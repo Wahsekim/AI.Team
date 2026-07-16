@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url'
 const exec = promisify(execFile)
 const SCRIPT = fileURLToPath(new URL('../scripts/check-claude-compat.sh', import.meta.url))
 
-async function withStubClaude(version, files, fn) {
+async function withStubClaude(version, files, fn, extraArgs = []) {
   const root = await mkdtemp(join(tmpdir(), 'ai-team-compat-'))
   try {
     const bin = join(root, 'bin')
@@ -30,7 +30,7 @@ async function withStubClaude(version, files, fn) {
     }
     const env = { ...process.env, PATH: `${bin}:/usr/bin:/bin` }
     try {
-      const { stdout } = await exec('bash', [SCRIPT, root], { env })
+      const { stdout } = await exec('bash', [SCRIPT, ...extraArgs, root], { env })
       return await fn({ code: 0, out: stdout })
     } catch (e) {
       return await fn({ code: e.code, out: (e.stdout || '') + (e.stderr || '') })
@@ -82,6 +82,38 @@ test('legacy reasoning_effort/token_budget frontmatter in an active wrapper -> F
 test('legacy fields in a .template.md are exempt (templates are seeds, not active wrappers)', async () => {
   await withStubClaude('2.1.200', {
     '.claude/agents/role-wrapper.template.md': '---\nname: x\nreasoning_effort: "high"\n---\nSeed.\n',
+  }, ({ code, out }) => {
+    assert.equal(code, 0, out)
+  })
+})
+
+test('N-11: unparsable claude version is fail-closed by default', async () => {
+  await withStubClaude('development build (no semver)', GOOD_WRAPPER, ({ code, out }) => {
+    assert.equal(code, 1, out)
+    assert.match(out, /FAIL - claude-version/)
+    assert.match(out, /fail-closed/)
+  })
+})
+
+test('N-11: --allow-unknown-version explicitly overrides the unparsable-version gate', async () => {
+  await withStubClaude('development build (no semver)', GOOD_WRAPPER, ({ code, out }) => {
+    assert.equal(code, 0, out)
+    assert.match(out, /WARN - claude-version/)
+  }, ['--allow-unknown-version'])
+})
+
+test('N-11: ANY unknown frontmatter key fails, not just the two legacy names', async () => {
+  await withStubClaude('2.1.200', {
+    '.claude/agents/proj-builder.md': '---\nname: proj-builder\neffort: "high"\ntoken_bugdet: "60000"\n---\nBody.\n',
+  }, ({ code, out }) => {
+    assert.equal(code, 1, out)
+    assert.match(out, /token_bugdet/)
+  })
+})
+
+test('all official allowlist keys pass', async () => {
+  await withStubClaude('2.1.200', {
+    '.claude/agents/proj-builder.md': '---\nname: b\ndescription: x\nmodel: sonnet\neffort: "high"\nmaxTurns: 40\ntools: Read, Grep\ndisallowedTools: Write\npermissionMode: default\ncolor: blue\n---\nBody.\n',
   }, ({ code, out }) => {
     assert.equal(code, 0, out)
   })

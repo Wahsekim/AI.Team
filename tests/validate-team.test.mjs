@@ -51,6 +51,7 @@ const FRESH_KIT = {
 }
 
 const MANDATORY = [
+  'CLAUDE.md',
   'charter.md',
   'profiles/project.md',
   'profiles/stack.md',
@@ -137,15 +138,86 @@ test('roster pointing at a nonexistent wrapper FAILS', async () => {
   })
 })
 
-test('operative reference to missing browser-access.md FAILS', async () => {
+test('roster ROW referencing missing browser-access.md FAILS', async () => {
   const files = {
     ...COMPLETE_DEPLOYMENT,
-    'agents/roster.md': COMPLETE_DEPLOYMENT['agents/roster.md'] + '\nUI verifies follow agents/_shared/browser-access.md.\n',
+    'agents/roster.md': COMPLETE_DEPLOYMENT['agents/roster.md'] + '| ux | active | needs agents/_shared/browser-access.md |\n',
   }
   await withFixture(files, async root => {
     const { code, out } = await runValidator(root, '--mode', 'deployment')
     assert.equal(code, 1, out)
     assert.match(out, /browser-access-ref/)
+  })
+})
+
+test('N-06 false-red: PROSE mention of browser-access.md (kit docs style) does NOT fail a non-UI deployment', async () => {
+  const files = {
+    ...COMPLETE_DEPLOYMENT,
+    'agents/pm.md': 'For UI projects, ensure agents/_shared/browser-access.md exists, instantiated from the seed.\n',
+    'agents/roster.md': COMPLETE_DEPLOYMENT['agents/roster.md'] + '\nUI verifies would follow agents/_shared/browser-access.md (only if UI roles are hired).\n',
+  }
+  await withFixture(files, async root => {
+    const { code, out } = await runValidator(root, '--mode', 'deployment')
+    assert.equal(code, 0, `conditional prose must not be read as config:\n${out}`)
+  })
+})
+
+test('profiles reference to missing browser-access.md FAILS (operative config)', async () => {
+  const files = {
+    ...COMPLETE_DEPLOYMENT,
+    'profiles/project.md': '# Project\nui_verify_discipline: agents/_shared/browser-access.md\n',
+  }
+  await withFixture(files, async root => {
+    const { code, out } = await runValidator(root, '--mode', 'deployment')
+    assert.equal(code, 1, out)
+    assert.match(out, /browser-access-ref/)
+  })
+})
+
+test('N-06 false-green: EMPTY mandatory artifact fails (hollow deployment)', async () => {
+  const files = { ...COMPLETE_DEPLOYMENT, 'profiles/stack.md': '' }
+  await withFixture(files, async root => {
+    const { code, out } = await runValidator(root, '--mode', 'deployment')
+    assert.equal(code, 1, out)
+    assert.match(out, /mandatory-artifacts.*empty/)
+  })
+})
+
+test('N-06 false-green: no wrapper rows AND no inline instantiation fails (no dispatch path)', async () => {
+  const files = {
+    ...COMPLETE_DEPLOYMENT,
+    'agents/roster.md': '# Roster\n\nNo wrappers configured yet.\n',
+  }
+  delete files['.claude/agents/proj-builder.md']
+  await withFixture(files, async root => {
+    const { code, out } = await runValidator(root, '--mode', 'deployment')
+    assert.equal(code, 1, out)
+    assert.match(out, /no sanctioned dispatch path/)
+  })
+})
+
+test('N-06 false-red: roster PROSE mentioning INLINE_BASE_AGENT_MODE.md does not demand the file', async () => {
+  const files = {
+    ...COMPLETE_DEPLOYMENT,
+    'agents/roster.md': COMPLETE_DEPLOYMENT['agents/roster.md']
+      + '\nAll-purpose dispatch is a fallback only (inline mode — .claude/agents/INLINE_BASE_AGENT_MODE.md on every row).\n',
+  }
+  await withFixture(files, async root => {
+    const { code, out } = await runValidator(root, '--mode', 'deployment')
+    assert.equal(code, 0, `prose must not be read as inline-mode declaration:\n${out}`)
+  })
+})
+
+test('roster ROW declaring inline mode without the file FAILS', async () => {
+  const files = {
+    ...COMPLETE_DEPLOYMENT,
+    'agents/roster.md': '# Roster\n\n| role | status | wrapper |\n|---|---|---|\n| builder | active | .claude/agents/INLINE_BASE_AGENT_MODE.md |\n',
+  }
+  delete files['.claude/agents/proj-builder.md']
+  await withFixture(files, async root => {
+    const { code, out } = await runValidator(root, '--mode', 'deployment')
+    assert.equal(code, 1, out)
+    assert.match(out, /roster-wrappers/)
   })
 })
 

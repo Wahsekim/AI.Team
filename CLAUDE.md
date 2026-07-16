@@ -60,6 +60,7 @@ Instantiated names; pre-bootstrap, the `.template.md` seed stands in.
 | `scripts/validate-team.sh` | mechanical integrity checker (PM wake step 0, bootstrap gate; `--mode deployment` on deployed instances) | PM |
 | `scripts/check-claude-compat.sh` | runtime version + wrapper-frontmatter gate (pre-bootstrap) | PM |
 | `scripts/bootstrap-team.sh` | idempotent template instantiation (mechanical half of bootstrap) | PM |
+| `scripts/reconcile-run.mjs` | atomic engine-run reconciliation (ledgers + counter, per-target idempotent) | PM |
 | `scripts/measure-context.sh` + `docs/context-budget.md` | cold-start context ratchet | PM + Coach |
 | `tests/` (`node --test tests/*.test.mjs`) | fault-injection suite for engine, validator, compat gate, watchdog | PM + Auditor |
 | `docs/staffing.md` | hiring step, MVT, expansion/retirement triggers | Coach proposes, owner ratifies |

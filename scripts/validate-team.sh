@@ -58,10 +58,11 @@ mtime_of() { # portable mtime (epoch seconds): macOS then GNU
 
 # --------------------- check -1: mandatory-artifact matrix (deployment mode only)
 # Data-driven completeness gate: every artifact bootstrap is contractually required
-# to produce. Missing = FAIL — never a silent skip (a partial deployment must not
-# validate green). browser-access.md is conditional (UI projects) and is enforced
-# by the reference-integrity check below instead.
+# to produce. Missing OR EMPTY = FAIL — never a silent skip (a partial or hollow
+# deployment must not validate green). browser-access.md is conditional (UI
+# projects) and is enforced by the reference-integrity check below instead.
 MANDATORY_ARTIFACTS="
+CLAUDE.md
 charter.md
 profiles/project.md
 profiles/stack.md
@@ -74,23 +75,44 @@ pm-decisions.md
 "
 if [ "$DEPLOYED" = 1 ]; then
   MISSING_ART=""
+  EMPTY_ART=""
   for f in $MANDATORY_ARTIFACTS; do
-    [ -f "$ROOT/$f" ] || MISSING_ART="$MISSING_ART $f"
+    if [ ! -f "$ROOT/$f" ]; then MISSING_ART="$MISSING_ART $f"
+    elif [ ! -s "$ROOT/$f" ]; then EMPTY_ART="$EMPTY_ART $f"
+    fi
   done
-  if [ -n "$MISSING_ART" ]; then
-    fail "mandatory-artifacts" "deployment is missing bootstrap-mandatory artifact(s):$MISSING_ART"
+  if [ -n "$MISSING_ART" ] || [ -n "$EMPTY_ART" ]; then
+    DETAIL=""
+    [ -n "$MISSING_ART" ] && DETAIL="missing:$MISSING_ART"
+    [ -n "$EMPTY_ART" ] && DETAIL="$DETAIL empty:$EMPTY_ART"
+    fail "mandatory-artifacts" "deployment has incomplete bootstrap-mandatory artifact(s): $DETAIL"
   else
-    pass "mandatory-artifacts" "all bootstrap-mandatory artifacts present"
+    pass "mandatory-artifacts" "all bootstrap-mandatory artifacts present and non-empty"
   fi
-  # Conditional artifact by reference-integrity: any operative file pointing at the
-  # instantiated browser-access discipline requires the file to exist.
+  # Conditional artifact by reference-integrity: only OPERATIVE CONFIG surfaces
+  # (roster table rows, wrappers, profiles) count as declaring the dependency —
+  # kit prose that conditionally MENTIONS browser-access.md (e.g. agents/pm.md
+  # "UI projects need...") must not fail a non-UI deployment (false-red fix).
   if [ ! -f "$ROOT/agents/_shared/browser-access.md" ]; then
-    BA_REFS=$(grep -rl --include='*.md' 'agents/_shared/browser-access\.md' "$ROOT" 2>/dev/null \
-      | sed "s|^$ROOT/||" | grep -vE '(\.template\.md$|^docs/|^CLAUDE\.md$|^README\.md$)')
+    BA_REFS=""
+    if [ -f "$ROOT/agents/roster.md" ] && \
+       grep -E '^\|' "$ROOT/agents/roster.md" | grep -q 'browser-access\.md'; then
+      BA_REFS="$BA_REFS agents/roster.md(row)"
+    fi
+    for f in profiles/project.md profiles/stack.md; do
+      [ -f "$ROOT/$f" ] && grep -q 'agents/_shared/browser-access\.md' "$ROOT/$f" && BA_REFS="$BA_REFS $f"
+    done
+    if [ -d "$ROOT/.claude/agents" ]; then
+      for w in "$ROOT"/.claude/agents/*.md; do
+        [ -f "$w" ] || continue
+        case "$w" in *.template.md|*/README.md) continue ;; esac
+        grep -q 'browser-access\.md' "$w" && BA_REFS="$BA_REFS ${w#$ROOT/}"
+      done
+    fi
     if [ -n "$BA_REFS" ]; then
-      fail "browser-access-ref" "operative file(s) reference agents/_shared/browser-access.md but it does not exist: $(echo $BA_REFS | tr '\n' ' ')"
+      fail "browser-access-ref" "operative config references agents/_shared/browser-access.md but it does not exist:$BA_REFS"
     else
-      pass "browser-access-ref" "browser-access.md absent and unreferenced (non-UI project)"
+      pass "browser-access-ref" "browser-access.md absent and not referenced by operative config (non-UI project)"
     fi
   else
     pass "browser-access-ref" "agents/_shared/browser-access.md present"
@@ -309,8 +331,10 @@ else
   CHECKED=0
   SKIPPED_ROWS=0
   while IFS= read -r line; do
+    # Only roster TABLE ROWS are configuration; explanatory prose that mentions
+    # wrapper paths must not be scanned (false-red fix).
     case "$line" in
-      *'.claude/agents/'*) ;;
+      '|'*'.claude/agents/'*) ;;
       *) continue ;;
     esac
     # staffing status (docs/staffing.md): non-active rows need no wrapper
@@ -323,14 +347,24 @@ else
     CHECKED=$((CHECKED+1))
     [ -f "$ROOT/$W" ] || MISSING="$MISSING $W"
   done < "$RM"
-  # inline-mode rows
-  if grep -q 'INLINE_BASE_AGENT_MODE\.md' "$RM" && [ ! -f "$ROOT/.claude/agents/INLINE_BASE_AGENT_MODE.md" ]; then
+  # inline-mode declaration: counts ONLY when a roster TABLE ROW names the inline
+  # file — the roster template's explanatory prose also mentions it, and prose
+  # must not be read as configuration (false-red fix).
+  INLINE_DECLARED=0
+  grep -E '^\|' "$RM" | grep -q 'INLINE_BASE_AGENT_MODE\.md' && INLINE_DECLARED=1
+  if [ "$INLINE_DECLARED" = 1 ] && [ ! -f "$ROOT/.claude/agents/INLINE_BASE_AGENT_MODE.md" ]; then
     MISSING="$MISSING .claude/agents/INLINE_BASE_AGENT_MODE.md(inline-mode-declared)"
   fi
   if [ -n "$MISSING" ]; then
     fail "roster-wrappers" "active roster rows point at nonexistent wrapper(s):$MISSING"
   elif [ "$CHECKED" -eq 0 ] && [ "$SKIPPED_ROWS" -eq 0 ]; then
-    warn "roster-wrappers" "roster.md has no wrapper-path rows — inline mode or unfilled roster?"
+    # A deployment with NO dispatch path at all must not pass: either wrapper
+    # rows exist, or inline mode is explicitly instantiated (false-green fix).
+    if [ "$DEPLOYED" = 1 ] && [ "$INLINE_DECLARED" = 0 ] && [ ! -f "$ROOT/.claude/agents/INLINE_BASE_AGENT_MODE.md" ]; then
+      fail "roster-wrappers" "deployment has NO wrapper-path roster rows and NO instantiated INLINE_BASE_AGENT_MODE.md — no sanctioned dispatch path exists"
+    else
+      warn "roster-wrappers" "roster.md has no wrapper-path rows — inline mode or unfilled roster?"
+    fi
   else
     pass "roster-wrappers" "$CHECKED active wrapper path(s) exist on disk ($SKIPPED_ROWS non-active row(s) skipped)"
   fi

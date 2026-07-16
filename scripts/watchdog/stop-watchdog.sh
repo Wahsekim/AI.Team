@@ -27,12 +27,13 @@ session_id=$(printf '%s' "$session_id" | cut -c1-128)
 PID_FILE="$HB_DIR/${session_id}.watchdog-pid"
 HB_FILE="$HB_DIR/${session_id}.heartbeat"
 
-# True only for a strictly-numeric PID whose live command is our watchdog loop —
-# never TERM/KILL a PID we merely found in a file (stale files, PID reuse).
+# True only for a strictly-numeric PID whose live command is our watchdog loop
+# FOR THIS SESSION (the loop's argv carries the session id) — never TERM/KILL a
+# PID we merely found in a file (stale files, PID reuse, other sessions).
 pid_is_watchdog() {
     [ -n "$1" ] || return 1
     case "$1" in *[!0-9]*) return 1 ;; esac
-    ps -p "$1" -o command= 2>/dev/null | grep -q 'watchdog-loop\.sh'
+    ps -p "$1" -o command= 2>/dev/null | grep -q "watchdog-loop\.sh ${session_id}\$"
 }
 
 if [ -f "$PID_FILE" ]; then

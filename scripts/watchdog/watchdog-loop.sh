@@ -47,9 +47,17 @@ while true; do
         exit 0
     fi
 
-    # Self-terminate if heartbeat file disappeared (clean shutdown signal).
+    # Self-terminate ONLY on clean shutdown: heartbeat gone AND no alert state.
+    # After a stale alert the heartbeat is set aside as `.alerted-<ts>` — that is
+    # a WAITING state, not a stop signal: keep looping (bounded by max lifetime)
+    # so monitoring resumes when the next tool result recreates the heartbeat
+    # (N-08: the old behavior exited here and never monitored again).
     if [ ! -f "$HB_FILE" ]; then
-        # Heartbeat was removed - session likely ended cleanly.
+        if ls "$HB_DIR/${session_id}.heartbeat.alerted-"* >/dev/null 2>&1; then
+            sleep "$INTERVAL_SECONDS"
+            continue
+        fi
+        # Heartbeat was removed with no alert pending - session ended cleanly.
         rm -f "$PID_FILE"
         exit 0
     fi

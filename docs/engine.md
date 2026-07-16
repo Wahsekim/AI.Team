@@ -1,8 +1,10 @@
 # Count-Directed Loop Engine (`run-n-rounds`)
 
 Contract doc for `.claude/workflows/run-n-rounds.js` — the mechanical executor
-for owner count directives ("run N rounds"). Ported from the source project
-where it was production-validated across multi-batch loops.
+for owner count directives ("run N rounds"). Ported from the source project,
+where the maintainer used it across multi-batch loops (maintainer experience,
+not independently published evidence); its deterministic behavior is verified
+by the shipped fault-injection suite (`node --test tests/*.test.mjs`).
 
 ## Why an engine
 
@@ -95,16 +97,31 @@ The rule, in preference order:
 ## Args contract
 
 ```js
-{ rounds, plan, date, nextLifecycleNumber, budgetCeilingTokens, runId? }
+{ rounds, plan, date, nextLifecycleNumber, executionMode, budgetCeilingTokens,
+  failurePolicy?, runId? }
 ```
 
 **Strict validation (fail-closed):** every field is validated BEFORE any
-dispatch; any violation returns `{errorCode: 'invalid-args',
-validationErrors: [...], dispatchedCount: 0}` with zero agents run. `rounds`
-and `nextLifecycleNumber` must be positive safe integers (`rounds` <= 300);
-`date` must be a real `YYYY-MM-DD` calendar date; `budgetCeilingTokens`,
-when given, a finite number > 0; ticket/agentType are length-capped and
-reject control characters (they land in lifecycle headers).
+dispatch; any violation (including a malformed JSON args string) returns
+`{errorCode: 'invalid-args', validationErrors: [...], dispatchedCount: 0}`
+with zero agents run. `rounds` and `nextLifecycleNumber` must be positive
+safe integers (`rounds` <= 300, plan <= 300 items); `date` must be a real
+`YYYY-MM-DD` calendar date; briefs are size-capped (200k chars);
+ticket/agentType are length-capped and reject control characters (they land
+in lifecycle headers).
+
+- `executionMode` (REQUIRED): `'wrappers'` — every agentType (worker,
+  verifier, guardian) must be an explicit roster wrapper name;
+  `'general-purpose'` anywhere is a validation error. `'inline'` — the
+  documented INLINE_BASE_AGENT_MODE fallback; generic types allowed with the
+  persona inlined in the brief. There is NO silent fallback between modes.
+- `budgetCeilingTokens` (REQUIRED): a run without a declared Q5 ceiling is an
+  invalid invocation — the old silent `budget.total` fallback is gone.
+- `failurePolicy` (default `'halt-on-failure'`): the loop STOPS after any
+  iteration that needs recovery (unknown side effects, failed/missing
+  verification, blocked/no-progress worker) — later workers never build on an
+  unattested workspace. `'continue'` is legal ONLY for plans the caller
+  asserts are per-ticket isolated and dependency-free.
 
 - `date` (YYYY-MM-DD) and `nextLifecycleNumber` are REQUIRED — the workflow
   body has no clock and cannot read `agents/lifecycle.md` to count entries.
@@ -132,24 +149,45 @@ reject control characters (they land in lifecycle headers).
 
 ## Return contract — how to read it
 
-- `allPassed` + `fixRetestQueue` + `recoveryQueue` are the batch-quality
-  signals. **Never read `haltReason` for quality**: `count-complete` means
-  all N DISPATCHED, not all passed. `allPassed` is a STRICT conjunction:
-  every worker succeeded (or clean terminal-stop), no unknown side effects,
-  every required verification `passed`, both queues empty, guardian ran and
-  did not return halt-and-investigate. No state defaults green.
+- **One truth derivation, no contradictions** (single source in the script):
+  - `allPassed` — batch quality. STRICT conjunction: every worker
+    `succeeded`/`terminal_stop` (a `blocked` or `no_progress` worker is NOT
+    success), no unknown side effects, every required verification `passed`,
+    both queues empty, guardian ran AND returned a consistent `clean`.
+  - `nextInvocationBlocked` — true unless the guardian is clean AND both
+    queues are empty. `allPassed=true` implies `nextInvocationBlocked=false`
+    BY CONSTRUCTION — the two can never contradict.
+  - `safeToContinue` — the one field automation may read alone: `allPassed`
+    AND the run finished everything it was asked (`!runIncomplete`).
+  **Never read `haltReason` for quality**: `count-complete` means all N
+  DISPATCHED, not all passed.
 - Per-iteration records carry three explicit state fields (no nullable
   booleans with dual meanings):
-  - `workerStatus`: `succeeded | null_result | error | terminal_stop` —
-    `null_result`/`error` mean the worker vanished/threw and its
-    `sideEffects` are `unknown` (it may have half-changed files);
+  - `workerStatus`: `succeeded | blocked | no_progress | null_result | error
+    | terminal_stop` — `blocked`/`no_progress` route to `recoveryQueue`
+    (dispatched ≠ effectively done); `null_result`/`error` mean the worker
+    vanished/threw and its `sideEffects` are `unknown` (it may have
+    half-changed files);
   - `verificationStatus`: `not_applicable | passed | failed | missing |
     blocked_by_worker_error` — a code-shipping iter counts ONLY on `passed`;
-    `missing` (gate threw/null) and `blocked_by_worker_error` are
-    fail-closed into the queues;
+    `missing` (gate threw/null/budget-blocked) and `blocked_by_worker_error`
+    are fail-closed into the queues;
   - `sideEffects`: `none_reported | known | unknown`.
   A code-shipping iteration that terminal-stops STILL gets its verifier gate
   before the loop breaks — `terminalStop` only stops FURTHER iterations.
+- **Guardian consistency is enforced**: a `clean` verdict alongside any
+  failure flag (`runawayDetected`, `missedHaltRisk`, `budgetGateCorrect:
+  false`, `droppedFixRetest`) is demoted fail-closed to
+  `main-session-action-required` with `guardianConsistencyFailure` set.
+- `runIncomplete` (halted before finishing the planned iters) is distinct
+  from `planShortfall`/`needsGrooming` (the plan was shorter than N) —
+  early halts can never masquerade as a fully-run board.
+- `budgetStatus` reports `{ceiling, loopSpent, overshootTokens}` — the Q5
+  gate checks before worker AND verifier dispatches, but one oversized spawn
+  can still overshoot; overshoot is visible, never silent. All engine
+  outputs (haltReason, ledger lines, guardian data) pass through a
+  sanitizer that strips newlines/header tokens and redacts common secret
+  shapes.
 - Counts are explicit: `workerSucceededCount`, `verificationRequiredCount`,
   `verificationPassedCount`, `recoveryRequiredCount` (there is no ambiguous
   `passedCount`).
@@ -172,18 +210,31 @@ reject control characters (they land in lifecycle headers).
   attended, then re-invoke with a fresh plan and an updated
   `nextLifecycleNumber`.
 
-## Reconciliation rule (paste-verbatim, idempotent)
+## Reconciliation rule (atomic, idempotent per target)
 
 After EVERY invocation, before anything else — before tracker sync, before the
-cycle report, before pulling new work — the PM FIRST checks idempotency: if
-`agents/lifecycle.md` already contains a `### BATCH` header carrying this
-run's `runId`, the run was already reconciled — stop, never paste twice.
-Otherwise the PM pastes
-`mainSessionTodo.lifecycleEntries` verbatim into `agents/lifecycle.md` and
-`mainSessionTodo.messagesLogBlock` verbatim into `messages/<date>.md`. The
-emitted lifecycle block already includes the `### BATCH` header (with the
-runId), the numbered per-iter entries (with separate worker/verifier token
-figures), and the numbered guardian entry — nothing in it is hand-derived.
+cycle report, before pulling new work — the PM applies the run with the
+shipped tool:
+
+```bash
+# save the engine return object to a file, then:
+node scripts/reconcile-run.mjs <result.json> .
+```
+
+The tool checks the runId in EVERY target independently (a crash between
+targets is repaired by re-running — a partial earlier write is detected and
+only the missing targets are applied, never masked), appends the lifecycle
+BATCH block and the messages block via atomic tmp+rename writes, and advances
+the lifecycle `Next NNN to assign` counter to
+`mainSessionTodo.nextLifecycleNumberAfter` (counter drift fix).
+
+Manual fallback (tool unavailable): check that NO target already contains the
+runId, paste `mainSessionTodo.lifecycleEntries` verbatim into
+`agents/lifecycle.md` and `mainSessionTodo.messagesLogBlock` verbatim into
+`messages/<date>.md`, then update the counter yourself. The emitted lifecycle
+block already includes the `### BATCH` header (with the runId), the numbered
+per-iter entries (with separate worker/verifier token figures), and the
+numbered guardian entry — nothing in it is hand-derived.
 
 **Manual re-derivation of these entries is BANNED** — re-derivation
 reintroduces the transcription-drift failure class the emission exists to

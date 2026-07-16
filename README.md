@@ -1,5 +1,10 @@
 # AI.Team - Portable Multi-Agent Team Template
 
+> "Portable" means the TEAM is portable across projects (drop the kit next to
+> any product repo and bootstrap) — not portable across agent runtimes. The
+> kit targets **Claude Code only** (>= 2.1.154); other runtimes are out of
+> scope unless a future ADR says otherwise.
+
 A reusable **team operating system for [Claude Code](https://claude.com/claude-code)**:
 one persistent PM session orchestrating a roster of specialist AI agents
 (architect, backend, frontend, UX, QA, data, security, coach, auditor, chaos)
@@ -138,7 +143,7 @@ is the operating model:
 
 ```text
 AI.Team/
-  CLAUDE.md                    # cold-start primer for future Claude/Codex sessions
+  CLAUDE.md                    # cold-start primer for future Claude Code sessions
   charter.template.md          # constitution SEED -> instantiated as charter.md at bootstrap
   profiles/                    # project and stack profiles, lazily locked
   agents/                      # PM, roster, templates, lifecycle, lessons index

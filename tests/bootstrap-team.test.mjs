@@ -45,7 +45,7 @@ const exists = p => access(p).then(() => true, () => false)
 test('fresh run instantiates all seeds and substitutes provided values', async () => {
   await withKit(async root => {
     const out = await run(root, '--project-name', 'StockUp', '--product-repo', '/abs/product')
-    assert.match(out, /RESULT: BOOTSTRAPPED/)
+    assert.match(out, /RESULT: INSTANTIATED-PENDING-INTERVIEW/, 'ask:first_start placeholders remain, so the verdict must say the interview is pending')
     for (const target of ['charter.md', 'profiles/project.md', 'profiles/stack.md', 'agents/roster.md', 'agents/_shared/verify-discipline.md']) {
       assert.ok(await exists(join(root, target)), `${target} missing`)
     }
@@ -123,6 +123,44 @@ test('unknown flag fails fast', async () => {
     } catch (e) {
       assert.equal(e.code, 1)
       assert.match(String(e.stdout), /FAIL - args/)
+      assert.match(String(e.stdout), /BOOTSTRAP-FAILED/)
     }
+  })
+})
+
+test('N-07: flag without a value fails fast instead of hanging the arg loop', async () => {
+  await withKit(async root => {
+    try {
+      // timeout guards against the old infinite-shift bug regressing
+      await exec('bash', [SCRIPT, root, '--project-name'], { timeout: 5000 })
+      assert.fail('expected nonzero exit for missing flag value')
+    } catch (e) {
+      assert.equal(e.code, 1, `expected clean failure, got: ${e.killed ? 'TIMEOUT (arg loop hang regressed)' : e.code}`)
+      assert.match(String(e.stdout), /requires a value/)
+      assert.match(String(e.stdout), /BOOTSTRAP-FAILED/)
+    }
+  })
+})
+
+test('N-07: missing mandatory seed -> BOOTSTRAP-FAILED exit 1, not a silent SKIP', async () => {
+  await withKit(async root => {
+    await rm(join(root, 'charter.template.md'))
+    try {
+      await exec('bash', [SCRIPT, root])
+      assert.fail('expected nonzero exit for missing mandatory seed')
+    } catch (e) {
+      assert.equal(e.code, 1)
+      assert.match(String(e.stdout), /mandatory seed charter\.template\.md missing/)
+      assert.match(String(e.stdout), /BOOTSTRAP-FAILED/)
+    }
+  })
+})
+
+test('N-07: already-instantiated target satisfies the mandatory-seed check', async () => {
+  await withKit(async root => {
+    await rm(join(root, 'charter.template.md'))
+    await writeFile(join(root, 'charter.md'), '# Charter already instantiated\n')
+    const out = await run(root)
+    assert.match(out, /RESULT: INSTANTIATED-PENDING-INTERVIEW|RESULT: BOOTSTRAPPED/)
   })
 })

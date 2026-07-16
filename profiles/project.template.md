@@ -66,8 +66,11 @@ constraints:
 
 ## Documentation Completeness
 
-Paths are relative to `product_repo_path` unless absolute. If the product repo
-does not exist yet, these paths are PROSPECTIVE — bootstrap creates them.
+Product-doc paths are relative to `product_repo_path` unless absolute; the two
+`team:`-prefixed entries are relative to the TEAM ROOT (the directory Claude
+Code starts in — where this profile lives), not the product repo. If the
+product repo does not exist yet, product paths are PROSPECTIVE — bootstrap
+creates them.
 
 ```yaml
 doc_surfaces:
@@ -75,8 +78,8 @@ doc_surfaces:
   user_manual: "{{USER_MANUAL_PATH | default:docs/USAGE.md}}"
   technical_doc: "{{TECHNICAL_DOC_PATH | default:docs/technical.md}}"
   functional_doc: "{{FUNCTIONAL_DOC_PATH | default:docs/functional.md}}"
-  decisions_index: "{{DECISIONS_INDEX_PATH | default:AI.Team/decisions/README.md}}"
-  team_process_index: "{{TEAM_PROCESS_INDEX_PATH | default:AI.Team/docs/process-index.md}}"
+  decisions_index: "{{DECISIONS_INDEX_PATH | default:decisions/README.md | team-root-relative}}"
+  team_process_index: "{{TEAM_PROCESS_INDEX_PATH | default:docs/process-index.md | team-root-relative}}"
 ```
 
 ## Workflow Status

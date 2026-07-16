@@ -4,6 +4,9 @@ description: "{{USE_WHEN_DESCRIPTION}}"
 model: "{{MODEL | from:agents/roster.md}}"
 effort: "{{REASONING_EFFORT | from:agents/roster.md}}"
 maxTurns: {{MAX_TURNS | per tier bands in agents/pm.md Rules}}
+tools: {{TOOLS | least privilege per role | e.g. builder: Read, Grep, Glob, Bash, Write, Edit | e.g. auditor/reviewer: Read, Grep, Glob}}
+disallowedTools: {{DISALLOWED_TOOLS | read-only roles MUST list Write, Edit, NotebookEdit | drop the line only for full-privilege builders}}
+permissionMode: "{{PERMISSION_MODE | default:default}}"
 color: "{{COLOR}}"
 ---
 
@@ -32,6 +35,11 @@ source; on conflict the roster wins):
 - model: `{{MODEL | from:agents/roster.md}}` (frontmatter-enforced)
 - effort: `{{REASONING_EFFORT | from:agents/roster.md}}` (frontmatter-enforced)
 - maxTurns: `{{MAX_TURNS}}` (frontmatter-enforced hard turn cap)
+- tools/disallowedTools/permissionMode: least privilege for the role
+  (frontmatter-enforced). Read-only/audit roles get NO Write/Edit. Caveat: a
+  role with Bash can still write files through the shell — for confidential
+  or high-risk repos, use container/VM/read-only-mount isolation (SECURITY.md);
+  frontmatter narrows the surface, it is not a sandbox.
 - token budget: `{{TOKEN_BUDGET | per tier bands in agents/pm.md Rules}}` —
   ADVISORY ONLY. No runtime frontmatter field hard-caps tokens per agent; the
   PM states this budget in the dispatch brief, monitors harness-measured spend

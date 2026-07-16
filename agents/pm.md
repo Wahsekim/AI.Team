@@ -187,39 +187,46 @@ points at a nonexistent artifact.
 Full contract: `docs/engine.md`. Non-negotiables:
 
 - Pre-scope the whole plan ATTENDED (tracker reads happen before the run);
-  build every brief from `agents/templates.md`; `agentType` values are the
-  roster wrapper names (or `general-purpose` + inlined persona only under
-  documented inline mode); pass `date` and `nextLifecycleNumber` (the workflow
-  has no clock and cannot read files); declare `isCodeShipping` EXPLICITLY
-  (boolean) on every plan item — the engine strict-validates all args and
-  returns `errorCode: 'invalid-args'` with zero dispatch on any violation.
+  build every brief from `agents/templates.md`; declare `executionMode`
+  EXPLICITLY — `'wrappers'` (all agentTypes incl. verifier + guardian are
+  roster wrapper names; `general-purpose` anywhere is rejected) or `'inline'`
+  (documented INLINE_BASE_AGENT_MODE fallback only); pass `date` and
+  `nextLifecycleNumber` (the workflow has no clock and cannot read files);
+  declare `isCodeShipping` EXPLICITLY (boolean) on every plan item; leave
+  `failurePolicy` on its `halt-on-failure` default unless every ticket is
+  provably isolated — the engine strict-validates all args and returns
+  `errorCode: 'invalid-args'` with zero dispatch on any violation.
 - Pre-declare the per-invocation budget: first loop = sum of per-iter tier
   estimates (worker + verifier) x 1.3; later loops = observed-per-round x N
   x 1.3. Track the CUMULATIVE cross-batch loop ceiling yourself — different
-  axis. Never omit the arg (the engine warns and gates against the harness
-  session budget nobody declared).
-- After EVERY invocation, FIRST check idempotency — if `agents/lifecycle.md`
-  already contains a `### BATCH` header with this run's `runId`, the run was
-  already reconciled: STOP, never paste twice — then paste
-  `mainSessionTodo.lifecycleEntries` (already includes the `### BATCH`
-  header with the runId, numbered entries, and the numbered guardian entry)
-  and `messagesLogBlock` VERBATIM into `agents/lifecycle.md` and
-  `messages/<date>.md`. **Manual re-derivation is BANNED.** Then write one
-  pm-decisions dispatch+close line per iter from `results[]`.
+  axis. The arg is REQUIRED: omitting it is an invalid-args rejection (no
+  silent fallback); read `budgetStatus.overshootTokens` at close.
+- After EVERY invocation, FIRST reconcile with the shipped tool: save the
+  return object to a file and run `node scripts/reconcile-run.mjs
+  <result.json> .` — atomic per-target writes, runId idempotency checked in
+  EVERY target (partial earlier writes are repaired, not masked), and the
+  lifecycle counter advanced to `mainSessionTodo.nextLifecycleNumberAfter`.
+  **Manual re-derivation is BANNED** (manual verbatim paste is the fallback
+  only when the tool is unavailable — check runId in every target first).
+  Then write one pm-decisions dispatch+close line per iter from `results[]`.
 - Per-spawn token attribution from the engine's SEPARATE
   `results[i].workerTokens` / `results[i].verifierTokens` harness deltas —
   NEVER the loop aggregate divided by N, never the fused per-iter total.
-- Read `allPassed` + `fixRetestQueue` + `recoveryQueue` for batch quality,
+- Read `safeToContinue` (or `allPassed` + the queues) for batch quality,
   never `haltReason` (`count-complete` ≠ all-passed; `allPassed` is a strict
-  conjunction — any worker error/null, unknown side effects, unpassed
-  required verification, non-empty queue, or unavailable guardian forces
-  false). Drain every fix-retest item per the engine fix-retest drain rule
-  (`docs/engine.md`): session continuation if the harness exposes the
-  workflow-spawned session; otherwise a fresh scoped fix spawn inlining the
-  verifier failure report, logged `Session: resumed-fresh` — sanctioned, not
-  an anti-pattern violation. Drain `recoveryQueue` too: worker error/null
-  records have UNKNOWN side effects — inspect the working tree before any
-  further dispatch.
+  conjunction — any worker error/null/BLOCKED/NO-PROGRESS, unknown side
+  effects, unpassed required verification, non-empty queue, or
+  unavailable/inconsistent guardian forces false; `allPassed=true` implies
+  `nextInvocationBlocked=false` by construction). Drain every fix-retest
+  item per the engine fix-retest drain rule (`docs/engine.md`): session
+  continuation if the harness exposes the workflow-spawned session;
+  otherwise a fresh scoped fix spawn inlining the verifier failure report,
+  logged `Session: resumed-fresh` — sanctioned, not an anti-pattern
+  violation. Drain `recoveryQueue` too: error/null records have UNKNOWN side
+  effects — inspect the working tree before any further dispatch;
+  blocked/no-progress records need triage (unblock, re-scope, or return to
+  the board). Under the default `halt-on-failure` policy the loop already
+  stopped at the first such iteration.
 - `dispatchedCount === 0` = DOA invocation (invalid args, budget semantics
   or plan error — see `errorCode`/`validationErrors`) — fix and re-invoke;
   it is not a loop.

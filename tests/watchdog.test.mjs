@@ -116,6 +116,49 @@ test('stop: traversal session_id cannot delete files outside the heartbeat dir',
   })
 })
 
+test('N-08: loop survives the alert state and resumes when the heartbeat returns', async () => {
+  await withHome(async home => {
+    const hb = join(home, '.claude', 'heartbeats')
+    // Alert state: heartbeat set aside as .alerted-<ts>, no live heartbeat.
+    await writeFile(join(hb, 's9.heartbeat.alerted-123'), '')
+    const loop = spawn('bash', [join(DIR, 'watchdog-loop.sh'), 's9'], {
+      env: { ...process.env, HOME: home, WATCHDOG_INTERVAL: '0.1', WATCHDOG_THRESHOLD: '600' },
+    })
+    try {
+      await new Promise(r => setTimeout(r, 600))
+      assert.equal(loop.exitCode, null, 'loop must WAIT during the alert state, not exit (or monitoring never resumes)')
+      // Clean shutdown: remove the alert marker with no heartbeat -> loop exits.
+      await rm(join(hb, 's9.heartbeat.alerted-123'))
+      await new Promise(r => setTimeout(r, 800))
+      assert.notEqual(loop.exitCode, null, 'loop must exit cleanly once neither heartbeat nor alert state exists')
+    } finally {
+      loop.kill('SIGKILL')
+    }
+  })
+})
+
+test('N-08: stop must not kill a watchdog loop belonging to ANOTHER session', async () => {
+  await withHome(async home => {
+    const hb = join(home, '.claude', 'heartbeats')
+    // A loop for session OTHER, alive via its own heartbeat.
+    await writeFile(join(hb, 'OTHER.heartbeat'), '')
+    const other = spawn('bash', [join(DIR, 'watchdog-loop.sh'), 'OTHER'], {
+      env: { ...process.env, HOME: home, WATCHDOG_INTERVAL: '0.2', WATCHDOG_THRESHOLD: '600' },
+    })
+    try {
+      // s10's stale PID file wrongly points at OTHER's loop process (PID reuse shape).
+      await writeFile(join(hb, 's10.watchdog-pid'), String(other.pid))
+      await writeFile(join(hb, 's10.heartbeat'), '')
+      const { code } = await runHook('stop-watchdog.sh', home, '{"session_id":"s10"}')
+      assert.equal(code, 0)
+      await new Promise(r => setTimeout(r, 300))
+      assert.equal(other.exitCode, null, "another session's watchdog must not be killed (session-bound PID check)")
+    } finally {
+      other.kill('SIGKILL')
+    }
+  })
+})
+
 test('start: stale PID file with reused non-watchdog PID is cleaned and respawned over', async () => {
   await withHome(async home => {
     const victim = spawn('sleep', ['300'])

@@ -30,12 +30,13 @@ session_id=$(printf '%s' "$session_id" | cut -c1-128)
 PID_FILE="$HB_DIR/${session_id}.watchdog-pid"
 HB_FILE="$HB_DIR/${session_id}.heartbeat"
 
-# True only for a strictly-numeric PID whose live command is our watchdog loop —
-# a reused PID from a stale file must not suppress a needed respawn.
+# True only for a strictly-numeric PID whose live command is our watchdog loop
+# FOR THIS SESSION (argv carries the session id) — a reused PID or another
+# session's loop must not suppress a needed respawn.
 pid_is_watchdog() {
     [ -n "$1" ] || return 1
     case "$1" in *[!0-9]*) return 1 ;; esac
-    ps -p "$1" -o command= 2>/dev/null | grep -q 'watchdog-loop\.sh'
+    ps -p "$1" -o command= 2>/dev/null | grep -q "watchdog-loop\.sh ${session_id}\$"
 }
 
 # Initial heartbeat so the watchdog has a baseline.
