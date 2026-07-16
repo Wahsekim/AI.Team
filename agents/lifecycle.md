@@ -50,7 +50,9 @@ Next NNN to assign: **001**
 
 For `run-n-rounds` engine loops, the PM pastes the engine's emitted block
 VERBATIM (see `docs/engine.md` — manual re-derivation banned). The emitted
-block already satisfies this format: it starts with the `### BATCH` header,
+block already satisfies this format: it starts with the `### BATCH` header
+(which carries the run's `runId` — if a BATCH header with that runId is
+already in this file, the run was already reconciled: never paste twice),
 each numbered entry carries SEPARATE worker/verifier token figures
 (`~N tok worker / ~N tok verifier` — the engine's harness deltas, never the
 aggregate divided by N), the verifier verdict is in each entry line, and the

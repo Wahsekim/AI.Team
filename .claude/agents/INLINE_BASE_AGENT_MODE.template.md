@@ -3,7 +3,7 @@
 Use this file only when the runtime cannot install one concrete Claude wrapper
 per role.
 
-The PM dispatches workers by reading each role file in `AI.Team/agents/`.
+The PM dispatches workers by reading each role file in `agents/` (team-root-relative).
 Each active role file must contain:
 
 1. the base agency-agent path, or `synthetic`;

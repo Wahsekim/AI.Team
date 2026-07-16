@@ -14,8 +14,16 @@
 #   - max lifetime reached (default 12h - defense against orphaned loops)
 
 set -e
+umask 077
 
+# Session IDs are UNTRUSTED input (they land in file paths, JSONL log lines and
+# the notification text): safe charset only, else fall back to 'unknown'.
 session_id="${1:-unknown}"
+case "$session_id" in
+    *[!A-Za-z0-9._-]*) session_id="unknown" ;;
+esac
+session_id=$(printf '%s' "$session_id" | cut -c1-128)
+[ -z "$session_id" ] && session_id="unknown"
 
 INTERVAL_SECONDS=${WATCHDOG_INTERVAL:-30}
 THRESHOLD_SECONDS=${WATCHDOG_THRESHOLD:-600}

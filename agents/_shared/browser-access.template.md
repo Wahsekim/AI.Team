@@ -52,6 +52,15 @@ Documentation comes from local sources only.
 
 ## Login for smoke/verify flows
 
-Use a dedicated smoke credential `{{SMOKE_CREDENTIAL | ask:first_use}}` -
+Use a dedicated smoke account referenced as
+`{{SMOKE_CREDENTIAL_REF | ask:first_use | e.g.:env:SMOKE_USER/env:SMOKE_PASS}}` —
 never a throwaway account that pollutes real data, never the owner's account
 except in an owner-approved production smoke where the brief supplies it.
+
+SECRET HANDLING (hard rule): this file stores only a REFERENCE (an environment
+variable name, keychain item, or secret-manager key) — NEVER the literal
+username/password/token. This file is instantiated into the repo and would
+otherwise commit the secret. Agents resolve the reference at use time (e.g.
+`$SMOKE_USER`) and must not echo resolved values into briefs, notes,
+screenshots, logs, or close output. If a literal credential ever lands in a
+tracked file: rotate it immediately, then purge (SECURITY.md).

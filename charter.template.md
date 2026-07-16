@@ -110,6 +110,12 @@ this table instead of restating values. When a value changes, it changes here
 first (ADR when material). All start values are placeholders - **recalibrate
 from your first loops' observed spend.**
 
+Enforcement class: the per-spawn and batch caps are **PM-enforced scoping
+discipline** (advisory — checked at estimate time and at close via harness
+figures), NOT runtime hard limits; only the engine's per-invocation Q5 gate
+and wrapper `maxTurns` are mechanically enforced
+(`docs/harness-assumptions.md`).
+
 | Axis | Value | Trigger | Behavior |
 |---|---|---|---|
 | Per-spawn worker cap | `{{TOKEN_HARD_CAP | ask:first_start | default:250000}}` (sizing target <= `{{TOKEN_SOFT_CAP | ask:first_start | default:200000}}`) | PM estimate > hard cap at scoping | split the ticket before dispatch; overshoot = block on re-spawn without owner sign-off |

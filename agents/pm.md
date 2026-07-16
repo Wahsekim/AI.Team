@@ -190,32 +190,44 @@ Full contract: `docs/engine.md`. Non-negotiables:
   build every brief from `agents/templates.md`; `agentType` values are the
   roster wrapper names (or `general-purpose` + inlined persona only under
   documented inline mode); pass `date` and `nextLifecycleNumber` (the workflow
-  has no clock and cannot read files).
+  has no clock and cannot read files); declare `isCodeShipping` EXPLICITLY
+  (boolean) on every plan item — the engine strict-validates all args and
+  returns `errorCode: 'invalid-args'` with zero dispatch on any violation.
 - Pre-declare the per-invocation budget: first loop = sum of per-iter tier
   estimates (worker + verifier) x 1.3; later loops = observed-per-round x N
   x 1.3. Track the CUMULATIVE cross-batch loop ceiling yourself — different
   axis. Never omit the arg (the engine warns and gates against the harness
   session budget nobody declared).
-- After EVERY invocation, FIRST paste `mainSessionTodo.lifecycleEntries`
-  (already includes the `### BATCH` header, numbered entries, and the
-  numbered guardian-verdict entry) and `messagesLogBlock` VERBATIM into
-  `agents/lifecycle.md` and `messages/<date>.md`. **Manual re-derivation is
-  BANNED.** Then write one pm-decisions dispatch+close line per iter from
-  `results[]`.
+- After EVERY invocation, FIRST check idempotency — if `agents/lifecycle.md`
+  already contains a `### BATCH` header with this run's `runId`, the run was
+  already reconciled: STOP, never paste twice — then paste
+  `mainSessionTodo.lifecycleEntries` (already includes the `### BATCH`
+  header with the runId, numbered entries, and the numbered guardian entry)
+  and `messagesLogBlock` VERBATIM into `agents/lifecycle.md` and
+  `messages/<date>.md`. **Manual re-derivation is BANNED.** Then write one
+  pm-decisions dispatch+close line per iter from `results[]`.
 - Per-spawn token attribution from the engine's SEPARATE
   `results[i].workerTokens` / `results[i].verifierTokens` harness deltas —
   NEVER the loop aggregate divided by N, never the fused per-iter total.
-- Read `allPassed` + `fixRetestQueue` for batch quality, never `haltReason`
-  (`count-complete` ≠ all-passed). Drain every fix-retest item per the
-  engine fix-retest drain rule (`docs/engine.md`): session continuation if
-  the harness exposes the workflow-spawned session; otherwise a fresh scoped
-  fix spawn inlining the verifier failure report, logged
-  `Session: resumed-fresh` — sanctioned, not an anti-pattern violation.
-- `dispatchedCount === 0` = DOA invocation (budget semantics or plan error) —
-  fix and re-invoke; it is not a loop.
+- Read `allPassed` + `fixRetestQueue` + `recoveryQueue` for batch quality,
+  never `haltReason` (`count-complete` ≠ all-passed; `allPassed` is a strict
+  conjunction — any worker error/null, unknown side effects, unpassed
+  required verification, non-empty queue, or unavailable guardian forces
+  false). Drain every fix-retest item per the engine fix-retest drain rule
+  (`docs/engine.md`): session continuation if the harness exposes the
+  workflow-spawned session; otherwise a fresh scoped fix spawn inlining the
+  verifier failure report, logged `Session: resumed-fresh` — sanctioned, not
+  an anti-pattern violation. Drain `recoveryQueue` too: worker error/null
+  records have UNKNOWN side effects — inspect the working tree before any
+  further dispatch.
+- `dispatchedCount === 0` = DOA invocation (invalid args, budget semantics
+  or plan error — see `errorCode`/`validationErrors`) — fix and re-invoke;
+  it is not a loop.
 - Complete the four carve-outs attended: tracker sync, audit-file writes,
   fix-retest drain, Q3/Q4 observation attestation.
-- `guardian.verdict != 'clean'` blocks the next invocation until acted on.
+- `nextInvocationBlocked=true` (guardian unavailable OR verdict != 'clean')
+  blocks the next invocation until acted on; `guardian.status != 'ok'` means
+  the run is UNAUDITED — run the guardian audit manually first.
 
 ## Rules
 

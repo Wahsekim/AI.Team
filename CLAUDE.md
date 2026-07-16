@@ -57,7 +57,11 @@ Instantiated names; pre-bootstrap, the `.template.md` seed stands in.
 | `agents/lessons.md` | one-line lessons index (Coach curates) | Coach |
 | `agents/self-improvement.md` | coaching/audit loops (catalog: `docs/failure-classes.md`) | Coach + Auditor |
 | `docs/failure-classes.md` | canonical failure-class catalog + mechanical controls | Coach + Auditor |
-| `scripts/validate-team.sh` | mechanical integrity checker (PM wake step 0, bootstrap gate) | PM |
+| `scripts/validate-team.sh` | mechanical integrity checker (PM wake step 0, bootstrap gate; `--mode deployment` on deployed instances) | PM |
+| `scripts/check-claude-compat.sh` | runtime version + wrapper-frontmatter gate (pre-bootstrap) | PM |
+| `scripts/bootstrap-team.sh` | idempotent template instantiation (mechanical half of bootstrap) | PM |
+| `scripts/measure-context.sh` + `docs/context-budget.md` | cold-start context ratchet | PM + Coach |
+| `tests/` (`node --test tests/*.test.mjs`) | fault-injection suite for engine, validator, compat gate, watchdog | PM + Auditor |
 | `docs/staffing.md` | hiring step, MVT, expansion/retirement triggers | Coach proposes, owner ratifies |
 | `docs/harness-assumptions.md` | runtime contract, degradation table, deployment hooks | PM |
 | `docs/owner-contract.md` | owner duties + SAFE-MODE (human half of the charter) | human owner |

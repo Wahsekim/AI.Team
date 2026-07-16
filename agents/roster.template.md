@@ -88,8 +88,10 @@ Every active role MUST have:
 4. one concrete project-scoped wrapper at `.claude/agents/<project>-<role>.md`
    when the runtime supports wrappers (created at bootstrap — the default
    dispatch path), otherwise instantiated inline mode;
-5. wrapper frontmatter or dispatch brief values for model, reasoning effort, and
-   token budget — model/reasoning COPIED from this roster (single source);
+5. wrapper frontmatter values for model (`model`), reasoning effort (`effort`)
+   and turn cap (`maxTurns`) — model/reasoning COPIED from this roster (single
+   source) — plus the ADVISORY token budget stated in the wrapper body and
+   dispatch brief (no runtime frontmatter field hard-caps tokens per agent);
 6. dispatch instructions telling the PM how to combine base agent + overlay;
 7. a matching row in this roster.
 

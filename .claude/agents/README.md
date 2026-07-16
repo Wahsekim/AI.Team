@@ -15,11 +15,14 @@ when each spawnable role has a concrete wrapper with:
 
 - role-specific name;
 - role-specific description;
-- model;
-- reasoning effort;
-- token budget;
+- model (frontmatter `model` — runtime-enforced);
+- reasoning effort (frontmatter `effort` — runtime-enforced);
+- turn cap (frontmatter `maxTurns` — runtime-enforced);
+- advisory token budget (brief-level only — NO runtime frontmatter field
+  hard-caps tokens per agent; never present it as a mechanical control);
 - base-agent or synthetic source;
-- pointer to `AI.Team/agents/<role_id>.md`.
+- pointer to `agents/<role_id>.md` (team-root-relative — wrappers run with the
+  main session's cwd, which is the team root per README "How to Deploy").
 
 If the runtime cannot install wrappers, copy
 `INLINE_BASE_AGENT_MODE.template.md` to `INLINE_BASE_AGENT_MODE.md`. Inline mode
@@ -28,8 +31,8 @@ role's model, reasoning effort, and token budget into each dispatch brief.
 
 The wrapper's job is to connect a generic agent persona to this project:
 
-- read `AI.Team/profiles/project.md`;
-- read `AI.Team/profiles/stack.md`;
+- read `profiles/project.md`;
+- read `profiles/stack.md`;
 - read the relevant role brief template;
 - report to PM only;
 - avoid hardcoded project facts in the wrapper itself.

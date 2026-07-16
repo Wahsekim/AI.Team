@@ -1,20 +1,34 @@
 #!/bin/bash
 # validate-team.sh — mechanical integrity checker for an AI.Team kit or deployment.
 #
-# Usage: scripts/validate-team.sh [DEPLOYMENT_ROOT]   (default: .)
+# Usage: scripts/validate-team.sh [--mode kit|deployment] [DEPLOYMENT_ROOT]   (default: auto-detect, .)
 #
 # Pure bash + grep/awk/sed/stat. No dependencies. Exit 0 = no FAIL, exit 1 = FAIL(s).
 # One "PASS|FAIL|WARN|SKIP - <check>: <detail>" line per check. WARN/SKIP never fail.
 #
-# Works on BOTH:
-#  - a fresh kit (templates only, nothing instantiated) -> inapplicable checks SKIP;
-#  - a deployed instance (charter.md instantiated) -> full checks.
+# Modes:
+#  - kit         -> validate a fresh kit (templates only); inapplicable checks SKIP.
+#  - deployment  -> validate a deployed instance: the mandatory-artifact matrix must
+#                   be complete; a missing artifact is a FAIL, never a silent skip.
+#  - (no --mode) -> auto-detect: charter.md present = deployment, else kit. Auto-detect
+#                   CANNOT catch a deployment that lost its charter — bootstrap Done
+#                   checklists and CI must call --mode deployment explicitly.
+#
+# Verdicts (last line): KIT-VALID | DEPLOYMENT-READY | DEPLOYMENT-INCOMPLETE.
+# Exit 0 means "no FAIL in the checked mode", NOT "healthy for every purpose".
 #
 # This script is the mechanical control for failure classes FC-8 (counter drift)
 # and parts of FC-9 (staleness) plus single-source/instantiation drift —
 # see docs/failure-classes.md. Wired into: agents/pm.md wake step 0, bootstrap
 # Done checklists, and the recommended Stop hook (docs/harness-assumptions.md).
 
+MODE="auto"
+if [ "$1" = "--mode" ]; then
+  case "$2" in
+    kit|deployment) MODE="$2"; shift 2 ;;
+    *) echo "FAIL - args: --mode must be 'kit' or 'deployment' (got '${2:-}')"; exit 1 ;;
+  esac
+fi
 ROOT="${1:-.}"
 FAILURES=0
 STALE_DAYS=14
@@ -30,17 +44,68 @@ if [ ! -d "$ROOT" ]; then
   exit 1
 fi
 
-# Deployment-mode marker: an instantiated charter.
-DEPLOYED=0
-[ -f "$ROOT/charter.md" ] && DEPLOYED=1
+# Deployment-mode marker: explicit --mode wins; auto-detect falls back to charter presence.
+case "$MODE" in
+  deployment) DEPLOYED=1 ;;
+  kit)        DEPLOYED=0 ;;
+  *)          DEPLOYED=0; [ -f "$ROOT/charter.md" ] && DEPLOYED=1 ;;
+esac
+echo "MODE: $MODE (validating as $([ "$DEPLOYED" = 1 ] && echo deployment || echo kit))"
 
 mtime_of() { # portable mtime (epoch seconds): macOS then GNU
   stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null
 }
 
+# --------------------- check -1: mandatory-artifact matrix (deployment mode only)
+# Data-driven completeness gate: every artifact bootstrap is contractually required
+# to produce. Missing = FAIL — never a silent skip (a partial deployment must not
+# validate green). browser-access.md is conditional (UI projects) and is enforced
+# by the reference-integrity check below instead.
+MANDATORY_ARTIFACTS="
+charter.md
+profiles/project.md
+profiles/stack.md
+agents/roster.md
+agents/_shared/verify-discipline.md
+agents/lifecycle.md
+agents/lessons.md
+memory/pm.md
+pm-decisions.md
+"
+if [ "$DEPLOYED" = 1 ]; then
+  MISSING_ART=""
+  for f in $MANDATORY_ARTIFACTS; do
+    [ -f "$ROOT/$f" ] || MISSING_ART="$MISSING_ART $f"
+  done
+  if [ -n "$MISSING_ART" ]; then
+    fail "mandatory-artifacts" "deployment is missing bootstrap-mandatory artifact(s):$MISSING_ART"
+  else
+    pass "mandatory-artifacts" "all bootstrap-mandatory artifacts present"
+  fi
+  # Conditional artifact by reference-integrity: any operative file pointing at the
+  # instantiated browser-access discipline requires the file to exist.
+  if [ ! -f "$ROOT/agents/_shared/browser-access.md" ]; then
+    BA_REFS=$(grep -rl --include='*.md' 'agents/_shared/browser-access\.md' "$ROOT" 2>/dev/null \
+      | sed "s|^$ROOT/||" | grep -vE '(\.template\.md$|^docs/|^CLAUDE\.md$|^README\.md$)')
+    if [ -n "$BA_REFS" ]; then
+      fail "browser-access-ref" "operative file(s) reference agents/_shared/browser-access.md but it does not exist: $(echo $BA_REFS | tr '\n' ' ')"
+    else
+      pass "browser-access-ref" "browser-access.md absent and unreferenced (non-UI project)"
+    fi
+  else
+    pass "browser-access-ref" "agents/_shared/browser-access.md present"
+  fi
+else
+  skip "mandatory-artifacts" "kit mode — deployment artifact matrix not applicable"
+fi
+
 # ---------------------------------------------------------------- check 0: charter
 if [ "$DEPLOYED" = 1 ]; then
-  pass "charter" "charter.md exists (deployed instance)"
+  if [ -f "$ROOT/charter.md" ]; then
+    pass "charter" "charter.md exists (deployed instance)"
+  else
+    fail "charter" "deployment mode but charter.md is missing (bootstrap incomplete or wrong root)"
+  fi
 elif [ -f "$ROOT/charter.template.md" ]; then
   skip "charter" "fresh kit (charter.template.md only; instantiate at bootstrap)"
 else
@@ -277,24 +342,40 @@ if [ "$DEPLOYED" = 0 ]; then
 else
   NOW=$(date +%s)
   STALE=""
+  CHECKED_FILES=""
+  ABSENT_FILES=""
   for f in memory/pm.md agents/lifecycle.md; do
-    [ -f "$ROOT/$f" ] || continue
+    if [ ! -f "$ROOT/$f" ]; then ABSENT_FILES="$ABSENT_FILES $f"; continue; fi
+    CHECKED_FILES="$CHECKED_FILES $f"
     MT=$(mtime_of "$ROOT/$f")
     [ -n "$MT" ] || continue
     AGE_D=$(( (NOW - MT) / 86400 ))
     [ "$AGE_D" -gt "$STALE_DAYS" ] && STALE="$STALE $f(${AGE_D}d)"
   done
+  # A missing state file is a mandatory-artifacts FAIL; never report it as fresh here.
   if [ -n "$STALE" ]; then
     warn "staleness" "PM state older than ${STALE_DAYS}d:$STALE — verify state before trusting it (FC-9)"
+  elif [ -z "$CHECKED_FILES" ]; then
+    warn "staleness" "no PM state files exist to age-check (missing:$ABSENT_FILES — see mandatory-artifacts)"
+  elif [ -n "$ABSENT_FILES" ]; then
+    warn "staleness" "fresh:$CHECKED_FILES; missing:$ABSENT_FILES (see mandatory-artifacts)"
   else
-    pass "staleness" "memory/pm.md and lifecycle touched within ${STALE_DAYS}d"
+    pass "staleness" "$(echo $CHECKED_FILES) touched within ${STALE_DAYS}d"
   fi
 fi
 
 # ---------------------------------------------------------------------- summary
 if [ "$FAILURES" -gt 0 ]; then
-  echo "RESULT: $FAILURES FAIL(s) — investigate before dispatching (agents/pm.md wake step 0)."
+  if [ "$DEPLOYED" = 1 ]; then
+    echo "RESULT: DEPLOYMENT-INCOMPLETE — $FAILURES FAIL(s); investigate before dispatching (agents/pm.md wake step 0)."
+  else
+    echo "RESULT: KIT-INVALID — $FAILURES FAIL(s); investigate before dispatching (agents/pm.md wake step 0)."
+  fi
   exit 1
 fi
-echo "RESULT: all checks green (PASS/WARN/SKIP only)."
+if [ "$DEPLOYED" = 1 ]; then
+  echo "RESULT: DEPLOYMENT-READY — no FAIL (PASS/WARN/SKIP only)."
+else
+  echo "RESULT: KIT-VALID — no FAIL (PASS/WARN/SKIP only). Kit mode does NOT attest a deployment; run --mode deployment on deployed instances."
+fi
 exit 0

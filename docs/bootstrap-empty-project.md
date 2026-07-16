@@ -16,6 +16,11 @@ deployed instance").
 
 ## PM First Cycle
 
+0. Mechanical instantiation shortcut: `scripts/bootstrap-team.sh
+   --project-name <name> --product-repo <path> [--ui] .` copies every seed to
+   its operational name (idempotent, never overwrites) and fills the
+   name/path placeholders — steps 1 and 3 then reduce to filling the
+   remaining `ask:first_start` placeholders in the interview.
 1. Create `profiles/project.md` from `profiles/project.template.md`.
 2. Ask first-start placeholders from `docs/lazy-placeholders.md` (includes
    project slug, per-role model tiers, and base-agent library location).

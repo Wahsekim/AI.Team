@@ -8,6 +8,7 @@
 # settings.json snippet from this directory.
 
 set -e
+umask 077
 
 HB_DIR="$HOME/.claude/heartbeats"
 mkdir -p "$HB_DIR"
@@ -22,6 +23,13 @@ try:
 except Exception:
     print('')" 2>/dev/null || true)
 fi
+# Session IDs are UNTRUSTED input (they land in file paths): allow only
+# [A-Za-z0-9._-] (no '/', so no path traversal), max 128 chars; anything
+# else falls back to the PPID form.
+case "$session_id" in
+    *[!A-Za-z0-9._-]*) session_id="" ;;
+esac
+session_id=$(printf '%s' "$session_id" | cut -c1-128)
 [ -z "$session_id" ] && session_id="ppid-$PPID"
 
 touch "$HB_DIR/${session_id}.heartbeat"

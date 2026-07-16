@@ -33,7 +33,7 @@ long setup interview. The PM resolves only the values that block the next action
 | `{{BASE_AGENT_ROOT}}` | `agents/roster.md` | ask first start; optional — absent library => all roles synthetic |
 | `{{<ROLE>_MODEL}}` / `{{<ROLE>_REASONING}}` | `agents/roster.md` (single source) | ask first start, using the model-tier menu in `agents/roster.template.md` -> Choosing Models |
 | `{{ENV_PREFIX}}` and verify-discipline values | `agents/_shared/verify-discipline.md` | auto-detect from stack at bootstrap (record `none` explicitly) |
-| `{{BROWSER_TOOL}}` / `{{SMOKE_CREDENTIAL}}` | `agents/_shared/browser-access.md` | ask first use (UI projects) |
+| `{{BROWSER_TOOL}}` / `{{SMOKE_CREDENTIAL_REF}}` | `agents/_shared/browser-access.md` | ask first use (UI projects); REF = env var / keychain name only — literal secrets never enter tracked files (SECURITY.md) |
 | `{{<ROLE> status}}` (`active | dormant | not-hired`) | `agents/roster.md` Status column | hiring step at bootstrap (`docs/staffing.md` questionnaire) |
 | `{{OVERSIZE_BREACH_K}}` / `{{IDLE_CYCLES_N}}` / `{{DORMANT_CYCLES_M}}` | `docs/staffing.md` | defaults 3 / 15 / 30; recalibrate |
 | `{{OWNER_DECISION_SLA}}` / `{{OWNER_REVIEW_INTERVAL}}` | `docs/owner-contract.md` | ask first start; defaults 48h / loop close-or-weekly |

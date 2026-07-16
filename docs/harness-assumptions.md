@@ -5,9 +5,22 @@ does not hold, and the recommended deployment hooks. The kit's defenses are
 HARNESS-level by design (`docs/failure-classes.md`) — so the harness itself is
 a dependency worth stating explicitly.
 
-**Tested against:** Claude Code 2.1.x (July 2026). Other runtimes/versions:
-walk this table before bootstrap and record deviations in
+**Compatibility:** tested against Claude Code 2.1.x (July 2026).
+**Minimum version: 2.1.154** — Dynamic Workflows (`.claude/workflows/*.js`,
+the engine) require it; earlier 2.1.x fails on the workflow path at runtime,
+not at bootstrap. Check `claude --version` before deploying. Other
+runtimes/versions: walk this table before bootstrap and record deviations in
 `profiles/project.md`.
+
+**Enforcement classes** (never present one as another):
+
+- *runtime-enforced*: wrapper frontmatter `model` / `effort` / `maxTurns` /
+  `tools` / `disallowedTools` / `permissionMode`; workflow `budget` gates;
+  hook `deny` rules. Unknown frontmatter fields are SILENTLY IGNORED by the
+  runtime — a typo demotes a control to a no-op, so probe after bootstrap.
+- *advisory (prompt-level)*: per-role token budgets, brief discipline,
+  meta-rules M1-M6. These depend on model compliance; they are conventions,
+  not caps. There is NO frontmatter field that hard-caps tokens per agent.
 
 ## Required primitives
 
@@ -63,7 +76,7 @@ Stop-hook is the mechanical wake/close control for FC-8 — see
         "hooks": [
           {
             "type": "command",
-            "command": "bash AI.Team/scripts/validate-team.sh AI.Team || echo 'validate-team FAIL — investigate before next dispatch (agents/pm.md wake step 0)'"
+            "command": "bash scripts/validate-team.sh . || echo 'validate-team FAIL — investigate before next dispatch (agents/pm.md wake step 0)'"
           },
           {
             "type": "command",
@@ -76,7 +89,13 @@ Stop-hook is the mechanical wake/close control for FC-8 — see
   "permissions": {
     "deny": [
       "Bash(git push:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git clean:*)",
+      "Read(.env)",
+      "Read(.env.*)",
+      "Read(**/*.pem)",
+      "Read(**/*.key)"
     ]
   }
 }
@@ -84,12 +103,22 @@ Stop-hook is the mechanical wake/close control for FC-8 — see
 
 - Keep the git denials wherever owner policy is local-git-only or
   no-commit-without-ask (charter `GIT_POLICY`); drop them only on explicit
-  owner instruction.
+  owner instruction. The `Read` denials keep secret files out of agent
+  context (SECURITY.md) — extend per project. Deny rules are
+  runtime-enforced but pattern-based; they are damage-limiting, NOT a
+  sandbox — confidential repos need isolation (container/VM/worktree).
 - Watchdog for long unattended runs: `scripts/watchdog/` (start/stop scripts,
   heartbeat, install notes).
 - The Stop-hook does not replace wake step 0: the PM still runs
   `scripts/validate-team.sh` at wake and investigates any FAIL before
   dispatching.
+
+## Pre-bootstrap compatibility gate
+
+Run `scripts/check-claude-compat.sh .` before bootstrap and after Claude Code
+upgrades: it fails fast when the CLI is below the minimum version (Dynamic
+Workflows) or when an active wrapper carries legacy/unknown frontmatter
+fields the runtime would silently ignore.
 
 ## Update rule
 

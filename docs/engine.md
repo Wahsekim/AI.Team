@@ -95,16 +95,29 @@ The rule, in preference order:
 ## Args contract
 
 ```js
-{ rounds, plan, date, nextLifecycleNumber, budgetCeilingTokens }
+{ rounds, plan, date, nextLifecycleNumber, budgetCeilingTokens, runId? }
 ```
+
+**Strict validation (fail-closed):** every field is validated BEFORE any
+dispatch; any violation returns `{errorCode: 'invalid-args',
+validationErrors: [...], dispatchedCount: 0}` with zero agents run. `rounds`
+and `nextLifecycleNumber` must be positive safe integers (`rounds` <= 300);
+`date` must be a real `YYYY-MM-DD` calendar date; `budgetCeilingTokens`,
+when given, a finite number > 0; ticket/agentType are length-capped and
+reject control characters (they land in lifecycle headers).
 
 - `date` (YYYY-MM-DD) and `nextLifecycleNumber` are REQUIRED — the workflow
   body has no clock and cannot read `agents/lifecycle.md` to count entries.
+- `runId` (optional, `[A-Za-z0-9._-]{1,64}`) — reconciliation idempotency
+  key; derived as `run-<date>-<NNN>` when omitted. It appears in the
+  `### BATCH` header so a re-run can be detected before pasting twice.
 - `plan[]` items: `{ticket, agentType, model, brief, isCodeShipping,
   verifierBrief, verifierAgentType, verifierModel}`. Models/agentTypes come
   from `agents/roster.md` (single source); briefs are built from
   `agents/templates.md` before the run; verifier briefs re-paste the stack's
   env/command discipline verbatim (`_shared/verify-discipline.md`).
+  `isCodeShipping` is a REQUIRED EXPLICIT boolean on every item —
+  verification opt-out by omission is rejected at validation.
 - `budgetCeilingTokens` — the Q5 ceiling. **Computable on every loop:**
   - **First loop (no history):** `sum of per-iter tier estimates
     (worker + verifier, from agents/pm.md Rules bands) x 1.3`.
@@ -119,32 +132,58 @@ The rule, in preference order:
 
 ## Return contract — how to read it
 
-- `allPassed` + `fixRetestQueue` are the batch-quality signals. **Never read
-  `haltReason` for quality**: `count-complete` means all N DISPATCHED, not all
-  passed.
+- `allPassed` + `fixRetestQueue` + `recoveryQueue` are the batch-quality
+  signals. **Never read `haltReason` for quality**: `count-complete` means
+  all N DISPATCHED, not all passed. `allPassed` is a STRICT conjunction:
+  every worker succeeded (or clean terminal-stop), no unknown side effects,
+  every required verification `passed`, both queues empty, guardian ran and
+  did not return halt-and-investigate. No state defaults green.
+- Per-iteration records carry three explicit state fields (no nullable
+  booleans with dual meanings):
+  - `workerStatus`: `succeeded | null_result | error | terminal_stop` —
+    `null_result`/`error` mean the worker vanished/threw and its
+    `sideEffects` are `unknown` (it may have half-changed files);
+  - `verificationStatus`: `not_applicable | passed | failed | missing |
+    blocked_by_worker_error` — a code-shipping iter counts ONLY on `passed`;
+    `missing` (gate threw/null) and `blocked_by_worker_error` are
+    fail-closed into the queues;
+  - `sideEffects`: `none_reported | known | unknown`.
+  A code-shipping iteration that terminal-stops STILL gets its verifier gate
+  before the loop breaks — `terminalStop` only stops FURTHER iterations.
+- Counts are explicit: `workerSucceededCount`, `verificationRequiredCount`,
+  `verificationPassedCount`, `recoveryRequiredCount` (there is no ambiguous
+  `passedCount`).
 - `dispatchedCount === 0` is the **DOA check**: the run died before any worker
-  ran — budget/ceiling semantics error, malformed plan, or a rejected
-  invocation (the malformed-args error return also carries
-  `dispatchedCount: 0`). Fix the invocation; do not count it as a loop.
+  ran — invalid args (`errorCode: 'invalid-args'` + `validationErrors`),
+  budget/ceiling semantics error, or malformed plan. Fix the invocation; do
+  not count it as a loop.
 - `results[i].workerTokens` / `results[i].verifierTokens` are the per-spawn
   harness figures for lifecycle attribution and coaching KPIs;
   `selfReportTokens` is the distrusted M4 self-report (dual-record >30%
   divergence).
-- `guardian.verdict != 'clean'` blocks the next invocation until the PM acts
-  on `guardian.findings`.
+- **Guardian is fail-closed**: if the guardian throws, is skipped, or returns
+  null, the engine STILL returns the full recovery package (results, queues,
+  paste-ready blocks) with `guardian.status: 'unavailable'`,
+  `guardianError`, and `nextInvocationBlocked: true` — the run is UNAUDITED
+  and can never be `allPassed`. `guardian.status: 'ok'` +
+  `guardian.verdict != 'clean'` also blocks the next invocation until the PM
+  acts on `guardian.findings`.
 - `needsGrooming` / `remainingRounds`: the plan was shorter than N — groom
   attended, then re-invoke with a fresh plan and an updated
   `nextLifecycleNumber`.
 
-## Reconciliation rule (paste-verbatim)
+## Reconciliation rule (paste-verbatim, idempotent)
 
 After EVERY invocation, before anything else — before tracker sync, before the
-cycle report, before pulling new work — the PM pastes
+cycle report, before pulling new work — the PM FIRST checks idempotency: if
+`agents/lifecycle.md` already contains a `### BATCH` header carrying this
+run's `runId`, the run was already reconciled — stop, never paste twice.
+Otherwise the PM pastes
 `mainSessionTodo.lifecycleEntries` verbatim into `agents/lifecycle.md` and
 `mainSessionTodo.messagesLogBlock` verbatim into `messages/<date>.md`. The
-emitted lifecycle block already includes the `### BATCH` header, the numbered
-per-iter entries (with separate worker/verifier token figures), and the
-numbered guardian-verdict entry — nothing in it is hand-derived.
+emitted lifecycle block already includes the `### BATCH` header (with the
+runId), the numbered per-iter entries (with separate worker/verifier token
+figures), and the numbered guardian entry — nothing in it is hand-derived.
 
 **Manual re-derivation of these entries is BANNED** — re-derivation
 reintroduces the transcription-drift failure class the emission exists to
@@ -158,8 +197,10 @@ above), Q3/Q4 attestation, guardian findings.
 ## Keeping the engine honest
 
 Before trusting a new or changed engine script in production, run the chaos
-gate (see `agents/chaos.md`): injected-failure tests confirming the fail-closed
-paths actually stop the loop (injected owner-stop -> `terminalStop` break;
-null/ungrounded/inconsistent verifier verdict -> `fixRetestQueue`). Also verify
-once per deployment whether workflow-spawned sessions are continuable
-(fix-retest drain rule).
+gate (see `agents/chaos.md`): the kit SHIPS the injected-failure suite —
+`node --test tests/*.test.mjs` exercises the real script through a mock runtime
+(`tests/workflow-harness.mjs`) covering invalid args, worker error/null,
+terminal-stop verification, null/ungrounded/inconsistent verifier verdicts,
+guardian failure, budget gating, and log-injection neutralization. Run it
+after ANY engine edit; all tests must pass. Also verify once per deployment
+whether workflow-spawned sessions are continuable (fix-retest drain rule).

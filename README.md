@@ -23,10 +23,14 @@ It works against either:
 
 ## Requirements
 
-- **Claude Code** (tested against 2.1.x, July 2026) with the Workflow tool,
-  project-scoped subagent registry (`.claude/agents/`), hooks, and background
-  agent dispatch. Every missing primitive has a documented fallback — see the
-  degradation table in `docs/harness-assumptions.md`.
+- **Claude Code >= 2.1.154** (tested against 2.1.x, July 2026) with the
+  Workflow tool (Dynamic Workflows require 2.1.154+), project-scoped subagent
+  registry (`.claude/agents/`), hooks, and background agent dispatch. Check
+  yours with `claude --version`. Every missing primitive has a documented
+  fallback — see the degradation table in `docs/harness-assumptions.md`.
+  Note: per-role token budgets in this kit are ADVISORY brief-level targets;
+  the runtime enforces `model`, `effort`, and `maxTurns` from wrapper
+  frontmatter, but no frontmatter field hard-caps tokens per agent.
 - **git** (local use is enough; no remote required).
 - Optional: an issue tracker (Jira / Linear / GitHub Projects). Without one,
   the Kanban methodology falls back to a file-based board — see
@@ -44,8 +48,18 @@ It works against either:
      MyProduct/      <- your product code (created at bootstrap if absent)
    ```
 
-2. **Open Claude Code in `AI.Team/` and say `start team`.**
-   The PM wakes, reads `CLAUDE.md`, and runs the bootstrap interview:
+2. **Open Claude Code in `AI.Team/` — with the product repo added — and say
+   `start team`.** The product repo is a sibling directory, so the session
+   needs explicit access to it:
+
+   ```bash
+   cd MyWorkspace/AI.Team
+   claude --add-dir /absolute/path/to/MyWorkspace/MyProduct
+   ```
+
+   Team files (`agents/...`, `profiles/...`) are read relative to this cwd —
+   the team root. The PM wakes, reads `CLAUDE.md`, and runs the bootstrap
+   interview:
    - instantiates `charter.md` and `profiles/project.md` / `profiles/stack.md`
      from their `.template.md` seeds (templates stay untouched as reference);
    - asks only the first-start placeholders (project name, repo path, token
@@ -64,11 +78,16 @@ It works against either:
 4. **Verify the deployment** at any time:
 
    ```bash
-   scripts/validate-team.sh .
+   scripts/check-claude-compat.sh .            # runtime version + wrapper frontmatter
+   scripts/validate-team.sh --mode deployment . # deployed instance: full artifact matrix
+   scripts/validate-team.sh .                   # fresh kit / auto-detect
+   node --test tests/*.test.mjs  # engine + validator + watchdog fault-injection suite
    ```
 
-   Pure bash, no dependencies; exit 0 = healthy. It is also the wake-step-0
-   integrity gate the PM runs every cycle.
+   Pure bash (validator) + node (tests); exit 0 = no FAIL **in the checked
+   mode** — kit mode does not attest a deployment, so deployed instances must
+   use `--mode deployment`. The validator is also the wake-step-0 integrity
+   gate the PM runs every cycle.
 
 5. **Drive it.** `start <project>` / `stop <project>` for daily cycles. Your
    duties as the human owner (decision SLA, weekly ledger scan, real-device
@@ -168,3 +187,10 @@ start team
 ```
 
 The PM should then initialize `profiles/project.md` and `profiles/stack.md`.
+
+## License
+
+MIT — see [LICENSE](LICENSE). You may use, modify, and redistribute this kit,
+including commercially, with attribution. Instantiated deployments (your
+`charter.md`, profiles, ledgers) are your own content and are not required to
+be shared.

@@ -15,6 +15,11 @@ deployed instance").
 
 ## Local Inventory
 
+Mechanical instantiation shortcut first: `scripts/bootstrap-team.sh
+--project-name <name> --product-repo <path> [--ui] .` copies every seed to
+its operational name (idempotent, never overwrites); the interview below then
+only fills the remaining `ask:first_start` placeholders.
+
 The PM or Architect scans:
 
 - top-level tree and package manifests;
