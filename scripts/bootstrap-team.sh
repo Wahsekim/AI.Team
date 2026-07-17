@@ -62,9 +62,22 @@ fi
 if [ "$DRY" != 1 ]; then
   BOOT_LOCK="$ROOT/.bootstrap-lock"
   if ! mkdir "$BOOT_LOCK" 2>/dev/null; then
-    failboot "another bootstrap appears to be in progress (lock $BOOT_LOCK exists) — wait for it, or remove the directory if it is stale"
+    # Stale-lock recovery (R5-12a): a SIGKILL inside the lock window would
+    # brick every later run. Mirror reconcile-run.mjs acquireLock: if the
+    # recorded owner pid is missing or dead, reclaim and retry ONCE; a live
+    # owner blocks as before.
+    lock_pid=$(cat "$BOOT_LOCK/pid" 2>/dev/null || echo "")
+    case "$lock_pid" in ''|*[!0-9]*) lock_pid="" ;; esac
+    if [ -n "$lock_pid" ] && kill -0 "$lock_pid" 2>/dev/null; then
+      failboot "another bootstrap appears to be in progress (lock $BOOT_LOCK held by live pid $lock_pid) — wait for it"
+    fi
+    echo "WARN - lock: stale $BOOT_LOCK (owner pid '${lock_pid:-unknown}' not running) — reclaiming"
+    rm -rf "$BOOT_LOCK"
+    mkdir "$BOOT_LOCK" 2>/dev/null \
+      || failboot "cannot acquire lock $BOOT_LOCK even after clearing a stale one — resolve manually"
   fi
-  trap 'rm -f "${TMP:-}" 2>/dev/null; rmdir "$BOOT_LOCK" 2>/dev/null' EXIT
+  echo $$ > "$BOOT_LOCK/pid"
+  trap 'rm -f "${TMP:-}" 2>/dev/null; rm -rf "$BOOT_LOCK" 2>/dev/null' EXIT
 fi
 if [ -n "$PRODUCT_REPO" ]; then
   # Normalize to an absolute path (the path may not exist yet — bootstrap of a
@@ -169,14 +182,17 @@ done
 #   placeholders     -> INSTANTIATED-PENDING-INTERVIEW
 #   all clean        -> BOOTSTRAPPED
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-COMPAT_CLEAN=1
-if [ -x "$SCRIPT_DIR/check-claude-compat.sh" ]; then
-  if COUT=$("$SCRIPT_DIR/check-claude-compat.sh" "$ROOT" 2>&1); then
+# Fail-closed (R5-08), like the validator gate below: the gate is clean only
+# when the checker RAN and passed. Explicit interpreter — a copy/unzip that
+# drops the exec bit must not silently skip the gate.
+COMPAT_CLEAN=0
+if [ -f "$SCRIPT_DIR/check-claude-compat.sh" ]; then
+  if COUT=$(bash "$SCRIPT_DIR/check-claude-compat.sh" "$ROOT" 2>&1); then
     COMPAT_CLEAN=1
-  else
-    COMPAT_CLEAN=0
   fi
   printf '%s\n' "$COUT" | tail -1
+else
+  echo "WARN - compat: scripts/check-claude-compat.sh missing — compatibility gate NOT run (fail-closed)"
 fi
 VALIDATOR_CLEAN=0
 if [ -x "$SCRIPT_DIR/validate-team.sh" ]; then

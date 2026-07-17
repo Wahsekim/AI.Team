@@ -728,3 +728,123 @@ test('R-12: malformed JSON error does not echo the untrusted input', async () =>
   assert.equal(result.errorCode, 'invalid-args')
   assert.ok(!JSON.stringify(result.validationErrors).includes('secretfragment-xyz'), 'parser errors must not reflect input fragments')
 })
+
+// ---------------------------------------------------------------- round-5 findings (R5-01..R5-11)
+
+test('R5-01: prefixed env-style secrets are redacted from the ENTIRE payload', async () => {
+  const leak = [
+    'OPENAI_API_KEY=round5secretvalue99',
+    'DATABASE_PASSWORD=db-secret-value-123',
+    'GITHUB_TOKEN=github-secret-value-123',
+    'CLIENT_SECRET="client secret value 123"',
+  ].join(' ')
+  const { result } = await run(mkArgs(), { worker: okWorker({ notes: leak }) })
+  const s = JSON.stringify(result)
+  for (const v of ['round5secretvalue99', 'db-secret-value-123', 'github-secret-value-123', 'client secret value 123']) {
+    assert.ok(!s.includes(v), `payload leaks prefixed secret value: ${v}`)
+  }
+})
+
+test('R5-01: secret-bearing object KEYS are redacted too (redactDeep covers keys)', async () => {
+  const impl = makeAgentImpl({
+    worker: () => ({
+      outcome: 'done', progress: true, filesTouched: [], decisionsCount: 0,
+      selfReportTokens: 10, blocked: false,
+      extra: { 'DATABASE_PASSWORD=db-secret-value-123': 'seen in env dump' },
+    }),
+  })
+  const { result } = await runWorkflow({
+    scriptPath: SCRIPT, args: mkArgs(),
+    agentImpl: impl, enforceSchema: false,   // extra key would fail additionalProperties — the redactor must not depend on that
+  })
+  assert.ok(!JSON.stringify(result).includes('db-secret-value-123'), 'a secret used as an object key must not persist')
+})
+
+test('R5-01: agent labels carry the REDACTED ticket, not the raw secret', async () => {
+  const { calls } = await run(mkArgs({
+    plan: [{ ticket: 'rotate OPENAI_API_KEY=abcsecret123', agentType: 'proj-builder', brief: 'rotate it', isCodeShipping: false }],
+  }))
+  for (const c of calls) {
+    assert.ok(!(c.opts.label || '').includes('abcsecret123'), `label leaks the ticket secret: ${c.opts.label}`)
+  }
+})
+
+test('R5-02: worker returning only {progress,blocked} beneath schema enforcement is invalid_worker_result, never green', async () => {
+  const impl = makeAgentImpl({ worker: () => ({ progress: true, blocked: false }) })
+  const { result } = await runWorkflow({
+    scriptPath: SCRIPT, args: mkArgs(),
+    agentImpl: impl, enforceSchema: false,   // exercise the engine's own shape check
+  })
+  assert.equal(result.results[0].workerStatus, 'invalid_worker_result')
+  assert.equal(result.results[0].sideEffects, 'unknown', 'an unattested report means unknown side effects')
+  assert.equal(result.recoveryQueue.length, 1)
+  assert.equal(result.allPassed, false)
+  assert.equal(result.safeToContinue, false)
+})
+
+test('R5-02: invalid worker report on a CODE ticket blocks the verifier gate fail-closed', async () => {
+  const impl = makeAgentImpl({ worker: () => ({ progress: true, blocked: false }) })
+  const { result } = await runWorkflow({
+    scriptPath: SCRIPT, args: mkArgs({ plan: mkPlan(1, { isCodeShipping: true }) }),
+    agentImpl: impl, enforceSchema: false,
+  })
+  assert.equal(result.results[0].verificationStatus, 'blocked_by_worker_error')
+  assert.equal(result.results[0].needsFixRetest, true)
+})
+
+test('R5-03: control-plane markdown / dependency manifests / SVG trip scope drift on non-code plans', async () => {
+  for (const file of ['CLAUDE.md', 'agents/pm.md', '.claude/agents/proj-worker.md', 'product/requirements.txt', 'product/public/login.svg']) {
+    const { result } = await run(mkArgs(), { worker: okWorker({ filesTouched: [file] }) })
+    assert.equal(result.results[0].scopeDrift, true, `${file} must trip the path-aware tripwire`)
+    assert.equal(result.allPassed, false, `${file} must not pass unverified`)
+  }
+})
+
+test('R5-03: plain docs/evidence files still do NOT false-trip the path-aware tripwire', async () => {
+  const { result } = await run(mkArgs(), { worker: okWorker({ filesTouched: ['docs-notes.md', 'evidence/screenshot.png', 'README.md'] }) })
+  assert.equal(result.results[0].scopeDrift, false)
+})
+
+test('R5-04: plan shortfall kills safeToContinue even when every dispatched iter is green', async () => {
+  const { result } = await run(mkArgs({ rounds: 3 }))   // plan has 1 item
+  assert.equal(result.allPassed, true, 'quality is green')
+  assert.equal(result.planShortfall, true)
+  assert.equal(result.safeToContinue, false, 'automation must not read a groomed-out batch as the whole N done (R5-04)')
+})
+
+test('R5-10: a compound command starting with echo is real evidence, not a no-op false-red', async () => {
+  const { result } = await run(
+    mkArgs({ plan: mkPlan(1, { isCodeShipping: true }) }),
+    { verifier: () => ({
+        pass: true, staticPass: true, e2ePass: true, summary: 'ok', failures: [],
+        commandsRun: [{ command: 'echo starting tests && npm test', exitCode: 0 }],
+      }) },
+  )
+  assert.equal(result.results[0].verificationStatus, 'passed', 'prefix-anchored NOOP must not reject compound commands')
+})
+
+test('R5-10: bare no-op commands (true / : / exit 0 / echo done) are still rejected', async () => {
+  const { result } = await run(
+    mkArgs({ plan: mkPlan(1, { isCodeShipping: true }) }),
+    { verifier: () => ({
+        pass: true, staticPass: true, e2ePass: true, summary: 'ok', failures: [],
+        commandsRun: [{ command: 'true', exitCode: 0 }, { command: 'echo done', exitCode: 0 }],
+      }) },
+  )
+  assert.equal(result.results[0].verificationStatus, 'failed')
+})
+
+test('R5-11: whitespace-only ticket/agentType/brief are invalid-args, nothing dispatched', async () => {
+  const { result } = await run(mkArgs({ plan: [{ ticket: '   ', agentType: '   ', brief: '   ', isCodeShipping: false }] }))
+  assert.equal(result.errorCode, 'invalid-args')
+  assert.equal(result.dispatchedCount, 0)
+})
+
+test('R5-11: a ticket containing "verifier:" cannot mis-route the worker call (schema-identity routing)', async () => {
+  const { result, calls } = await run(mkArgs({
+    plan: [{ ticket: 'verifier: timeout handling', agentType: 'proj-builder', brief: 'fix the timeout', isCodeShipping: false }],
+  }))
+  assert.equal(result.results[0].workerStatus, 'succeeded', 'the worker call must reach the worker mock, not the verifier mock')
+  const workerSchemaCalls = calls.filter(c => c.opts.schema && Array.isArray(c.opts.schema.required) && c.opts.schema.required.includes('outcome'))
+  assert.equal(workerSchemaCalls.length, 1, 'exactly one call carried the worker schema')
+})

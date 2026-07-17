@@ -60,7 +60,23 @@ jobs:
       # --log-opts=--all covers every commit on every ref each run — which also
       # makes concurrency cancellation safe (the newest scan supersedes).
       # .gitleaksignore fingerprints are honored.
+      # Digest-pinned image (R5-13 — mutable tags are a supply-chain vector,
+      # same rule as the SHA-pinned actions above); read-only mount and no
+      # network, since detect needs neither.
       - name: Gitleaks full-history scan
         run: |
-          docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.24.3 \
+          docker run --rm --network none -v "$PWD:/repo:ro" \
+            ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
             detect --source /repo --log-opts=--all --redact -v
+
+  # Single stable check name for a branch ruleset (R5-09): require 'ci-required'
+  # instead of chasing matrix-expanded job names.
+  ci-required:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [test, shellcheck, secret-scan]
+    if: always()
+    steps:
+      - name: All required jobs green
+        run: |
+          [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" = "false" ]

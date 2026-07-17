@@ -36,7 +36,11 @@ const COMPLETE_DEPLOYMENT = {
   'CLAUDE.md': '# Team index\n',
   'profiles/project.md': '# Project profile\n',
   'profiles/stack.md': '# Stack profile\n',
-  'agents/roster.md': '# Roster\n\n| role | status | wrapper |\n|---|---|---|\n| builder | active | .claude/agents/proj-builder.md |\n',
+  // Status is the LAST column (matches roster.template.md's Recommended Roster
+  // shape — the R5-05 contract reads role_id from the first cell, status from
+  // the last). Every active row needs agents/<role_id>.md + a dispatch path.
+  'agents/roster.md': '# Roster\n\n| role | wrapper | status |\n|---|---|---|\n| builder | .claude/agents/proj-builder.md | active |\n',
+  'agents/builder.md': '# Builder role\n\nScope, verify gates, and handoff format for the builder role.\n',
   'agents/_shared/verify-discipline.md': '# Verify discipline\n',
   'agents/lifecycle.md': '# Lifecycle\n\n## [001] bootstrap — deployed\n\nNext NNN to assign: 002\n',
   'agents/lessons.md': '# Lessons index\n',
@@ -141,7 +145,7 @@ test('roster pointing at a nonexistent wrapper FAILS', async () => {
 test('roster ROW referencing missing browser-access.md FAILS', async () => {
   const files = {
     ...COMPLETE_DEPLOYMENT,
-    'agents/roster.md': COMPLETE_DEPLOYMENT['agents/roster.md'] + '| ux | active | needs agents/_shared/browser-access.md |\n',
+    'agents/roster.md': COMPLETE_DEPLOYMENT['agents/roster.md'] + '| ux | needs agents/_shared/browser-access.md | dormant |\n',
   }
   await withFixture(files, async root => {
     const { code, out } = await runValidator(root, '--mode', 'deployment')
@@ -211,7 +215,7 @@ test('N-06 false-red: roster PROSE mentioning INLINE_BASE_AGENT_MODE.md does not
 test('roster ROW declaring inline mode without the file FAILS', async () => {
   const files = {
     ...COMPLETE_DEPLOYMENT,
-    'agents/roster.md': '# Roster\n\n| role | status | wrapper |\n|---|---|---|\n| builder | active | .claude/agents/INLINE_BASE_AGENT_MODE.md |\n',
+    'agents/roster.md': '# Roster\n\n| role | wrapper | status |\n|---|---|---|\n| builder | .claude/agents/INLINE_BASE_AGENT_MODE.md | active |\n',
   }
   delete files['.claude/agents/proj-builder.md']
   await withFixture(files, async root => {
@@ -271,17 +275,94 @@ test('F-05: wrapper without a positive-integer maxTurns fails (template contract
   })
 })
 
-test('F-05: one-byte INLINE_BASE_AGENT_MODE.md is not a dispatch configuration', async () => {
+test('F-05/R5-06: one-byte INLINE_BASE_AGENT_MODE.md is not a dispatch configuration', async () => {
   const files = {
     ...COMPLETE_DEPLOYMENT,
-    'agents/roster.md': '# Roster\n\n| role | status | wrapper |\n|---|---|---|\n| builder | active | .claude/agents/INLINE_BASE_AGENT_MODE.md |\n',
-    '.claude/agents/INLINE_BASE_AGENT_MODE.md': '',
+    'agents/roster.md': '# Roster\n\n| role | wrapper | status |\n|---|---|---|\n| builder | .claude/agents/INLINE_BASE_AGENT_MODE.md | active |\n',
+    '.claude/agents/INLINE_BASE_AGENT_MODE.md': 'x',
   }
   delete files['.claude/agents/proj-builder.md']
   await withFixture(files, async root => {
     const { code, out } = await runValidator(root, '--mode', 'deployment')
     assert.equal(code, 1, out)
-    assert.match(out, /missing-or-empty|roster-wrappers/)
+    assert.match(out, /missing-or-hollow/)
+    assert.match(out, /roster-wrappers/)
+  })
+})
+
+test('R5-05: active roster row with no wrapper path, main session, or inline mode FAILS', async () => {
+  const files = {
+    ...COMPLETE_DEPLOYMENT,
+    'agents/roster.md': COMPLETE_DEPLOYMENT['agents/roster.md'] + '| qa | — | active |\n',
+    'agents/qa.md': '# QA role\n',
+  }
+  await withFixture(files, async root => {
+    const { code, out } = await runValidator(root, '--mode', 'deployment')
+    assert.equal(code, 1, out)
+    assert.match(out, /roster-contract/)
+    assert.match(out, /qa\(no-dispatch-path/)
+  })
+})
+
+test('R5-05: active roster row whose agents/<role_id>.md is missing FAILS', async () => {
+  const files = {
+    ...COMPLETE_DEPLOYMENT,
+    'agents/roster.md': COMPLETE_DEPLOYMENT['agents/roster.md'] + '| qa | .claude/agents/proj-qa.md | active |\n',
+    '.claude/agents/proj-qa.md': '---\nname: proj-qa\ndescription: qa for tests\nmodel: sonnet\neffort: medium\nmaxTurns: 40\ntools: Read, Grep, Bash\npermissionMode: default\n---\n\nQA wrapper.\n',
+  }
+  await withFixture(files, async root => {
+    const { code, out } = await runValidator(root, '--mode', 'deployment')
+    assert.equal(code, 1, out)
+    assert.match(out, /roster-contract/)
+    assert.match(out, /agents\/qa\.md missing-or-empty/)
+  })
+})
+
+test('R5-05: dormant (active if UI) row does NOT trigger the active-row checks', async () => {
+  const files = {
+    ...COMPLETE_DEPLOYMENT,
+    'agents/roster.md': COMPLETE_DEPLOYMENT['agents/roster.md'] + '| ux | (not yet) | dormant (active if UI) |\n',
+  }
+  await withFixture(files, async root => {
+    const { code, out } = await runValidator(root, '--mode', 'deployment')
+    assert.equal(code, 0, `status keyword is the FIRST word of the cell — parenthetical 'active' must not count:\n${out}`)
+  })
+})
+
+test('R5-06: wrapper with name: "" (YAML-empty value) FAILS the frontmatter schema', async () => {
+  const files = {
+    ...COMPLETE_DEPLOYMENT,
+    '.claude/agents/proj-builder.md': '---\nname: ""\ndescription: b\nmodel: sonnet\neffort: high\nmaxTurns: 40\ntools: Read\npermissionMode: default\n---\nBody.\n',
+  }
+  await withFixture(files, async root => {
+    const { code, out } = await runValidator(root, '--mode', 'deployment')
+    assert.equal(code, 1, out)
+    assert.match(out, /wrapper-frontmatter/)
+    assert.match(out, /missing:.*name/)
+  })
+})
+
+test('R5-06: wrapper with unterminated frontmatter (no closing ---) FAILS', async () => {
+  const files = {
+    ...COMPLETE_DEPLOYMENT,
+    '.claude/agents/proj-builder.md': '---\nname: proj-builder\ndescription: b\nmodel: sonnet\neffort: high\nmaxTurns: 40\n\nBody without a closing fence.\n',
+  }
+  await withFixture(files, async root => {
+    const { code, out } = await runValidator(root, '--mode', 'deployment')
+    assert.equal(code, 1, out)
+    assert.match(out, /unterminated-frontmatter/)
+  })
+})
+
+test('R5-06: wrapper with effort: low-medium FAILS (not a runtime effort value)', async () => {
+  const files = {
+    ...COMPLETE_DEPLOYMENT,
+    '.claude/agents/proj-builder.md': '---\nname: proj-builder\ndescription: b\nmodel: sonnet\neffort: low-medium\nmaxTurns: 40\ntools: Read\npermissionMode: default\n---\nBody.\n',
+  }
+  await withFixture(files, async root => {
+    const { code, out } = await runValidator(root, '--mode', 'deployment')
+    assert.equal(code, 1, out)
+    assert.match(out, /invalid-effort:low-medium/)
   })
 })
 

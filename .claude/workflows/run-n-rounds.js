@@ -69,7 +69,8 @@ const MAX_ROUNDS = 300 // 2-3 agents/iter + guardian stays well under the 1000-a
 const MAX_BRIEF_CHARS = 200000
 const CTRL = /[\x00-\x1F\x7F]/
 const isPosInt = v => typeof v === 'number' && Number.isSafeInteger(v) && v >= 1
-const isNonEmptyStr = (v, max) => typeof v === 'string' && v.length > 0 && v.length <= max && !CTRL.test(v)
+// trim(): whitespace-only identifiers dispatch garbage labels/briefs (R5-11)
+const isNonEmptyStr = (v, max) => typeof v === 'string' && v.trim().length > 0 && v.length <= max && !CTRL.test(v)
 const isRealDate = s => {
   if (typeof s !== 'string') return false
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s)
@@ -115,7 +116,7 @@ if (!Array.isArray(A.plan) || A.plan.length === 0) {
     if (!p || typeof p !== 'object' || Array.isArray(p)) { validationErrors.push(`${at} must be an object`); return }
     if (!isNonEmptyStr(p.ticket, 200)) validationErrors.push(`${at}.ticket must be a non-empty string <= 200 chars without control characters`)
     if (!isNonEmptyStr(p.agentType, 128)) validationErrors.push(`${at}.agentType must be a non-empty string <= 128 chars without control characters`)
-    if (typeof p.brief !== 'string' || p.brief.length === 0) validationErrors.push(`${at}.brief must be a non-empty string`)
+    if (typeof p.brief !== 'string' || p.brief.trim().length === 0) validationErrors.push(`${at}.brief must be a non-empty string`)
     else if (p.brief.length > MAX_BRIEF_CHARS) validationErrors.push(`${at}.brief exceeds ${MAX_BRIEF_CHARS} chars`)
     if (typeof p.isCodeShipping !== 'boolean') validationErrors.push(`${at}.isCodeShipping must be an EXPLICIT boolean — verification opt-out by omission is not allowed`)
     // Identifier fields get the same control-char/length rules as agentType —
@@ -231,12 +232,16 @@ const redact = s => String(s || '')
   .replace(/\b(authorization|proxy-authorization|cookie|set-cookie|x-api-key)\s*[:=][^\n]*/gi, '$1: [REDACTED]')
   .replace(/\bbearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, 'bearer [REDACTED]')
   .replace(/\b(sk-[A-Za-z0-9_-]{8,}|ghp_[A-Za-z0-9]{20,}|gho_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|AKIA[A-Z0-9]{12,}|eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,})\b/g, '[REDACTED]')
+  // Sensitive KEY NAMES match the full identifier TAIL, not a bare word (R5-01):
+  // '_' is a word character, so \b(token|...) never fired on OPENAI_API_KEY /
+  // DATABASE_PASSWORD / GITHUB_TOKEN / CLIENT_SECRET — prefixed env-style names
+  // are the COMMON case and must redact too.
   // QUOTED values may contain spaces — 'password="space secret 12345"' (F-01)
-  .replace(/(["']?)\b(bearer|token|password|passwd|secret|api[_-]?key|authorization)\b\1(\s*[:=]\s*|\s+)"[^"\n]{4,}"/gi, '$1$2$1$3"[REDACTED]"')
-  .replace(/(["']?)\b(bearer|token|password|passwd|secret|api[_-]?key|authorization)\b\1(\s*[:=]\s*|\s+)'[^'\n]{4,}'/gi, "$1$2$1$3'[REDACTED]'")
+  .replace(/(["']?)\b((?:[A-Za-z0-9]+[_-])*(?:bearer|token|password|passwd|secret|api[_-]?key|authorization))\b\1(\s*[:=]\s*|\s+)"[^"\n]{4,}"/gi, '$1$2$1$3"[REDACTED]"')
+  .replace(/(["']?)\b((?:[A-Za-z0-9]+[_-])*(?:bearer|token|password|passwd|secret|api[_-]?key|authorization))\b\1(\s*[:=]\s*|\s+)'[^'\n]{4,}'/gi, "$1$2$1$3'[REDACTED]'")
   // unquoted assignments, shell/env/JSON pair styles (R-03):
-  //   password=hunter2x99   "password":"quoted..."   API_KEY='...'
-  .replace(/(["']?)\b(bearer|token|password|passwd|secret|api[_-]?key|authorization)\b\1(\s*[:=]\s*|\s+)(["']?)[^\s"']{6,}\4/gi, '$1$2$1$3$4[REDACTED]$4')
+  //   password=hunter2x99   OPENAI_API_KEY=sk...   "password":"quoted..."
+  .replace(/(["']?)\b((?:[A-Za-z0-9]+[_-])*(?:bearer|token|password|passwd|secret|api[_-]?key|authorization))\b\1(\s*[:=]\s*|\s+)(["']?)[^\s"']{6,}\4/gi, '$1$2$1$3$4[REDACTED]$4')
   // protocol control words are reserved: worker text must not be able to spoof
   // the untrusted-data fence sentinels in the guardian prompt (R-08)
   .replace(/(BEGIN|END)\s+UNTRUSTED\s+WORKER-REPORTED\s+DATA/gi, '[sentinel-removed]')
@@ -244,9 +249,11 @@ const redact = s => String(s || '')
 // results[].verifier, guardian findings): ledger-line sanitization alone is
 // not enough — the full return payload gets saved to disk for reconciliation,
 // so every string in it must pass the redactor (R-03).
+// Keys pass the redactor too (R5-01): worker objects are model-shaped data, and
+// a secret used AS a key ('OPENAI_API_KEY=x' as a map key) persists like a value.
 const redactDeep = v => typeof v === 'string' ? redact(v)
   : Array.isArray(v) ? v.map(redactDeep)
-  : (v && typeof v === 'object') ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, redactDeep(x)]))
+  : (v && typeof v === 'object') ? Object.fromEntries(Object.entries(v).map(([k, x]) => [redact(k), redactDeep(x)]))
   : v
 const cleanLine = (s, max) => redact(s).replace(/\s+/g, ' ').replace(/#/g, '').replace(/\[(\d+)\]/g, '($1)').trim().slice(0, max || 200)
 const oneLine = s => cleanLine(s, 140)
@@ -264,6 +271,11 @@ const emitLogs = (r, verdict) => {
 let haltReason = null
 for (let i = 0; i < iters; i++) {
   const p = plan[i]
+  // ONE sanitized ticket copy per iteration (R5-01): ticket text is
+  // tracker-sourced (untrusted) and rides in agent LABELS and log() lines too —
+  // both leave the engine as telemetry, so they get the same redaction as
+  // results[]/ledgers. p.ticket raw is only ever read here.
+  const safeTicket = redact(p.ticket)
   // Q5 token-burnout — the ONLY halt the script body can observe.
   // Q3 (hardware) and Q4 (owner mid-loop input) are invisible here BY DESIGN (no IO/clock in a
   // workflow body) -> the main session owns them.
@@ -280,6 +292,7 @@ for (let i = 0; i < iters; i++) {
   // workerStatus: 'succeeded' | 'blocked' (worker reported blocked:true — NOT success) |
   //               'no_progress' (progress:false — NOT success) | 'null_result' (skipped/died —
   //               side effects unknown) | 'error' (agent() threw — side effects unknown) |
+  //               'invalid_worker_result' (report missing required fields — side effects unknown) |
   //               'terminal_stop' (stop requested AND the iteration otherwise succeeded).
   // terminalStop is a STOP REQUEST, not an outcome: a worker returning
   // {terminalStop:true, blocked:true} is a BLOCKED iteration that also wants the
@@ -292,11 +305,24 @@ for (let i = 0; i < iters; i++) {
   try {
     worker = await agent(p.brief, {
       agentType: p.agentType, model: p.model,
-      label: `iter${i + 1}:${p.ticket}:${p.agentType}`, phase: 'Loop', schema: WORKER_SCHEMA,
+      label: `iter${i + 1}:${safeTicket}:${p.agentType}`, phase: 'Loop', schema: WORKER_SCHEMA,
     })
     worker = redactDeep(worker)   // full worker object leaves the engine in results[] — redact at capture (R-03)
     terminalStopRequested = worker !== null && worker.terminalStop === true
+    // Schema-independent shape check (R5-02): schema enforcement is a runtime
+    // property this engine must not rely on — the verifier and guardian already
+    // get explicit-field discipline; the WORKER success path needs it too. A
+    // report missing any required field is unattested: never 'succeeded',
+    // side effects unknown, straight to recovery.
+    const workerShapeValid = worker !== null
+      && typeof worker.outcome === 'string'
+      && typeof worker.progress === 'boolean'
+      && typeof worker.blocked === 'boolean'
+      && Array.isArray(worker.filesTouched)
+      && Number.isSafeInteger(worker.decisionsCount)
+      && Number.isSafeInteger(worker.selfReportTokens)
     const outcome = worker === null ? 'null_result'
+      : !workerShapeValid ? 'invalid_worker_result'
       : worker.blocked === true ? 'blocked'
       : worker.progress !== true ? 'no_progress'
       : 'succeeded'
@@ -306,8 +332,9 @@ for (let i = 0; i < iters; i++) {
     workerError = { code: 'worker-agent-error', message: cleanLine(String(e), 200) }
   }
   const workerTokens = spentInLoop() - preWorker
-  // A worker that threw or vanished may ALREADY have modified files — never assume otherwise.
-  const sideEffects = (workerStatus === 'error' || workerStatus === 'null_result') ? 'unknown'
+  // A worker that threw, vanished, or reported an invalid shape may ALREADY
+  // have modified files — never assume otherwise.
+  const sideEffects = (workerStatus === 'error' || workerStatus === 'null_result' || workerStatus === 'invalid_worker_result') ? 'unknown'
     : (worker.filesTouched && worker.filesTouched.length > 0 ? 'known' : 'none_reported')
 
   // ---- verifier gate. verificationStatus is ALWAYS explicit — no nullable-boolean dual meanings.
@@ -330,30 +357,35 @@ for (let i = 0; i < iters; i++) {
     // behavior and needs the verifier gate. Fail-closed to recovery; the main
     // session then reads the REAL git diff (worker reports are untrusted in
     // both directions: this catches honest drift, not a lying worker).
-    const NON_CODE_SAFE = /\.(md|markdown|txt|rst|adoc|png|jpe?g|gif|svg|pdf)$/i
+    // PATH-aware, not extension-only (R5-03): in an AI.Team deployment,
+    // CLAUDE.md / agents/*.md / .claude/** / profiles/** / scripts/** ARE the
+    // run control plane, requirements*.txt is a dependency execution surface,
+    // and SVG is scriptable — a safe extension does not make them safe files.
+    const NON_CODE_SAFE = /\.(md|markdown|txt|rst|adoc|png|jpe?g|gif|pdf)$/i
+    const CONTROL_PLANE = /(^|\/)(CLAUDE\.md|AGENTS\.md|charter\.md|requirements[^/]*\.txt|constraints[^/]*\.txt)$|(^|\/)(\.claude|\.github|agents|profiles|scripts)\//i
     const offending = worker && Array.isArray(worker.filesTouched)
-      ? worker.filesTouched.filter(f => !NON_CODE_SAFE.test(String(f))) : []
+      ? worker.filesTouched.filter(f => CONTROL_PLANE.test(String(f)) || !NON_CODE_SAFE.test(String(f))) : []
     scopeDrift = offending.length > 0
-    if (scopeDrift) log(`iter ${i + 1} ${p.ticket}: SCOPE DRIFT — declared non-code but worker reports non-doc files touched (${offending.slice(0, 3).map(f => oneLine(f)).join(', ')}) — routing to recovery`)
-  } else if (workerStatus === 'error' || workerStatus === 'null_result') {
+    if (scopeDrift) log(`iter ${i + 1} ${safeTicket}: SCOPE DRIFT — declared non-code but worker reports non-doc files touched (${offending.slice(0, 3).map(f => oneLine(f)).join(', ')}) — routing to recovery`)
+  } else if (workerStatus === 'error' || workerStatus === 'null_result' || workerStatus === 'invalid_worker_result') {
     verificationStatus = 'blocked_by_worker_error'
   } else if (budgetTripped()) {
     // Budget crossed between worker and verifier: never skip the gate silently — fail-closed.
     budgetTrippedBeforeVerifier = true
     verificationStatus = 'missing'
-    log(`iter ${i + 1} ${p.ticket}: Q5 gate tripped before the verifier dispatch — verification missing (fail-closed), loop halts`)
+    log(`iter ${i + 1} ${safeTicket}: Q5 gate tripped before the verifier dispatch — verification missing (fail-closed), loop halts`)
   } else {
     // Runs for 'succeeded', 'blocked', 'no_progress' AND 'terminal_stop': a stopping or stuck
     // code-shipping iteration still gets its safety close-out — terminalStop only controls
     // whether FURTHER iterations run.
     try {
       verifier = await agent(
-        p.verifierBrief || `Verify ticket ${redact(p.ticket)} against its acceptance criteria. Run the code-shipping verification commands from profiles/stack.md (static suite + e2e gate where configured; gates whose surfaces do not exist on this ticket are N/A — say so with a note), following _shared/verify-discipline.md (clean state, env prefix verbatim if the stack defines one, real exit codes). You MUST actually EXECUTE the verification commands — do not infer results from reading code. Report EVERY command you ran with its REAL exit code in the commandsRun field; set staticPass and e2ePass honestly (true-with-note when n/a); the engine rejects any pass verdict with an empty commandsRun, a nonzero exitCode, or staticPass/e2ePass=false.`,
-        { agentType: p.verifierAgentType || 'general-purpose', model: p.verifierModel, label: `iter${i + 1}:verifier:${p.ticket}`, phase: 'Loop', schema: VERIFIER_SCHEMA },
+        p.verifierBrief || `Verify ticket ${safeTicket} against its acceptance criteria. Run the code-shipping verification commands from profiles/stack.md (static suite + e2e gate where configured; gates whose surfaces do not exist on this ticket are N/A — say so with a note), following _shared/verify-discipline.md (clean state, env prefix verbatim if the stack defines one, real exit codes). You MUST actually EXECUTE the verification commands — do not infer results from reading code. Report EVERY command you ran with its REAL exit code in the commandsRun field; set staticPass and e2ePass honestly (true-with-note when n/a); the engine rejects any pass verdict with an empty commandsRun, a nonzero exitCode, or staticPass/e2ePass=false.`,
+        { agentType: p.verifierAgentType || 'general-purpose', model: p.verifierModel, label: `iter${i + 1}:verifier:${safeTicket}`, phase: 'Loop', schema: VERIFIER_SCHEMA },
       )
     } catch (e) {
       verifier = null
-      log(`iter ${i + 1} ${p.ticket}: verifier gate agent() FAILED (${cleanLine(String(e), 160)}) — fail-closed, routing to fixRetestQueue`)
+      log(`iter ${i + 1} ${safeTicket}: verifier gate agent() FAILED (${cleanLine(String(e), 160)}) — fail-closed, routing to fixRetestQueue`)
     }
     verifier = redactDeep(verifier)   // full verifier object leaves the engine in results[] — redact at capture (R-03)
     if (!verifier) {
@@ -366,10 +398,12 @@ for (let i = 0; i < iters; i++) {
       if (verifier.pass === true) {
         const cmds = Array.isArray(verifier.commandsRun) ? verifier.commandsRun : []
         // Obvious no-op "evidence" (F-02): `true`, `:`, `exit 0`, bare `echo ...`
-        // exit 0 by construction and verify nothing. This is a tripwire for a
-        // lazy verifier, NOT an adversarial defense — command content stays
-        // verifier-reported (see the honesty note in docs/engine.md).
-        const NOOP = /^\s*(true|:|exit\s+0|echo(\s|$))/i
+        // exit 0 by construction and verify nothing. WHOLE-command match only
+        // (R5-10): 'echo starting tests && npm test' is real evidence — a
+        // prefix-anchored regex false-red'd every compound command starting
+        // with echo. This is a tripwire for a lazy verifier, NOT an adversarial
+        // defense — command content stays verifier-reported (docs/engine.md).
+        const NOOP = /^\s*(?:true|:|exit\s+0)\s*$|^\s*echo\b[^&|;>]*$/i
         if (cmds.length === 0) {
           verifierGroundingFailure = 'pass=true with missing/empty commandsRun — ungrounded verdict rejected'
         } else {
@@ -389,7 +423,7 @@ for (let i = 0; i < iters; i++) {
         if (!verifierGroundingFailure && (verifier.staticPass !== true || verifier.e2ePass !== true)) {
           verifierGroundingFailure = `pass=true but staticPass=${verifier.staticPass} / e2ePass=${verifier.e2ePass} — both must be explicitly true (true-with-note when n/a)`
         }
-        if (verifierGroundingFailure) log(`iter ${i + 1} ${p.ticket}: verifier GROUNDING FAIL — ${verifierGroundingFailure}`)
+        if (verifierGroundingFailure) log(`iter ${i + 1} ${safeTicket}: verifier GROUNDING FAIL — ${verifierGroundingFailure}`)
       }
       verificationStatus = (verifier.pass === true && !verifierGroundingFailure) ? 'passed' : 'failed'
     }
@@ -402,14 +436,14 @@ for (let i = 0; i < iters; i++) {
   // must never read as "N tickets effectively done".
   const needsFixRetest = p.isCodeShipping ? verificationStatus !== 'passed' : false
   const needsRecovery = needsFixRetest
-    || workerStatus === 'error' || workerStatus === 'null_result'
+    || workerStatus === 'error' || workerStatus === 'null_result' || workerStatus === 'invalid_worker_result'
     || workerStatus === 'blocked' || workerStatus === 'no_progress'
     || scopeDrift
   spentTrace.push(spentInLoop())
   const r = {
     // ticket text is tracker-sourced (untrusted): the copy that leaves the
     // engine (results[], iterFacts, ledgers) is redacted + sentinel-safe (F-01/F-04)
-    iter: i + 1, ticket: redact(p.ticket), agentType: p.agentType,
+    iter: i + 1, ticket: safeTicket, agentType: p.agentType,
     workerStatus, verificationStatus, sideEffects,
     terminalStopRequested, scopeDrift,
     verificationRequired: p.isCodeShipping,
@@ -425,6 +459,7 @@ for (let i = 0; i < iters; i++) {
   const stopSuffix = terminalStopRequested && workerStatus !== 'terminal_stop' ? ' + TERMINAL-STOP requested' : ''
   const verdict = workerStatus === 'error' ? 'WORKER ERROR (side effects unknown) -> recovery'
     : workerStatus === 'null_result' ? 'WORKER NULL (skipped/died, side effects unknown) -> recovery'
+    : workerStatus === 'invalid_worker_result' ? `WORKER REPORT INVALID (required fields missing, side effects unknown)${stopSuffix} -> recovery`
     : workerStatus === 'blocked' ? `WORKER BLOCKED${verificationStatus === 'failed' || verificationStatus === 'missing' ? ' + verification not passed' : ''}${stopSuffix} -> recovery`
     : workerStatus === 'no_progress' ? `NO PROGRESS${stopSuffix} -> recovery`
     : scopeDrift ? 'SCOPE DRIFT (non-code plan touched code files) -> recovery'
@@ -569,11 +604,14 @@ const guardianTokens = spentInLoop() - guardianTokensPre
 //                        except count-complete / board-exhausted.
 //   nextInvocationBlocked — the PM may NOT start another engine run: guardian not clean, any
 //                        queue non-empty, budget tripped, or an unacknowledged halt.
-//   safeToContinue     — THE one field automation may read alone: quality green AND everything
-//                        ran AND no budget/halt condition pending. NOTE: allPassed=true no longer
-//                        guarantees nextInvocationBlocked=false — a batch can be all-green work
-//                        that still exhausted its budget (R-04); read safeToContinue.
+//   safeToContinue     — THE one field automation may read alone: quality green AND the WHOLE
+//                        count directive done (all N dispatched — a plan shorter than N needs
+//                        main-session grooming first, R5-04) AND no budget/halt condition
+//                        pending. NOTE: allPassed=true no longer guarantees
+//                        nextInvocationBlocked=false — a batch can be all-green work that
+//                        still exhausted its budget (R-04); read safeToContinue.
 const runIncomplete = results.length < iters
+const planShortfall = iters < rounds
 const guardianClean = guardian.status === 'ok' && guardian.verdict === 'clean'
 const budgetGateTripped = spentInLoop() >= 0.8 * ceiling
 const haltRequiresAcknowledgement = haltReason !== 'count-complete' && !String(haltReason).startsWith('board-exhausted')
@@ -587,7 +625,7 @@ const allPassed =
   guardianClean
 const nextInvocationBlocked = !guardianClean || fixRetestQueue.length > 0 || recoveryQueue.length > 0
   || budgetGateTripped || haltRequiresAcknowledgement
-const safeToContinue = allPassed && !runIncomplete && !budgetGateTripped && !haltRequiresAcknowledgement
+const safeToContinue = allPassed && !runIncomplete && !planShortfall && !budgetGateTripped && !haltRequiresAcknowledgement
 
 // Guardian verdict gets its OWN numbered lifecycle entry (emitted here so the PM never hand-derives it).
 const guardianEntryNo = NNN(A.nextLifecycleNumber + lifecycleEntries.length)
@@ -614,10 +652,10 @@ return {
   verificationPassedCount: results.filter(r => r.verificationStatus === 'passed').length,
   recoveryRequiredCount: recoveryQueue.length,
   allPassed,                                                              // strict conjunction — DISTINCT from count-complete; read THIS for batch quality
-  safeToContinue,                                                         // allPassed AND nothing left undispatched — the one field automation may read alone
+  safeToContinue,                                                         // allPassed AND nothing left undispatched (incl. plan shortfall, R5-04) — the one field automation may read alone
   itersRun: results.length, haltReason,
   runIncomplete,                                                          // true when the loop halted before finishing the planned iters (error/budget/policy)
-  needsGrooming: iters < rounds, planShortfall: iters < rounds,           // the PLAN was shorter than N (distinct from runIncomplete)
+  needsGrooming: planShortfall, planShortfall,                            // the PLAN was shorter than N (distinct from runIncomplete) — kills safeToContinue until groomed (R5-04)
   remainingRounds: rounds - results.length,
   budgetStatus: {                                                         // Q5 gate is 80%-of-ceiling, checked before worker AND verifier dispatches;
     ceiling, loopSpent: spentInLoop(),                                    // a single oversized spawn can still overshoot — overshootTokens reports it

@@ -55,6 +55,12 @@ project requires retention limits or deletion, define them in
 `profiles/project.md` (owner decision) — append-only conventions yield to
 legal deletion requirements.
 
+The engine's redactor is a CREDENTIAL-shape backstop (headers, bearer
+tokens, `*_API_KEY`/`*_PASSWORD`/`*_TOKEN`/`*_SECRET`-style pairs, known
+token formats) — it does NOT detect emails, names, or other PII. Minimal
+data in tickets/briefs/notes is the primary boundary; the regexes are
+damage limitation, never the control.
+
 ## Supported versions
 
 The kit tracks Claude Code >= 2.1.154 (see `scripts/check-claude-compat.sh`).

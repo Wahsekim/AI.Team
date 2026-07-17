@@ -165,15 +165,20 @@ in lifecycle headers).
     unblocked — a batch can be all-green work that still exhausted its
     budget.
   - `safeToContinue` — THE one field automation may read alone: quality
-    green AND everything ran AND no budget/halt condition pending.
+    green AND the WHOLE count directive done (a plan shorter than N sets
+    `planShortfall` and kills it — grooming needs the main session, R5-04)
+    AND no budget/halt condition pending.
   **Never read `haltReason` for quality**: `count-complete` means all N
   DISPATCHED, not all passed.
 - Per-iteration records carry three explicit state fields (no nullable
   booleans with dual meanings):
   - `workerStatus`: `succeeded | blocked | no_progress | null_result | error
-    | terminal_stop` — `blocked`/`no_progress` route to `recoveryQueue`
-    (dispatched ≠ effectively done); `null_result`/`error` mean the worker
-    vanished/threw and its `sideEffects` are `unknown` (it may have
+    | invalid_worker_result | terminal_stop` — `blocked`/`no_progress` route
+    to `recoveryQueue` (dispatched ≠ effectively done);
+    `null_result`/`error`/`invalid_worker_result` mean the worker vanished,
+    threw, or returned a report missing required fields (the engine
+    shape-checks worker reports itself — runtime schema enforcement is not
+    assumed, R5-02) and its `sideEffects` are `unknown` (it may have
     half-changed files);
   - `verificationStatus`: `not_applicable | passed | failed | missing |
     blocked_by_worker_error` — a code-shipping iter counts ONLY on `passed`;

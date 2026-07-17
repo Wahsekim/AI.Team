@@ -98,9 +98,12 @@ export async function runWorkflow({ scriptPath, args, agentImpl, budgetImpl, enf
   return { result, calls, logs, phases }
 }
 
-// Standard mock agent set: dispatches on the engine's label conventions
-// (worker `iterN:<ticket>:<agentType>`, verifier `iterN:verifier:<ticket>`,
-// guardian `chaos:guardian`). Each impl may throw or return null to inject faults.
+// Standard mock agent set: dispatches on SCHEMA IDENTITY (each engine call kind
+// carries a distinct schema — verifier requires 'pass', guardian requires
+// 'runawayDetected'), NOT on label substrings: labels embed the untrusted
+// ticket text, so a ticket like 'verifier: timeout handling' would mis-route a
+// WORKER call to the verifier mock (R5-11). Labels are display-only. Each impl
+// may throw or return null to inject faults.
 export function makeAgentImpl({ worker, verifier, guardian } = {}) {
   const defaults = {
     worker: () => ({
@@ -118,9 +121,9 @@ export function makeAgentImpl({ worker, verifier, guardian } = {}) {
   }
   const impl = { worker: worker ?? defaults.worker, verifier: verifier ?? defaults.verifier, guardian: guardian ?? defaults.guardian }
   return (prompt, opts, callIndex) => {
-    const label = (opts && opts.label) || ''
-    if (label === 'chaos:guardian') return impl.guardian(prompt, opts, callIndex)
-    if (label.includes(':verifier:')) return impl.verifier(prompt, opts, callIndex)
+    const required = (opts && opts.schema && Array.isArray(opts.schema.required)) ? opts.schema.required : []
+    if (required.includes('runawayDetected')) return impl.guardian(prompt, opts, callIndex)
+    if (required.includes('pass')) return impl.verifier(prompt, opts, callIndex)
     return impl.worker(prompt, opts, callIndex)
   }
 }

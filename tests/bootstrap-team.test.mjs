@@ -4,7 +4,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { mkdtemp, mkdir, writeFile, readFile, rm, access } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, readFile, rm, access, copyFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -178,17 +178,31 @@ test('R-09: BOOTSTRAPPED is never printed over an incomplete deployment', async 
   })
 })
 
-test('F-07: a held bootstrap lock blocks a concurrent run (no mixed-config deployments)', async () => {
+test('F-07/R5-12a: a lock held by a LIVE owner pid blocks a concurrent run', async () => {
   await withKit(async root => {
-    const { mkdir } = await import('node:fs/promises')
     await mkdir(join(root, '.bootstrap-lock'))
+    await writeFile(join(root, '.bootstrap-lock', 'pid'), `${process.pid}\n`)
     try {
       await exec('bash', [SCRIPT, root])
       assert.fail('expected nonzero exit while the lock is held')
     } catch (e) {
       assert.equal(e.code, 1)
       assert.match(String(e.stdout), /another bootstrap appears to be in progress/)
+      assert.match(String(e.stdout), /BOOTSTRAP-FAILED/)
     }
+  })
+})
+
+test('R5-12a: stale lock with a dead owner pid is reclaimed and the run proceeds', async () => {
+  await withKit(async root => {
+    // A shell that echoes its own pid and exits: a guaranteed-dead owner.
+    const { stdout: pidOut } = await exec('sh', ['-c', 'echo $$'])
+    await mkdir(join(root, '.bootstrap-lock'))
+    await writeFile(join(root, '.bootstrap-lock', 'pid'), pidOut)
+    const out = await run(root)
+    assert.match(out, /WARN - lock: stale .*reclaiming/, 'must announce the stale-lock takeover')
+    assert.match(out, /RESULT: /)
+    assert.ok(!(await exists(join(root, '.bootstrap-lock'))), 'reclaimed lock must be released after the run')
   })
 })
 
@@ -197,6 +211,62 @@ test('F-07: bootstrap lock is released after a run (subsequent run proceeds)', a
     await run(root)
     const out = await run(root)
     assert.match(out, /RESULT: /)
+  })
+})
+
+// R5-08 fixtures: copy the script into a scripts dir we control so the compat
+// and validator gates run against fakes instead of the real kit checkers.
+async function withGateFakes(root, { compatBody, compatMode = 0o644 } = {}) {
+  const sdir = join(root, 'kit-scripts')
+  await mkdir(sdir, { recursive: true })
+  await copyFile(SCRIPT, join(sdir, 'bootstrap-team.sh'))
+  await writeFile(join(sdir, 'validate-team.sh'), '#!/bin/bash\necho "RESULT: PASS (fake validator)"\nexit 0\n', { mode: 0o755 })
+  if (compatBody !== undefined) {
+    await writeFile(join(sdir, 'check-claude-compat.sh'), compatBody, { mode: compatMode })
+  }
+  return join(sdir, 'bootstrap-team.sh')
+}
+
+// Seeds without ask:first_start placeholders, so the verdict is decided by the
+// gates alone (same shape as the R-09 test above).
+async function stripInterviewPlaceholders(root) {
+  await writeFile(join(root, 'profiles/project.template.md'), 'name: fixed\n')
+  await writeFile(join(root, 'profiles/stack.template.md'), '# Stack fixed\n')
+  await writeFile(join(root, 'agents/_shared/verify-discipline.template.md'), '# Verify fixed\n')
+}
+
+test('R5-08: non-executable FAILING compat checker still runs and blocks BOOTSTRAPPED', async () => {
+  await withKit(async root => {
+    await stripInterviewPlaceholders(root)
+    const script = await withGateFakes(root, {
+      compatBody: '#!/bin/bash\necho "compat: FAIL (fake)"\nexit 1\n',
+      compatMode: 0o644, // exec bit dropped (copy/unzip shape) — gate must run anyway
+    })
+    const { stdout } = await exec('bash', [script, '--project-name', 'X', root])
+    assert.match(stdout, /RESULT: PENDING-RUNTIME-COMPAT/, `failing checker must gate the verdict:\n${stdout}`)
+    assert.ok(!/RESULT: BOOTSTRAPPED/.test(stdout))
+  })
+})
+
+test('R5-08: MISSING compat checker fails closed — never BOOTSTRAPPED', async () => {
+  await withKit(async root => {
+    await stripInterviewPlaceholders(root)
+    const script = await withGateFakes(root) // no check-claude-compat.sh at all
+    const { stdout } = await exec('bash', [script, '--project-name', 'X', root])
+    assert.match(stdout, /WARN - compat: .*missing.*fail-closed/, 'the unrun gate must be announced')
+    assert.match(stdout, /RESULT: PENDING-RUNTIME-COMPAT/)
+    assert.ok(!/RESULT: BOOTSTRAPPED/.test(stdout))
+  })
+})
+
+test('R5-08 control: passing compat checker + clean validator -> BOOTSTRAPPED', async () => {
+  await withKit(async root => {
+    await stripInterviewPlaceholders(root)
+    const script = await withGateFakes(root, {
+      compatBody: '#!/bin/bash\necho "compat: PASS (fake)"\nexit 0\n',
+    })
+    const { stdout } = await exec('bash', [script, '--project-name', 'X', root])
+    assert.match(stdout, /RESULT: BOOTSTRAPPED/, `fail-closed gate must still be satisfiable:\n${stdout}`)
   })
 })
 

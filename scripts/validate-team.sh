@@ -58,6 +58,16 @@ mtime_of() { # portable mtime (epoch seconds): GNU first — on Linux the BSD
   case "$MT_OUT" in ''|*[!0-9]*) return 1 ;; *) printf '%s\n' "$MT_OUT" ;; esac
 }
 
+inline_mode_ok() { # R5-06: the inline-mode file must be a REAL dispatch doc,
+  # not a placeholder — at least one markdown heading and >= 200 bytes.
+  # A '-s' test alone lets a one-byte 'x' pass as configuration.
+  IM_FILE="$ROOT/.claude/agents/INLINE_BASE_AGENT_MODE.md"
+  [ -f "$IM_FILE" ] || return 1
+  grep -q '^#' "$IM_FILE" || return 1
+  IM_BYTES=$(wc -c < "$IM_FILE" | tr -d '[:space:]')
+  [ "${IM_BYTES:-0}" -ge 200 ]
+}
+
 # --------------------- check -1: mandatory-artifact matrix (deployment mode only)
 # Data-driven completeness gate: every artifact bootstrap is contractually required
 # to produce. Missing OR EMPTY = FAIL — never a silent skip (a partial or hollow
@@ -360,23 +370,69 @@ else
   # must not be read as configuration (false-red fix).
   INLINE_DECLARED=0
   grep -E '^\|' "$RM" | grep -q 'INLINE_BASE_AGENT_MODE\.md' && INLINE_DECLARED=1
-  # Inline file must be NON-EMPTY: a one-byte placeholder is not a dispatch
-  # configuration (F-05).
-  if [ "$INLINE_DECLARED" = 1 ] && [ ! -s "$ROOT/.claude/agents/INLINE_BASE_AGENT_MODE.md" ]; then
-    MISSING="$MISSING .claude/agents/INLINE_BASE_AGENT_MODE.md(inline-mode-declared,missing-or-empty)"
+  # Inline file must be a REAL dispatch doc: a one-byte placeholder is not a
+  # dispatch configuration (F-05; hardened per R5-06 — see inline_mode_ok).
+  if [ "$INLINE_DECLARED" = 1 ] && ! inline_mode_ok; then
+    MISSING="$MISSING .claude/agents/INLINE_BASE_AGENT_MODE.md(inline-mode-declared,missing-or-hollow:needs-a-heading-and->=200-bytes)"
   fi
   if [ -n "$MISSING" ]; then
     fail "roster-wrappers" "active roster rows point at nonexistent wrapper(s):$MISSING"
   elif [ "$CHECKED" -eq 0 ] && [ "$SKIPPED_ROWS" -eq 0 ]; then
     # A deployment with NO dispatch path at all must not pass: either wrapper
     # rows exist, or inline mode is explicitly instantiated (false-green fix).
-    if [ "$DEPLOYED" = 1 ] && [ "$INLINE_DECLARED" = 0 ] && [ ! -s "$ROOT/.claude/agents/INLINE_BASE_AGENT_MODE.md" ]; then
+    if [ "$DEPLOYED" = 1 ] && [ "$INLINE_DECLARED" = 0 ] && ! inline_mode_ok; then
       fail "roster-wrappers" "deployment has NO wrapper-path roster rows and NO instantiated INLINE_BASE_AGENT_MODE.md — no sanctioned dispatch path exists"
     else
       warn "roster-wrappers" "roster.md has no wrapper-path rows — inline mode or unfilled roster?"
     fi
   else
     pass "roster-wrappers" "$CHECKED active wrapper path(s) exist on disk ($SKIPPED_ROWS non-active row(s) skipped)"
+  fi
+fi
+
+# ------------- check 5a: active roster rows carry role file + dispatch (R5-05)
+# The roster table is the staffing contract: an ACTIVE role must have BOTH a
+# role file at agents/<role_id>.md AND a sanctioned dispatch path (a
+# .claude/agents/*.md wrapper, the PM's 'main session', or instantiated inline
+# mode). Check 5 above only sees rows that already NAME a wrapper path, so an
+# active row with no path at all was invisible before this check.
+# Parsing assumptions (column POSITIONS vary per deployment): role_id = FIRST
+# data cell (backticks stripped); status = LAST cell of the row (the roster
+# table keeps Status last); dispatch detection = substring match on the whole
+# row. The status keyword is the FIRST WORD of the cell — 'dormant (active if
+# UI)' is dormant, never active. Non-active rows are never failed here.
+if [ "$DEPLOYED" = 0 ]; then
+  skip "roster-contract" "kit mode — staffing contract applies to deployed rosters only"
+elif [ ! -f "$RM" ]; then
+  skip "roster-contract" "agents/roster.md missing (already a roster-wrappers FAIL)"
+else
+  RC_FAILS=""
+  RC_ACTIVE=0
+  while IFS= read -r line; do
+    case "$line" in '|'*) ;; *) continue ;; esac   # table rows only, never prose
+    ST=$(printf '%s\n' "$line" | awk -F'|' '{
+      for (i = NF; i >= 2; i--) if ($i ~ /[^[:space:]]/) {
+        gsub(/`/, "", $i); sub(/^[[:space:]]+/, "", $i)
+        split($i, a, /[[:space:]]/); print a[1]; exit
+      }
+    }')
+    [ "$ST" = "active" ] || continue   # header, |---| separator, non-active rows fall out here
+    RID=$(printf '%s\n' "$line" | awk -F'|' '{ gsub(/[[:space:]`]/, "", $2); print $2 }')
+    [ -n "$RID" ] || continue
+    case "$RID" in *'{{'*) continue ;; esac   # unfilled slug caught by check 2
+    RC_ACTIVE=$((RC_ACTIVE+1))
+    [ -s "$ROOT/agents/$RID.md" ] || RC_FAILS="$RC_FAILS $RID(agents/$RID.md missing-or-empty)"
+    case "$line" in
+      *'.claude/agents/'*'.md'*|*'main session'*) ;;   # row names its own dispatch path
+      *) inline_mode_ok || RC_FAILS="$RC_FAILS $RID(no-dispatch-path:no-wrapper,no-main-session,no-inline-mode)" ;;
+    esac
+  done < "$RM"
+  if [ -n "$RC_FAILS" ]; then
+    fail "roster-contract" "active roster row(s) break the deployment invariant:$RC_FAILS"
+  elif [ "$RC_ACTIVE" -eq 0 ]; then
+    warn "roster-contract" "no active roster rows found — staffing not instantiated yet?"
+  else
+    pass "roster-contract" "$RC_ACTIVE active row(s) carry role file + dispatch path"
   fi
 fi
 
@@ -393,13 +449,32 @@ if [ "$DEPLOYED" = 1 ] && [ -d "$ROOT/.claude/agents" ]; then
     [ -f "$w" ] || continue
     case "$w" in *.template.md|*/README.md|*INLINE_BASE_AGENT_MODE.md) continue ;; esac
     FM_CHECKED=$((FM_CHECKED+1))
+    # R5-06: frontmatter must be a CLOSED block — with a lone opening '---'
+    # the runtime sees no frontmatter at all, so the wrapper is a shell.
+    if [ "$(grep -cE '^---$' "$w")" -lt 2 ]; then
+      FM_FAILS="$FM_FAILS ${w#$ROOT/}(unterminated-frontmatter)"
+      continue
+    fi
     FM=$(awk '/^---$/{n++; next} n==1{print} n>=2{exit}' "$w")
     MISSING_KEYS=""
     # Keys must carry a NON-EMPTY value — 'model:' alone is a shell, not
-    # config (F-05).
+    # config (F-05). YAML-semantically-empty tokens ("", '', ~, null) are
+    # missing too, not values (R5-06).
     for k in name description model effort; do
-      printf '%s\n' "$FM" | grep -qE "^${k}:[[:space:]]*[^[:space:]]" || MISSING_KEYS="$MISSING_KEYS $k"
+      V=$(printf '%s\n' "$FM" | sed -nE "s/^${k}:[[:space:]]*//p" | head -1 | sed -E 's/[[:space:]]+$//')
+      case "$V" in
+        ''|'""'|"''"|'~'|null) MISSING_KEYS="$MISSING_KEYS $k" ;;
+      esac
     done
+    # R5-06: effort must be a value the runtime accepts — a hyphenated
+    # pseudo-band like 'low-medium' silently dispatches as nothing.
+    EFF=$(printf '%s\n' "$FM" | sed -nE 's/^effort:[[:space:]]*//p' | head -1 | sed -E 's/[[:space:]]+$//')
+    EFF=${EFF#\"}; EFF=${EFF%\"}; EFF=${EFF#\'}; EFF=${EFF%\'}
+    case "$EFF" in
+      ''|'~'|null) ;;                  # absent/empty is reported by the key loop above
+      low|medium|high|xhigh|max) ;;    # runtime effort enum
+      *) FM_FAILS="$FM_FAILS ${w#$ROOT/}(invalid-effort:$EFF,allowed:low|medium|high|xhigh|max)" ;;
+    esac
     # maxTurns is part of the wrapper contract (role-wrapper.template.md):
     # required, positive integer.
     printf '%s\n' "$FM" | grep -qE '^maxTurns:[[:space:]]*"?[1-9][0-9]*"?[[:space:]]*$' || MISSING_KEYS="$MISSING_KEYS maxTurns(positive-int)"

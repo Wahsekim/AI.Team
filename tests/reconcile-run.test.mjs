@@ -5,6 +5,7 @@ import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -190,6 +191,44 @@ test('F-06: missing lifecycle counter fails BEFORE any write (matches the valida
     assert.match(out, /no 'Next NNN to assign' counter/)
     const lc = await readFile(join(root, 'agents', 'lifecycle.md'), 'utf8')
     assert.ok(!lc.includes('### BATCH'), 'nothing may be appended without a counter')
+  })
+})
+
+test('R5-07: a PROSE mention of the runId in messages does not false-skip the canonical block', async () => {
+  await withDeployment(async (root, resultPath) => {
+    await writeFile(join(root, 'messages', '2026-07-16.md'),
+      'we expect run-n-rounds batch run-2026-07-16-002 (N=1) to land later\n')
+    const { code, out } = await runTool(resultPath, root)
+    assert.equal(code, 0, out)
+    assert.match(out, /APPLY - messages/, `prose mention must not count as an applied block:\n${out}`)
+    const msg = await readFile(join(root, 'messages', '2026-07-16.md'), 'utf8')
+    assert.match(msg, /^## 2026-07-16 — run-n-rounds batch run-2026-07-16-002 \(/m, 'canonical header must be written')
+  })
+})
+
+test('R5-07: ALREADY-APPLIED batch with a missing counter fails closed instead of PARTIAL-REPAIRED', async () => {
+  await withDeployment(async (root, resultPath) => {
+    // Batch present in lifecycle, but the counter line is gone — the validator
+    // calls this ledger invalid; the reconciler must not write messages + exit 0.
+    const lc = '# Lifecycle\n\n## [001] bootstrap — deployed\n\n' + RESULT.mainSessionTodo.lifecycleEntries.join('\n') + '\n'
+    await writeFile(join(root, 'agents', 'lifecycle.md'), lc)
+    const { code, out } = await runTool(resultPath, root)
+    assert.equal(code, 1, out)
+    assert.match(out, /no 'Next NNN to assign' counter/)
+    assert.ok(!existsSync(join(root, 'messages', '2026-07-16.md')), 'nothing may be written without a counter')
+  })
+})
+
+test('R5-07: a shape-valid but impossible calendar date (2026-99-99) is rejected before any write', async () => {
+  await withDeployment(async (root, resultPath) => {
+    const bad = structuredClone(RESULT)
+    bad.mainSessionTodo.lifecycleEntries[0] = bad.mainSessionTodo.lifecycleEntries[0].replace('2026-07-16', '2026-99-99')
+    bad.mainSessionTodo.messagesLogBlock = bad.mainSessionTodo.messagesLogBlock.replace('## 2026-07-16', '## 2026-99-99')
+    await writeFile(resultPath, JSON.stringify(bad))
+    const { code, out } = await runTool(resultPath, root)
+    assert.equal(code, 1, out)
+    assert.match(out, /not a real calendar date/)
+    assert.ok(!existsSync(join(root, 'messages', '2026-99-99.md')), 'no ledger target may be created from a fake date')
   })
 })
 

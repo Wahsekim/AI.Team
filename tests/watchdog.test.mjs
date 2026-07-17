@@ -5,7 +5,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
-import { mkdtemp, mkdir, writeFile, rm, readdir, access } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, readFile, rm, readdir, access, utimes } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -204,6 +204,29 @@ test('R-10: bogus WATCHDOG_* env values fall back to defaults (no busy-spin, cle
       await new Promise(r => setTimeout(r, 1500))
       assert.notEqual(loop.exitCode, null, 'loop must run its check loop and exit cleanly despite bogus env')
       assert.equal(loop.exitCode, 0)
+    } finally {
+      loop.kill('SIGKILL')
+    }
+  })
+})
+
+test('R5-12b: fractional WATCHDOG_THRESHOLD falls back to an integer — stale alert still fires', async () => {
+  await withHome(async home => {
+    const hb = join(home, '.claude', 'heartbeats')
+    await writeFile(join(hb, 's14.heartbeat'), '')
+    // Older than the 600s integer fallback the fractional value must map to.
+    const past = Math.floor(Date.now() / 1000) - 700
+    await utimes(join(hb, 's14.heartbeat'), past, past)
+    const loop = spawn('bash', [join(DIR, 'watchdog-loop.sh'), 's14'], {
+      env: { ...process.env, HOME: home, WATCHDOG_INTERVAL: '0.1', WATCHDOG_THRESHOLD: '0.5', WATCHDOG_MAX_LIFETIME: '30' },
+    })
+    let err = ''
+    loop.stderr.on('data', d => { err += d })
+    try {
+      await new Promise(r => setTimeout(r, 800))
+      assert.ok(!/integer expression/.test(err), `staleness compare crashed on fractional threshold: ${err}`)
+      const log = await readFile(join(home, '.claude', 'hang-log.jsonl'), 'utf8')
+      assert.match(log, /"session_id":"s14".*"event":"heartbeat_stale"/, 'stale alert must fire, not error out every pass')
     } finally {
       loop.kill('SIGKILL')
     }

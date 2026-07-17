@@ -36,7 +36,11 @@ INTERVAL_SECONDS=${WATCHDOG_INTERVAL:-30}
 THRESHOLD_SECONDS=${WATCHDOG_THRESHOLD:-600}
 MAX_LIFETIME_SECONDS=${WATCHDOG_MAX_LIFETIME:-43200}  # 12 hours
 is_positive_num "$INTERVAL_SECONDS"     || INTERVAL_SECONDS=30
-is_positive_num "$THRESHOLD_SECONDS"    || THRESHOLD_SECONDS=600
+# THRESHOLD feeds an integer [ -gt ] comparison (R5-12b): a fractional value
+# like 0.5 would error 'integer expression expected' on every pass and the
+# loop would never alert — positive INTEGER only, else fall back.
+case "$THRESHOLD_SECONDS" in ''|*[!0-9]*) THRESHOLD_SECONDS=600 ;; esac
+[ "$THRESHOLD_SECONDS" -gt 0 ] || THRESHOLD_SECONDS=600
 case "$MAX_LIFETIME_SECONDS" in ''|*[!0-9]*) MAX_LIFETIME_SECONDS=43200 ;; esac
 [ "$MAX_LIFETIME_SECONDS" -gt 0 ] || MAX_LIFETIME_SECONDS=43200  # 0 would end monitoring instantly (F-08)
 
@@ -73,8 +77,16 @@ while true; do
         exit 0
     fi
 
-    # Compute heartbeat age.
-    if mtime=$(stat -f %m "$HB_FILE" 2>/dev/null); then :; else mtime=$(stat -c %Y "$HB_FILE"); fi
+    # Compute heartbeat age. GNU form first: on Linux, BSD-style 'stat -f %m'
+    # SUCCEEDS but prints the filesystem mount point, which would poison the
+    # arithmetic (same class as start-watchdog.sh's lock-mtime read).
+    mtime=$(stat -c %Y "$HB_FILE" 2>/dev/null || stat -f %m "$HB_FILE" 2>/dev/null || echo "")
+    case "$mtime" in ''|*[!0-9]*)
+        # Non-numeric mtime (file raced away, odd stat output): skip the
+        # staleness check this iteration rather than crash the loop.
+        sleep "$INTERVAL_SECONDS"
+        continue ;;
+    esac
     age=$((now - mtime))
 
     if [ "$age" -gt "$THRESHOLD_SECONDS" ]; then

@@ -77,6 +77,17 @@ const headerMatch = /^### BATCH (\d{4}-\d{2}-\d{2}) (\S+) /.exec(batchHeader)
 if (!headerMatch) die(`lifecycleEntries[0] is not a '### BATCH <date> <runId> ...' header: ${batchHeader.slice(0, 80)}`)
 if (headerMatch[2] !== runId) die(`BATCH header carries runId '${headerMatch[2]}' but result.runId is '${runId}' — refusing to apply a mismatched block`)
 const date = headerMatch[1]
+// Real CALENDAR date, not just the shape (R5-07): '2026-99-99' must never
+// name a messages/<date>.md file.
+const isRealDate = s => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s)
+  if (!m) return false
+  const y = +m[1], mo = +m[2], d = +m[3]
+  if (mo < 1 || mo > 12 || d < 1) return false
+  const leap = (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0
+  return d <= [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][mo - 1]
+}
+if (!isRealDate(date)) die(`BATCH header date '${date}' is not a real calendar date — refusing to create ledger targets from it`)
 
 // Entry numbers must be parsed from the ACTUAL '## [NNN]' lines — consecutive,
 // ending exactly at nextLifecycleNumberAfter - 1 (never inferred from array length).
@@ -119,8 +130,11 @@ const lcHasRunId = (text, id) => text.split('\n').some(l => {
   const m = /^### BATCH \d{4}-\d{2}-\d{2} (\S+) /.exec(l)
   return m && m[1] === id
 })
+// Anchored to the CANONICAL header line (R5-07): a prose mention of the runId
+// ('we expect run-n-rounds batch X (3 rounds) to land later') must never count
+// as an applied block — that false-skip would drop the canonical block forever.
 const msgHasRunId = (text, id) => text.split('\n').some(l => {
-  const m = /run-n-rounds batch (\S+) \(/.exec(l)
+  const m = /^## \d{4}-\d{2}-\d{2} .*run-n-rounds batch (\S+) \(/.exec(l)
   return m && m[1] === id
 })
 
@@ -131,18 +145,20 @@ const lcHasRun = lcHasRunId(lifecycle, runId)
 const firstEntryNo = entryNos[0]   // parsed from the actual '## [NNN]' lines (F-06)
 const counterRe = /(Next NNN to assign[^\d]*)(\d+)/
 const counterMatch = counterRe.exec(lifecycle)
+// Counter PRECONDITION (R-06/F-06, hoisted for R5-07): a MISSING counter is
+// fail-closed on EVERY path — including a batch that was already applied
+// earlier. The validator FAILs deployments without a counter; writing any
+// target here (even just messages) and exiting 0 would contradict it.
+if (!counterMatch) {
+  die(`agents/lifecycle.md has no 'Next NNN to assign' counter line — required before reconciling (scripts/validate-team.sh flags this); add it, then re-run. Nothing was written.`)
+}
 let lifecycleChanged = false
 if (lcHasRun) {
   actions.push(`SKIP - lifecycle: runId ${runId} already applied`)
 } else {
-  // Counter PRECONDITION (R-06/F-06): appending an unapplied batch whose
-  // numbering does not line up with the live counter would create duplicate
-  // or gapped [NNN] entries — fail closed instead of writing a corrupt
-  // ledger. A MISSING counter is equally fail-closed (the validator FAILs
-  // deployments without one; silently appending here would contradict it).
-  if (!counterMatch) {
-    die(`agents/lifecycle.md has no 'Next NNN to assign' counter line — required before reconciling (scripts/validate-team.sh flags this); add it, then re-run. Nothing was written.`)
-  }
+  // Numbering PRECONDITION: appending an unapplied batch whose numbering does
+  // not line up with the live counter would create duplicate or gapped [NNN]
+  // entries — fail closed instead of writing a corrupt ledger.
   const current = parseInt(counterMatch[2], 10)
   if (current !== firstEntryNo) {
     die(`lifecycle counter is ${NNN(current)} but this batch's entries start at ${NNN(firstEntryNo)} — numbering conflict (another batch ran since this result was produced?). Re-invoke the engine with nextLifecycleNumber=${current}, or resolve the ledger manually. Nothing was written.`)
@@ -152,9 +168,8 @@ if (lcHasRun) {
   actions.push(`APPLY - lifecycle: BATCH block (${entryNos.length} entries) appended`)
 }
 // Counter update (drift fix): the paste block never carried it; the tool owns it.
-if (!counterMatch) {
-  actions.push('WARN - lifecycle: no "Next NNN to assign" counter line found — update it manually')
-} else {
+// (A missing counter already died above — R5-07.)
+{
   const current = parseInt(counterRe.exec(lifecycle)[2], 10)
   const target = todo.nextLifecycleNumberAfter
   if (current === target) {
