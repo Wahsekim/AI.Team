@@ -36,7 +36,10 @@ HB_FILE="$HB_DIR/${session_id}.heartbeat"
 pid_is_watchdog() {
     [ -n "$1" ] || return 1
     case "$1" in *[!0-9]*) return 1 ;; esac
-    ps -p "$1" -o command= 2>/dev/null | grep -q "watchdog-loop\.sh ${session_id}\$"
+    # Fixed-string suffix match — session ids may contain '.' which is a regex
+    # metachar; never build a regex from untrusted-ish input (F-08).
+    _cmd=$(ps -p "$1" -o command= 2>/dev/null) || return 1
+    case "$_cmd" in *"watchdog-loop.sh ${session_id}") return 0 ;; *) return 1 ;; esac
 }
 
 # Initial heartbeat so the watchdog has a baseline.
@@ -48,7 +51,17 @@ touch "$HB_FILE"
 # session either exists or is being created).
 LOCK_DIR="$HB_DIR/${session_id}.start-lock"
 if ! mkdir "$LOCK_DIR" 2>/dev/null; then
-    exit 0
+    # Stale-lock recovery (F-08): a SIGKILL inside the lock window leaves the
+    # directory forever. A start-lock older than 60s cannot belong to a live
+    # start hook (they run for milliseconds) — reclaim it and retry once.
+    lock_mtime=$(stat -f %m "$LOCK_DIR" 2>/dev/null || stat -c %Y "$LOCK_DIR" 2>/dev/null || echo "")
+    now_s=$(date +%s)
+    if [ -n "$lock_mtime" ] && [ $((now_s - lock_mtime)) -gt 60 ]; then
+        rmdir "$LOCK_DIR" 2>/dev/null || true
+        mkdir "$LOCK_DIR" 2>/dev/null || exit 0
+    else
+        exit 0
+    fi
 fi
 trap 'rmdir "$LOCK_DIR" 2>/dev/null' EXIT
 

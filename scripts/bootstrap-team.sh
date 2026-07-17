@@ -56,6 +56,16 @@ done
 if [ -n "$PROJECT_NAME$PRODUCT_REPO" ] && ! command -v perl >/dev/null 2>&1; then
   failboot "deps: perl is required for --project-name/--product-repo substitutions"
 fi
+
+# Root lock (F-07): two concurrent bootstraps with different flags would each
+# instantiate part of the tree and both exit 0 — a mixed-config deployment.
+if [ "$DRY" != 1 ]; then
+  BOOT_LOCK="$ROOT/.bootstrap-lock"
+  if ! mkdir "$BOOT_LOCK" 2>/dev/null; then
+    failboot "another bootstrap appears to be in progress (lock $BOOT_LOCK exists) — wait for it, or remove the directory if it is stale"
+  fi
+  trap 'rm -f "${TMP:-}" 2>/dev/null; rmdir "$BOOT_LOCK" 2>/dev/null' EXIT
+fi
 if [ -n "$PRODUCT_REPO" ]; then
   # Normalize to an absolute path (the path may not exist yet — bootstrap of a
   # blank project creates it later; normalize what we can).
@@ -152,12 +162,21 @@ for pair in $MANDATORY_PAIRS $OPTIONAL_PAIRS; do
   fi
 done
 
-# Gates: compat is informational (the runtime may be absent on CI machines),
-# but the deployment VALIDATOR decides the verdict (R-09) — 'BOOTSTRAPPED'
-# is only ever printed over a structurally-complete deployment.
+# Gates decide the SINGLE final verdict (R-09/F-07) — automation reads the
+# last line only, so it must never say BOOTSTRAPPED when any gate failed:
+#   compat FAIL      -> PENDING-RUNTIME-COMPAT (runtime on this machine cannot run the kit)
+#   validator FAIL   -> PENDING-STAFFING (structure incomplete)
+#   placeholders     -> INSTANTIATED-PENDING-INTERVIEW
+#   all clean        -> BOOTSTRAPPED
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+COMPAT_CLEAN=1
 if [ -x "$SCRIPT_DIR/check-claude-compat.sh" ]; then
-  "$SCRIPT_DIR/check-claude-compat.sh" "$ROOT" | tail -1 || true
+  if COUT=$("$SCRIPT_DIR/check-claude-compat.sh" "$ROOT" 2>&1); then
+    COMPAT_CLEAN=1
+  else
+    COMPAT_CLEAN=0
+  fi
+  printf '%s\n' "$COUT" | tail -1
 fi
 VALIDATOR_CLEAN=0
 if [ -x "$SCRIPT_DIR/validate-team.sh" ]; then
@@ -170,7 +189,9 @@ if [ "$PENDING" -gt 0 ]; then
   echo "RESULT: INSTANTIATED-PENDING-INTERVIEW${CREATED:+ — created:$CREATED} — $PENDING ask:first_start placeholder(s) remain. Next: PM interview (docs/bootstrap-*.md), staffing (docs/staffing.md), wrappers, then validate-team.sh --mode deployment must exit 0."
 elif [ "$VALIDATOR_CLEAN" != 1 ]; then
   echo "RESULT: PENDING-STAFFING${CREATED:+ — created:$CREATED} — interview placeholders resolved but the deployment is NOT structurally complete (see validator output above: wrappers/staffing/ledgers still needed). Not BOOTSTRAPPED."
+elif [ "$COMPAT_CLEAN" != 1 ]; then
+  echo "RESULT: PENDING-RUNTIME-COMPAT${CREATED:+ — created:$CREATED} — structure complete but the Claude runtime on THIS machine failed the compatibility gate (see above). Not BOOTSTRAPPED."
 else
-  echo "RESULT: BOOTSTRAPPED${CREATED:+ — created:$CREATED} — deployment validation passed. Next: scripts/check-claude-compat.sh must also pass on the machine that will run the team."
+  echo "RESULT: BOOTSTRAPPED${CREATED:+ — created:$CREATED} — structure and runtime compatibility gates passed."
 fi
 exit 0

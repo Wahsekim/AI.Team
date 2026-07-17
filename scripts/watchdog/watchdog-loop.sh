@@ -38,6 +38,7 @@ MAX_LIFETIME_SECONDS=${WATCHDOG_MAX_LIFETIME:-43200}  # 12 hours
 is_positive_num "$INTERVAL_SECONDS"     || INTERVAL_SECONDS=30
 is_positive_num "$THRESHOLD_SECONDS"    || THRESHOLD_SECONDS=600
 case "$MAX_LIFETIME_SECONDS" in ''|*[!0-9]*) MAX_LIFETIME_SECONDS=43200 ;; esac
+[ "$MAX_LIFETIME_SECONDS" -gt 0 ] || MAX_LIFETIME_SECONDS=43200  # 0 would end monitoring instantly (F-08)
 
 HB_DIR="$HOME/.claude/heartbeats"
 HB_FILE="$HB_DIR/${session_id}.heartbeat"

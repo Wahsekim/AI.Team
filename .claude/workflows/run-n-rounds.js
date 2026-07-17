@@ -118,9 +118,12 @@ if (!Array.isArray(A.plan) || A.plan.length === 0) {
     if (typeof p.brief !== 'string' || p.brief.length === 0) validationErrors.push(`${at}.brief must be a non-empty string`)
     else if (p.brief.length > MAX_BRIEF_CHARS) validationErrors.push(`${at}.brief exceeds ${MAX_BRIEF_CHARS} chars`)
     if (typeof p.isCodeShipping !== 'boolean') validationErrors.push(`${at}.isCodeShipping must be an EXPLICIT boolean — verification opt-out by omission is not allowed`)
-    for (const k of ['model', 'verifierBrief', 'verifierAgentType', 'verifierModel']) {
-      if (p[k] !== undefined && (typeof p[k] !== 'string' || p[k].length === 0)) validationErrors.push(`${at}.${k}, when given, must be a non-empty string`)
+    // Identifier fields get the same control-char/length rules as agentType —
+    // 'model: "\n"' must not reach a dispatch (F-10).
+    for (const k of ['model', 'verifierAgentType', 'verifierModel']) {
+      if (p[k] !== undefined && !isNonEmptyStr(p[k], 128)) validationErrors.push(`${at}.${k}, when given, must be a non-empty string <= 128 chars without control characters`)
     }
+    if (p.verifierBrief !== undefined && (typeof p.verifierBrief !== 'string' || p.verifierBrief.length === 0)) validationErrors.push(`${at}.verifierBrief, when given, must be a non-empty string`)
     if (p.verifierBrief !== undefined && typeof p.verifierBrief === 'string' && p.verifierBrief.length > MAX_BRIEF_CHARS) {
       validationErrors.push(`${at}.verifierBrief exceeds ${MAX_BRIEF_CHARS} chars`)
     }
@@ -166,14 +169,14 @@ const WORKER_SCHEMA = {
   type: 'object', additionalProperties: false,
   required: ['outcome', 'progress', 'filesTouched', 'decisionsCount', 'selfReportTokens', 'blocked'],
   properties: {
-    outcome: { type: 'string', description: 'one-phrase close outcome (-> lifecycle Outcome field)' },
+    outcome: { type: 'string', maxLength: 2000, description: 'one-phrase close outcome (-> lifecycle Outcome field)' },
     progress: { type: 'boolean', description: '>=1 of {written artifact, ticket transition, recorded decision} produced (harness mandatory-progress rule). FALSE routes this iteration to the recovery queue and, under halt-on-failure, stops the loop.' },
-    filesTouched: { type: 'array', items: { type: 'string' } },
+    filesTouched: { type: 'array', maxItems: 500, items: { type: 'string', maxLength: 500 } },
     decisionsCount: { type: 'integer' },
     selfReportTokens: { type: 'integer', description: 'worker token self-estimate (meta-rule M4: distrust — the engine records harness spend deltas per spawn; guardian cross-checks)' },
     blocked: { type: 'boolean', description: 'this TICKET is blocked (recoverable). It does NOT count as success: the iteration enters the recovery queue and, under halt-on-failure, stops the loop for main-session triage.' },
     terminalStop: { type: 'boolean', description: 'this WHOLE LOOP must stop now (terminal signal the engine can break on deterministically). Distinct from blocked. The stopping iteration STILL gets its verifier gate if code-shipping. Only catches stops a worker can surface; pure out-of-band owner-input Q4 still needs the main-session batch discipline.' },
-    notes: { type: 'string' },
+    notes: { type: 'string', maxLength: 4000 },
   },
 }
 const VERIFIER_SCHEMA = {
@@ -184,19 +187,19 @@ const VERIFIER_SCHEMA = {
     staticPass: { type: 'boolean', description: 'static/test-suite gate per profiles/stack.md; if n/a for this ticket return true with a note. ENFORCED (see pass).' },
     e2ePass: { type: 'boolean', description: 'end-to-end gate per profiles/stack.md verification commands; if n/a return true with a note. ENFORCED (see pass).' },
     commandsRun: {
-      type: 'array',
+      type: 'array', maxItems: 100,
       items: {
         type: 'object', additionalProperties: false,
         required: ['command', 'exitCode'],
         properties: {
-          command: { type: 'string', minLength: 1, description: 'the exact (env-prefixed, if the stack requires it) command actually executed — a blank command is rejected as no evidence' },
+          command: { type: 'string', minLength: 1, maxLength: 1000, description: 'the exact (env-prefixed, if the stack requires it) command actually executed — a blank command is rejected as no evidence' },
           exitCode: { type: 'integer', description: 'the REAL process exit code observed' },
         },
       },
       description: 'executable-oracle grounding: every test command ACTUALLY run, with its real exit code. The engine REJECTS a pass=true verdict whose commandsRun is empty or contains any nonzero exitCode (fail-closed -> fixRetestQueue). Residual risk: content is still verifier-reported — see docs/engine.md.',
     },
-    failures: { type: 'array', items: { type: 'string' } },
-    summary: { type: 'string' },
+    failures: { type: 'array', maxItems: 100, items: { type: 'string', maxLength: 2000 } },
+    summary: { type: 'string', maxLength: 4000 },
   },
 }
 const GUARDIAN_SCHEMA = {
@@ -208,8 +211,8 @@ const GUARDIAN_SCHEMA = {
     budgetGateCorrect: { type: 'boolean', description: 'Q5 token-burnout gate behaved correctly vs the spent trace + ceiling (a vacuous ceiling is a finding)' },
     droppedFixRetest: { type: 'boolean', description: 'any verifier-FAIL items at risk of being silently dropped instead of handed to main-session fix-retest' },
     verdict: { type: 'string', enum: ['clean', 'main-session-action-required', 'halt-and-investigate'], description: "MUST be consistent with the booleans: 'clean' with any failure flag set is rejected by the engine as an inconsistent verdict (fail-closed demotion to main-session-action-required)." },
-    findings: { type: 'array', items: { type: 'string' } },
-    newPatternCandidates: { type: 'array', items: { type: 'string' }, description: 'workflow-specific failure patterns for the chaos-role pattern catalog' },
+    findings: { type: 'array', maxItems: 100, items: { type: 'string', maxLength: 2000 } },
+    newPatternCandidates: { type: 'array', maxItems: 50, items: { type: 'string', maxLength: 2000 }, description: 'workflow-specific failure patterns for the chaos-role pattern catalog' },
   },
 }
 
@@ -223,9 +226,16 @@ const msgBullets = []            // one bullet per round for the messages/<date>
 // haltReason, lifecycle/messages blocks, or the guardian prompt. Every string that leaves the
 // engine goes through cleanLine — worker output, verifier commands, and ERROR MESSAGES alike.
 const redact = s => String(s || '')
+  // credential-bearing HEADERS first, whole value to end of line (F-01):
+  // 'Authorization: Bearer <token>' must lose the TOKEN, not the word Bearer
+  .replace(/\b(authorization|proxy-authorization|cookie|set-cookie|x-api-key)\s*[:=][^\n]*/gi, '$1: [REDACTED]')
+  .replace(/\bbearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, 'bearer [REDACTED]')
   .replace(/\b(sk-[A-Za-z0-9_-]{8,}|ghp_[A-Za-z0-9]{20,}|gho_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|AKIA[A-Z0-9]{12,}|eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,})\b/g, '[REDACTED]')
-  // quoted AND unquoted assignments, shell/env/JSON pair styles (R-03):
-  //   password=hunter2x99   password="quoted..."   "password":"quoted..."   API_KEY='...'
+  // QUOTED values may contain spaces — 'password="space secret 12345"' (F-01)
+  .replace(/(["']?)\b(bearer|token|password|passwd|secret|api[_-]?key|authorization)\b\1(\s*[:=]\s*|\s+)"[^"\n]{4,}"/gi, '$1$2$1$3"[REDACTED]"')
+  .replace(/(["']?)\b(bearer|token|password|passwd|secret|api[_-]?key|authorization)\b\1(\s*[:=]\s*|\s+)'[^'\n]{4,}'/gi, "$1$2$1$3'[REDACTED]'")
+  // unquoted assignments, shell/env/JSON pair styles (R-03):
+  //   password=hunter2x99   "password":"quoted..."   API_KEY='...'
   .replace(/(["']?)\b(bearer|token|password|passwd|secret|api[_-]?key|authorization)\b\1(\s*[:=]\s*|\s+)(["']?)[^\s"']{6,}\4/gi, '$1$2$1$3$4[REDACTED]$4')
   // protocol control words are reserved: worker text must not be able to spoof
   // the untrusted-data fence sentinels in the guardian prompt (R-08)
@@ -314,15 +324,17 @@ for (let i = 0; i < iters; i++) {
   const preVerifier = spentInLoop()
   if (!p.isCodeShipping) {
     verificationStatus = 'not_applicable'
-    // Scope-drift tripwire (R-07): a plan item declared non-code whose worker
-    // reports touching code-shaped files bypassed the verifier gate on the
-    // CALLER's declaration alone. Conservative extension heuristic on the
-    // worker's own report — fail-closed to recovery; the main session then
-    // reads the REAL git diff (worker reports are untrusted in both
-    // directions: this catches honest drift, not a lying worker).
-    const CODE_EXT = /\.(m?[jt]sx?|py|go|rb|java|kt|cs|rs|c|cc|cpp|h|hpp|swift|php|scala|sh|bash|zsh|ps1|sql|tf|proto|vue|svelte)$/i
-    scopeDrift = !!(worker && Array.isArray(worker.filesTouched) && worker.filesTouched.some(f => CODE_EXT.test(String(f))))
-    if (scopeDrift) log(`iter ${i + 1} ${p.ticket}: SCOPE DRIFT — declared non-code but worker reports code files touched (${worker.filesTouched.slice(0, 3).map(f => oneLine(f)).join(', ')}) — routing to recovery`)
+    // Scope-drift tripwire (R-07/F-03), ALLOWLIST polarity: a non-code ticket
+    // may only touch documentation/ledger/evidence artifacts — anything else
+    // (source, package.json, Dockerfile, CI YAML, CSS, .env, ...) changes
+    // behavior and needs the verifier gate. Fail-closed to recovery; the main
+    // session then reads the REAL git diff (worker reports are untrusted in
+    // both directions: this catches honest drift, not a lying worker).
+    const NON_CODE_SAFE = /\.(md|markdown|txt|rst|adoc|png|jpe?g|gif|svg|pdf)$/i
+    const offending = worker && Array.isArray(worker.filesTouched)
+      ? worker.filesTouched.filter(f => !NON_CODE_SAFE.test(String(f))) : []
+    scopeDrift = offending.length > 0
+    if (scopeDrift) log(`iter ${i + 1} ${p.ticket}: SCOPE DRIFT — declared non-code but worker reports non-doc files touched (${offending.slice(0, 3).map(f => oneLine(f)).join(', ')}) — routing to recovery`)
   } else if (workerStatus === 'error' || workerStatus === 'null_result') {
     verificationStatus = 'blocked_by_worker_error'
   } else if (budgetTripped()) {
@@ -336,7 +348,7 @@ for (let i = 0; i < iters; i++) {
     // whether FURTHER iterations run.
     try {
       verifier = await agent(
-        p.verifierBrief || `Verify ticket ${p.ticket} against its acceptance criteria. Run the code-shipping verification commands from profiles/stack.md (static suite + e2e gate where configured; gates whose surfaces do not exist on this ticket are N/A — say so with a note), following _shared/verify-discipline.md (clean state, env prefix verbatim if the stack defines one, real exit codes). You MUST actually EXECUTE the verification commands — do not infer results from reading code. Report EVERY command you ran with its REAL exit code in the commandsRun field; set staticPass and e2ePass honestly (true-with-note when n/a); the engine rejects any pass verdict with an empty commandsRun, a nonzero exitCode, or staticPass/e2ePass=false.`,
+        p.verifierBrief || `Verify ticket ${redact(p.ticket)} against its acceptance criteria. Run the code-shipping verification commands from profiles/stack.md (static suite + e2e gate where configured; gates whose surfaces do not exist on this ticket are N/A — say so with a note), following _shared/verify-discipline.md (clean state, env prefix verbatim if the stack defines one, real exit codes). You MUST actually EXECUTE the verification commands — do not infer results from reading code. Report EVERY command you ran with its REAL exit code in the commandsRun field; set staticPass and e2ePass honestly (true-with-note when n/a); the engine rejects any pass verdict with an empty commandsRun, a nonzero exitCode, or staticPass/e2ePass=false.`,
         { agentType: p.verifierAgentType || 'general-purpose', model: p.verifierModel, label: `iter${i + 1}:verifier:${p.ticket}`, phase: 'Loop', schema: VERIFIER_SCHEMA },
       )
     } catch (e) {
@@ -353,6 +365,11 @@ for (let i = 0; i < iters; i++) {
       // sub-gate -> FAIL -> fixRetestQueue.
       if (verifier.pass === true) {
         const cmds = Array.isArray(verifier.commandsRun) ? verifier.commandsRun : []
+        // Obvious no-op "evidence" (F-02): `true`, `:`, `exit 0`, bare `echo ...`
+        // exit 0 by construction and verify nothing. This is a tripwire for a
+        // lazy verifier, NOT an adversarial defense — command content stays
+        // verifier-reported (see the honesty note in docs/engine.md).
+        const NOOP = /^\s*(true|:|exit\s+0|echo(\s|$))/i
         if (cmds.length === 0) {
           verifierGroundingFailure = 'pass=true with missing/empty commandsRun — ungrounded verdict rejected'
         } else {
@@ -363,10 +380,14 @@ for (let i = 0; i < iters; i++) {
             || typeof c.exitCode !== 'number' || c.exitCode !== 0)
           if (bad.length > 0) {
             verifierGroundingFailure = `pass=true but blank command or nonzero/invalid exitCode: ${bad.map(c => `${cleanLine((c && c.command) || '(blank)', 80) || '(blank)'} -> ${c ? c.exitCode : '?'}`).join('; ')}`
+          } else if (cmds.every(c => NOOP.test(c.command))) {
+            verifierGroundingFailure = 'pass=true but every command is a no-op (true/:/exit 0/echo) — no verification evidence'
           }
         }
-        if (!verifierGroundingFailure && (verifier.staticPass === false || verifier.e2ePass === false)) {
-          verifierGroundingFailure = `pass=true but ${verifier.staticPass === false ? 'staticPass=false' : ''}${verifier.staticPass === false && verifier.e2ePass === false ? ' + ' : ''}${verifier.e2ePass === false ? 'e2ePass=false' : ''} — inconsistent verdict rejected`
+        // Sub-gates must be EXPLICITLY true — a missing field is not a pass (F-02):
+        // schema enforcement is a runtime property this engine must not rely on.
+        if (!verifierGroundingFailure && (verifier.staticPass !== true || verifier.e2ePass !== true)) {
+          verifierGroundingFailure = `pass=true but staticPass=${verifier.staticPass} / e2ePass=${verifier.e2ePass} — both must be explicitly true (true-with-note when n/a)`
         }
         if (verifierGroundingFailure) log(`iter ${i + 1} ${p.ticket}: verifier GROUNDING FAIL — ${verifierGroundingFailure}`)
       }
@@ -386,7 +407,9 @@ for (let i = 0; i < iters; i++) {
     || scopeDrift
   spentTrace.push(spentInLoop())
   const r = {
-    iter: i + 1, ticket: p.ticket, agentType: p.agentType,
+    // ticket text is tracker-sourced (untrusted): the copy that leaves the
+    // engine (results[], iterFacts, ledgers) is redacted + sentinel-safe (F-01/F-04)
+    iter: i + 1, ticket: redact(p.ticket), agentType: p.agentType,
     workerStatus, verificationStatus, sideEffects,
     terminalStopRequested, scopeDrift,
     verificationRequired: p.isCodeShipping,
@@ -501,7 +524,17 @@ try {
     model: A.guardianModel,          // per agents/roster.md (single source) — pass explicitly
     label: 'chaos:guardian', phase: 'Guardian', schema: GUARDIAN_SCHEMA,
   })
-  if (g) guardian = { status: 'ok', ...redactDeep(g) }   // findings are model text — redact before they reach ledgers/return (R-03)
+  if (g) {
+    // findings are model text — redact before they reach ledgers/return (R-03);
+    // normalize array fields defensively (schema enforcement is a runtime
+    // property, not a guarantee — a bare {verdict} object must not crash, F-02)
+    const gg = redactDeep(g)
+    guardian = {
+      status: 'ok', ...gg,
+      findings: Array.isArray(gg.findings) ? gg.findings : [],
+      newPatternCandidates: Array.isArray(gg.newPatternCandidates) ? gg.newPatternCandidates : [],
+    }
+  }
   else guardianError = { code: 'guardian-null-result', message: 'guardian agent returned null (skipped or died on a terminal error)' }
 } catch (e) {
   guardianError = { code: 'guardian-agent-error', message: cleanLine(String(e), 200) }
@@ -510,11 +543,14 @@ if (guardianError) guardian = { ...guardian, findings: [...guardian.findings, `$
 // Verdict/flag consistency is ENFORCED, not assumed: a 'clean' verdict alongside any failure
 // flag is an inconsistent guardian — demoted fail-closed so a contradictory audit can never
 // read as green.
+// 'clean' requires every flag EXPLICITLY at its passing value — a guardian
+// object missing flags (schema not enforced by the runtime is not a given,
+// F-02) must not read as clean either.
 let guardianConsistencyFailure = null
 if (guardian.status === 'ok' && guardian.verdict === 'clean'
-  && (guardian.runawayDetected === true || guardian.missedHaltRisk === true
-    || guardian.budgetGateCorrect === false || guardian.droppedFixRetest === true)) {
-  guardianConsistencyFailure = "guardian verdict 'clean' contradicts its own failure flags — inconsistent verdict demoted to main-session-action-required (fail-closed)"
+  && !(guardian.runawayDetected === false && guardian.missedHaltRisk === false
+    && guardian.budgetGateCorrect === true && guardian.droppedFixRetest === false)) {
+  guardianConsistencyFailure = "guardian verdict 'clean' without all four flags explicitly at passing values (runaway=false, missedHalt=false, budgetGate=true, droppedFixRetest=false) — demoted to main-session-action-required (fail-closed)"
   guardian = { ...guardian, verdict: 'main-session-action-required', findings: [...guardian.findings, guardianConsistencyFailure] }
   log(`GUARDIAN INCONSISTENCY — ${guardianConsistencyFailure}`)
 }

@@ -7,13 +7,69 @@ import { readFile } from 'node:fs/promises'
 
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor
 
+// Minimal JSON-Schema checker covering the subset the engine's schemas use
+// (F-02): the real runtime enforces `opts.schema` on structured returns, so a
+// mock that hands back schema-invalid objects would prove nothing. Throws on
+// the first violation.
+export function validateAgainstSchema(value, schema, path = '$') {
+  const fail = msg => { throw new Error(`schema violation at ${path}: ${msg}`) }
+  if (schema.enum && !schema.enum.includes(value)) fail(`expected one of ${JSON.stringify(schema.enum)}`)
+  switch (schema.type) {
+    case 'object': {
+      if (typeof value !== 'object' || value === null || Array.isArray(value)) fail('expected object')
+      for (const k of schema.required || []) {
+        if (!(k in value)) fail(`missing required key '${k}'`)
+      }
+      for (const [k, v] of Object.entries(value)) {
+        const propSchema = (schema.properties || {})[k]
+        if (!propSchema) {
+          if (schema.additionalProperties === false) fail(`unexpected key '${k}'`)
+          continue
+        }
+        validateAgainstSchema(v, propSchema, `${path}.${k}`)
+      }
+      break
+    }
+    case 'array': {
+      if (!Array.isArray(value)) fail('expected array')
+      if (schema.maxItems !== undefined && value.length > schema.maxItems) fail(`more than ${schema.maxItems} items`)
+      if (schema.items) value.forEach((v, i) => validateAgainstSchema(v, schema.items, `${path}[${i}]`))
+      break
+    }
+    case 'string': {
+      if (typeof value !== 'string') fail('expected string')
+      if (schema.minLength !== undefined && value.length < schema.minLength) fail(`shorter than minLength ${schema.minLength}`)
+      if (schema.maxLength !== undefined && value.length > schema.maxLength) fail(`longer than maxLength ${schema.maxLength}`)
+      break
+    }
+    case 'integer': {
+      if (!Number.isInteger(value)) fail('expected integer')
+      break
+    }
+    case 'number': {
+      if (typeof value !== 'number' || !isFinite(value)) fail('expected finite number')
+      break
+    }
+    case 'boolean': {
+      if (typeof value !== 'boolean') fail('expected boolean')
+      break
+    }
+    default: break
+  }
+  return value
+}
+
 // Run a workflow script with mocked globals.
-//   scriptPath  - path to the workflow .js file
-//   args        - the `args` global the script receives
-//   agentImpl   - (prompt, opts, callIndex) => result | Promise (throw/null to inject failures)
-//   budgetImpl  - optional { total, spent(), remaining() }
+//   scriptPath    - path to the workflow .js file
+//   args          - the `args` global the script receives
+//   agentImpl     - (prompt, opts, callIndex) => result | Promise (throw/null to inject failures)
+//   budgetImpl    - optional { total, spent(), remaining() }
+//   enforceSchema - default true: non-null mock returns are validated against
+//                   opts.schema and a mismatch THROWS (approximating the real
+//                   runtime's enforcement). Set false only to exercise the
+//                   engine's own defensive layer beneath schema enforcement.
 // Returns { result, calls, logs, phases } where calls records every agent() invocation.
-export async function runWorkflow({ scriptPath, args, agentImpl, budgetImpl }) {
+export async function runWorkflow({ scriptPath, args, agentImpl, budgetImpl, enforceSchema = true }) {
   let src = await readFile(scriptPath, 'utf8')
   src = src.replace(/^export const meta =/m, 'const meta =')
 
@@ -23,7 +79,11 @@ export async function runWorkflow({ scriptPath, args, agentImpl, budgetImpl }) {
 
   const agent = async (prompt, opts = {}) => {
     calls.push({ prompt, opts })
-    return agentImpl(prompt, opts, calls.length)
+    const out = await agentImpl(prompt, opts, calls.length)
+    if (enforceSchema && out !== null && out !== undefined && opts.schema) {
+      validateAgainstSchema(out, opts.schema)
+    }
+    return out
   }
   const budget = budgetImpl ?? { total: null, spent: () => 0, remaining: () => Infinity }
   const log = m => logs.push(String(m))

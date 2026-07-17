@@ -358,15 +358,17 @@ else
   # must not be read as configuration (false-red fix).
   INLINE_DECLARED=0
   grep -E '^\|' "$RM" | grep -q 'INLINE_BASE_AGENT_MODE\.md' && INLINE_DECLARED=1
-  if [ "$INLINE_DECLARED" = 1 ] && [ ! -f "$ROOT/.claude/agents/INLINE_BASE_AGENT_MODE.md" ]; then
-    MISSING="$MISSING .claude/agents/INLINE_BASE_AGENT_MODE.md(inline-mode-declared)"
+  # Inline file must be NON-EMPTY: a one-byte placeholder is not a dispatch
+  # configuration (F-05).
+  if [ "$INLINE_DECLARED" = 1 ] && [ ! -s "$ROOT/.claude/agents/INLINE_BASE_AGENT_MODE.md" ]; then
+    MISSING="$MISSING .claude/agents/INLINE_BASE_AGENT_MODE.md(inline-mode-declared,missing-or-empty)"
   fi
   if [ -n "$MISSING" ]; then
     fail "roster-wrappers" "active roster rows point at nonexistent wrapper(s):$MISSING"
   elif [ "$CHECKED" -eq 0 ] && [ "$SKIPPED_ROWS" -eq 0 ]; then
     # A deployment with NO dispatch path at all must not pass: either wrapper
     # rows exist, or inline mode is explicitly instantiated (false-green fix).
-    if [ "$DEPLOYED" = 1 ] && [ "$INLINE_DECLARED" = 0 ] && [ ! -f "$ROOT/.claude/agents/INLINE_BASE_AGENT_MODE.md" ]; then
+    if [ "$DEPLOYED" = 1 ] && [ "$INLINE_DECLARED" = 0 ] && [ ! -s "$ROOT/.claude/agents/INLINE_BASE_AGENT_MODE.md" ]; then
       fail "roster-wrappers" "deployment has NO wrapper-path roster rows and NO instantiated INLINE_BASE_AGENT_MODE.md — no sanctioned dispatch path exists"
     else
       warn "roster-wrappers" "roster.md has no wrapper-path rows — inline mode or unfilled roster?"
@@ -391,9 +393,14 @@ if [ "$DEPLOYED" = 1 ] && [ -d "$ROOT/.claude/agents" ]; then
     FM_CHECKED=$((FM_CHECKED+1))
     FM=$(awk '/^---$/{n++; next} n==1{print} n>=2{exit}' "$w")
     MISSING_KEYS=""
+    # Keys must carry a NON-EMPTY value — 'model:' alone is a shell, not
+    # config (F-05).
     for k in name description model effort; do
-      printf '%s\n' "$FM" | grep -qE "^${k}:" || MISSING_KEYS="$MISSING_KEYS $k"
+      printf '%s\n' "$FM" | grep -qE "^${k}:[[:space:]]*[^[:space:]]" || MISSING_KEYS="$MISSING_KEYS $k"
     done
+    # maxTurns is part of the wrapper contract (role-wrapper.template.md):
+    # required, positive integer.
+    printf '%s\n' "$FM" | grep -qE '^maxTurns:[[:space:]]*"?[1-9][0-9]*"?[[:space:]]*$' || MISSING_KEYS="$MISSING_KEYS maxTurns(positive-int)"
     [ -n "$MISSING_KEYS" ] && FM_FAILS="$FM_FAILS ${w#$ROOT/}(missing:$MISSING_KEYS )"
     if ! printf '%s\n' "$FM" | grep -qE '^(tools|permissionMode):'; then
       FM_WARNS="$FM_WARNS ${w#$ROOT/}"

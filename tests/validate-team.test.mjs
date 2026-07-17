@@ -42,7 +42,7 @@ const COMPLETE_DEPLOYMENT = {
   'agents/lessons.md': '# Lessons index\n',
   'memory/pm.md': '# PM memory\n',
   'pm-decisions.md': '# PM decisions\n',
-  '.claude/agents/proj-builder.md': '---\nname: proj-builder\ndescription: builder for tests\nmodel: sonnet\neffort: "high"\ntools: Read, Grep, Bash, Write, Edit\npermissionMode: default\n---\n\nBuilder wrapper.\n',
+  '.claude/agents/proj-builder.md': '---\nname: proj-builder\ndescription: builder for tests\nmodel: sonnet\neffort: "high"\nmaxTurns: 40\ntools: Read, Grep, Bash, Write, Edit\npermissionMode: default\n---\n\nBuilder wrapper.\n',
 }
 
 const FRESH_KIT = {
@@ -237,12 +237,51 @@ test('R-05: shell wrapper with only a name fails the frontmatter schema', async 
 test('R-05: wrapper without tools/permissionMode passes with a least-privilege WARN', async () => {
   const files = {
     ...COMPLETE_DEPLOYMENT,
-    '.claude/agents/proj-builder.md': '---\nname: proj-builder\ndescription: b\nmodel: sonnet\neffort: "high"\n---\nBody.\n',
+    '.claude/agents/proj-builder.md': '---\nname: proj-builder\ndescription: b\nmodel: sonnet\neffort: "high"\nmaxTurns: 40\n---\nBody.\n',
   }
   await withFixture(files, async root => {
     const { code, out } = await runValidator(root, '--mode', 'deployment')
     assert.equal(code, 0, out)
     assert.match(out, /WARN - wrapper-frontmatter.*inherits ALL tools/)
+  })
+})
+
+test('F-05: empty frontmatter VALUES fail (key alone is a shell, not config)', async () => {
+  const files = {
+    ...COMPLETE_DEPLOYMENT,
+    '.claude/agents/proj-builder.md': '---\nname: proj-builder\ndescription:\nmodel:\neffort:\nmaxTurns: 40\n---\nBody.\n',
+  }
+  await withFixture(files, async root => {
+    const { code, out } = await runValidator(root, '--mode', 'deployment')
+    assert.equal(code, 1, out)
+    assert.match(out, /wrapper-frontmatter/)
+    assert.match(out, /description/)
+  })
+})
+
+test('F-05: wrapper without a positive-integer maxTurns fails (template contract)', async () => {
+  const files = {
+    ...COMPLETE_DEPLOYMENT,
+    '.claude/agents/proj-builder.md': '---\nname: proj-builder\ndescription: b\nmodel: sonnet\neffort: "high"\nmaxTurns: 0\n---\nBody.\n',
+  }
+  await withFixture(files, async root => {
+    const { code, out } = await runValidator(root, '--mode', 'deployment')
+    assert.equal(code, 1, out)
+    assert.match(out, /maxTurns/)
+  })
+})
+
+test('F-05: one-byte INLINE_BASE_AGENT_MODE.md is not a dispatch configuration', async () => {
+  const files = {
+    ...COMPLETE_DEPLOYMENT,
+    'agents/roster.md': '# Roster\n\n| role | status | wrapper |\n|---|---|---|\n| builder | active | .claude/agents/INLINE_BASE_AGENT_MODE.md |\n',
+    '.claude/agents/INLINE_BASE_AGENT_MODE.md': '',
+  }
+  delete files['.claude/agents/proj-builder.md']
+  await withFixture(files, async root => {
+    const { code, out } = await runValidator(root, '--mode', 'deployment')
+    assert.equal(code, 1, out)
+    assert.match(out, /missing-or-empty|roster-wrappers/)
   })
 })
 

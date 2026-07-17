@@ -28,15 +28,32 @@ const [, , resultPath, rootArg] = process.argv
 if (!resultPath) die('usage: node scripts/reconcile-run.mjs <engine-result.json> [TEAM_ROOT]')
 const ROOT = resolve(rootArg || '.')
 
-// Concurrency lock (R-06): two concurrent reconciles would each read->append->
-// rename and the last writer would silently drop the other's block. mkdir is
-// atomic; holding the lock for the whole run serializes writers.
+// Concurrency lock (R-06/F-06): two concurrent reconciles would each read->
+// append->rename and the last writer would silently drop the other's block.
+// mkdir is atomic; the lock carries owner metadata so a crash (SIGKILL, power
+// loss) does not require manual cleanup: a lock whose PID is dead is stale
+// and is taken over.
 const LOCK_DIR = join(ROOT, '.reconcile-lock')
-try {
-  await mkdir(LOCK_DIR)
-} catch {
-  die(`another reconcile appears to be in progress (lock ${LOCK_DIR} exists) — wait for it, or remove the directory if it is stale`)
+const LOCK_META = join(LOCK_DIR, 'owner.json')
+async function acquireLock(retried = false) {
+  try {
+    await mkdir(LOCK_DIR)
+    await writeFile(LOCK_META, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }))
+    return
+  } catch {
+    let owner = null
+    try { owner = JSON.parse(await readFile(LOCK_META, 'utf8')) } catch { /* no/corrupt metadata */ }
+    const ownerAlive = owner && Number.isInteger(owner.pid) && (() => {
+      try { process.kill(owner.pid, 0); return true } catch { return false }
+    })()
+    if (ownerAlive) die(`another reconcile is in progress (pid ${owner.pid} since ${owner.startedAt}) — wait for it`)
+    if (retried) die(`cannot acquire ${LOCK_DIR} even after clearing a stale lock — resolve manually`)
+    // Stale lock (owner dead or metadata missing): recover and retry once.
+    try { rmSync(LOCK_DIR, { recursive: true, force: true }) } catch { /* fall through to retry */ }
+    return acquireLock(true)
+  }
 }
+await acquireLock()
 process.on('exit', () => { try { rmSync(LOCK_DIR, { recursive: true, force: true }) } catch { /* best effort */ } })
 
 let result
@@ -53,11 +70,34 @@ if (!todo || !Array.isArray(todo.lifecycleEntries) || todo.lifecycleEntries.leng
 if (typeof todo.messagesLogBlock !== 'string' || todo.messagesLogBlock.length === 0) die('result.mainSessionTodo.messagesLogBlock missing/empty')
 if (!Number.isSafeInteger(todo.nextLifecycleNumberAfter) || todo.nextLifecycleNumberAfter < 1) die('result.mainSessionTodo.nextLifecycleNumberAfter missing/invalid')
 
+// ---- payload invariants (F-06): the block must be internally consistent
+// BEFORE anything is written — a malformed result must never corrupt ledgers.
 const batchHeader = todo.lifecycleEntries[0]
-const dateMatch = /^### BATCH (\d{4}-\d{2}-\d{2}) /.exec(batchHeader)
-if (!dateMatch) die(`lifecycleEntries[0] is not a '### BATCH <date> ...' header: ${batchHeader.slice(0, 80)}`)
-if (!batchHeader.includes(runId)) die('BATCH header does not carry the runId — refusing to apply a mismatched block')
-const date = dateMatch[1]
+const headerMatch = /^### BATCH (\d{4}-\d{2}-\d{2}) (\S+) /.exec(batchHeader)
+if (!headerMatch) die(`lifecycleEntries[0] is not a '### BATCH <date> <runId> ...' header: ${batchHeader.slice(0, 80)}`)
+if (headerMatch[2] !== runId) die(`BATCH header carries runId '${headerMatch[2]}' but result.runId is '${runId}' — refusing to apply a mismatched block`)
+const date = headerMatch[1]
+
+// Entry numbers must be parsed from the ACTUAL '## [NNN]' lines — consecutive,
+// ending exactly at nextLifecycleNumberAfter - 1 (never inferred from array length).
+const entryNos = todo.lifecycleEntries.slice(1).map((l, i) => {
+  const m = /^## \[(\d+)\] /.exec(l)
+  if (!m) die(`lifecycleEntries[${i + 1}] is not a '## [NNN] ...' entry: ${l.slice(0, 80)}`)
+  return parseInt(m[1], 10)
+})
+if (entryNos.length === 0) die('BATCH block has no entries')
+entryNos.forEach((n, i) => {
+  if (i > 0 && n !== entryNos[i - 1] + 1) die(`BATCH entry numbers are not consecutive: [${String(entryNos[i - 1]).padStart(3, '0')}] -> [${String(n).padStart(3, '0')}]`)
+})
+if (entryNos[entryNos.length - 1] !== todo.nextLifecycleNumberAfter - 1) {
+  die(`last BATCH entry is [${String(entryNos[entryNos.length - 1]).padStart(3, '0')}] but nextLifecycleNumberAfter is ${todo.nextLifecycleNumberAfter} — inconsistent payload`)
+}
+
+// The messages block must belong to the SAME run: date + exact runId token.
+const msgHeader = todo.messagesLogBlock.split('\n')[0] || ''
+const msgMatch = /^## (\d{4}-\d{2}-\d{2}) .*run-n-rounds batch (\S+) \(/.exec(msgHeader)
+if (!msgMatch) die(`messagesLogBlock does not start with '## <date> — run-n-rounds batch <runId> (...': ${msgHeader.slice(0, 80)}`)
+if (msgMatch[1] !== date || msgMatch[2] !== runId) die(`messagesLogBlock is for ${msgMatch[1]}/${msgMatch[2]} but the lifecycle block is for ${date}/${runId} — inconsistent payload`)
 
 const NNN = n => String(n).padStart(3, '0')
 const lifecyclePath = join(ROOT, 'agents', 'lifecycle.md')
@@ -88,26 +128,28 @@ const msgHasRunId = (text, id) => text.split('\n').some(l => {
 if (!existsSync(lifecyclePath)) die(`missing ${lifecyclePath} — not a deployed AI.Team root? (pass TEAM_ROOT)`)
 let lifecycle = await readFile(lifecyclePath, 'utf8')
 const lcHasRun = lcHasRunId(lifecycle, runId)
-const entriesCount = todo.lifecycleEntries.length - 1   // minus the BATCH header
-const firstEntryNo = todo.nextLifecycleNumberAfter - entriesCount
+const firstEntryNo = entryNos[0]   // parsed from the actual '## [NNN]' lines (F-06)
 const counterRe = /(Next NNN to assign[^\d]*)(\d+)/
 const counterMatch = counterRe.exec(lifecycle)
 let lifecycleChanged = false
 if (lcHasRun) {
   actions.push(`SKIP - lifecycle: runId ${runId} already applied`)
 } else {
-  // Counter PRECONDITION (R-06): appending an unapplied batch whose numbering
-  // does not line up with the live counter would create duplicate or gapped
-  // [NNN] entries — fail closed instead of writing a corrupt ledger.
-  if (counterMatch) {
-    const current = parseInt(counterMatch[2], 10)
-    if (current !== firstEntryNo) {
-      die(`lifecycle counter is ${NNN(current)} but this batch's entries start at ${NNN(firstEntryNo)} — numbering conflict (another batch ran since this result was produced?). Re-invoke the engine with nextLifecycleNumber=${current}, or resolve the ledger manually. Nothing was written.`)
-    }
+  // Counter PRECONDITION (R-06/F-06): appending an unapplied batch whose
+  // numbering does not line up with the live counter would create duplicate
+  // or gapped [NNN] entries — fail closed instead of writing a corrupt
+  // ledger. A MISSING counter is equally fail-closed (the validator FAILs
+  // deployments without one; silently appending here would contradict it).
+  if (!counterMatch) {
+    die(`agents/lifecycle.md has no 'Next NNN to assign' counter line — required before reconciling (scripts/validate-team.sh flags this); add it, then re-run. Nothing was written.`)
+  }
+  const current = parseInt(counterMatch[2], 10)
+  if (current !== firstEntryNo) {
+    die(`lifecycle counter is ${NNN(current)} but this batch's entries start at ${NNN(firstEntryNo)} — numbering conflict (another batch ran since this result was produced?). Re-invoke the engine with nextLifecycleNumber=${current}, or resolve the ledger manually. Nothing was written.`)
   }
   lifecycle = lifecycle.replace(/\n*$/, '\n\n') + todo.lifecycleEntries.join('\n') + '\n'
   lifecycleChanged = true
-  actions.push(`APPLY - lifecycle: BATCH block (${entriesCount} entries) appended`)
+  actions.push(`APPLY - lifecycle: BATCH block (${entryNos.length} entries) appended`)
 }
 // Counter update (drift fix): the paste block never carried it; the tool owns it.
 if (!counterMatch) {

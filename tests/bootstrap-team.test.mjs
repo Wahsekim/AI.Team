@@ -178,6 +178,28 @@ test('R-09: BOOTSTRAPPED is never printed over an incomplete deployment', async 
   })
 })
 
+test('F-07: a held bootstrap lock blocks a concurrent run (no mixed-config deployments)', async () => {
+  await withKit(async root => {
+    const { mkdir } = await import('node:fs/promises')
+    await mkdir(join(root, '.bootstrap-lock'))
+    try {
+      await exec('bash', [SCRIPT, root])
+      assert.fail('expected nonzero exit while the lock is held')
+    } catch (e) {
+      assert.equal(e.code, 1)
+      assert.match(String(e.stdout), /another bootstrap appears to be in progress/)
+    }
+  })
+})
+
+test('F-07: bootstrap lock is released after a run (subsequent run proceeds)', async () => {
+  await withKit(async root => {
+    await run(root)
+    const out = await run(root)
+    assert.match(out, /RESULT: /)
+  })
+})
+
 test('R-09: no render-tmp litter is left behind after a successful run', async () => {
   await withKit(async root => {
     await run(root, '--project-name', 'X')

@@ -33,7 +33,10 @@ HB_FILE="$HB_DIR/${session_id}.heartbeat"
 pid_is_watchdog() {
     [ -n "$1" ] || return 1
     case "$1" in *[!0-9]*) return 1 ;; esac
-    ps -p "$1" -o command= 2>/dev/null | grep -q "watchdog-loop\.sh ${session_id}\$"
+    # Fixed-string suffix match — session ids may contain '.' which is a regex
+    # metachar; never build a regex from untrusted-ish input (F-08).
+    _cmd=$(ps -p "$1" -o command= 2>/dev/null) || return 1
+    case "$_cmd" in *"watchdog-loop.sh ${session_id}") return 0 ;; *) return 1 ;; esac
 }
 
 if [ -f "$PID_FILE" ]; then

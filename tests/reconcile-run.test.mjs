@@ -136,14 +136,60 @@ test('R-06: prefix runId (run-...-0020) does not false-skip this run (run-...-00
   })
 })
 
-test('R-06: a held lock blocks a second reconcile (no concurrent writers)', async () => {
+test('R-06: a lock held by a LIVE process blocks a second reconcile', async () => {
   await withDeployment(async (root, resultPath) => {
     await mkdir(join(root, '.reconcile-lock'))
+    await writeFile(join(root, '.reconcile-lock', 'owner.json'), JSON.stringify({ pid: process.pid, startedAt: 'now' }))
     const { code, out } = await runTool(resultPath, root)
     assert.equal(code, 1, out)
-    assert.match(out, /another reconcile appears to be in progress/)
+    assert.match(out, /another reconcile is in progress/)
     const lc = await readFile(join(root, 'agents', 'lifecycle.md'), 'utf8')
     assert.ok(!lc.includes('### BATCH'))
+  })
+})
+
+test('F-06: a STALE lock (dead owner) is recovered automatically instead of demanding manual cleanup', async () => {
+  await withDeployment(async (root, resultPath) => {
+    await mkdir(join(root, '.reconcile-lock'))
+    await writeFile(join(root, '.reconcile-lock', 'owner.json'), JSON.stringify({ pid: 999999999, startedAt: 'crashed' }))
+    const { code, out } = await runTool(resultPath, root)
+    assert.equal(code, 0, out)
+    assert.match(out, /RECONCILED/)
+  })
+})
+
+test('F-06: non-consecutive BATCH entry numbers are rejected before any write', async () => {
+  await withDeployment(async (root, resultPath) => {
+    const bad = structuredClone(RESULT)
+    bad.mainSessionTodo.lifecycleEntries[2] = bad.mainSessionTodo.lifecycleEntries[2].replace('## [003]', '## [007]')
+    await writeFile(resultPath, JSON.stringify(bad))
+    const { code, out } = await runTool(resultPath, root)
+    assert.equal(code, 1, out)
+    assert.match(out, /not consecutive|inconsistent payload/)
+    const lc = await readFile(join(root, 'agents', 'lifecycle.md'), 'utf8')
+    assert.ok(!lc.includes('### BATCH'))
+  })
+})
+
+test('F-06: messages block for a different runId/date is rejected (cross-field invariant)', async () => {
+  await withDeployment(async (root, resultPath) => {
+    const bad = structuredClone(RESULT)
+    bad.mainSessionTodo.messagesLogBlock = bad.mainSessionTodo.messagesLogBlock.replace('batch run-2026-07-16-002', 'batch run-2026-07-16-999')
+    await writeFile(resultPath, JSON.stringify(bad))
+    const { code, out } = await runTool(resultPath, root)
+    assert.equal(code, 1, out)
+    assert.match(out, /inconsistent payload/)
+  })
+})
+
+test('F-06: missing lifecycle counter fails BEFORE any write (matches the validator contract)', async () => {
+  await withDeployment(async (root, resultPath) => {
+    await writeFile(join(root, 'agents', 'lifecycle.md'), '# Lifecycle\n\n## [001] bootstrap — deployed\n')
+    const { code, out } = await runTool(resultPath, root)
+    assert.equal(code, 1, out)
+    assert.match(out, /no 'Next NNN to assign' counter/)
+    const lc = await readFile(join(root, 'agents', 'lifecycle.md'), 'utf8')
+    assert.ok(!lc.includes('### BATCH'), 'nothing may be appended without a counter')
   })
 })
 
