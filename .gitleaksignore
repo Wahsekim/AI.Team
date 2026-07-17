@@ -1,0 +1,6 @@
+# Known false positives — FAKE fixture secrets in redaction regression tests
+# (tests/run-n-rounds.test.mjs, R-03). The fixtures are now built by runtime
+# concatenation so no secret-shaped literal exists in current source; these
+# fingerprints cover the one historical commit that carried them verbatim.
+99d8e603265ee95477aef89774704778a73ec598:tests/run-n-rounds.test.mjs:generic-api-key:579
+99d8e603265ee95477aef89774704778a73ec598:tests/run-n-rounds.test.mjs:generic-api-key:594
