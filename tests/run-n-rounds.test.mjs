@@ -33,7 +33,7 @@ const verifierCalls = calls => calls.filter(c => (c.opts.label || '').includes('
 const guardianCalls = calls => calls.filter(c => c.opts.label === 'chaos:guardian')
 
 const okWorker = over => () => ({
-  outcome: 'done', progress: true, filesTouched: [], decisionsCount: 0,
+  outcome: 'done', progress: true, filesTouched: [], decisionsCount: 1,   // 1: progress needs evidence (R7-02)
   selfReportTokens: 10, blocked: false, terminalStop: false, notes: '', ...over,
 })
 
@@ -112,6 +112,7 @@ test('valid args: exactly N workers dispatched for rounds=3, plan=3', async () =
 test('wrappers mode: explicit verifier/guardian wrapper types are used verbatim', async () => {
   const { result, calls } = await run(mkArgs({
     executionMode: 'wrappers', guardianAgentType: 'proj-chaos',
+    allowedAgentTypes: ['proj-builder', 'proj-qa', 'proj-chaos'],   // roster membership required in wrappers mode (R7-03)
     plan: mkPlan(1, { isCodeShipping: true, verifierAgentType: 'proj-qa' }),
   }))
   assert.equal(verifierCalls(calls)[0].opts.agentType, 'proj-qa')
@@ -633,9 +634,11 @@ test('R-07: non-code plan whose worker touched code files -> scope drift recover
   assert.match(result.haltReason, /failure-policy halt/)
 })
 
-test('R-07: non-code plan touching docs/ledgers stays clean (no false drift)', async () => {
+test('R-07: non-code plan touching docs/evidence stays clean (no false drift)', async () => {
+  // messages/ moved OUT of this fixture in round 7: ledgers are PM-only
+  // surfaces now (R7-01) — worker-safe docs/evidence paths only.
   const { result } = await run(mkArgs(), {
-    worker: okWorker({ filesTouched: ['docs/notes.md', 'messages/2026-07-16.md'] }),
+    worker: okWorker({ filesTouched: ['docs/notes.md', 'evidence/screenshot-report.md'] }),
   })
   assert.equal(result.results[0].scopeDrift, false)
   assert.equal(result.allPassed, true)
@@ -935,4 +938,93 @@ test('R6-05: a real command with a trailing comment still counts as evidence', a
       }) },
   )
   assert.equal(result.results[0].verificationStatus, 'passed')
+})
+
+// ---------------------------------------------------------------- round-7 findings (R7-01..R7-09)
+
+test('R7-01: a CODE worker reporting writes to PM/owner-only surfaces is an ownership violation, never green', async () => {
+  for (const file of ['charter.md', 'agents/roster.md', 'agents/lifecycle.md', 'pm-decisions.md', 'memory/pm.md', 'decisions/adr-001.md']) {
+    const { result } = await run(
+      mkArgs({ plan: mkPlan(1, { isCodeShipping: true }) }),
+      { worker: okWorker({ filesTouched: [file] }) },
+    )
+    assert.equal(result.results[0].ownershipViolation, true, `${file} is serial-PM/owner-only`)
+    assert.equal(result.allPassed, false, `${file}: a verifier pass must not authorize the write`)
+    assert.equal(result.safeToContinue, false)
+    assert.ok(result.recoveryQueue.length >= 1)
+  }
+})
+
+test('R7-01: a NON-code worker writing memory/pm.md trips the same ownership tripwire', async () => {
+  const { result } = await run(mkArgs(), { worker: okWorker({ filesTouched: ['memory/pm.md'] }) })
+  assert.equal(result.results[0].ownershipViolation, true)
+  assert.equal(result.allPassed, false)
+})
+
+test('R7-01: ordinary product files on a code ticket do NOT trip ownership', async () => {
+  const { result } = await run(
+    mkArgs({ plan: mkPlan(1, { isCodeShipping: true }) }),
+    { worker: okWorker({ filesTouched: ['product/src/app.ts', 'product/README.md'] }) },
+  )
+  assert.equal(result.results[0].ownershipViolation, false)
+  assert.equal(result.allPassed, true)
+})
+
+test('R7-02: progress:true with zero files AND zero decisions is no_progress (evidence-free self-report)', async () => {
+  const { result } = await run(mkArgs(), { worker: okWorker({ filesTouched: [], decisionsCount: 0 }) })
+  assert.equal(result.results[0].workerStatus, 'no_progress')
+  assert.equal(result.allPassed, false)
+  assert.equal(result.safeToContinue, false)
+})
+
+test('R7-02: empty/whitespace outcome or negative counters are invalid_worker_result', async () => {
+  for (const over of [{ outcome: '' }, { outcome: '   ' }, { decisionsCount: -1 }, { selfReportTokens: -5 }]) {
+    const impl = makeAgentImpl({ worker: okWorker(over) })
+    const { result } = await runWorkflow({ scriptPath: SCRIPT, args: mkArgs(), agentImpl: impl, enforceSchema: false })
+    assert.equal(result.results[0].workerStatus, 'invalid_worker_result', JSON.stringify(over))
+  }
+})
+
+test('R7-03: wrappers mode without allowedAgentTypes is invalid-args', async () => {
+  const { result } = await run(mkArgs({ executionMode: 'wrappers', guardianAgentType: 'proj-chaos' }))
+  assert.equal(result.errorCode, 'invalid-args')
+  assert.equal(result.dispatchedCount, 0)
+})
+
+test('R7-03: a charset-legal built-in name (Plan/Explore) outside the roster list is invalid-args', async () => {
+  const { result } = await run(mkArgs({
+    executionMode: 'wrappers', guardianAgentType: 'Explore',
+    allowedAgentTypes: ['proj-builder', 'proj-qa', 'proj-chaos'],
+    plan: [{ ticket: 'T-1', agentType: 'Plan', brief: 'x', isCodeShipping: false }],
+  }))
+  assert.equal(result.errorCode, 'invalid-args')
+  assert.equal(result.dispatchedCount, 0)
+  assert.ok(result.validationErrors.some(e => e.includes('not in allowedAgentTypes')))
+})
+
+test('R7-07: a comment-only command is rejected as evidence', async () => {
+  const { result } = await run(
+    mkArgs({ plan: mkPlan(1, { isCodeShipping: true }) }),
+    { verifier: () => ({
+        pass: true, staticPass: true, e2ePass: true, summary: 'ok', failures: [],
+        commandsRun: [{ command: '# comment only', exitCode: 0 }],
+      }) },
+  )
+  assert.equal(result.results[0].verificationStatus, 'failed')
+  assert.match(result.results[0].verifierGroundingFailure, /blank|comment/)
+})
+
+test('R7-08: shape validation runs on the RAW report — redaction cannot legalize an oversized outcome', async () => {
+  const raw = 'x'.repeat(1950) + ' password="' + 'a'.repeat(50) + '"'   // raw > 2000, redacted < 2000
+  assert.ok(raw.length > 2000, 'fixture must be raw-illegal')
+  const impl = makeAgentImpl({ worker: okWorker({ outcome: raw }) })
+  const { result } = await runWorkflow({ scriptPath: SCRIPT, args: mkArgs(), agentImpl: impl, enforceSchema: false })
+  assert.equal(result.results[0].workerStatus, 'invalid_worker_result')
+})
+
+test('R7-09: absolute, drive, UNC, and parent-escaping paths are never "safe markdown"', async () => {
+  for (const file of ['/tmp/outside.md', '../other-repo/README.md', 'C:\\other\\README.md', '\\\\server\\share\\README.md', '   ']) {
+    const { result } = await run(mkArgs(), { worker: okWorker({ filesTouched: [file] }) })
+    assert.equal(result.results[0].scopeDrift, true, `${JSON.stringify(file)} is outside the repo-relative contract`)
+  }
 })

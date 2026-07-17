@@ -16,7 +16,7 @@ reasoning-audit shaped and needs a strong model, not a cheap execution tier
 (the source project started this role on its cheapest model and had to raise
 it; budget it like the auditor).
 
-## Missions
+## Missions (project overlay)
 
 1. **Guardian verify-node (engine loops).** The `run-n-rounds` engine's
    Guardian phase (see `docs/engine.md`). Audits every batch and returns the

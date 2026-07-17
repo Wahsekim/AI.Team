@@ -47,7 +47,10 @@ export const meta = {
 //     verifierBrief?: string,             // verifier brief WITH stack env/prefix lines re-pasted verbatim (see _shared/verify-discipline.md)
 //     verifierAgentType?: string, verifierModel?: string    // per agents/roster.md; REQUIRED (non-generic) for code-shipping items in wrappers mode
 //   }],
-//   guardianAgentType?: string, guardianModel?: string      // per agents/roster.md; guardianAgentType REQUIRED (non-generic) in wrappers mode
+//   guardianAgentType?: string, guardianModel?: string,     // per agents/roster.md; guardianAgentType REQUIRED (non-generic) in wrappers mode
+//   allowedAgentTypes?: string[]          // REQUIRED in wrappers mode (R7-03): the roster-derived list of legal wrapper
+//                                         // names — every agentType/verifierAgentType/guardianAgentType must be a member
+//                                         // (the workflow body cannot read agents/roster.md itself; the PM passes the list)
 // }
 
 // Boundary defense: args may arrive as a parsed object OR as a JSON string depending on the
@@ -110,6 +113,25 @@ for (const k of ['guardianAgentType', 'guardianModel']) {
 if (A.executionMode === 'wrappers' && (!isIdent(A.guardianAgentType, 128) || A.guardianAgentType === 'general-purpose')) {
   validationErrors.push("wrappers mode requires an explicit non-generic guardianAgentType (roster wrapper name) — the guardian must not silently run as general-purpose")
 }
+// Roster MEMBERSHIP, not just charset (R7-03): the workflow body cannot read
+// agents/roster.md (no IO in-loop), so wrappers mode requires the caller to
+// pass the roster-derived wrapper-name list and every dispatched type must be
+// a member — 'Plan'/'Explore'/other built-ins must not slip through as
+// charset-legal wrapper names.
+let allowedTypes = null
+if (A.executionMode === 'wrappers') {
+  if (!Array.isArray(A.allowedAgentTypes) || A.allowedAgentTypes.length === 0
+    || A.allowedAgentTypes.length > 100 || !A.allowedAgentTypes.every(t => isIdent(t, 128))) {
+    validationErrors.push('wrappers mode REQUIRES allowedAgentTypes: a non-empty array (<= 100) of roster wrapper names matching [A-Za-z0-9._-]+ — membership is enforced per dispatch (R7-03)')
+  } else {
+    allowedTypes = new Set(A.allowedAgentTypes)
+    if (isIdent(A.guardianAgentType, 128) && !allowedTypes.has(A.guardianAgentType)) {
+      validationErrors.push(`guardianAgentType '${A.guardianAgentType}' is not in allowedAgentTypes — not a roster wrapper`)
+    }
+  }
+} else if (A.allowedAgentTypes !== undefined && !Array.isArray(A.allowedAgentTypes)) {
+  validationErrors.push('allowedAgentTypes, when given, must be an array of wrapper names')
+}
 if (!Array.isArray(A.plan) || A.plan.length === 0) {
   validationErrors.push('plan must be a non-empty array — the main-session PM pre-scopes the N-iter plan while attended (tracker/MCP is banned in-loop), then invokes with {scriptPath, args}')
 } else if (A.plan.length > MAX_ROUNDS) {
@@ -136,6 +158,15 @@ if (!Array.isArray(A.plan) || A.plan.length === 0) {
       if (p.agentType === 'general-purpose') validationErrors.push(`${at}.agentType is 'general-purpose' — banned in wrappers mode (use the roster wrapper name, or invoke with executionMode:'inline')`)
       if (p.isCodeShipping === true && (!isIdent(p.verifierAgentType, 128) || p.verifierAgentType === 'general-purpose')) {
         validationErrors.push(`${at}.verifierAgentType must be an explicit non-generic wrapper name for code-shipping items in wrappers mode — the verifier gate must not silently run as general-purpose`)
+      }
+      // Membership per dispatch (R7-03): charset-legal is not roster-legal.
+      if (allowedTypes) {
+        if (isIdent(p.agentType, 128) && !allowedTypes.has(p.agentType)) {
+          validationErrors.push(`${at}.agentType '${p.agentType}' is not in allowedAgentTypes — not a roster wrapper`)
+        }
+        if (isIdent(p.verifierAgentType, 128) && !allowedTypes.has(p.verifierAgentType)) {
+          validationErrors.push(`${at}.verifierAgentType '${p.verifierAgentType}' is not in allowedAgentTypes — not a roster wrapper`)
+        }
       }
     }
   })
@@ -174,11 +205,11 @@ const WORKER_SCHEMA = {
   type: 'object', additionalProperties: false,
   required: ['outcome', 'progress', 'filesTouched', 'decisionsCount', 'selfReportTokens', 'blocked'],
   properties: {
-    outcome: { type: 'string', maxLength: 2000, description: 'one-phrase close outcome (-> lifecycle Outcome field)' },
-    progress: { type: 'boolean', description: '>=1 of {written artifact, ticket transition, recorded decision} produced (harness mandatory-progress rule). FALSE routes this iteration to the recovery queue and, under halt-on-failure, stops the loop.' },
-    filesTouched: { type: 'array', maxItems: 500, items: { type: 'string', maxLength: 500 } },
-    decisionsCount: { type: 'integer' },
-    selfReportTokens: { type: 'integer', description: 'worker token self-estimate (meta-rule M4: distrust — the engine records harness spend deltas per spawn; guardian cross-checks)' },
+    outcome: { type: 'string', minLength: 1, maxLength: 2000, description: 'one-phrase close outcome (-> lifecycle Outcome field); must be non-empty (R7-02)' },
+    progress: { type: 'boolean', description: '>=1 of {written artifact, ticket transition, recorded decision} produced (harness mandatory-progress rule). FALSE routes this iteration to the recovery queue and, under halt-on-failure, stops the loop. ENFORCED (R7-02): true with zero filesTouched AND zero decisionsCount is evidence-free and is demoted to no_progress (transitions are banned in-loop, so files/decisions are the only in-loop evidence).' },
+    filesTouched: { type: 'array', maxItems: 500, items: { type: 'string', maxLength: 500 }, description: 'repo-relative POSIX paths of files written (progress evidence + scope/ownership tripwires)' },
+    decisionsCount: { type: 'integer', description: 'recorded decisions this iteration (progress evidence); non-negative' },
+    selfReportTokens: { type: 'integer', description: 'worker token self-estimate, non-negative (meta-rule M4: distrust — the engine records harness spend deltas per spawn; guardian cross-checks)' },
     blocked: { type: 'boolean', description: 'this TICKET is blocked (recoverable). It does NOT count as success: the iteration enters the recovery queue and, under halt-on-failure, stops the loop for main-session triage.' },
     terminalStop: { type: 'boolean', description: 'this WHOLE LOOP must stop now (terminal signal the engine can break on deterministically). Distinct from blocked. The stopping iteration STILL gets its verifier gate if code-shipping. Only catches stops a worker can surface; pure out-of-band owner-input Q4 still needs the main-session batch discipline.' },
     notes: { type: 'string', maxLength: 4000 },
@@ -311,7 +342,10 @@ for (let i = 0; i < iters; i++) {
       agentType: p.agentType, model: p.model,
       label: `iter${i + 1}:${safeTicket}:${p.agentType}`, phase: 'Loop', schema: WORKER_SCHEMA,
     })
-    worker = redactDeep(worker)   // full worker object leaves the engine in results[] — redact at capture (R-03)
+    // Validation runs on the RAW report (R7-08): sanitizing first would let a
+    // raw-illegal report (e.g. an oversized outcome that the redactor happens
+    // to shorten) validate as legal. The sanitized copy is generated AFTER
+    // status derivation and is what persists.
     terminalStopRequested = worker !== null && worker.terminalStop === true
     // Schema-independent shape check (R5-02): schema enforcement is a runtime
     // property this engine must not rely on — the verifier and guardian already
@@ -319,7 +353,7 @@ for (let i = 0; i < iters; i++) {
     // report missing any required field is unattested: never 'succeeded',
     // side effects unknown, straight to recovery.
     const workerShapeValid = worker !== null
-      && typeof worker.outcome === 'string' && worker.outcome.length <= 2000
+      && typeof worker.outcome === 'string' && worker.outcome.trim().length > 0 && worker.outcome.length <= 2000
       && typeof worker.progress === 'boolean'
       && typeof worker.blocked === 'boolean'
       && Array.isArray(worker.filesTouched)
@@ -328,16 +362,23 @@ for (let i = 0; i < iters; i++) {
       // not the WORKER_SCHEMA contract.
       && worker.filesTouched.length <= 500
       && worker.filesTouched.every(f => typeof f === 'string' && f.length <= 500)
-      && Number.isSafeInteger(worker.decisionsCount)
-      && Number.isSafeInteger(worker.selfReportTokens)
+      && Number.isSafeInteger(worker.decisionsCount) && worker.decisionsCount >= 0
+      && Number.isSafeInteger(worker.selfReportTokens) && worker.selfReportTokens >= 0
       && (worker.terminalStop === undefined || typeof worker.terminalStop === 'boolean')
       && (worker.notes === undefined || (typeof worker.notes === 'string' && worker.notes.length <= 4000))
+    // Mandatory-progress evidence (R7-02): the harness rule is >=1 of
+    // {written artifact, ticket transition, recorded decision}; transitions
+    // are banned in-loop, so progress:true with zero files AND zero decisions
+    // is an evidence-free self-report — no_progress, not success.
+    const evidenceEmpty = workerShapeValid && worker.filesTouched.length === 0 && worker.decisionsCount === 0
     const outcome = worker === null ? 'null_result'
       : !workerShapeValid ? 'invalid_worker_result'
       : worker.blocked === true ? 'blocked'
       : worker.progress !== true ? 'no_progress'
+      : evidenceEmpty ? 'no_progress'
       : 'succeeded'
     workerStatus = (terminalStopRequested && outcome === 'succeeded') ? 'terminal_stop' : outcome
+    worker = redactDeep(worker)   // sanitized copy — the only one that leaves the engine (R-03/R7-08)
   } catch (e) {
     workerStatus = 'error'
     workerError = { code: 'worker-agent-error', message: cleanLine(String(e), 200) }
@@ -354,6 +395,24 @@ for (let i = 0; i < iters; i++) {
   // session must verify manually; the gate cannot attest a workspace a vanished worker may have
   // half-changed). Blocked/no-progress workers on code tickets STILL get the gate — they ran and
   // may have touched files.
+  // ---- ownership tripwire, EVERY ticket type (R7-01): lifecycle, roster,
+  // pm-decisions, memory, messages, decisions/ and the charter are
+  // serial-PM/owner-only single-writer surfaces. A verifier pass does not
+  // authorize a worker to write them — this is a role boundary, not a quality
+  // gate. Worker-reported (catches honest reports; the main session reads the
+  // REAL git diff for every recovery record).
+  const normPath = f => String(f).replace(/\\/g, '/')
+  // Path CONTRACT (R7-09): filesTouched is repo-relative POSIX. Absolute,
+  // drive-letter, UNC, parent-escaping, or empty paths are outside the
+  // contract — fail-closed as unclassifiable, never "safe markdown".
+  const unsafePath = p2 => p2.trim() === '' || p2 === '.'
+    || /^\/|^[A-Za-z]:/.test(p2) || p2.split('/').includes('..')
+  const FORBIDDEN_ANY_WORKER = /(^|\/)(charter\.md|pm-decisions\.md)$|(^|\/)(memory|messages|decisions)\/|(^|\/)agents\/(lifecycle|roster|lessons|pm)\.md$/i
+  const touched = worker && Array.isArray(worker.filesTouched) ? worker.filesTouched.map(normPath) : []
+  const forbiddenTouched = touched.filter(f => FORBIDDEN_ANY_WORKER.test(f))
+  const ownershipViolation = forbiddenTouched.length > 0
+  if (ownershipViolation) log(`iter ${i + 1} ${safeTicket}: OWNERSHIP VIOLATION — worker reports writes to PM/owner-only surfaces (${forbiddenTouched.slice(0, 3).map(f => oneLine(f)).join(', ')}) — routing to recovery`)
+
   let verifier = null
   let verifierGroundingFailure = null
   let verificationStatus
@@ -374,11 +433,10 @@ for (let i = 0; i < iters; i++) {
     // and SVG is scriptable — a safe extension does not make them safe files.
     const NON_CODE_SAFE = /\.(md|markdown|txt|rst|adoc|png|jpe?g|gif|pdf)$/i
     const CONTROL_PLANE = /(^|\/)(CLAUDE\.md|AGENTS\.md|charter\.md|requirements[^/]*\.txt|constraints[^/]*\.txt)$|(^|\/)(\.claude|\.github|agents|profiles|scripts)\//i
-    // Separator-normalized before classification (R6-04): worker reports may
-    // use backslashes — 'agents\pm.md' must classify like 'agents/pm.md'.
-    const offending = worker && Array.isArray(worker.filesTouched)
-      ? worker.filesTouched.map(f => String(f).replace(/\\/g, '/'))
-        .filter(f => CONTROL_PLANE.test(f) || !NON_CODE_SAFE.test(f)) : []
+    // Separator-normalized before classification (R6-04, shared normPath) and
+    // contract-checked (R7-09): an out-of-contract path is offending, never
+    // "safe markdown" — '/tmp/outside.md' proves nothing about this repo.
+    const offending = touched.filter(f => unsafePath(f) || CONTROL_PLANE.test(f) || !NON_CODE_SAFE.test(f))
     scopeDrift = offending.length > 0
     if (scopeDrift) log(`iter ${i + 1} ${safeTicket}: SCOPE DRIFT — declared non-code but worker reports non-doc files touched (${offending.slice(0, 3).map(f => oneLine(f)).join(', ')}) — routing to recovery`)
   } else if (workerStatus === 'error' || workerStatus === 'null_result' || workerStatus === 'invalid_worker_result') {
@@ -418,25 +476,26 @@ for (let i = 0; i < iters; i++) {
         // with echo. This is a tripwire for a lazy verifier, NOT an adversarial
         // defense — command content stays verifier-reported (docs/engine.md).
         const NOOP = /^\s*(?:true|:|exit\s+0)\s*$|^\s*echo\b[^&|;>]*$/i
-        // Shell comments are not evidence content: strip an unquoted trailing
-        // comment BEFORE the no-op test so 'true # explanatory note' cannot
-        // launder a no-op into evidence (R6-05).
-        const decomment = s => String(s).replace(/\s#.*$/, '')
+        // CANONICAL command first (R7-07): single-line check, then strip an
+        // unquoted trailing/whole-line comment, then trim — every evidence
+        // check (blank, no-op) runs on the canonical form, so neither
+        // 'true # note' nor '# comment only' counts as executed evidence.
+        const canonical = s => String(s).replace(/\s#.*$/, '').replace(/^\s*#.*$/, '').trim()
         if (cmds.length === 0) {
           verifierGroundingFailure = 'pass=true with missing/empty commandsRun — ungrounded verdict rejected'
         } else {
-          // A blank/whitespace command is no evidence at all — a schema-legal
-          // {command:'   ', exitCode:0} must not count as an executed gate (R-02).
-          // A MULTI-LINE command is rejected too (R6-05): one commandsRun entry
-          // = one single-line command with its own exit code; embedded newlines
-          // defeat both the no-op tripwire and per-command attribution.
+          // A blank/whitespace/comment-only command is no evidence at all — a
+          // schema-legal {command:'   ', exitCode:0} or {command:'# note'}
+          // must not count as an executed gate (R-02/R7-07). A MULTI-LINE
+          // command is rejected too (R6-05): one commandsRun entry = one
+          // single-line command with its own exit code.
           const bad = cmds.filter(c => !c
-            || typeof c.command !== 'string' || c.command.trim().length === 0
-            || /[\r\n]/.test(c.command)
+            || typeof c.command !== 'string' || /[\r\n]/.test(c.command)
+            || canonical(c.command).length === 0
             || typeof c.exitCode !== 'number' || c.exitCode !== 0)
           if (bad.length > 0) {
-            verifierGroundingFailure = `pass=true but blank/multi-line command or nonzero/invalid exitCode: ${bad.map(c => `${cleanLine((c && c.command) || '(blank)', 80) || '(blank)'} -> ${c ? c.exitCode : '?'}`).join('; ')}`
-          } else if (cmds.every(c => NOOP.test(decomment(c.command)))) {
+            verifierGroundingFailure = `pass=true but blank/comment-only/multi-line command or nonzero/invalid exitCode: ${bad.map(c => `${cleanLine((c && c.command) || '(blank)', 80) || '(blank)'} -> ${c ? c.exitCode : '?'}`).join('; ')}`
+          } else if (cmds.every(c => NOOP.test(canonical(c.command)))) {
             verifierGroundingFailure = 'pass=true but every command is a no-op (true/:/exit 0/echo) — no verification evidence'
           }
         }
@@ -460,14 +519,14 @@ for (let i = 0; i < iters; i++) {
   const needsRecovery = needsFixRetest
     || workerStatus === 'error' || workerStatus === 'null_result' || workerStatus === 'invalid_worker_result'
     || workerStatus === 'blocked' || workerStatus === 'no_progress'
-    || scopeDrift
+    || scopeDrift || ownershipViolation
   spentTrace.push(spentInLoop())
   const r = {
     // ticket text is tracker-sourced (untrusted): the copy that leaves the
     // engine (results[], iterFacts, ledgers) is redacted + sentinel-safe (F-01/F-04)
     iter: i + 1, ticket: safeTicket, agentType: p.agentType,
     workerStatus, verificationStatus, sideEffects,
-    terminalStopRequested, scopeDrift,
+    terminalStopRequested, scopeDrift, ownershipViolation,
     verificationRequired: p.isCodeShipping,
     worker, verifier,               // redacted at capture — safe to persist (R-03)
     workerTokens, verifierTokens,   // SEPARATE per-spawn harness deltas (per-spawn attribution rule)
@@ -484,6 +543,7 @@ for (let i = 0; i < iters; i++) {
     : workerStatus === 'invalid_worker_result' ? `WORKER REPORT INVALID (required fields missing, side effects unknown)${stopSuffix} -> recovery`
     : workerStatus === 'blocked' ? `WORKER BLOCKED${verificationStatus === 'failed' || verificationStatus === 'missing' ? ' + verification not passed' : ''}${stopSuffix} -> recovery`
     : workerStatus === 'no_progress' ? `NO PROGRESS${stopSuffix} -> recovery`
+    : ownershipViolation ? 'OWNERSHIP VIOLATION (worker wrote PM/owner-only surfaces) -> recovery'
     : scopeDrift ? 'SCOPE DRIFT (non-code plan touched code files) -> recovery'
     : verificationStatus === 'not_applicable' ? (workerStatus === 'terminal_stop' ? 'TERMINAL-STOP (non-code, no verifier gate)' : 'no verifier gate (non-code-shipping)')
     : verificationStatus === 'missing' ? 'verifier gate MISSING -> fail-closed fix-retest'

@@ -292,6 +292,61 @@ test('R6-08: a prose H2 mentioning the runId in messages does not count as the b
   })
 })
 
+test('R7-06: a messagesLogBlock BODY line starting with "## " is rejected before any write (not replay-recognizable)', async () => {
+  await withDeployment(async (root, resultPath) => {
+    // Used to be written whole on the first run (RECONCILED); on replay the
+    // idempotency scan stopped at the injected heading and died DIVERGES.
+    const bad = structuredClone(RESULT)
+    bad.mainSessionTodo.messagesLogBlock += '\n## injected heading\n- trailing bullet'
+    await writeFile(resultPath, JSON.stringify(bad))
+    const { code, out } = await runTool(resultPath, root)
+    assert.equal(code, 1, out)
+    assert.match(out, /replay-recognizable/)
+    const lc = await readFile(join(root, 'agents', 'lifecycle.md'), 'utf8')
+    assert.ok(!lc.includes('### BATCH'), 'nothing may be written for a non-recognizable block')
+    assert.ok(!existsSync(join(root, 'messages', '2026-07-16.md')))
+  })
+})
+
+test('R7-06: duplicate "Next NNN to assign" counter lines fail closed — neither counter modified', async () => {
+  await withDeployment(async (root, resultPath) => {
+    // One counter used to be advanced and the other left stale, exit 0.
+    await writeFile(join(root, 'agents', 'lifecycle.md'), LIFECYCLE + '\nNext NNN to assign: 007\n')
+    const { code, out } = await runTool(resultPath, root)
+    assert.equal(code, 1, out)
+    assert.match(out, /ambiguous/)
+    const lc = await readFile(join(root, 'agents', 'lifecycle.md'), 'utf8')
+    assert.match(lc, /Next NNN to assign: 002/, 'first counter must stay untouched')
+    assert.match(lc, /Next NNN to assign: 007/, 'second counter must stay untouched')
+    assert.ok(!lc.includes('### BATCH'), 'nothing may be written over an ambiguous counter')
+  })
+})
+
+test('R7-06: TWO pre-existing BATCH blocks for this runId fail closed as a uniqueness violation, not ALREADY-RECONCILED', async () => {
+  await withDeployment(async (root, resultPath) => {
+    const block = RESULT.mainSessionTodo.lifecycleEntries.join('\n')
+    await writeFile(join(root, 'agents', 'lifecycle.md'), LIFECYCLE + '\n' + block + '\n\n' + block + '\n')
+    const { code, out } = await runTool(resultPath, root)
+    assert.equal(code, 1, out)
+    assert.match(out, /uniqueness violation/)
+    assert.ok(!out.includes('ALREADY-RECONCILED'), 'duplicate blocks must never read as applied')
+    assert.ok(!existsSync(join(root, 'messages', '2026-07-16.md')), 'nothing may be written over duplicate blocks')
+  })
+})
+
+test('R7-06: TWO pre-existing canonical messages headers for this runId fail closed as a uniqueness violation', async () => {
+  await withDeployment(async (root, resultPath) => {
+    const block = RESULT.mainSessionTodo.messagesLogBlock
+    await writeFile(join(root, 'messages', '2026-07-16.md'), block + '\n\n' + block + '\n')
+    const { code, out } = await runTool(resultPath, root)
+    assert.equal(code, 1, out)
+    assert.match(out, /uniqueness violation/)
+    const lc = await readFile(join(root, 'agents', 'lifecycle.md'), 'utf8')
+    assert.ok(!lc.includes('### BATCH'), 'lifecycle must stay untouched over duplicate messages blocks')
+    assert.match(lc, /Next NNN to assign: 002/, 'counter must stay untouched')
+  })
+})
+
 test('R6-09: a FRESH ownerless lock (no metadata, current mtime) is treated as held, not reclaimed', async () => {
   await withDeployment(async (root, resultPath) => {
     // A concurrent acquirer inside its mkdir->writeFile init window looks

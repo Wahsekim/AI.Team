@@ -26,7 +26,10 @@ guardian node audits.
 | Work requiring tracker/MCP mid-loop, or same-session continuations mid-loop | NOT the engine — those are main-session carve-outs |
 
 Precondition: the plan's `agentType` values are the project wrapper names from
-`agents/roster.md`. If the deployment runs documented inline mode instead
+`agents/roster.md`, and wrappers mode REQUIRES `allowedAgentTypes` — the
+roster-derived wrapper-name list — because the workflow body cannot read the
+roster itself; every worker/verifier/guardian type is validated against it
+per dispatch (R7-03). If the deployment runs documented inline mode instead
 (`.claude/agents/INLINE_BASE_AGENT_MODE.md`), `general-purpose` + inlined
 persona is the sanctioned fallback — never an undocumented default.
 
@@ -177,9 +180,16 @@ in lifecycle headers).
     to `recoveryQueue` (dispatched ≠ effectively done);
     `null_result`/`error`/`invalid_worker_result` mean the worker vanished,
     threw, or returned a report missing required fields (the engine
-    shape-checks worker reports itself — runtime schema enforcement is not
-    assumed, R5-02) and its `sideEffects` are `unknown` (it may have
-    half-changed files);
+    shape-checks the RAW report itself before sanitizing — runtime schema
+    enforcement is not assumed, R5-02/R7-08) and its `sideEffects` are
+    `unknown` (it may have half-changed files). `progress:true` with zero
+    `filesTouched` AND zero `decisionsCount` is evidence-free and demotes to
+    `no_progress` (R7-02);
+  - `ownershipViolation` (per record, EVERY ticket type): the worker reported
+    writes to serial-PM/owner-only surfaces (charter, roster, lifecycle,
+    pm-decisions, lessons, memory/, messages/, decisions/) — a verifier pass
+    does not authorize that write; the record routes to recovery and the main
+    session reads the real git diff (R7-01);
   - `verificationStatus`: `not_applicable | passed | failed | missing |
     blocked_by_worker_error` — a code-shipping iter counts ONLY on `passed`;
     `missing` (gate threw/null/budget-blocked) and `blocked_by_worker_error`

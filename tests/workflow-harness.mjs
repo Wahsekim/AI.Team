@@ -107,7 +107,10 @@ export async function runWorkflow({ scriptPath, args, agentImpl, budgetImpl, enf
 export function makeAgentImpl({ worker, verifier, guardian } = {}) {
   const defaults = {
     worker: () => ({
-      outcome: 'done', progress: true, filesTouched: [], decisionsCount: 0,
+      // decisionsCount 1, not 0: progress:true now requires in-loop evidence
+      // (files or decisions, R7-02) — an evidence-free default mock would
+      // hard-code the exact false-green the engine rejects.
+      outcome: 'done', progress: true, filesTouched: [], decisionsCount: 1,
       selfReportTokens: 100, blocked: false, terminalStop: false, notes: '',
     }),
     verifier: () => ({

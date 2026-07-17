@@ -76,11 +76,15 @@ inline_mode_ok() { # R5-06: the inline-mode file must be a REAL dispatch doc,
 
 fm_clean_value() { # R6-06(c): normalize one frontmatter value from the strict
   # flat subset — strip an unquoted trailing ' #comment' plus trailing space.
-  # Heuristic: a value starting with a quote is never comment-stripped; a
-  # value that IS a comment ('# ...') cleans to empty; otherwise everything
-  # from the first ' #' is dropped.
+  # R7-05(a): a value starting with a quote yields its QUOTED SCALAR (up to
+  # the matching close quote, quotes kept) — 'description: "" # comment' must
+  # clean to '""' (empty), never pass on the trailing comment text. A value
+  # that IS a comment ('# ...') cleans to empty; otherwise everything from
+  # the first ' #' is dropped.
   FMV="$1"
   case "$FMV" in
+    \"*\"*) FMV=$(printf '%s' "$FMV" | sed -E 's/^("[^"]*").*$/\1/') ;;
+    \'*\'*) FMV=$(printf '%s' "$FMV" | sed -E "s/^('[^']*').*\$/\1/") ;;
     \"*|\'*) ;;
     \#*) FMV="" ;;
     *) FMV=$(printf '%s' "$FMV" | sed -E 's/[[:space:]]#.*$//') ;;
@@ -213,8 +217,14 @@ else
   # 1d counter line cross-check (Next NNN to assign == last entry + 1).
   # Missing counter is a FAIL on deployments: the engine/reconciler contract
   # depends on it, and a silently absent counter is exactly how drift starts.
+  # R7-06: on deployments the counter must appear EXACTLY once — duplicate
+  # counter lines let the reconciler update one while automation reads the
+  # other (the same drift, one file later).
   CTR=$(grep -E 'Next NNN to assign' "$LC" | grep -oE '[0-9]+' | head -1)
-  if [ -z "$CTR" ]; then
+  CTR_LINES=$(grep -cE 'Next NNN to assign' "$LC")
+  if [ "$DEPLOYED" = 1 ] && [ "$CTR_LINES" -gt 1 ]; then
+    fail "lifecycle-counter" "'Next NNN to assign' appears $CTR_LINES times — must appear EXACTLY once (duplicate counters split the reconciler from automation)"
+  elif [ -z "$CTR" ]; then
     if [ "$DEPLOYED" = 1 ]; then
       fail "lifecycle-counter" "no 'Next NNN to assign' counter line found — required on deployments (engine/reconciler contract)"
     else
@@ -465,13 +475,32 @@ else
     RC_ACTIVE=$((RC_ACTIVE+1))
     if [ ! -s "$ROOT/agents/$RID.md" ]; then
       RC_FAILS="$RC_FAILS $RID(agents/$RID.md missing-or-empty)"
-    # R6-07(c): a role file must carry the dispatchable substance the kit seeds
-    # carry ('## Base Agent' + '## Project Overlay' / '## Dispatch Assembly'
-    # in agents/*.md) — a one-byte stub fakes staffing. Permissive on wording:
-    # any base-agent mention plus overlay/dispatch/assembly guidance passes.
-    elif ! grep -qiE 'base agent' "$ROOT/agents/$RID.md" || \
-         ! grep -qiE 'overlay|dispatch|assembly' "$ROOT/agents/$RID.md"; then
-      RC_FAILS="$RC_FAILS $RID(agents/$RID.md hollow:needs-base-agent+overlay/dispatch/assembly-sections)"
+    else
+      # R6-07(c)/R7-04(b): a role file must carry the seed STRUCTURE, not just
+      # the keywords — a one-line 'base agent overlay' stub fakes staffing.
+      # Required: a '## Base Agent' HEADING plus at least one heading naming
+      # overlay/dispatch/assembly (the shape agents/agent-file.template.md
+      # mandates). Main-session rows (pm) keep the kit-authored pm.md shape
+      # and are exempt from the overlay/dispatch/assembly heading only.
+      RF="$ROOT/agents/$RID.md"
+      if ! grep -qiE '^##[[:space:]]+base agent' "$RF"; then
+        RC_FAILS="$RC_FAILS $RID(agents/$RID.md hollow:no-base-agent-heading)"
+      else
+        case "$line" in
+          *'main session'*) ;;
+          *) grep -qiE '^#{1,6}[[:space:]].*(overlay|dispatch|assembly)' "$RF" || \
+               RC_FAILS="$RC_FAILS $RID(agents/$RID.md hollow:no-overlay/dispatch/assembly-heading)" ;;
+        esac
+        # R7-04(c): the Base Agent section must NAME its base — 'synthetic' or
+        # a path-like token (contains '/' or a .md name) — in the lines between
+        # the '## Base Agent' heading and the next '## ' heading. A heading
+        # over 'TBD' is still hollow staffing.
+        BA_SEC=$(awk 'tolower($0) ~ /^##[[:space:]]+base agent/ {insec=1; next}
+                      insec && /^## / {exit}
+                      insec {print}' "$RF")
+        printf '%s\n' "$BA_SEC" | grep -qiE 'synthetic|/|\.md' || \
+          RC_FAILS="$RC_FAILS $RID(agents/$RID.md hollow:base-agent-names-no-base:need-synthetic-or-path)"
+      fi
     fi
     case "$line" in
       *'.claude/agents/'*'.md'*|*'main session'*) ;;   # row names its own dispatch path
@@ -529,12 +558,13 @@ if [ "$DEPLOYED" = 1 ] && [ -d "$ROOT/.claude/agents" ]; then
     MISSING_KEYS=""
     # Keys must carry a NON-EMPTY value — 'model:' alone is a shell, not
     # config (F-05). YAML-semantically-empty tokens ("", '', ~, null) are
-    # missing too, not values (R5-06). Values are comment-stripped FIRST
-    # (R6-06c) so 'effort: high # note' passes and 'description: # x' fails.
+    # missing too, not values (R5-06); null is case-insensitive per YAML
+    # (NULL/Null — R7-05b). Values are comment-stripped FIRST (R6-06c) so
+    # 'effort: high # note' passes and 'description: # x' fails.
     for k in name description model effort; do
       V=$(fm_clean_value "$(printf '%s\n' "$FM" | sed -nE "s/^${k}:[[:space:]]*//p" | head -1)")
       case "$V" in
-        ''|'""'|"''"|'~'|null) MISSING_KEYS="$MISSING_KEYS $k" ;;
+        ''|'""'|"''"|'~'|[Nn][Uu][Ll][Ll]) MISSING_KEYS="$MISSING_KEYS $k" ;;
       esac
     done
     # R5-06: effort must be a value the runtime accepts — a hyphenated
@@ -542,7 +572,7 @@ if [ "$DEPLOYED" = 1 ] && [ -d "$ROOT/.claude/agents" ]; then
     EFF=$(fm_clean_value "$(printf '%s\n' "$FM" | sed -nE 's/^effort:[[:space:]]*//p' | head -1)")
     EFF=${EFF#\"}; EFF=${EFF%\"}; EFF=${EFF#\'}; EFF=${EFF%\'}
     case "$EFF" in
-      ''|'~'|null) ;;                  # absent/empty is reported by the key loop above
+      ''|'~'|[Nn][Uu][Ll][Ll]) ;;      # absent/empty/null reported by the key loop above (R7-05b)
       low|medium|high|xhigh|max) ;;    # runtime effort enum
       *) FM_FAILS="$FM_FAILS ${w#$ROOT/}(invalid-effort:$EFF,allowed:low|medium|high|xhigh|max)" ;;
     esac
@@ -552,12 +582,23 @@ if [ "$DEPLOYED" = 1 ] && [ -d "$ROOT/.claude/agents" ]; then
     MT=${MT#\"}; MT=${MT%\"}
     printf '%s\n' "$MT" | grep -qE '^[1-9][0-9]*$' || MISSING_KEYS="$MISSING_KEYS maxTurns(positive-int)"
     [ -n "$MISSING_KEYS" ] && FM_FAILS="$FM_FAILS ${w#$ROOT/}(missing:$MISSING_KEYS )"
+    # R7-04(a): a wrapper is frontmatter + a DISPATCH BODY. Valid frontmatter
+    # over an empty (or whitespace-only) body dispatches nothing; and a body
+    # that never references an agents/ path is not an instantiation of
+    # role-wrapper.template.md, whose body routes the runtime at the role
+    # file (agents/<role_id>.md) and the shared agents/ surfaces.
+    WBODY=$(awk '/^---$/{n++; next} n>=2{print}' "$w")
+    if ! printf '%s' "$WBODY" | grep -q '[^[:space:]]'; then
+      FM_FAILS="$FM_FAILS ${w#$ROOT/}(empty-body)"
+    elif ! printf '%s\n' "$WBODY" | grep -q 'agents/'; then
+      FM_FAILS="$FM_FAILS ${w#$ROOT/}(body-missing-role-file-ref:agents/)"
+    fi
     if ! printf '%s\n' "$FM" | grep -qE '^(tools|permissionMode):'; then
       FM_WARNS="$FM_WARNS ${w#$ROOT/}"
     fi
   done
   if [ -n "$FM_FAILS" ]; then
-    fail "wrapper-frontmatter" "wrapper(s) violate the strict flat frontmatter subset this validator implements (line 1 '---', closed block, unique non-empty 'key: value' lines):$FM_FAILS"
+    fail "wrapper-frontmatter" "wrapper(s) violate the strict flat frontmatter subset this validator implements (line 1 '---', closed block, unique non-empty 'key: value' lines) or lack a real body referencing their agents/ role file (R7-04a):$FM_FAILS"
   elif [ "$FM_CHECKED" -eq 0 ]; then
     skip "wrapper-frontmatter" "no active wrappers to check (inline mode?)"
   elif [ -n "$FM_WARNS" ]; then
@@ -567,6 +608,91 @@ if [ "$DEPLOYED" = 1 ] && [ -d "$ROOT/.claude/agents" ]; then
   fi
 else
   skip "wrapper-frontmatter" "kit mode or no .claude/agents — wrapper schema not applicable"
+fi
+
+# ------------- check 5c: role<->wrapper<->model binding (R7-03, deployment mode)
+# One wrapper = one role: two ACTIVE roster rows sharing a wrapper path make
+# dispatch ambiguous. And the roster is the single source for model/reasoning
+# — a wrapper whose frontmatter contradicts a CONCRETE roster cell silently
+# dispatches the wrong tier. Placeholder ({{...}}), 'inherits...', and
+# multi-token cells are skipped (bootstrap-incomplete rosters must not
+# false-red); the pm row (wrapper 'main session') is exempt.
+if [ "$DEPLOYED" = 0 ]; then
+  skip "roster-binding" "kit mode — role/wrapper/model binding applies to deployed rosters only"
+elif [ ! -f "$RM" ]; then
+  skip "roster-binding" "agents/roster.md missing (already a roster-wrappers FAIL)"
+else
+  RB_FAILS=""
+  RB_CHECKED=0
+  RB_PATHS=""
+  # Column POSITIONS vary per deployment: locate the Model/Reasoning cells
+  # from the header row (first table row); absent columns skip the comparison.
+  RB_HDR=$(grep -E '^\|' "$RM" | head -1)
+  MODEL_COL=$(printf '%s\n' "$RB_HDR" | awk -F'|' '{
+    for (i = 2; i <= NF; i++) {
+      c = tolower($i); gsub(/^[[:space:]]+|[[:space:]]+$/, "", c)
+      if (c == "model") { print i; exit }
+    } }')
+  REASON_COL=$(printf '%s\n' "$RB_HDR" | awk -F'|' '{
+    for (i = 2; i <= NF; i++) {
+      c = tolower($i); gsub(/^[[:space:]]+|[[:space:]]+$/, "", c)
+      if (c == "reasoning") { print i; exit }
+    } }')
+  while IFS= read -r line; do
+    case "$line" in '|'*) ;; *) continue ;; esac   # table rows only, never prose
+    ST=$(printf '%s\n' "$line" | awk -F'|' '{
+      for (i = NF; i >= 2; i--) if ($i ~ /[^[:space:]]/) {
+        gsub(/`/, "", $i); sub(/^[[:space:]]+/, "", $i)
+        split($i, a, /[[:space:]]/); print a[1]; exit
+      }
+    }')
+    [ "$ST" = "active" ] || continue
+    case "$line" in *'main session'*) continue ;; esac   # pm row exempt (R7-03)
+    RID=$(printf '%s\n' "$line" | awk -F'|' '{ gsub(/[[:space:]`]/, "", $2); print $2 }')
+    W=$(echo "$line" | grep -oE '\.claude/agents/[A-Za-z0-9_.{}-]+\.md' | head -1)
+    [ -n "$W" ] || continue   # pathless rows are a roster-contract concern
+    # Placeholder slugs are a check-2 FAIL; README/template rows a check-5
+    # FAIL; the inline-mode file is legitimately SHARED across roles.
+    case "$W" in *'{{'*|*/README.md|*.template.md|*INLINE_BASE_AGENT_MODE.md) continue ;; esac
+    RB_CHECKED=$((RB_CHECKED+1))
+    RB_PATHS="$RB_PATHS$W
+"
+    [ -f "$ROOT/$W" ] || continue   # missing wrapper is already a roster-wrappers FAIL
+    RB_FM=$(awk '/^---$/{n++; next} n==1{print} n>=2{exit}' "$ROOT/$W")
+    if [ -n "$MODEL_COL" ]; then
+      RCM=$(printf '%s\n' "$line" | awk -F'|' -v c="$MODEL_COL" '{
+        gsub(/`/, "", $c); gsub(/^[[:space:]]+|[[:space:]]+$/, "", $c); print $c }')
+      case "$RCM" in
+        ''|*'{{'*|*'}}'*|[Ii]nherits*|*' '*) ;;   # not a concrete single token — skip, never FAIL
+        *)
+          WMV=$(fm_clean_value "$(printf '%s\n' "$RB_FM" | sed -nE 's/^model:[[:space:]]*//p' | head -1)")
+          WMV=${WMV#\"}; WMV=${WMV%\"}; WMV=${WMV#\'}; WMV=${WMV%\'}
+          [ "$RCM" = "$WMV" ] || RB_FAILS="$RB_FAILS $RID(model:roster=$RCM,wrapper=${WMV:-unset})"
+          ;;
+      esac
+    fi
+    if [ -n "$REASON_COL" ]; then
+      RCE=$(printf '%s\n' "$line" | awk -F'|' -v c="$REASON_COL" '{
+        gsub(/`/, "", $c); gsub(/^[[:space:]]+|[[:space:]]+$/, "", $c); print $c }')
+      case "$RCE" in
+        ''|*'{{'*|*'}}'*|[Ii]nherits*|*' '*) ;;   # not a concrete single token — skip, never FAIL
+        *)
+          WEV=$(fm_clean_value "$(printf '%s\n' "$RB_FM" | sed -nE 's/^effort:[[:space:]]*//p' | head -1)")
+          WEV=${WEV#\"}; WEV=${WEV%\"}; WEV=${WEV#\'}; WEV=${WEV%\'}
+          [ "$RCE" = "$WEV" ] || RB_FAILS="$RB_FAILS $RID(effort:roster=$RCE,wrapper=${WEV:-unset})"
+          ;;
+      esac
+    fi
+  done < "$RM"
+  RB_DUPES=$(printf '%s' "$RB_PATHS" | sort | uniq -d | tr '\n' ' ' | sed -E 's/ +$//')
+  [ -n "$RB_DUPES" ] && RB_FAILS="$RB_FAILS shared-wrapper(one-wrapper=one-role):$RB_DUPES"
+  if [ -n "$RB_FAILS" ]; then
+    fail "roster-binding" "active roster row(s) break role<->wrapper<->model binding:$RB_FAILS"
+  elif [ "$RB_CHECKED" -eq 0 ]; then
+    skip "roster-binding" "no active wrapper-path roster rows to bind (inline mode or main-session-only roster)"
+  else
+    pass "roster-binding" "$RB_CHECKED active wrapper binding(s): unique wrapper per role; concrete model/effort cells match wrapper frontmatter"
+  fi
 fi
 
 # ------------------------------ check 6: staleness of PM state surfaces (>14 days)

@@ -150,6 +150,15 @@ if (msgMatch[1] !== date || msgMatch[2] !== runId) die(`messagesLogBlock is for 
 // any other form could never be recognized as applied and would duplicate.
 const msgCanonicalPrefix = `## ${date} — run-n-rounds batch ${runId} (`
 if (!msgHeader.startsWith(msgCanonicalPrefix)) die(`messagesLogBlock header is not the canonical '${msgCanonicalPrefix}...)' form emitted by the engine — refusing a block the idempotency check could never re-recognize`)
+// Replay-recognizability invariant (R7-06): the idempotency scan ends a block
+// at the NEXT '## ' heading, so a payload whose BODY smuggles a '## ' line
+// would be written whole today (RECONCILED) yet re-recognized only up to the
+// injected heading on replay — and die DIVERGES. Canonical grammar: exactly
+// ONE '## ' header line; body lines are blank lines and '- ' bullets in
+// genuine engine output (other non-heading text is tolerated), never '## '.
+todo.messagesLogBlock.split('\n').forEach((l, i) => {
+  if (i > 0 && l.startsWith('## ')) die(`messagesLogBlock line ${i + 1} starts with '## ' — a second H2 would make the block not replay-recognizable (the idempotency scan stops at the next heading and would call the ledger DIVERGED on re-run); the engine never emits H2 body lines`)
+})
 
 const NNN = n => String(n).padStart(3, '0')
 const lifecyclePath = join(ROOT, 'agents', 'lifecycle.md')
@@ -169,31 +178,40 @@ const actions = []
 // existing on-disk block for this runId so it can be compared line-by-line
 // with the payload BEFORE anything is written — a bare header, a truncated
 // block, or a diverging one must fail closed, never SKIP.
-// Lifecycle block: the '### BATCH <date> <runId> — ...' header plus all
+// Both finders return ALL matches (R7-06): with duplicate blocks for one runId
+// on disk, comparing against just the first match would bless whichever copy
+// happens to come first — anything other than 0 or 1 match is a uniqueness
+// violation the callers fail closed on.
+// Lifecycle blocks: the '### BATCH <date> <runId> — ...' header plus all
 // IMMEDIATELY following '## [' entry lines.
-function findLifecycleBlock(text, id) {
+function findLifecycleBlocks(text, id) {
   const lines = text.split('\n')
+  const found = []
   for (let i = 0; i < lines.length; i++) {
     const m = /^### BATCH (\d{4}-\d{2}-\d{2}) (\S+) /.exec(lines[i])
     if (!m || m[2] !== id) continue
     const block = [lines[i]]
     for (let j = i + 1; j < lines.length && lines[j].startsWith('## ['); j++) block.push(lines[j])
-    return { block, headerDate: m[1] }
+    found.push({ block, headerDate: m[1] })
   }
-  return null
+  return found
 }
-// Messages block: anchored to the CANONICAL header prefix built from the
+// Messages blocks: anchored to the CANONICAL header prefix built from the
 // validated date + runId (R6-08, supersedes the R5-07 regex): a prose H2 that
 // merely mentions 'run-n-rounds batch <runId> (' must never count as the
-// applied block. The block runs from the header line to the line before the
+// applied block. Each block runs from its header line to the line before the
 // next '## ' heading, or EOF.
-function findMessagesBlock(text, prefix) {
+function findMessagesBlocks(text, prefix) {
   const lines = text.split('\n')
-  const start = lines.findIndex(l => l.startsWith(prefix))
-  if (start === -1) return null
-  let end = start + 1
-  while (end < lines.length && !lines[end].startsWith('## ')) end++
-  return lines.slice(start, end)
+  const found = []
+  for (let i = 0; i < lines.length; i++) {
+    if (!lines[i].startsWith(prefix)) continue
+    let end = i + 1
+    while (end < lines.length && !lines[end].startsWith('## ')) end++
+    found.push(lines.slice(i, end))
+    i = end - 1
+  }
+  return found
 }
 const stripTrailingBlank = lines => {
   const out = [...lines]
@@ -206,7 +224,13 @@ const sameLines = (a, b) => a.length === b.length && a.every((l, i) => l === b[i
 // a mismatch in either target must abort with the counter untouched.
 if (!existsSync(lifecyclePath)) die(`missing ${lifecyclePath} — not a deployed AI.Team root? (pass TEAM_ROOT)`)
 let lifecycle = await readFile(lifecyclePath, 'utf8')
-const existingLc = findLifecycleBlock(lifecycle, runId)
+const lcBlocks = findLifecycleBlocks(lifecycle, runId)
+// Uniqueness (R7-06): two BATCH blocks for one runId is a corrupt ledger —
+// never compare against just the first copy and call it applied.
+if (lcBlocks.length > 1) {
+  die(`agents/lifecycle.md carries ${lcBlocks.length} BATCH blocks for runId ${runId} — uniqueness violation; the ledger needs manual repair. Nothing was written.`)
+}
+const existingLc = lcBlocks[0] ?? null
 if (existingLc) {
   if (existingLc.headerDate !== date) {
     die(`agents/lifecycle.md already carries a BATCH block for runId ${runId} dated ${existingLc.headerDate}, but this result is dated ${date} — same runId reused for a different date (runId collision). Nothing was written.`)
@@ -218,9 +242,15 @@ if (existingLc) {
     die(`agents/lifecycle.md BATCH block for runId ${runId} DIVERGES from this result's block — refusing to treat it as applied; reconcile the ledger manually. Nothing was written.`)
   }
 }
-const existingMsg = existsSync(messagesPath)
-  ? findMessagesBlock(await readFile(messagesPath, 'utf8'), msgCanonicalPrefix)
-  : null
+const msgBlocks = existsSync(messagesPath)
+  ? findMessagesBlocks(await readFile(messagesPath, 'utf8'), msgCanonicalPrefix)
+  : []
+// Uniqueness (R7-06): two canonical headers for one runId is a corrupt ledger —
+// never compare against just the first copy and call it applied.
+if (msgBlocks.length > 1) {
+  die(`messages/${date}.md carries ${msgBlocks.length} canonical blocks for runId ${runId} — uniqueness violation; the ledger needs manual repair. Nothing was written.`)
+}
+const existingMsg = msgBlocks[0] ?? null
 if (existingMsg && !sameLines(stripTrailingBlank(existingMsg), stripTrailingBlank(todo.messagesLogBlock.split('\n')))) {
   die(`messages/${date}.md block for runId ${runId} DIVERGES from this result's block (truncated or altered earlier write) — refusing to treat it as applied; repair it manually. Nothing was written.`)
 }
@@ -235,6 +265,13 @@ const counterMatch = counterRe.exec(lifecycle)
 // target here (even just messages) and exiting 0 would contradict it.
 if (!counterMatch) {
   die(`agents/lifecycle.md has no 'Next NNN to assign' counter line — required before reconciling (scripts/validate-team.sh flags this); add it, then re-run. Nothing was written.`)
+}
+// Counter UNIQUENESS (R7-06): with two counter lines the non-global replace
+// below would advance one and leave the other stale at exit 0 — a silently
+// forked source of truth. Anything other than exactly one is fail-closed.
+const counterCount = (lifecycle.match(/Next NNN to assign[^\d]*\d+/g) || []).length
+if (counterCount !== 1) {
+  die(`agents/lifecycle.md has ${counterCount} 'Next NNN to assign' counter lines — duplicate counter lines make the ledger ambiguous; fix the ledger first. Nothing was written.`)
 }
 let lifecycleChanged = false
 if (existingLc) {
