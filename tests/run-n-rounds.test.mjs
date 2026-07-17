@@ -569,7 +569,7 @@ test('R-02: whitespace-only verifier command is no evidence — grounding fail-c
     { verifier: () => ({ pass: true, staticPass: true, e2ePass: true, summary: 'looks fine', commandsRun: [{ command: '   ', exitCode: 0 }] }) },
   )
   assert.equal(result.results[0].verificationStatus, 'failed')
-  assert.match(result.results[0].verifierGroundingFailure, /blank command/)
+  assert.match(result.results[0].verifierGroundingFailure, /blank/)
   assert.equal(result.allPassed, false)
 })
 
@@ -847,4 +847,92 @@ test('R5-11: a ticket containing "verifier:" cannot mis-route the worker call (s
   assert.equal(result.results[0].workerStatus, 'succeeded', 'the worker call must reach the worker mock, not the verifier mock')
   const workerSchemaCalls = calls.filter(c => c.opts.schema && Array.isArray(c.opts.schema.required) && c.opts.schema.required.includes('outcome'))
   assert.equal(workerSchemaCalls.length, 1, 'exactly one call carried the worker schema')
+})
+
+// ---------------------------------------------------------------- round-6 findings (R6-01..R6-05)
+
+test('R6-01: mid-identifier secret segments (AWS_SECRET_ACCESS_KEY-style) are redacted from the whole payload', async () => {
+  const leak = [
+    'AWS_SECRET_ACCESS_KEY=fixture-aws-value-987',
+    'STRIPE_SECRET_LIVE_KEY=fixture-stripe-val-42',
+    'DB_CREDENTIAL_STRING=fixture-cred-value-77',
+  ].join(' ')
+  const { result } = await run(mkArgs(), { worker: okWorker({ notes: leak }) })
+  const s = JSON.stringify(result)
+  for (const v of ['fixture-aws-value-987', 'fixture-stripe-val-42', 'fixture-cred-value-77']) {
+    assert.ok(!s.includes(v), `payload leaks mid-segment secret value: ${v}`)
+  }
+})
+
+test('R6-02: filesTouched with non-string elements is invalid_worker_result beneath schema enforcement', async () => {
+  const impl = makeAgentImpl({
+    worker: () => ({
+      outcome: 'done', progress: true, filesTouched: [null], decisionsCount: 0,
+      selfReportTokens: 10, blocked: false,
+    }),
+  })
+  const { result } = await runWorkflow({
+    scriptPath: SCRIPT, args: mkArgs({ plan: mkPlan(1, { isCodeShipping: true }) }),
+    agentImpl: impl, enforceSchema: false,
+  })
+  assert.equal(result.results[0].workerStatus, 'invalid_worker_result')
+  assert.equal(result.results[0].sideEffects, 'unknown')
+  assert.equal(result.allPassed, false)
+  assert.equal(result.safeToContinue, false)
+})
+
+test('R6-03: whitespace-only verifierBrief is invalid-args, nothing dispatched', async () => {
+  const plan = [{ ticket: 'T-1', agentType: 'proj-builder', brief: 'do it', isCodeShipping: true, verifierBrief: '   ' }]
+  const { result } = await run(mkArgs({ plan }))
+  assert.equal(result.errorCode, 'invalid-args')
+  assert.equal(result.dispatchedCount, 0)
+})
+
+test('R6-03: padded " general-purpose " identifiers cannot bypass the wrappers-mode ban', async () => {
+  const plan = [{ ticket: 'T-1', agentType: ' general-purpose ', brief: 'do it', isCodeShipping: false }]
+  const { result } = await run(mkArgs({ plan, executionMode: 'wrappers', guardianAgentType: 'proj-chaos' }))
+  assert.equal(result.errorCode, 'invalid-args', 'untrimmed identifiers must be invalid, not runtime-interpreted')
+  assert.equal(result.dispatchedCount, 0)
+})
+
+test('R6-04: backslash-separated control-plane paths still trip scope drift', async () => {
+  for (const file of ['agents\\pm.md', '.claude\\agents\\proj-worker.md', 'profiles\\project.md']) {
+    const { result } = await run(mkArgs(), { worker: okWorker({ filesTouched: [file] }) })
+    assert.equal(result.results[0].scopeDrift, true, `${file} must classify like its forward-slash form`)
+  }
+})
+
+test('R6-05: a multi-line command is rejected as evidence (one entry = one command)', async () => {
+  const { result } = await run(
+    mkArgs({ plan: mkPlan(1, { isCodeShipping: true }) }),
+    { verifier: () => ({
+        pass: true, staticPass: true, e2ePass: true, summary: 'ok', failures: [],
+        commandsRun: [{ command: 'echo starting tests\nnpm test', exitCode: 0 }],
+      }) },
+  )
+  assert.equal(result.results[0].verificationStatus, 'failed')
+  assert.match(result.results[0].verifierGroundingFailure, /multi-line/)
+})
+
+test('R6-05: a shell comment cannot launder a bare no-op into evidence', async () => {
+  const { result } = await run(
+    mkArgs({ plan: mkPlan(1, { isCodeShipping: true }) }),
+    { verifier: () => ({
+        pass: true, staticPass: true, e2ePass: true, summary: 'ok', failures: [],
+        commandsRun: [{ command: 'true # explanatory comment', exitCode: 0 }],
+      }) },
+  )
+  assert.equal(result.results[0].verificationStatus, 'failed')
+  assert.match(result.results[0].verifierGroundingFailure, /no-op/)
+})
+
+test('R6-05: a real command with a trailing comment still counts as evidence', async () => {
+  const { result } = await run(
+    mkArgs({ plan: mkPlan(1, { isCodeShipping: true }) }),
+    { verifier: () => ({
+        pass: true, staticPass: true, e2ePass: true, summary: 'ok', failures: [],
+        commandsRun: [{ command: 'npm test # full suite', exitCode: 0 }],
+      }) },
+  )
+  assert.equal(result.results[0].verificationStatus, 'passed')
 })

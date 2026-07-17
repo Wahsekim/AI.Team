@@ -4,7 +4,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, readFile, rm, utimes } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
@@ -229,6 +229,90 @@ test('R5-07: a shape-valid but impossible calendar date (2026-99-99) is rejected
     assert.equal(code, 1, out)
     assert.match(out, /not a real calendar date/)
     assert.ok(!existsSync(join(root, 'messages', '2026-99-99.md')), 'no ledger target may be created from a fake date')
+  })
+})
+
+test('R6-08: a pre-existing header-only (truncated) BATCH block fails closed — counter not advanced, messages not created', async () => {
+  await withDeployment(async (root, resultPath) => {
+    // A bare header with zero entries used to count as "applied": the counter
+    // advanced and the run exited PARTIAL-REPAIRED over a corrupt ledger.
+    await writeFile(join(root, 'agents', 'lifecycle.md'),
+      LIFECYCLE + '\n' + RESULT.mainSessionTodo.lifecycleEntries[0] + '\n')
+    const { code, out } = await runTool(resultPath, root)
+    assert.equal(code, 1, out)
+    assert.match(out, /TRUNCATED/)
+    const lc = await readFile(join(root, 'agents', 'lifecycle.md'), 'utf8')
+    assert.match(lc, /Next NNN to assign: 002/, 'counter must not advance over a truncated block')
+    assert.ok(!existsSync(join(root, 'messages', '2026-07-16.md')), 'messages must not be written over a truncated lifecycle block')
+  })
+})
+
+test('R6-08: same runId reused for a DIFFERENT date fails closed as a collision', async () => {
+  await withDeployment(async (root, resultPath) => {
+    // The 2026-07-16 block for this runId is already on disk; a second result
+    // reuses the runId under 2026-07-17.
+    await writeFile(join(root, 'agents', 'lifecycle.md'),
+      LIFECYCLE + '\n' + RESULT.mainSessionTodo.lifecycleEntries.join('\n') + '\n')
+    const bad = structuredClone(RESULT)
+    bad.mainSessionTodo.lifecycleEntries[0] = bad.mainSessionTodo.lifecycleEntries[0].replace('2026-07-16', '2026-07-17')
+    bad.mainSessionTodo.messagesLogBlock = bad.mainSessionTodo.messagesLogBlock.replace('## 2026-07-16', '## 2026-07-17')
+    await writeFile(resultPath, JSON.stringify(bad))
+    const { code, out } = await runTool(resultPath, root)
+    assert.equal(code, 1, out)
+    assert.match(out, /different date|runId collision/)
+    assert.ok(!existsSync(join(root, 'messages', '2026-07-17.md')), 'nothing may be written on a runId collision')
+  })
+})
+
+test('R6-08: a lifecycleEntries element embedding a newline cannot forge extra entries', async () => {
+  await withDeployment(async (root, resultPath) => {
+    const bad = structuredClone(RESULT)
+    bad.mainSessionTodo.lifecycleEntries[2] += '\n## [999] x'
+    await writeFile(resultPath, JSON.stringify(bad))
+    const { code, out } = await runTool(resultPath, root)
+    assert.equal(code, 1, out)
+    assert.match(out, /single newline-free|line breaks forge/)
+    const lc = await readFile(join(root, 'agents', 'lifecycle.md'), 'utf8')
+    assert.ok(!lc.includes('### BATCH'), 'nothing may be written for a forged payload')
+    assert.ok(!existsSync(join(root, 'messages', '2026-07-16.md')))
+  })
+})
+
+test('R6-08: a prose H2 mentioning the runId in messages does not count as the block — canonical block still applied', async () => {
+  await withDeployment(async (root, resultPath) => {
+    // Old regex matched ANY '## <date> ... run-n-rounds batch <runId> (' line;
+    // this prose heading satisfied it and false-skipped the canonical block.
+    await writeFile(join(root, 'messages', '2026-07-16.md'),
+      '## 2026-07-16 status note about run-n-rounds batch run-2026-07-16-002 (planning)\n')
+    const { code, out } = await runTool(resultPath, root)
+    assert.equal(code, 0, out)
+    assert.match(out, /APPLY - messages/, `prose H2 must not count as an applied block:\n${out}`)
+    const msg = await readFile(join(root, 'messages', '2026-07-16.md'), 'utf8')
+    assert.match(msg, /^## 2026-07-16 — run-n-rounds batch run-2026-07-16-002 \(/m, 'canonical header must be written')
+  })
+})
+
+test('R6-09: a FRESH ownerless lock (no metadata, current mtime) is treated as held, not reclaimed', async () => {
+  await withDeployment(async (root, resultPath) => {
+    // A concurrent acquirer inside its mkdir->writeFile init window looks
+    // exactly like this — reclaiming it would let two reconciles run at once.
+    await mkdir(join(root, '.reconcile-lock'))
+    const { code, out } = await runTool(resultPath, root)
+    assert.equal(code, 1, out)
+    assert.match(out, /ownerless but fresh/)
+    const lc = await readFile(join(root, 'agents', 'lifecycle.md'), 'utf8')
+    assert.ok(!lc.includes('### BATCH'))
+  })
+})
+
+test('R6-09: an ownerless lock whose dir mtime is older than 10s is reclaimed after the grace re-read', async () => {
+  await withDeployment(async (root, resultPath) => {
+    await mkdir(join(root, '.reconcile-lock'))
+    const old = new Date(Date.now() - 30_000)
+    await utimes(join(root, '.reconcile-lock'), old, old)
+    const { code, out } = await runTool(resultPath, root)
+    assert.equal(code, 0, out)
+    assert.match(out, /RESULT: RECONCILED/)
   })
 })
 

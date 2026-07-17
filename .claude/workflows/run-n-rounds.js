@@ -40,7 +40,7 @@ export const meta = {
 //   runId?: string,                       // idempotency key for reconciliation ([A-Za-z0-9._-]{1,64}); derived as run-<date>-<NNN> if omitted
 //   plan: [{
 //     ticket: string,                     // non-empty, <= 200 chars, no control characters (it lands in lifecycle headers)
-//     agentType: string,                  // wrapper name per agents/roster.md (single source); <= 128 chars, no control characters
+//     agentType: string,                  // wrapper name per agents/roster.md (single source); [A-Za-z0-9._-]+ <= 128 chars (R6-03)
 //     model?: string,                     // per agents/roster.md (single source)
 //     brief: string,                      // the full worker brief (built from agents/templates.md by the PM before the run); <= 200k chars
 //     isCodeShipping: boolean,            // REQUIRED EXPLICITLY — true: verifier gate fires; false: verification not applicable.
@@ -71,6 +71,10 @@ const CTRL = /[\x00-\x1F\x7F]/
 const isPosInt = v => typeof v === 'number' && Number.isSafeInteger(v) && v >= 1
 // trim(): whitespace-only identifiers dispatch garbage labels/briefs (R5-11)
 const isNonEmptyStr = (v, max) => typeof v === 'string' && v.trim().length > 0 && v.length <= max && !CTRL.test(v)
+// Agent/model IDENTIFIERS get a strict charset, not just non-emptiness (R6-03):
+// ' general-purpose ' must not bypass exact-equality bans and land in agent()
+// for the runtime to interpret — identifiers are machine tokens, not prose.
+const isIdent = (v, max) => typeof v === 'string' && v.length <= max && /^[A-Za-z0-9._-]+$/.test(v)
 const isRealDate = s => {
   if (typeof s !== 'string') return false
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s)
@@ -101,9 +105,9 @@ if (A.runId !== undefined && !(typeof A.runId === 'string' && /^[A-Za-z0-9._-]{1
   validationErrors.push('runId, when given, must match [A-Za-z0-9._-]{1,64}')
 }
 for (const k of ['guardianAgentType', 'guardianModel']) {
-  if (A[k] !== undefined && !isNonEmptyStr(A[k], 128)) validationErrors.push(`${k}, when given, must be a non-empty string <= 128 chars`)
+  if (A[k] !== undefined && !isIdent(A[k], 128)) validationErrors.push(`${k}, when given, must match [A-Za-z0-9._-]+ (<= 128 chars)`)
 }
-if (A.executionMode === 'wrappers' && (!isNonEmptyStr(A.guardianAgentType, 128) || A.guardianAgentType === 'general-purpose')) {
+if (A.executionMode === 'wrappers' && (!isIdent(A.guardianAgentType, 128) || A.guardianAgentType === 'general-purpose')) {
   validationErrors.push("wrappers mode requires an explicit non-generic guardianAgentType (roster wrapper name) — the guardian must not silently run as general-purpose")
 }
 if (!Array.isArray(A.plan) || A.plan.length === 0) {
@@ -115,22 +119,22 @@ if (!Array.isArray(A.plan) || A.plan.length === 0) {
     const at = `plan[${idx}]`
     if (!p || typeof p !== 'object' || Array.isArray(p)) { validationErrors.push(`${at} must be an object`); return }
     if (!isNonEmptyStr(p.ticket, 200)) validationErrors.push(`${at}.ticket must be a non-empty string <= 200 chars without control characters`)
-    if (!isNonEmptyStr(p.agentType, 128)) validationErrors.push(`${at}.agentType must be a non-empty string <= 128 chars without control characters`)
+    if (!isIdent(p.agentType, 128)) validationErrors.push(`${at}.agentType must match [A-Za-z0-9._-]+ (<= 128 chars) — wrapper names are machine identifiers (R6-03)`)
     if (typeof p.brief !== 'string' || p.brief.trim().length === 0) validationErrors.push(`${at}.brief must be a non-empty string`)
     else if (p.brief.length > MAX_BRIEF_CHARS) validationErrors.push(`${at}.brief exceeds ${MAX_BRIEF_CHARS} chars`)
     if (typeof p.isCodeShipping !== 'boolean') validationErrors.push(`${at}.isCodeShipping must be an EXPLICIT boolean — verification opt-out by omission is not allowed`)
-    // Identifier fields get the same control-char/length rules as agentType —
-    // 'model: "\n"' must not reach a dispatch (F-10).
+    // Identifier fields get the same strict charset as agentType —
+    // 'model: "\n"' or ' general-purpose ' must not reach a dispatch (F-10/R6-03).
     for (const k of ['model', 'verifierAgentType', 'verifierModel']) {
-      if (p[k] !== undefined && !isNonEmptyStr(p[k], 128)) validationErrors.push(`${at}.${k}, when given, must be a non-empty string <= 128 chars without control characters`)
+      if (p[k] !== undefined && !isIdent(p[k], 128)) validationErrors.push(`${at}.${k}, when given, must match [A-Za-z0-9._-]+ (<= 128 chars)`)
     }
-    if (p.verifierBrief !== undefined && (typeof p.verifierBrief !== 'string' || p.verifierBrief.length === 0)) validationErrors.push(`${at}.verifierBrief, when given, must be a non-empty string`)
+    if (p.verifierBrief !== undefined && (typeof p.verifierBrief !== 'string' || p.verifierBrief.trim().length === 0)) validationErrors.push(`${at}.verifierBrief, when given, must be a non-empty string`)
     if (p.verifierBrief !== undefined && typeof p.verifierBrief === 'string' && p.verifierBrief.length > MAX_BRIEF_CHARS) {
       validationErrors.push(`${at}.verifierBrief exceeds ${MAX_BRIEF_CHARS} chars`)
     }
     if (A.executionMode === 'wrappers') {
       if (p.agentType === 'general-purpose') validationErrors.push(`${at}.agentType is 'general-purpose' — banned in wrappers mode (use the roster wrapper name, or invoke with executionMode:'inline')`)
-      if (p.isCodeShipping === true && (!isNonEmptyStr(p.verifierAgentType, 128) || p.verifierAgentType === 'general-purpose')) {
+      if (p.isCodeShipping === true && (!isIdent(p.verifierAgentType, 128) || p.verifierAgentType === 'general-purpose')) {
         validationErrors.push(`${at}.verifierAgentType must be an explicit non-generic wrapper name for code-shipping items in wrappers mode — the verifier gate must not silently run as general-purpose`)
       }
     }
@@ -237,11 +241,11 @@ const redact = s => String(s || '')
   // DATABASE_PASSWORD / GITHUB_TOKEN / CLIENT_SECRET — prefixed env-style names
   // are the COMMON case and must redact too.
   // QUOTED values may contain spaces — 'password="space secret 12345"' (F-01)
-  .replace(/(["']?)\b((?:[A-Za-z0-9]+[_-])*(?:bearer|token|password|passwd|secret|api[_-]?key|authorization))\b\1(\s*[:=]\s*|\s+)"[^"\n]{4,}"/gi, '$1$2$1$3"[REDACTED]"')
-  .replace(/(["']?)\b((?:[A-Za-z0-9]+[_-])*(?:bearer|token|password|passwd|secret|api[_-]?key|authorization))\b\1(\s*[:=]\s*|\s+)'[^'\n]{4,}'/gi, "$1$2$1$3'[REDACTED]'")
+  .replace(/(["']?)\b((?:[A-Za-z0-9]+[_-])*(?:bearer|token|password|passwd|secret|credential|api[_-]?key|authorization)(?:[_-][A-Za-z0-9]+)*)\b\1(\s*[:=]\s*|\s+)"[^"\n]{4,}"/gi, '$1$2$1$3"[REDACTED]"')
+  .replace(/(["']?)\b((?:[A-Za-z0-9]+[_-])*(?:bearer|token|password|passwd|secret|credential|api[_-]?key|authorization)(?:[_-][A-Za-z0-9]+)*)\b\1(\s*[:=]\s*|\s+)'[^'\n]{4,}'/gi, "$1$2$1$3'[REDACTED]'")
   // unquoted assignments, shell/env/JSON pair styles (R-03):
   //   password=hunter2x99   OPENAI_API_KEY=sk...   "password":"quoted..."
-  .replace(/(["']?)\b((?:[A-Za-z0-9]+[_-])*(?:bearer|token|password|passwd|secret|api[_-]?key|authorization))\b\1(\s*[:=]\s*|\s+)(["']?)[^\s"']{6,}\4/gi, '$1$2$1$3$4[REDACTED]$4')
+  .replace(/(["']?)\b((?:[A-Za-z0-9]+[_-])*(?:bearer|token|password|passwd|secret|credential|api[_-]?key|authorization)(?:[_-][A-Za-z0-9]+)*)\b\1(\s*[:=]\s*|\s+)(["']?)[^\s"']{6,}\4/gi, '$1$2$1$3$4[REDACTED]$4')
   // protocol control words are reserved: worker text must not be able to spoof
   // the untrusted-data fence sentinels in the guardian prompt (R-08)
   .replace(/(BEGIN|END)\s+UNTRUSTED\s+WORKER-REPORTED\s+DATA/gi, '[sentinel-removed]')
@@ -315,12 +319,19 @@ for (let i = 0; i < iters; i++) {
     // report missing any required field is unattested: never 'succeeded',
     // side effects unknown, straight to recovery.
     const workerShapeValid = worker !== null
-      && typeof worker.outcome === 'string'
+      && typeof worker.outcome === 'string' && worker.outcome.length <= 2000
       && typeof worker.progress === 'boolean'
       && typeof worker.blocked === 'boolean'
       && Array.isArray(worker.filesTouched)
+      // Element-level checks too (R6-02): filesTouched=[null] feeds the scope
+      // tripwire and sideEffects derivation — top-level Array.isArray alone is
+      // not the WORKER_SCHEMA contract.
+      && worker.filesTouched.length <= 500
+      && worker.filesTouched.every(f => typeof f === 'string' && f.length <= 500)
       && Number.isSafeInteger(worker.decisionsCount)
       && Number.isSafeInteger(worker.selfReportTokens)
+      && (worker.terminalStop === undefined || typeof worker.terminalStop === 'boolean')
+      && (worker.notes === undefined || (typeof worker.notes === 'string' && worker.notes.length <= 4000))
     const outcome = worker === null ? 'null_result'
       : !workerShapeValid ? 'invalid_worker_result'
       : worker.blocked === true ? 'blocked'
@@ -363,8 +374,11 @@ for (let i = 0; i < iters; i++) {
     // and SVG is scriptable — a safe extension does not make them safe files.
     const NON_CODE_SAFE = /\.(md|markdown|txt|rst|adoc|png|jpe?g|gif|pdf)$/i
     const CONTROL_PLANE = /(^|\/)(CLAUDE\.md|AGENTS\.md|charter\.md|requirements[^/]*\.txt|constraints[^/]*\.txt)$|(^|\/)(\.claude|\.github|agents|profiles|scripts)\//i
+    // Separator-normalized before classification (R6-04): worker reports may
+    // use backslashes — 'agents\pm.md' must classify like 'agents/pm.md'.
     const offending = worker && Array.isArray(worker.filesTouched)
-      ? worker.filesTouched.filter(f => CONTROL_PLANE.test(String(f)) || !NON_CODE_SAFE.test(String(f))) : []
+      ? worker.filesTouched.map(f => String(f).replace(/\\/g, '/'))
+        .filter(f => CONTROL_PLANE.test(f) || !NON_CODE_SAFE.test(f)) : []
     scopeDrift = offending.length > 0
     if (scopeDrift) log(`iter ${i + 1} ${safeTicket}: SCOPE DRIFT — declared non-code but worker reports non-doc files touched (${offending.slice(0, 3).map(f => oneLine(f)).join(', ')}) — routing to recovery`)
   } else if (workerStatus === 'error' || workerStatus === 'null_result' || workerStatus === 'invalid_worker_result') {
@@ -404,17 +418,25 @@ for (let i = 0; i < iters; i++) {
         // with echo. This is a tripwire for a lazy verifier, NOT an adversarial
         // defense — command content stays verifier-reported (docs/engine.md).
         const NOOP = /^\s*(?:true|:|exit\s+0)\s*$|^\s*echo\b[^&|;>]*$/i
+        // Shell comments are not evidence content: strip an unquoted trailing
+        // comment BEFORE the no-op test so 'true # explanatory note' cannot
+        // launder a no-op into evidence (R6-05).
+        const decomment = s => String(s).replace(/\s#.*$/, '')
         if (cmds.length === 0) {
           verifierGroundingFailure = 'pass=true with missing/empty commandsRun — ungrounded verdict rejected'
         } else {
           // A blank/whitespace command is no evidence at all — a schema-legal
           // {command:'   ', exitCode:0} must not count as an executed gate (R-02).
+          // A MULTI-LINE command is rejected too (R6-05): one commandsRun entry
+          // = one single-line command with its own exit code; embedded newlines
+          // defeat both the no-op tripwire and per-command attribution.
           const bad = cmds.filter(c => !c
             || typeof c.command !== 'string' || c.command.trim().length === 0
+            || /[\r\n]/.test(c.command)
             || typeof c.exitCode !== 'number' || c.exitCode !== 0)
           if (bad.length > 0) {
-            verifierGroundingFailure = `pass=true but blank command or nonzero/invalid exitCode: ${bad.map(c => `${cleanLine((c && c.command) || '(blank)', 80) || '(blank)'} -> ${c ? c.exitCode : '?'}`).join('; ')}`
-          } else if (cmds.every(c => NOOP.test(c.command))) {
+            verifierGroundingFailure = `pass=true but blank/multi-line command or nonzero/invalid exitCode: ${bad.map(c => `${cleanLine((c && c.command) || '(blank)', 80) || '(blank)'} -> ${c ? c.exitCode : '?'}`).join('; ')}`
+          } else if (cmds.every(c => NOOP.test(decomment(c.command)))) {
             verifierGroundingFailure = 'pass=true but every command is a no-op (true/:/exit 0/echo) — no verification evidence'
           }
         }

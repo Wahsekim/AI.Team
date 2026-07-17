@@ -61,11 +61,31 @@ mtime_of() { # portable mtime (epoch seconds): GNU first — on Linux the BSD
 inline_mode_ok() { # R5-06: the inline-mode file must be a REAL dispatch doc,
   # not a placeholder — at least one markdown heading and >= 200 bytes.
   # A '-s' test alone lets a one-byte 'x' pass as configuration.
+  # R6-07(d): a heading plus padding is still hollow — require the key
+  # sections the instantiated seed (INLINE_BASE_AGENT_MODE.template.md)
+  # actually carries: the Base Agent requirement and the dispatch/assembly
+  # guidance. Permissive on wording so a genuine bootstrap output passes.
   IM_FILE="$ROOT/.claude/agents/INLINE_BASE_AGENT_MODE.md"
   [ -f "$IM_FILE" ] || return 1
   grep -q '^#' "$IM_FILE" || return 1
+  grep -qiE 'base agent' "$IM_FILE" || return 1
+  grep -qiE 'dispatch|assembly' "$IM_FILE" || return 1
   IM_BYTES=$(wc -c < "$IM_FILE" | tr -d '[:space:]')
   [ "${IM_BYTES:-0}" -ge 200 ]
+}
+
+fm_clean_value() { # R6-06(c): normalize one frontmatter value from the strict
+  # flat subset — strip an unquoted trailing ' #comment' plus trailing space.
+  # Heuristic: a value starting with a quote is never comment-stripped; a
+  # value that IS a comment ('# ...') cleans to empty; otherwise everything
+  # from the first ' #' is dropped.
+  FMV="$1"
+  case "$FMV" in
+    \"*|\'*) ;;
+    \#*) FMV="" ;;
+    *) FMV=$(printf '%s' "$FMV" | sed -E 's/[[:space:]]#.*$//') ;;
+  esac
+  printf '%s\n' "$FMV" | sed -E 's/[[:space:]]+$//'
 }
 
 # --------------------- check -1: mandatory-artifact matrix (deployment mode only)
@@ -362,6 +382,28 @@ else
     W=$(echo "$line" | grep -oE '\.claude/agents/[A-Za-z0-9_.{}-]+\.md' | head -1)
     [ -n "$W" ] || continue
     case "$W" in *'{{'*) continue ;; esac   # unfilled slug caught by check 2
+    # R6-07(a): kit fixtures are not dispatch configurations — an active row
+    # pointing at README.md or any .template.md fakes dispatchability even
+    # though the file exists on disk.
+    case "$W" in
+      */README.md|*.template.md)
+        MISSING="$MISSING $W(not-a-dispatch-wrapper:kit-fixture)"; continue ;;
+    esac
+    if [ "$W" = ".claude/agents/INLINE_BASE_AGENT_MODE.md" ]; then
+      # R6-07(a): the inline-mode FILE is a mode declaration, not a per-role
+      # wrapper. The sanctioned cell form is 'inline mode — <path>' (roster
+      # template "Wrapper-column honesty"); a cell that IS the bare path uses
+      # it as a wrapper path and fails. Either way the INLINE_DECLARED gate
+      # below enforces the file itself.
+      CELL=$(printf '%s\n' "$line" | awk -F'|' '{
+        for (i = 2; i <= NF; i++) if ($i ~ /\.claude\/agents\//) {
+          gsub(/`/, "", $i); gsub(/^[[:space:]]+|[[:space:]]+$/, "", $i)
+          print $i; exit
+        }
+      }')
+      [ "$CELL" = "$W" ] && MISSING="$MISSING $W(inline-mode-file-used-as-wrapper-path)"
+      continue
+    fi
     CHECKED=$((CHECKED+1))
     [ -f "$ROOT/$W" ] || MISSING="$MISSING $W"
   done < "$RM"
@@ -373,10 +415,10 @@ else
   # Inline file must be a REAL dispatch doc: a one-byte placeholder is not a
   # dispatch configuration (F-05; hardened per R5-06 — see inline_mode_ok).
   if [ "$INLINE_DECLARED" = 1 ] && ! inline_mode_ok; then
-    MISSING="$MISSING .claude/agents/INLINE_BASE_AGENT_MODE.md(inline-mode-declared,missing-or-hollow:needs-a-heading-and->=200-bytes)"
+    MISSING="$MISSING .claude/agents/INLINE_BASE_AGENT_MODE.md(inline-mode-declared,missing-or-hollow:needs-heading+base-agent+dispatch/assembly-text,>=200-bytes)"
   fi
   if [ -n "$MISSING" ]; then
-    fail "roster-wrappers" "active roster rows point at nonexistent wrapper(s):$MISSING"
+    fail "roster-wrappers" "active roster rows point at nonexistent or placeholder wrapper(s):$MISSING"
   elif [ "$CHECKED" -eq 0 ] && [ "$SKIPPED_ROWS" -eq 0 ]; then
     # A deployment with NO dispatch path at all must not pass: either wrapper
     # rows exist, or inline mode is explicitly instantiated (false-green fix).
@@ -421,7 +463,16 @@ else
     [ -n "$RID" ] || continue
     case "$RID" in *'{{'*) continue ;; esac   # unfilled slug caught by check 2
     RC_ACTIVE=$((RC_ACTIVE+1))
-    [ -s "$ROOT/agents/$RID.md" ] || RC_FAILS="$RC_FAILS $RID(agents/$RID.md missing-or-empty)"
+    if [ ! -s "$ROOT/agents/$RID.md" ]; then
+      RC_FAILS="$RC_FAILS $RID(agents/$RID.md missing-or-empty)"
+    # R6-07(c): a role file must carry the dispatchable substance the kit seeds
+    # carry ('## Base Agent' + '## Project Overlay' / '## Dispatch Assembly'
+    # in agents/*.md) — a one-byte stub fakes staffing. Permissive on wording:
+    # any base-agent mention plus overlay/dispatch/assembly guidance passes.
+    elif ! grep -qiE 'base agent' "$ROOT/agents/$RID.md" || \
+         ! grep -qiE 'overlay|dispatch|assembly' "$ROOT/agents/$RID.md"; then
+      RC_FAILS="$RC_FAILS $RID(agents/$RID.md hollow:needs-base-agent+overlay/dispatch/assembly-sections)"
+    fi
     case "$line" in
       *'.claude/agents/'*'.md'*|*'main session'*) ;;   # row names its own dispatch path
       *) inline_mode_ok || RC_FAILS="$RC_FAILS $RID(no-dispatch-path:no-wrapper,no-main-session,no-inline-mode)" ;;
@@ -445,30 +496,50 @@ if [ "$DEPLOYED" = 1 ] && [ -d "$ROOT/.claude/agents" ]; then
   FM_FAILS=""
   FM_WARNS=""
   FM_CHECKED=0
+  # R6-07(b): this glob is a SUPERSET of the wrapper paths active roster rows
+  # can legitimately reference — check 5 fails referenced-but-missing files
+  # and README/template/inline placeholder names, so every dispatchable
+  # wrapper on disk passes through this schema gate.
   for w in "$ROOT"/.claude/agents/*.md; do
     [ -f "$w" ] || continue
     case "$w" in *.template.md|*/README.md|*INLINE_BASE_AGENT_MODE.md) continue ;; esac
     FM_CHECKED=$((FM_CHECKED+1))
+    # R6-06(a): the strict flat subset requires line 1 to be exactly '---' —
+    # with prose before the block the runtime sees no frontmatter at all.
+    if [ "$(head -n 1 "$w")" != "---" ]; then
+      FM_FAILS="$FM_FAILS ${w#$ROOT/}(no-frontmatter-at-line-1)"
+      continue
+    fi
     # R5-06: frontmatter must be a CLOSED block — with a lone opening '---'
     # the runtime sees no frontmatter at all, so the wrapper is a shell.
     if [ "$(grep -cE '^---$' "$w")" -lt 2 ]; then
       FM_FAILS="$FM_FAILS ${w#$ROOT/}(unterminated-frontmatter)"
       continue
     fi
+    # R6-06(b): keys are read ONLY between the first two '---' delimiters
+    # (line 1 is guaranteed '---' by the check above).
     FM=$(awk '/^---$/{n++; next} n==1{print} n>=2{exit}' "$w")
+    # R6-06(d): the strict flat subset reads ONE value per key — a repeated
+    # key ('model: sonnet' + 'model: ""') is ambiguous, not configuration.
+    FM_DUPES=$(printf '%s\n' "$FM" | sed -nE 's/^([A-Za-z][A-Za-z0-9_-]*):.*/\1/p' | sort | uniq -d | tr '\n' ',' | sed 's/,$//')
+    if [ -n "$FM_DUPES" ]; then
+      FM_FAILS="$FM_FAILS ${w#$ROOT/}(duplicate-key:$FM_DUPES)"
+      continue
+    fi
     MISSING_KEYS=""
     # Keys must carry a NON-EMPTY value — 'model:' alone is a shell, not
     # config (F-05). YAML-semantically-empty tokens ("", '', ~, null) are
-    # missing too, not values (R5-06).
+    # missing too, not values (R5-06). Values are comment-stripped FIRST
+    # (R6-06c) so 'effort: high # note' passes and 'description: # x' fails.
     for k in name description model effort; do
-      V=$(printf '%s\n' "$FM" | sed -nE "s/^${k}:[[:space:]]*//p" | head -1 | sed -E 's/[[:space:]]+$//')
+      V=$(fm_clean_value "$(printf '%s\n' "$FM" | sed -nE "s/^${k}:[[:space:]]*//p" | head -1)")
       case "$V" in
         ''|'""'|"''"|'~'|null) MISSING_KEYS="$MISSING_KEYS $k" ;;
       esac
     done
     # R5-06: effort must be a value the runtime accepts — a hyphenated
     # pseudo-band like 'low-medium' silently dispatches as nothing.
-    EFF=$(printf '%s\n' "$FM" | sed -nE 's/^effort:[[:space:]]*//p' | head -1 | sed -E 's/[[:space:]]+$//')
+    EFF=$(fm_clean_value "$(printf '%s\n' "$FM" | sed -nE 's/^effort:[[:space:]]*//p' | head -1)")
     EFF=${EFF#\"}; EFF=${EFF%\"}; EFF=${EFF#\'}; EFF=${EFF%\'}
     case "$EFF" in
       ''|'~'|null) ;;                  # absent/empty is reported by the key loop above
@@ -476,15 +547,17 @@ if [ "$DEPLOYED" = 1 ] && [ -d "$ROOT/.claude/agents" ]; then
       *) FM_FAILS="$FM_FAILS ${w#$ROOT/}(invalid-effort:$EFF,allowed:low|medium|high|xhigh|max)" ;;
     esac
     # maxTurns is part of the wrapper contract (role-wrapper.template.md):
-    # required, positive integer.
-    printf '%s\n' "$FM" | grep -qE '^maxTurns:[[:space:]]*"?[1-9][0-9]*"?[[:space:]]*$' || MISSING_KEYS="$MISSING_KEYS maxTurns(positive-int)"
+    # required, positive integer (comment-stripped first — R6-06c).
+    MT=$(fm_clean_value "$(printf '%s\n' "$FM" | sed -nE 's/^maxTurns:[[:space:]]*//p' | head -1)")
+    MT=${MT#\"}; MT=${MT%\"}
+    printf '%s\n' "$MT" | grep -qE '^[1-9][0-9]*$' || MISSING_KEYS="$MISSING_KEYS maxTurns(positive-int)"
     [ -n "$MISSING_KEYS" ] && FM_FAILS="$FM_FAILS ${w#$ROOT/}(missing:$MISSING_KEYS )"
     if ! printf '%s\n' "$FM" | grep -qE '^(tools|permissionMode):'; then
       FM_WARNS="$FM_WARNS ${w#$ROOT/}"
     fi
   done
   if [ -n "$FM_FAILS" ]; then
-    fail "wrapper-frontmatter" "active wrapper(s) missing required frontmatter:$FM_FAILS"
+    fail "wrapper-frontmatter" "wrapper(s) violate the strict flat frontmatter subset this validator implements (line 1 '---', closed block, unique non-empty 'key: value' lines):$FM_FAILS"
   elif [ "$FM_CHECKED" -eq 0 ]; then
     skip "wrapper-frontmatter" "no active wrappers to check (inline mode?)"
   elif [ -n "$FM_WARNS" ]; then

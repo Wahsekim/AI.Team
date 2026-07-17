@@ -6,9 +6,11 @@ commands they run).
 
 ## Reporting
 
-Report suspected vulnerabilities or leaked secrets to the repository owner
-privately (repository contact or security advisory). Do not open a public
-issue containing secret values or exploit details.
+Report suspected vulnerabilities or leaked secrets privately via GitHub's
+private vulnerability reporting (enabled for this repository):
+<https://github.com/Wahsekim/AI.Team/security/advisories/new>.
+Expect a first response within 7 days. Do not open a public issue containing
+secret values or exploit details.
 
 ## Secret handling (hard rules)
 

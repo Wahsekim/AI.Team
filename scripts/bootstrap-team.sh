@@ -64,10 +64,31 @@ if [ "$DRY" != 1 ]; then
   if ! mkdir "$BOOT_LOCK" 2>/dev/null; then
     # Stale-lock recovery (R5-12a): a SIGKILL inside the lock window would
     # brick every later run. Mirror reconcile-run.mjs acquireLock: if the
-    # recorded owner pid is missing or dead, reclaim and retry ONCE; a live
-    # owner blocks as before.
+    # recorded owner pid is dead, reclaim and retry ONCE; a live owner blocks
+    # as before.
     lock_pid=$(cat "$BOOT_LOCK/pid" 2>/dev/null || echo "")
     case "$lock_pid" in ''|*[!0-9]*) lock_pid="" ;; esac
+    if [ -z "$lock_pid" ]; then
+      # R6-09: a missing pid file may just be a concurrent bootstrap inside
+      # its mkdir->pid-write init window — grace-wait and re-read before
+      # judging, instead of reclaiming a lock that is being born.
+      sleep 1
+      lock_pid=$(cat "$BOOT_LOCK/pid" 2>/dev/null || echo "")
+      case "$lock_pid" in ''|*[!0-9]*) lock_pid="" ;; esac
+      if [ -z "$lock_pid" ]; then
+        # Still ownerless after the grace re-read: reclaim ONLY a demonstrably
+        # old lock — a FRESH ownerless lock is treated as held (R6-09).
+        # GNU stat first: on Linux, BSD-style 'stat -f %m' SUCCEEDS but prints
+        # the mount point, which would poison the arithmetic (same pattern as
+        # scripts/watchdog/start-watchdog.sh).
+        lock_mtime=$(stat -c %Y "$BOOT_LOCK" 2>/dev/null || stat -f %m "$BOOT_LOCK" 2>/dev/null || echo "")
+        case "$lock_mtime" in ''|*[!0-9]*) lock_mtime="" ;; esac
+        now_s=$(date +%s)
+        if [ -z "$lock_mtime" ] || [ $((now_s - lock_mtime)) -le 10 ]; then
+          failboot "another bootstrap appears to be in progress (lock $BOOT_LOCK is ownerless but fresh) — wait for it, or remove it manually if it persists"
+        fi
+      fi
+    fi
     if [ -n "$lock_pid" ] && kill -0 "$lock_pid" 2>/dev/null; then
       failboot "another bootstrap appears to be in progress (lock $BOOT_LOCK held by live pid $lock_pid) — wait for it"
     fi
@@ -77,7 +98,10 @@ if [ "$DRY" != 1 ]; then
       || failboot "cannot acquire lock $BOOT_LOCK even after clearing a stale one — resolve manually"
   fi
   echo $$ > "$BOOT_LOCK/pid"
-  trap 'rm -f "${TMP:-}" 2>/dev/null; rm -rf "$BOOT_LOCK" 2>/dev/null' EXIT
+  # Ownership-verified release (R6-09): the EXIT trap re-reads the recorded
+  # pid and deletes the lock ONLY if it is our own — a run exiting after
+  # losing a race must never clean up someone else's live lock.
+  trap 'rm -f "${TMP:-}" 2>/dev/null; if [ "$(cat "$BOOT_LOCK/pid" 2>/dev/null)" = "$$" ]; then rm -rf "$BOOT_LOCK" 2>/dev/null; fi' EXIT
 fi
 if [ -n "$PRODUCT_REPO" ]; then
   # Normalize to an absolute path (the path may not exist yet — bootstrap of a

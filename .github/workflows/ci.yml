@@ -78,5 +78,10 @@ jobs:
     if: always()
     steps:
       - name: All required jobs green
+        # Every dependency must be exactly 'success' (R6-12): needs.*.result
+        # can also be 'skipped', which a failure/cancelled check reads as green
+        # the moment any dependency gains a job-level condition.
         run: |
-          [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" = "false" ]
+          [ "${{ needs.test.result }}" = "success" ]
+          [ "${{ needs.shellcheck.result }}" = "success" ]
+          [ "${{ needs.secret-scan.result }}" = "success" ]

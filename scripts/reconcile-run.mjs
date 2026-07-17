@@ -13,13 +13,16 @@
 //
 // Idempotency is checked in EVERY target file — a partial earlier write (e.g.
 // lifecycle applied, then crash) is detected and only the missing targets are
-// applied. Writes are tmp-file + rename (atomic on POSIX filesystems).
+// applied. "Already applied" means BLOCK IDENTITY, not marker presence (R6-08):
+// an existing block for this runId that differs from the payload (truncated,
+// different date, diverging content) fails closed before any write.
+// Writes are tmp-file + rename (atomic on POSIX filesystems).
 //
 // NOT automated here (PM-authored, serial-PM-only): pm-decisions.md lines and
 // tracker transitions — the tool prints reminders for both.
 
 import { readFile, writeFile, rename, mkdir } from 'node:fs/promises'
-import { existsSync, rmSync } from 'node:fs'
+import { existsSync, rmSync, readFileSync, statSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 
 const die = msg => { console.error(`FAIL - ${msg}`); process.exit(1) }
@@ -43,18 +46,43 @@ async function acquireLock(retried = false) {
   } catch {
     let owner = null
     try { owner = JSON.parse(await readFile(LOCK_META, 'utf8')) } catch { /* no/corrupt metadata */ }
+    if (!owner || !Number.isInteger(owner.pid)) {
+      // R6-09: missing/corrupt metadata may just be a concurrent acquirer
+      // inside its mkdir->writeFile init window — grace-wait and re-read
+      // before judging, instead of reclaiming a lock that is being born.
+      await new Promise(r => setTimeout(r, 300))
+      try { owner = JSON.parse(await readFile(LOCK_META, 'utf8')) } catch { /* still ownerless */ }
+      if (!owner || !Number.isInteger(owner.pid)) {
+        // Still ownerless after the grace re-read: reclaim ONLY a demonstrably
+        // old lock — a FRESH ownerless lock is treated as held (R6-09).
+        let lockMtimeMs = null
+        try { lockMtimeMs = statSync(LOCK_DIR).mtimeMs } catch { /* dir vanished — retry below */ }
+        if (lockMtimeMs !== null && Date.now() - lockMtimeMs < 10_000) {
+          die(`another reconcile appears to be in progress (${LOCK_DIR} is ownerless but fresh) — wait for it, or remove the lock manually if it persists`)
+        }
+      }
+    }
     const ownerAlive = owner && Number.isInteger(owner.pid) && (() => {
       try { process.kill(owner.pid, 0); return true } catch { return false }
     })()
     if (ownerAlive) die(`another reconcile is in progress (pid ${owner.pid} since ${owner.startedAt}) — wait for it`)
     if (retried) die(`cannot acquire ${LOCK_DIR} even after clearing a stale lock — resolve manually`)
-    // Stale lock (owner dead or metadata missing): recover and retry once.
+    // Stale lock (owner dead, or ownerless past the grace + age gate): recover
+    // and retry once.
     try { rmSync(LOCK_DIR, { recursive: true, force: true }) } catch { /* fall through to retry */ }
     return acquireLock(true)
   }
 }
 await acquireLock()
-process.on('exit', () => { try { rmSync(LOCK_DIR, { recursive: true, force: true }) } catch { /* best effort */ } })
+// Ownership-verified release (R6-09): re-read the recorded pid at exit and
+// delete the lock ONLY if it is our own — a process exiting after losing a
+// race must never clean up someone else's live lock.
+process.on('exit', () => {
+  try {
+    const owner = JSON.parse(readFileSync(LOCK_META, 'utf8'))
+    if (owner.pid === process.pid) rmSync(LOCK_DIR, { recursive: true, force: true })
+  } catch { /* not ours / unreadable / already gone — leave it */ }
+})
 
 let result
 try {
@@ -72,6 +100,14 @@ if (!Number.isSafeInteger(todo.nextLifecycleNumberAfter) || todo.nextLifecycleNu
 
 // ---- payload invariants (F-06): the block must be internally consistent
 // BEFORE anything is written — a malformed result must never corrupt ledgers.
+// Single-line invariant (R6-08): every lifecycleEntries element is ONE ledger
+// line — an element embedding '\n## [999] ...' would forge entries past every
+// line-anchored check below. messagesLogBlock is multi-line by design, but
+// its lines must not carry CRs (they would poison later line-anchored parsing).
+todo.lifecycleEntries.forEach((l, i) => {
+  if (typeof l !== 'string' || /[\r\n]/.test(l)) die(`lifecycleEntries[${i}] must be a single newline-free string — embedded line breaks forge ledger entries`)
+})
+if (/\r/.test(todo.messagesLogBlock)) die('messagesLogBlock contains CR characters — refusing to write them into the ledger')
 const batchHeader = todo.lifecycleEntries[0]
 const headerMatch = /^### BATCH (\d{4}-\d{2}-\d{2}) (\S+) /.exec(batchHeader)
 if (!headerMatch) die(`lifecycleEntries[0] is not a '### BATCH <date> <runId> ...' header: ${batchHeader.slice(0, 80)}`)
@@ -109,6 +145,11 @@ const msgHeader = todo.messagesLogBlock.split('\n')[0] || ''
 const msgMatch = /^## (\d{4}-\d{2}-\d{2}) .*run-n-rounds batch (\S+) \(/.exec(msgHeader)
 if (!msgMatch) die(`messagesLogBlock does not start with '## <date> — run-n-rounds batch <runId> (...': ${msgHeader.slice(0, 80)}`)
 if (msgMatch[1] !== date || msgMatch[2] !== runId) die(`messagesLogBlock is for ${msgMatch[1]}/${msgMatch[2]} but the lifecycle block is for ${date}/${runId} — inconsistent payload`)
+// Canonical-header invariant (R6-08): the idempotency check anchors on this
+// EXACT prefix (built from the validated date + runId), so a payload header in
+// any other form could never be recognized as applied and would duplicate.
+const msgCanonicalPrefix = `## ${date} — run-n-rounds batch ${runId} (`
+if (!msgHeader.startsWith(msgCanonicalPrefix)) die(`messagesLogBlock header is not the canonical '${msgCanonicalPrefix}...)' form emitted by the engine — refusing a block the idempotency check could never re-recognize`)
 
 const NNN = n => String(n).padStart(3, '0')
 const lifecyclePath = join(ROOT, 'agents', 'lifecycle.md')
@@ -124,24 +165,67 @@ async function atomicWrite(path, content) {
 const actions = []
 
 // Exact-token runId matching (R-06): includes() would let run-1 match run-10.
-// The BATCH header format is '### BATCH <date> <runId> — ...'; messages headers
-// carry 'run-n-rounds batch <runId> ('.
-const lcHasRunId = (text, id) => text.split('\n').some(l => {
-  const m = /^### BATCH \d{4}-\d{2}-\d{2} (\S+) /.exec(l)
-  return m && m[1] === id
-})
-// Anchored to the CANONICAL header line (R5-07): a prose mention of the runId
-// ('we expect run-n-rounds batch X (3 rounds) to land later') must never count
-// as an applied block — that false-skip would drop the canonical block forever.
-const msgHasRunId = (text, id) => text.split('\n').some(l => {
-  const m = /^## \d{4}-\d{2}-\d{2} .*run-n-rounds batch (\S+) \(/.exec(l)
-  return m && m[1] === id
-})
+// "Already applied" means BLOCK IDENTITY (R6-08): each finder returns the
+// existing on-disk block for this runId so it can be compared line-by-line
+// with the payload BEFORE anything is written — a bare header, a truncated
+// block, or a diverging one must fail closed, never SKIP.
+// Lifecycle block: the '### BATCH <date> <runId> — ...' header plus all
+// IMMEDIATELY following '## [' entry lines.
+function findLifecycleBlock(text, id) {
+  const lines = text.split('\n')
+  for (let i = 0; i < lines.length; i++) {
+    const m = /^### BATCH (\d{4}-\d{2}-\d{2}) (\S+) /.exec(lines[i])
+    if (!m || m[2] !== id) continue
+    const block = [lines[i]]
+    for (let j = i + 1; j < lines.length && lines[j].startsWith('## ['); j++) block.push(lines[j])
+    return { block, headerDate: m[1] }
+  }
+  return null
+}
+// Messages block: anchored to the CANONICAL header prefix built from the
+// validated date + runId (R6-08, supersedes the R5-07 regex): a prose H2 that
+// merely mentions 'run-n-rounds batch <runId> (' must never count as the
+// applied block. The block runs from the header line to the line before the
+// next '## ' heading, or EOF.
+function findMessagesBlock(text, prefix) {
+  const lines = text.split('\n')
+  const start = lines.findIndex(l => l.startsWith(prefix))
+  if (start === -1) return null
+  let end = start + 1
+  while (end < lines.length && !lines[end].startsWith('## ')) end++
+  return lines.slice(start, end)
+}
+const stripTrailingBlank = lines => {
+  const out = [...lines]
+  while (out.length && out[out.length - 1].trim() === '') out.pop()
+  return out
+}
+const sameLines = (a, b) => a.length === b.length && a.every((l, i) => l === b[i])
 
-// ---- target 1: agents/lifecycle.md (block + counter, one atomic write) ----
+// ---- read BOTH targets and settle block identity BEFORE any write (R6-08):
+// a mismatch in either target must abort with the counter untouched.
 if (!existsSync(lifecyclePath)) die(`missing ${lifecyclePath} — not a deployed AI.Team root? (pass TEAM_ROOT)`)
 let lifecycle = await readFile(lifecyclePath, 'utf8')
-const lcHasRun = lcHasRunId(lifecycle, runId)
+const existingLc = findLifecycleBlock(lifecycle, runId)
+if (existingLc) {
+  if (existingLc.headerDate !== date) {
+    die(`agents/lifecycle.md already carries a BATCH block for runId ${runId} dated ${existingLc.headerDate}, but this result is dated ${date} — same runId reused for a different date (runId collision). Nothing was written.`)
+  }
+  if (existingLc.block.length < todo.lifecycleEntries.length) {
+    die(`agents/lifecycle.md BATCH block for runId ${runId} is TRUNCATED — ${existingLc.block.length - 1} entries on disk vs ${todo.lifecycleEntries.length - 1} in the payload (an earlier write was cut short); repair the ledger manually, then re-run. Nothing was written.`)
+  }
+  if (!sameLines(existingLc.block, todo.lifecycleEntries)) {
+    die(`agents/lifecycle.md BATCH block for runId ${runId} DIVERGES from this result's block — refusing to treat it as applied; reconcile the ledger manually. Nothing was written.`)
+  }
+}
+const existingMsg = existsSync(messagesPath)
+  ? findMessagesBlock(await readFile(messagesPath, 'utf8'), msgCanonicalPrefix)
+  : null
+if (existingMsg && !sameLines(stripTrailingBlank(existingMsg), stripTrailingBlank(todo.messagesLogBlock.split('\n')))) {
+  die(`messages/${date}.md block for runId ${runId} DIVERGES from this result's block (truncated or altered earlier write) — refusing to treat it as applied; repair it manually. Nothing was written.`)
+}
+
+// ---- target 1: agents/lifecycle.md (block + counter, one atomic write) ----
 const firstEntryNo = entryNos[0]   // parsed from the actual '## [NNN]' lines (F-06)
 const counterRe = /(Next NNN to assign[^\d]*)(\d+)/
 const counterMatch = counterRe.exec(lifecycle)
@@ -153,8 +237,8 @@ if (!counterMatch) {
   die(`agents/lifecycle.md has no 'Next NNN to assign' counter line — required before reconciling (scripts/validate-team.sh flags this); add it, then re-run. Nothing was written.`)
 }
 let lifecycleChanged = false
-if (lcHasRun) {
-  actions.push(`SKIP - lifecycle: runId ${runId} already applied`)
+if (existingLc) {
+  actions.push(`SKIP - lifecycle: runId ${runId} already applied (block identical)`)
 } else {
   // Numbering PRECONDITION: appending an unapplied batch whose numbering does
   // not line up with the live counter would create duplicate or gapped [NNN]
@@ -187,11 +271,12 @@ if (lcHasRun) {
 if (lifecycleChanged) await atomicWrite(lifecyclePath, lifecycle)
 
 // ---- target 2: messages/<date>.md ----
-await mkdir(dirname(messagesPath), { recursive: true })
-let messages = existsSync(messagesPath) ? await readFile(messagesPath, 'utf8') : ''
-if (msgHasRunId(messages, runId)) {
-  actions.push(`SKIP - messages/${date}.md: runId ${runId} already applied`)
+// (identity of an existing block was already settled above — R6-08)
+if (existingMsg) {
+  actions.push(`SKIP - messages/${date}.md: runId ${runId} already applied (block identical)`)
 } else {
+  await mkdir(dirname(messagesPath), { recursive: true })
+  const messages = existsSync(messagesPath) ? await readFile(messagesPath, 'utf8') : ''
   const next = (messages ? messages.replace(/\n*$/, '\n\n') : '') + todo.messagesLogBlock + '\n'
   await atomicWrite(messagesPath, next)
   actions.push(`APPLY - messages/${date}.md: batch block appended`)

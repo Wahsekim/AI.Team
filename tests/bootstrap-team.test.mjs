@@ -4,7 +4,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { mkdtemp, mkdir, writeFile, readFile, rm, access, copyFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, readFile, rm, access, copyFile, utimes } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -199,6 +199,35 @@ test('R5-12a: stale lock with a dead owner pid is reclaimed and the run proceeds
     const { stdout: pidOut } = await exec('sh', ['-c', 'echo $$'])
     await mkdir(join(root, '.bootstrap-lock'))
     await writeFile(join(root, '.bootstrap-lock', 'pid'), pidOut)
+    const out = await run(root)
+    assert.match(out, /WARN - lock: stale .*reclaiming/, 'must announce the stale-lock takeover')
+    assert.match(out, /RESULT: /)
+    assert.ok(!(await exists(join(root, '.bootstrap-lock'))), 'reclaimed lock must be released after the run')
+  })
+})
+
+test('R6-09: a FRESH ownerless lock (no pid file, current mtime) is treated as held — BOOTSTRAP-FAILED, not reclaimed', async () => {
+  await withKit(async root => {
+    // A concurrent bootstrap inside its mkdir->pid-write init window looks
+    // exactly like this — reclaiming it would let two bootstraps run at once.
+    await mkdir(join(root, '.bootstrap-lock'))
+    try {
+      await exec('bash', [SCRIPT, root])
+      assert.fail('expected nonzero exit for a fresh ownerless lock')
+    } catch (e) {
+      assert.equal(e.code, 1)
+      assert.match(String(e.stdout), /ownerless but fresh/)
+      assert.match(String(e.stdout), /BOOTSTRAP-FAILED/)
+    }
+    assert.ok(await exists(join(root, '.bootstrap-lock')), 'a fresh ownerless lock must not be reclaimed or deleted')
+  })
+})
+
+test('R6-09: an ownerless lock with dir mtime older than 10s is reclaimed after the grace re-read', async () => {
+  await withKit(async root => {
+    await mkdir(join(root, '.bootstrap-lock'))
+    const old = new Date(Date.now() - 30_000)
+    await utimes(join(root, '.bootstrap-lock'), old, old)
     const out = await run(root)
     assert.match(out, /WARN - lock: stale .*reclaiming/, 'must announce the stale-lock takeover')
     assert.match(out, /RESULT: /)

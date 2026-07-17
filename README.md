@@ -1,5 +1,14 @@
 # AI.Team - Portable Multi-Agent Team Template
 
+> **Status: Engineering Alpha.**
+> Validated: deterministic mock/fault-injection suite (`tests/`) + macOS/Linux
+> CI (Node 22/24, ShellCheck, full-history secret scan).
+> NOT yet validated: real-Claude end-to-end runs, unattended operation on
+> private code. Open owner decisions: permission manifest, retention/TTL,
+> branch rules, first release.
+> Use for attended, low-sensitivity, rollback-able pilots only — see
+> `SECURITY.md` and `docs/harness-assumptions.md` for the boundaries.
+
 > "Portable" means the TEAM is portable across projects (drop the kit next to
 > any product repo and bootstrap) — not portable across agent runtimes. The
 > kit targets **Claude Code only** (>= 2.1.154); other runtimes are out of
