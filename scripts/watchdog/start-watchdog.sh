@@ -54,7 +54,10 @@ if ! mkdir "$LOCK_DIR" 2>/dev/null; then
     # Stale-lock recovery (F-08): a SIGKILL inside the lock window leaves the
     # directory forever. A start-lock older than 60s cannot belong to a live
     # start hook (they run for milliseconds) — reclaim it and retry once.
-    lock_mtime=$(stat -f %m "$LOCK_DIR" 2>/dev/null || stat -c %Y "$LOCK_DIR" 2>/dev/null || echo "")
+    # GNU form first: on Linux, BSD-style 'stat -f %m' SUCCEEDS but prints the
+    # mount point (filesystem format), which would poison the arithmetic.
+    lock_mtime=$(stat -c %Y "$LOCK_DIR" 2>/dev/null || stat -f %m "$LOCK_DIR" 2>/dev/null || echo "")
+    case "$lock_mtime" in ''|*[!0-9]*) lock_mtime="" ;; esac
     now_s=$(date +%s)
     if [ -n "$lock_mtime" ] && [ $((now_s - lock_mtime)) -gt 60 ]; then
         rmdir "$LOCK_DIR" 2>/dev/null || true

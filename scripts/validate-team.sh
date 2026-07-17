@@ -52,8 +52,10 @@ case "$MODE" in
 esac
 echo "MODE: $MODE (validating as $([ "$DEPLOYED" = 1 ] && echo deployment || echo kit))"
 
-mtime_of() { # portable mtime (epoch seconds): macOS then GNU
-  stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null
+mtime_of() { # portable mtime (epoch seconds): GNU first — on Linux the BSD
+  # form 'stat -f %m' SUCCEEDS but prints the mount point, not a timestamp.
+  MT_OUT=$(stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null)
+  case "$MT_OUT" in ''|*[!0-9]*) return 1 ;; *) printf '%s\n' "$MT_OUT" ;; esac
 }
 
 # --------------------- check -1: mandatory-artifact matrix (deployment mode only)
