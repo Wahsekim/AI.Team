@@ -37,6 +37,11 @@ It works against either:
   the runtime enforces `model`, `effort`, and `maxTurns` from wrapper
   frontmatter, but no frontmatter field hard-caps tokens per agent.
 - **git** (local use is enough; no remote required).
+- **Node.js 22 or 24** (the fault-injection test suite and
+  `scripts/reconcile-run.mjs`), **bash + coreutils/grep/awk** (validator,
+  bootstrap, watchdog), and **perl** (bootstrap placeholder substitution).
+  Supported OS: macOS and Linux (CI runs both); Windows/WSL is untested —
+  the reconciler relies on POSIX same-directory rename semantics.
 - Optional: an issue tracker (Jira / Linear / GitHub Projects). Without one,
   the Kanban methodology falls back to a file-based board — see
   `methodologies/kanban.md`.

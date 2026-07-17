@@ -42,6 +42,16 @@ pid_is_watchdog() {
 # Initial heartbeat so the watchdog has a baseline.
 touch "$HB_FILE"
 
+# Concurrency lock (R-10): two SessionStart hooks racing here would spawn two
+# loops and the second PID write would orphan the first. mkdir is atomic —
+# whoever gets the lock does the spawn; the loser exits (a watchdog for this
+# session either exists or is being created).
+LOCK_DIR="$HB_DIR/${session_id}.start-lock"
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    exit 0
+fi
+trap 'rmdir "$LOCK_DIR" 2>/dev/null' EXIT
+
 # Already running for this session?
 if [ -f "$PID_FILE" ]; then
     existing_pid=$(cat "$PID_FILE" 2>/dev/null || echo "")

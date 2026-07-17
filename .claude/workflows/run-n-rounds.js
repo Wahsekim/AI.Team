@@ -57,7 +57,9 @@ let argsParseError = null
 try {
   A = (typeof args === 'string' ? JSON.parse(args) : args) || {}
 } catch (e) {
-  argsParseError = String(e).slice(0, 160)
+  // Fixed message on purpose: parser errors echo input fragments, and the
+  // input is untrusted — never reflect it into the error surface (R-12).
+  argsParseError = 'JSON.parse failed on the args string'
   A = {}
 }
 
@@ -84,6 +86,7 @@ if (!isPosInt(A.rounds)) validationErrors.push('rounds must be a positive safe i
 else if (A.rounds > MAX_ROUNDS) validationErrors.push(`rounds ${A.rounds} exceeds the engine cap of ${MAX_ROUNDS}`)
 if (!isRealDate(A.date)) validationErrors.push("date must be a real 'YYYY-MM-DD' calendar date (no clock in-loop — the caller supplies it)")
 if (!isPosInt(A.nextLifecycleNumber)) validationErrors.push('nextLifecycleNumber must be a positive safe integer (the starting "## [NNN]" lifecycle entry number)')
+else if (A.nextLifecycleNumber > 1000000) validationErrors.push('nextLifecycleNumber exceeds the engine cap of 1,000,000 — entry-number arithmetic must stay far inside safe-integer range (R-12)')
 if (A.executionMode !== 'wrappers' && A.executionMode !== 'inline') {
   validationErrors.push("executionMode must be EXPLICITLY 'wrappers' (roster wrapper dispatch) or 'inline' (documented INLINE_BASE_AGENT_MODE fallback) — silent generic dispatch is banned")
 }
@@ -186,7 +189,7 @@ const VERIFIER_SCHEMA = {
         type: 'object', additionalProperties: false,
         required: ['command', 'exitCode'],
         properties: {
-          command: { type: 'string', description: 'the exact (env-prefixed, if the stack requires it) command actually executed' },
+          command: { type: 'string', minLength: 1, description: 'the exact (env-prefixed, if the stack requires it) command actually executed — a blank command is rejected as no evidence' },
           exitCode: { type: 'integer', description: 'the REAL process exit code observed' },
         },
       },
@@ -221,7 +224,20 @@ const msgBullets = []            // one bullet per round for the messages/<date>
 // engine goes through cleanLine — worker output, verifier commands, and ERROR MESSAGES alike.
 const redact = s => String(s || '')
   .replace(/\b(sk-[A-Za-z0-9_-]{8,}|ghp_[A-Za-z0-9]{20,}|gho_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|AKIA[A-Z0-9]{12,}|eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,})\b/g, '[REDACTED]')
-  .replace(/\b(bearer|token|password|passwd|secret|api[_-]?key)(\s*[:=]\s*|\s+)[^\s"']{8,}/gi, '$1$2[REDACTED]')
+  // quoted AND unquoted assignments, shell/env/JSON pair styles (R-03):
+  //   password=hunter2x99   password="quoted..."   "password":"quoted..."   API_KEY='...'
+  .replace(/(["']?)\b(bearer|token|password|passwd|secret|api[_-]?key|authorization)\b\1(\s*[:=]\s*|\s+)(["']?)[^\s"']{6,}\4/gi, '$1$2$1$3$4[REDACTED]$4')
+  // protocol control words are reserved: worker text must not be able to spoof
+  // the untrusted-data fence sentinels in the guardian prompt (R-08)
+  .replace(/(BEGIN|END)\s+UNTRUSTED\s+WORKER-REPORTED\s+DATA/gi, '[sentinel-removed]')
+// Recursive redaction for OBJECTS that leave the engine (results[].worker /
+// results[].verifier, guardian findings): ledger-line sanitization alone is
+// not enough — the full return payload gets saved to disk for reconciliation,
+// so every string in it must pass the redactor (R-03).
+const redactDeep = v => typeof v === 'string' ? redact(v)
+  : Array.isArray(v) ? v.map(redactDeep)
+  : (v && typeof v === 'object') ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, redactDeep(x)]))
+  : v
 const cleanLine = (s, max) => redact(s).replace(/\s+/g, ' ').replace(/#/g, '').replace(/\[(\d+)\]/g, '($1)').trim().slice(0, max || 200)
 const oneLine = s => cleanLine(s, 140)
 const emitLogs = (r, verdict) => {
@@ -254,21 +270,27 @@ for (let i = 0; i < iters; i++) {
   // workerStatus: 'succeeded' | 'blocked' (worker reported blocked:true — NOT success) |
   //               'no_progress' (progress:false — NOT success) | 'null_result' (skipped/died —
   //               side effects unknown) | 'error' (agent() threw — side effects unknown) |
-  //               'terminal_stop'
+  //               'terminal_stop' (stop requested AND the iteration otherwise succeeded).
+  // terminalStop is a STOP REQUEST, not an outcome: a worker returning
+  // {terminalStop:true, blocked:true} is a BLOCKED iteration that also wants the
+  // loop stopped — it must hit the recovery queue, never read as success (R-01).
   let worker = null
   let workerStatus = 'running'
   let workerError = null
+  let terminalStopRequested = false
   const preWorker = spentInLoop()
   try {
     worker = await agent(p.brief, {
       agentType: p.agentType, model: p.model,
       label: `iter${i + 1}:${p.ticket}:${p.agentType}`, phase: 'Loop', schema: WORKER_SCHEMA,
     })
-    workerStatus = worker === null ? 'null_result'
-      : worker.terminalStop ? 'terminal_stop'
+    worker = redactDeep(worker)   // full worker object leaves the engine in results[] — redact at capture (R-03)
+    terminalStopRequested = worker !== null && worker.terminalStop === true
+    const outcome = worker === null ? 'null_result'
       : worker.blocked === true ? 'blocked'
       : worker.progress !== true ? 'no_progress'
       : 'succeeded'
+    workerStatus = (terminalStopRequested && outcome === 'succeeded') ? 'terminal_stop' : outcome
   } catch (e) {
     workerStatus = 'error'
     workerError = { code: 'worker-agent-error', message: cleanLine(String(e), 200) }
@@ -288,9 +310,19 @@ for (let i = 0; i < iters; i++) {
   let verifierGroundingFailure = null
   let verificationStatus
   let budgetTrippedBeforeVerifier = false
+  let scopeDrift = false
   const preVerifier = spentInLoop()
   if (!p.isCodeShipping) {
     verificationStatus = 'not_applicable'
+    // Scope-drift tripwire (R-07): a plan item declared non-code whose worker
+    // reports touching code-shaped files bypassed the verifier gate on the
+    // CALLER's declaration alone. Conservative extension heuristic on the
+    // worker's own report — fail-closed to recovery; the main session then
+    // reads the REAL git diff (worker reports are untrusted in both
+    // directions: this catches honest drift, not a lying worker).
+    const CODE_EXT = /\.(m?[jt]sx?|py|go|rb|java|kt|cs|rs|c|cc|cpp|h|hpp|swift|php|scala|sh|bash|zsh|ps1|sql|tf|proto|vue|svelte)$/i
+    scopeDrift = !!(worker && Array.isArray(worker.filesTouched) && worker.filesTouched.some(f => CODE_EXT.test(String(f))))
+    if (scopeDrift) log(`iter ${i + 1} ${p.ticket}: SCOPE DRIFT — declared non-code but worker reports code files touched (${worker.filesTouched.slice(0, 3).map(f => oneLine(f)).join(', ')}) — routing to recovery`)
   } else if (workerStatus === 'error' || workerStatus === 'null_result') {
     verificationStatus = 'blocked_by_worker_error'
   } else if (budgetTripped()) {
@@ -311,6 +343,7 @@ for (let i = 0; i < iters; i++) {
       verifier = null
       log(`iter ${i + 1} ${p.ticket}: verifier gate agent() FAILED (${cleanLine(String(e), 160)}) — fail-closed, routing to fixRetestQueue`)
     }
+    verifier = redactDeep(verifier)   // full verifier object leaves the engine in results[] — redact at capture (R-03)
     if (!verifier) {
       verificationStatus = 'missing'
     } else {
@@ -323,9 +356,13 @@ for (let i = 0; i < iters; i++) {
         if (cmds.length === 0) {
           verifierGroundingFailure = 'pass=true with missing/empty commandsRun — ungrounded verdict rejected'
         } else {
-          const bad = cmds.filter(c => !c || typeof c.exitCode !== 'number' || c.exitCode !== 0)
+          // A blank/whitespace command is no evidence at all — a schema-legal
+          // {command:'   ', exitCode:0} must not count as an executed gate (R-02).
+          const bad = cmds.filter(c => !c
+            || typeof c.command !== 'string' || c.command.trim().length === 0
+            || typeof c.exitCode !== 'number' || c.exitCode !== 0)
           if (bad.length > 0) {
-            verifierGroundingFailure = `pass=true but nonzero/invalid exitCode: ${bad.map(c => `${cleanLine((c && c.command) || '?', 80)} -> ${c ? c.exitCode : '?'}`).join('; ')}`
+            verifierGroundingFailure = `pass=true but blank command or nonzero/invalid exitCode: ${bad.map(c => `${cleanLine((c && c.command) || '(blank)', 80) || '(blank)'} -> ${c ? c.exitCode : '?'}`).join('; ')}`
           }
         }
         if (!verifierGroundingFailure && (verifier.staticPass === false || verifier.e2ePass === false)) {
@@ -346,12 +383,14 @@ for (let i = 0; i < iters; i++) {
   const needsRecovery = needsFixRetest
     || workerStatus === 'error' || workerStatus === 'null_result'
     || workerStatus === 'blocked' || workerStatus === 'no_progress'
+    || scopeDrift
   spentTrace.push(spentInLoop())
   const r = {
     iter: i + 1, ticket: p.ticket, agentType: p.agentType,
     workerStatus, verificationStatus, sideEffects,
+    terminalStopRequested, scopeDrift,
     verificationRequired: p.isCodeShipping,
-    worker, verifier,
+    worker, verifier,               // redacted at capture — safe to persist (R-03)
     workerTokens, verifierTokens,   // SEPARATE per-spawn harness deltas (per-spawn attribution rule)
     verifierPass: verificationStatus === 'passed' ? true : (verificationStatus === 'failed' ? false : null),
     verifierGroundingFailure,
@@ -360,23 +399,25 @@ for (let i = 0; i < iters; i++) {
     error: workerError,
   }
   results.push(r)
+  const stopSuffix = terminalStopRequested && workerStatus !== 'terminal_stop' ? ' + TERMINAL-STOP requested' : ''
   const verdict = workerStatus === 'error' ? 'WORKER ERROR (side effects unknown) -> recovery'
-    : workerStatus === 'null_result' ? `WORKER NULL (skipped/died, side effects unknown)${p.isCodeShipping ? ' -> recovery' : ' -> recovery'}`
-    : workerStatus === 'blocked' ? `WORKER BLOCKED${verificationStatus === 'failed' || verificationStatus === 'missing' ? ' + verification not passed' : ''} -> recovery`
-    : workerStatus === 'no_progress' ? 'NO PROGRESS -> recovery'
+    : workerStatus === 'null_result' ? 'WORKER NULL (skipped/died, side effects unknown) -> recovery'
+    : workerStatus === 'blocked' ? `WORKER BLOCKED${verificationStatus === 'failed' || verificationStatus === 'missing' ? ' + verification not passed' : ''}${stopSuffix} -> recovery`
+    : workerStatus === 'no_progress' ? `NO PROGRESS${stopSuffix} -> recovery`
+    : scopeDrift ? 'SCOPE DRIFT (non-code plan touched code files) -> recovery'
     : verificationStatus === 'not_applicable' ? (workerStatus === 'terminal_stop' ? 'TERMINAL-STOP (non-code, no verifier gate)' : 'no verifier gate (non-code-shipping)')
     : verificationStatus === 'missing' ? 'verifier gate MISSING -> fail-closed fix-retest'
     : verificationStatus === 'failed' ? (verifierGroundingFailure ? 'verifier FAIL (ungrounded/inconsistent pass rejected) -> fix-retest' : 'verifier FAIL -> fix-retest')
     : (workerStatus === 'terminal_stop' ? 'TERMINAL-STOP, verifier PASS' : 'verifier PASS')
   emitLogs(r, verdict)
-  // Halt precedence: worker error > terminal stop > budget > failure policy.
+  // Halt precedence: worker error > terminal-stop REQUEST (any outcome) > budget > failure policy.
   if (workerStatus === 'error') {
     haltReason = `agent() threw at iter ${i + 1} (likely harness budget exhausted): ${workerError.message}`
     log(`HALT — ${haltReason}`)
     break
   }
-  if (workerStatus === 'terminal_stop') {
-    haltReason = `terminal-stop at iter ${i + 1}: ${oneLine(worker.notes || worker.outcome).slice(0, 120)}`
+  if (terminalStopRequested) {
+    haltReason = `terminal-stop at iter ${i + 1}${workerStatus !== 'terminal_stop' ? ` (iteration outcome: ${workerStatus} -> recovery)` : ''}: ${oneLine(worker.notes || worker.outcome).slice(0, 120)}`
     log(`HALT — ${haltReason}`)
     break
   }
@@ -460,7 +501,7 @@ try {
     model: A.guardianModel,          // per agents/roster.md (single source) — pass explicitly
     label: 'chaos:guardian', phase: 'Guardian', schema: GUARDIAN_SCHEMA,
   })
-  if (g) guardian = { status: 'ok', ...g }
+  if (g) guardian = { status: 'ok', ...redactDeep(g) }   // findings are model text — redact before they reach ledgers/return (R-03)
   else guardianError = { code: 'guardian-null-result', message: 'guardian agent returned null (skipped or died on a terminal error)' }
 } catch (e) {
   guardianError = { code: 'guardian-agent-error', message: cleanLine(String(e), 200) }
@@ -480,16 +521,26 @@ if (guardian.status === 'ok' && guardian.verdict === 'clean'
 const guardianTokens = spentInLoop() - guardianTokensPre
 
 // ---- Single truth derivation. One source, no contradictions:
-//   allPassed          — batch quality: every worker effectively succeeded, every required
+//   allPassed          — batch QUALITY only: every worker effectively succeeded, every required
 //                        verification passed, no unknown side effects, queues empty, guardian
-//                        ran and returned a consistent 'clean'.
-//   nextInvocationBlocked — the PM may NOT start another engine run before draining: true when
-//                        the guardian is unavailable/not-clean OR any queue is non-empty.
-//   safeToContinue     — convenience conjunction for automation: run completed everything it was
-//                        asked, nothing to drain, guardian clean. allPassed=true implies
-//                        nextInvocationBlocked=false BY CONSTRUCTION.
+//                        ran and returned a consistent 'clean'. Quality says nothing about
+//                        whether continuing is safe.
+//   budgetGateTripped  — final loop-attributable spend crossed the Q5 threshold (including a
+//                        last-iteration or guardian overshoot the in-loop gate can no longer
+//                        stop). A tripped budget REQUIRES re-budgeting before any next run.
+//   haltRequiresAcknowledgement — the loop stopped for a cause the main session must act on
+//                        (token-burnout, terminal-stop, failure-policy, worker error) — anything
+//                        except count-complete / board-exhausted.
+//   nextInvocationBlocked — the PM may NOT start another engine run: guardian not clean, any
+//                        queue non-empty, budget tripped, or an unacknowledged halt.
+//   safeToContinue     — THE one field automation may read alone: quality green AND everything
+//                        ran AND no budget/halt condition pending. NOTE: allPassed=true no longer
+//                        guarantees nextInvocationBlocked=false — a batch can be all-green work
+//                        that still exhausted its budget (R-04); read safeToContinue.
 const runIncomplete = results.length < iters
 const guardianClean = guardian.status === 'ok' && guardian.verdict === 'clean'
+const budgetGateTripped = spentInLoop() >= 0.8 * ceiling
+const haltRequiresAcknowledgement = haltReason !== 'count-complete' && !String(haltReason).startsWith('board-exhausted')
 const allPassed =
   results.length > 0 &&
   results.every(r => r.workerStatus === 'succeeded' || r.workerStatus === 'terminal_stop') &&
@@ -499,7 +550,8 @@ const allPassed =
   recoveryQueue.length === 0 &&
   guardianClean
 const nextInvocationBlocked = !guardianClean || fixRetestQueue.length > 0 || recoveryQueue.length > 0
-const safeToContinue = allPassed && !runIncomplete
+  || budgetGateTripped || haltRequiresAcknowledgement
+const safeToContinue = allPassed && !runIncomplete && !budgetGateTripped && !haltRequiresAcknowledgement
 
 // Guardian verdict gets its OWN numbered lifecycle entry (emitted here so the PM never hand-derives it).
 const guardianEntryNo = NNN(A.nextLifecycleNumber + lifecycleEntries.length)
@@ -534,7 +586,9 @@ return {
   budgetStatus: {                                                         // Q5 gate is 80%-of-ceiling, checked before worker AND verifier dispatches;
     ceiling, loopSpent: spentInLoop(),                                    // a single oversized spawn can still overshoot — overshootTokens reports it
     overshootTokens: Math.max(0, spentInLoop() - ceiling),
+    tripped: budgetGateTripped,                                           // final-state trip incl. last-iteration/guardian spend (R-04)
   },
+  budgetGateTripped, haltRequiresAcknowledgement,                         // both force nextInvocationBlocked and kill safeToContinue
   results,                                                                // each result carries workerStatus/verificationStatus/sideEffects + separate workerTokens/verifierTokens
   fixRetestQueue,                                                         // MANDATORY drain — main session must fix-retest each before close
   recoveryQueue,                                                          // error/null/blocked/no-progress records — main session must triage each
@@ -551,6 +605,8 @@ return {
       'DRAIN fixRetestQueue: `haltReason: count-complete` means all N DISPATCHED, NOT all passed. Every queued item MUST be fix-retested (or PM-direct-verified) BEFORE the batch is declared closed (count-complete must never mask not-done). Path per the engine fix-retest drain rule (docs/engine.md): same-session continuation if the harness exposes the workflow-spawned session; otherwise a fresh scoped fix spawn inlining the verifier failure report, logged `Session: resumed-fresh`.',
       'DRAIN recoveryQueue: error/null records have UNKNOWN side effects — inspect the working tree (git status/diff) for each before dispatching anything else; blocked/no-progress records need triage (unblock, re-scope, or return to the board).',
       'Confirm you watched Q3 (hardware) + Q4 (owner input) during the run — the workflow could not.',
+      'If budgetGateTripped or haltRequiresAcknowledgement: acknowledge the halt cause FIRST (re-budget the ceiling / act on the terminal-stop or failure) — nextInvocationBlocked stays true until then; safeToContinue is the only field automation may read alone.',
+      'For any scopeDrift record: a non-code plan item touched code-shaped files — read the REAL git diff before trusting or reverting the work (worker file reports are untrusted).',
       'If guardian.status != "ok": the run is UNAUDITED — run the guardian audit manually (agents/chaos.md) before the next invocation. If guardian.verdict != "clean" or guardianConsistencyFailure is set, act on guardian.findings first. nextInvocationBlocked=true until queues are drained AND the guardian question is settled.',
       'If needsGrooming/planShortfall, groom remaining tickets (tracker) then re-invoke run-n-rounds with remainingRounds + a fresh plan (and nextLifecycleNumber = mainSessionTodo.nextLifecycleNumberAfter). If runIncomplete, first resolve the halt cause — the same plan tail may be re-run only after recovery is drained.',
     ],

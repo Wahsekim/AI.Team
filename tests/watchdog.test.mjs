@@ -159,6 +159,57 @@ test('N-08: stop must not kill a watchdog loop belonging to ANOTHER session', as
   })
 })
 
+test('R-10: concurrent SessionStart hooks spawn at most one loop (start lock)', async () => {
+  await withHome(async home => {
+    const [a, b] = await Promise.all([
+      runHook('start-watchdog.sh', home, '{"session_id":"s11"}'),
+      runHook('start-watchdog.sh', home, '{"session_id":"s11"}'),
+    ])
+    try {
+      assert.equal(a.code, 0)
+      assert.equal(b.code, 0)
+      const { stdout } = await new Promise(res => {
+        const c = spawn('sh', ['-c', 'ps ax -o command= | grep "watchdog-loop.sh s11" | grep -v grep | wc -l'])
+        let out = ''
+        c.stdout.on('data', d => { out += d })
+        c.on('close', () => res({ stdout: out }))
+      })
+      assert.ok(parseInt(stdout.trim(), 10) <= 1, `expected at most one loop, got ${stdout.trim()}`)
+    } finally {
+      await runHook('stop-watchdog.sh', home, '{"session_id":"s11"}')
+    }
+  })
+})
+
+test('R-10: stop clears alert-state markers so no orphan loop lingers', async () => {
+  await withHome(async home => {
+    const hb = join(home, '.claude', 'heartbeats')
+    await writeFile(join(hb, 's12.heartbeat'), '')
+    await writeFile(join(hb, 's12.heartbeat.alerted-42'), '')
+    const { code } = await runHook('stop-watchdog.sh', home, '{"session_id":"s12"}')
+    assert.equal(code, 0)
+    assert.ok(!(await exists(join(hb, 's12.heartbeat'))))
+    assert.ok(!(await exists(join(hb, 's12.heartbeat.alerted-42'))), 'alert markers must be cleared on stop')
+  })
+})
+
+test('R-10: bogus WATCHDOG_* env values fall back to defaults (no busy-spin, clean exit)', async () => {
+  await withHome(async home => {
+    // No heartbeat + no alert state -> a healthy loop exits immediately on its
+    // first check; a busy-spinning or arithmetic-crashed loop would not.
+    const loop = spawn('bash', [join(DIR, 'watchdog-loop.sh'), 's13'], {
+      env: { ...process.env, HOME: home, WATCHDOG_INTERVAL: 'evil; rm -rf /', WATCHDOG_THRESHOLD: '-5', WATCHDOG_MAX_LIFETIME: 'NaN' },
+    })
+    try {
+      await new Promise(r => setTimeout(r, 1500))
+      assert.notEqual(loop.exitCode, null, 'loop must run its check loop and exit cleanly despite bogus env')
+      assert.equal(loop.exitCode, 0)
+    } finally {
+      loop.kill('SIGKILL')
+    }
+  })
+})
+
 test('start: stale PID file with reused non-watchdog PID is cleaned and respawned over', async () => {
   await withHome(async home => {
     const victim = spawn('sleep', ['300'])

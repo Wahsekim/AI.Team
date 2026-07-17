@@ -216,8 +216,10 @@ Full contract: `docs/engine.md`. Non-negotiables:
   never `haltReason` (`count-complete` ≠ all-passed; `allPassed` is a strict
   conjunction — any worker error/null/BLOCKED/NO-PROGRESS, unknown side
   effects, unpassed required verification, non-empty queue, or
-  unavailable/inconsistent guardian forces false; `allPassed=true` implies
-  `nextInvocationBlocked=false` by construction). Drain every fix-retest
+  unavailable/inconsistent guardian forces false; NOTE `allPassed=true` does
+  NOT mean continuation is safe — a green batch can still trip the budget:
+  `safeToContinue` is the only field automation may read alone). Drain every
+  fix-retest
   item per the engine fix-retest drain rule (`docs/engine.md`): session
   continuation if the harness exposes the workflow-spawned session;
   otherwise a fresh scoped fix spawn inlining the verifier failure report,

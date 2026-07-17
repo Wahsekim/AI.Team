@@ -14,7 +14,7 @@
 #                   CANNOT catch a deployment that lost its charter — bootstrap Done
 #                   checklists and CI must call --mode deployment explicitly.
 #
-# Verdicts (last line): KIT-VALID | DEPLOYMENT-READY | DEPLOYMENT-INCOMPLETE.
+# Verdicts (last line): KIT-VALID | DEPLOYMENT-STRUCTURALLY-COMPLETE | DEPLOYMENT-INCOMPLETE.
 # Exit 0 means "no FAIL in the checked mode", NOT "healthy for every purpose".
 #
 # This script is the mechanical control for failure classes FC-8 (counter drift)
@@ -178,10 +178,16 @@ else
     pass "lifecycle-close-headers" "no second-close headers"
   fi
 
-  # 1d counter line cross-check (Next NNN to assign == last entry + 1)
+  # 1d counter line cross-check (Next NNN to assign == last entry + 1).
+  # Missing counter is a FAIL on deployments: the engine/reconciler contract
+  # depends on it, and a silently absent counter is exactly how drift starts.
   CTR=$(grep -E 'Next NNN to assign' "$LC" | grep -oE '[0-9]+' | head -1)
   if [ -z "$CTR" ]; then
-    warn "lifecycle-counter" "no 'Next NNN to assign' counter line found"
+    if [ "$DEPLOYED" = 1 ]; then
+      fail "lifecycle-counter" "no 'Next NNN to assign' counter line found — required on deployments (engine/reconciler contract)"
+    else
+      warn "lifecycle-counter" "no 'Next NNN to assign' counter line found"
+    fi
   elif [ "$COUNT" -eq 0 ]; then
     pass "lifecycle-counter" "counter=$CTR, no entries yet — nothing to reconcile"
   else
@@ -370,6 +376,42 @@ else
   fi
 fi
 
+# -------------------- check 5b: wrapper frontmatter schema (deployment mode)
+# A wrapper that exists but carries no runtime-enforced config is a shell —
+# `name` alone dispatches with inherited-everything (R-05). Required keys:
+# name, description, model, effort. tools/permissionMode absent -> WARN
+# (least-privilege advisory until the permission manifest lands).
+if [ "$DEPLOYED" = 1 ] && [ -d "$ROOT/.claude/agents" ]; then
+  FM_FAILS=""
+  FM_WARNS=""
+  FM_CHECKED=0
+  for w in "$ROOT"/.claude/agents/*.md; do
+    [ -f "$w" ] || continue
+    case "$w" in *.template.md|*/README.md|*INLINE_BASE_AGENT_MODE.md) continue ;; esac
+    FM_CHECKED=$((FM_CHECKED+1))
+    FM=$(awk '/^---$/{n++; next} n==1{print} n>=2{exit}' "$w")
+    MISSING_KEYS=""
+    for k in name description model effort; do
+      printf '%s\n' "$FM" | grep -qE "^${k}:" || MISSING_KEYS="$MISSING_KEYS $k"
+    done
+    [ -n "$MISSING_KEYS" ] && FM_FAILS="$FM_FAILS ${w#$ROOT/}(missing:$MISSING_KEYS )"
+    if ! printf '%s\n' "$FM" | grep -qE '^(tools|permissionMode):'; then
+      FM_WARNS="$FM_WARNS ${w#$ROOT/}"
+    fi
+  done
+  if [ -n "$FM_FAILS" ]; then
+    fail "wrapper-frontmatter" "active wrapper(s) missing required frontmatter:$FM_FAILS"
+  elif [ "$FM_CHECKED" -eq 0 ]; then
+    skip "wrapper-frontmatter" "no active wrappers to check (inline mode?)"
+  elif [ -n "$FM_WARNS" ]; then
+    warn "wrapper-frontmatter" "$FM_CHECKED wrapper(s) OK; no tools/permissionMode (inherits ALL tools — least-privilege advisory):$FM_WARNS"
+  else
+    pass "wrapper-frontmatter" "$FM_CHECKED active wrapper(s) carry required frontmatter"
+  fi
+else
+  skip "wrapper-frontmatter" "kit mode or no .claude/agents — wrapper schema not applicable"
+fi
+
 # ------------------------------ check 6: staleness of PM state surfaces (>14 days)
 if [ "$DEPLOYED" = 0 ]; then
   skip "staleness" "fresh kit — no live PM state to age"
@@ -408,7 +450,11 @@ if [ "$FAILURES" -gt 0 ]; then
   exit 1
 fi
 if [ "$DEPLOYED" = 1 ]; then
-  echo "RESULT: DEPLOYMENT-READY — no FAIL (PASS/WARN/SKIP only)."
+  # Honest verdict (R-05): this validator proves STRUCTURE (files, wiring,
+  # counters, wrapper schema), not semantic readiness — it does not start the
+  # runtime, resolve stack commands, or dispatch a probe. "READY" is reserved
+  # for a future semantic gate.
+  echo "RESULT: DEPLOYMENT-STRUCTURALLY-COMPLETE — no FAIL (PASS/WARN/SKIP only). Structural checks only: run a real dispatch smoke before trusting the deployment end-to-end."
 else
   echo "RESULT: KIT-VALID — no FAIL (PASS/WARN/SKIP only). Kit mode does NOT attest a deployment; run --mode deployment on deployed instances."
 fi

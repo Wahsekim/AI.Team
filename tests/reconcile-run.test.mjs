@@ -98,14 +98,61 @@ test('N-09: partial earlier write (lifecycle only) is detected and repaired, not
   })
 })
 
-test('counter ahead of this run is left untouched with a warning (later batch already advanced it)', async () => {
+test('R-06: UNAPPLIED batch with a mismatched counter fails closed instead of corrupting numbering', async () => {
   await withDeployment(async (root, resultPath) => {
+    // Counter says 009 but this batch's entries start at [002] and it is NOT
+    // yet applied — appending would create out-of-sequence entries.
     await writeFile(join(root, 'agents', 'lifecycle.md'), LIFECYCLE.replace('002', '009'))
     const { code, out } = await runTool(resultPath, root)
-    assert.equal(code, 0, out)
-    assert.match(out, /WARN - lifecycle counter 009 is AHEAD/)
+    assert.equal(code, 1, out)
+    assert.match(out, /numbering conflict/)
     const lc = await readFile(join(root, 'agents', 'lifecycle.md'), 'utf8')
+    assert.ok(!lc.includes('### BATCH'), 'nothing may be written on a counter conflict')
     assert.match(lc, /Next NNN to assign: 009/)
+  })
+})
+
+test('counter ahead of an ALREADY-APPLIED batch is left untouched with a warning', async () => {
+  await withDeployment(async (root, resultPath) => {
+    // Batch applied earlier; later batches advanced the counter to 009.
+    const lc = LIFECYCLE.replace('002', '009') + '\n' + RESULT.mainSessionTodo.lifecycleEntries.join('\n') + '\n'
+    await writeFile(join(root, 'agents', 'lifecycle.md'), lc)
+    const { code, out } = await runTool(resultPath, root)
+    assert.equal(code, 0, out)
+    assert.match(out, /SKIP - lifecycle/)
+    assert.match(out, /AHEAD/)
+    const after = await readFile(join(root, 'agents', 'lifecycle.md'), 'utf8')
+    assert.match(after, /Next NNN to assign: 009/)
+  })
+})
+
+test('R-06: prefix runId (run-...-0020) does not false-skip this run (run-...-002)', async () => {
+  await withDeployment(async (root, resultPath) => {
+    const other = '### BATCH 2026-07-16 run-2026-07-16-0020 — run-n-rounds N=1, dispatched 1, halt: count-complete\n## [020] other worker — verifier PASS, ~1 tok worker, x\n'
+    await writeFile(join(root, 'agents', 'lifecycle.md'), LIFECYCLE + '\n' + other)
+    const { code, out } = await runTool(resultPath, root)
+    assert.equal(code, 0, out)
+    assert.match(out, /APPLY - lifecycle/, `exact-token match must not treat run-...-0020 as run-...-002:\n${out}`)
+  })
+})
+
+test('R-06: a held lock blocks a second reconcile (no concurrent writers)', async () => {
+  await withDeployment(async (root, resultPath) => {
+    await mkdir(join(root, '.reconcile-lock'))
+    const { code, out } = await runTool(resultPath, root)
+    assert.equal(code, 1, out)
+    assert.match(out, /another reconcile appears to be in progress/)
+    const lc = await readFile(join(root, 'agents', 'lifecycle.md'), 'utf8')
+    assert.ok(!lc.includes('### BATCH'))
+  })
+})
+
+test('lock is released after a successful run (second run proceeds)', async () => {
+  await withDeployment(async (root, resultPath) => {
+    await runTool(resultPath, root)
+    const { code, out } = await runTool(resultPath, root)
+    assert.equal(code, 0, out)
+    assert.match(out, /ALREADY-RECONCILED/)
   })
 })
 

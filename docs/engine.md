@@ -140,9 +140,9 @@ in lifecycle headers).
     (worker + verifier, from agents/pm.md Rules bands) x 1.3`.
   - **Subsequent loops:** `observed-per-round x N x 1.3` (observed-per-round =
     mean per-iter spend from the previous batch's `spentTrace` deltas).
-  - If omitted, the engine falls back to the harness session `budget.total`
-    and logs a WARNING — that gates against a number nobody declared and
-    produces guardian vacuous-ceiling findings; always declare explicitly.
+  - If omitted, the invocation is REJECTED (`invalid-args`, zero dispatch) —
+    there is no fallback to `budget.total`: gating against a number nobody
+    declared produced vacuous ceilings, so the field is mandatory.
   - This is a PER-INVOCATION gate — the PM tracks the cumulative cross-batch
     loop ceiling herself (charter budget/halt table). Conflating the two axes
     caused a false-halt in the source project.
@@ -150,15 +150,22 @@ in lifecycle headers).
 ## Return contract — how to read it
 
 - **One truth derivation, no contradictions** (single source in the script):
-  - `allPassed` — batch quality. STRICT conjunction: every worker
+  - `allPassed` — batch QUALITY only. STRICT conjunction: every worker
     `succeeded`/`terminal_stop` (a `blocked` or `no_progress` worker is NOT
-    success), no unknown side effects, every required verification `passed`,
-    both queues empty, guardian ran AND returned a consistent `clean`.
-  - `nextInvocationBlocked` — true unless the guardian is clean AND both
-    queues are empty. `allPassed=true` implies `nextInvocationBlocked=false`
-    BY CONSTRUCTION — the two can never contradict.
-  - `safeToContinue` — the one field automation may read alone: `allPassed`
-    AND the run finished everything it was asked (`!runIncomplete`).
+    success — and a terminal-stop REQUEST from a blocked/no-progress worker
+    does not upgrade it), no unknown side effects, every required
+    verification `passed`, both queues empty, guardian ran AND returned a
+    consistent `clean`.
+  - `budgetGateTripped` / `haltRequiresAcknowledgement` — final loop spend
+    crossed the Q5 threshold (including a last-iteration or guardian
+    overshoot), or the loop stopped for a cause needing action
+    (token-burnout / terminal-stop / failure-policy / worker error).
+  - `nextInvocationBlocked` — guardian not clean, any queue non-empty, budget
+    tripped, or an unacknowledged halt. NOTE: `allPassed=true` does NOT imply
+    unblocked — a batch can be all-green work that still exhausted its
+    budget.
+  - `safeToContinue` — THE one field automation may read alone: quality
+    green AND everything ran AND no budget/halt condition pending.
   **Never read `haltReason` for quality**: `count-complete` means all N
   DISPATCHED, not all passed.
 - Per-iteration records carry three explicit state fields (no nullable

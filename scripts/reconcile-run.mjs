@@ -19,7 +19,7 @@
 // tracker transitions — the tool prints reminders for both.
 
 import { readFile, writeFile, rename, mkdir } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
+import { existsSync, rmSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 
 const die = msg => { console.error(`FAIL - ${msg}`); process.exit(1) }
@@ -27,6 +27,17 @@ const die = msg => { console.error(`FAIL - ${msg}`); process.exit(1) }
 const [, , resultPath, rootArg] = process.argv
 if (!resultPath) die('usage: node scripts/reconcile-run.mjs <engine-result.json> [TEAM_ROOT]')
 const ROOT = resolve(rootArg || '.')
+
+// Concurrency lock (R-06): two concurrent reconciles would each read->append->
+// rename and the last writer would silently drop the other's block. mkdir is
+// atomic; holding the lock for the whole run serializes writers.
+const LOCK_DIR = join(ROOT, '.reconcile-lock')
+try {
+  await mkdir(LOCK_DIR)
+} catch {
+  die(`another reconcile appears to be in progress (lock ${LOCK_DIR} exists) — wait for it, or remove the directory if it is stale`)
+}
+process.on('exit', () => { try { rmSync(LOCK_DIR, { recursive: true, force: true }) } catch { /* best effort */ } })
 
 let result
 try {
@@ -61,29 +72,54 @@ async function atomicWrite(path, content) {
 
 const actions = []
 
+// Exact-token runId matching (R-06): includes() would let run-1 match run-10.
+// The BATCH header format is '### BATCH <date> <runId> — ...'; messages headers
+// carry 'run-n-rounds batch <runId> ('.
+const lcHasRunId = (text, id) => text.split('\n').some(l => {
+  const m = /^### BATCH \d{4}-\d{2}-\d{2} (\S+) /.exec(l)
+  return m && m[1] === id
+})
+const msgHasRunId = (text, id) => text.split('\n').some(l => {
+  const m = /run-n-rounds batch (\S+) \(/.exec(l)
+  return m && m[1] === id
+})
+
 // ---- target 1: agents/lifecycle.md (block + counter, one atomic write) ----
 if (!existsSync(lifecyclePath)) die(`missing ${lifecyclePath} — not a deployed AI.Team root? (pass TEAM_ROOT)`)
 let lifecycle = await readFile(lifecyclePath, 'utf8')
-const lcHasRun = lifecycle.split('\n').some(l => l.startsWith('### BATCH ') && l.includes(runId))
+const lcHasRun = lcHasRunId(lifecycle, runId)
+const entriesCount = todo.lifecycleEntries.length - 1   // minus the BATCH header
+const firstEntryNo = todo.nextLifecycleNumberAfter - entriesCount
+const counterRe = /(Next NNN to assign[^\d]*)(\d+)/
+const counterMatch = counterRe.exec(lifecycle)
 let lifecycleChanged = false
 if (lcHasRun) {
   actions.push(`SKIP - lifecycle: runId ${runId} already applied`)
 } else {
+  // Counter PRECONDITION (R-06): appending an unapplied batch whose numbering
+  // does not line up with the live counter would create duplicate or gapped
+  // [NNN] entries — fail closed instead of writing a corrupt ledger.
+  if (counterMatch) {
+    const current = parseInt(counterMatch[2], 10)
+    if (current !== firstEntryNo) {
+      die(`lifecycle counter is ${NNN(current)} but this batch's entries start at ${NNN(firstEntryNo)} — numbering conflict (another batch ran since this result was produced?). Re-invoke the engine with nextLifecycleNumber=${current}, or resolve the ledger manually. Nothing was written.`)
+    }
+  }
   lifecycle = lifecycle.replace(/\n*$/, '\n\n') + todo.lifecycleEntries.join('\n') + '\n'
   lifecycleChanged = true
-  actions.push(`APPLY - lifecycle: BATCH block (${todo.lifecycleEntries.length - 1} entries) appended`)
+  actions.push(`APPLY - lifecycle: BATCH block (${entriesCount} entries) appended`)
 }
 // Counter update (drift fix): the paste block never carried it; the tool owns it.
-const counterRe = /(Next NNN to assign[^\d]*)(\d+)/
-const counterMatch = counterRe.exec(lifecycle)
 if (!counterMatch) {
   actions.push('WARN - lifecycle: no "Next NNN to assign" counter line found — update it manually')
 } else {
-  const current = parseInt(counterMatch[2], 10)
+  const current = parseInt(counterRe.exec(lifecycle)[2], 10)
   const target = todo.nextLifecycleNumberAfter
   if (current === target) {
     actions.push(`OK   - lifecycle counter already ${NNN(target)}`)
   } else if (current > target) {
+    // Reachable only when the batch was ALREADY applied earlier and later
+    // batches advanced the counter — informational, never a rewind.
     actions.push(`WARN - lifecycle counter ${NNN(current)} is AHEAD of this run's ${NNN(target)} — a later batch already advanced it; left untouched`)
   } else {
     lifecycle = lifecycle.replace(counterRe, `$1${NNN(target)}`)
@@ -96,7 +132,7 @@ if (lifecycleChanged) await atomicWrite(lifecyclePath, lifecycle)
 // ---- target 2: messages/<date>.md ----
 await mkdir(dirname(messagesPath), { recursive: true })
 let messages = existsSync(messagesPath) ? await readFile(messagesPath, 'utf8') : ''
-if (messages.includes(runId)) {
+if (msgHasRunId(messages, runId)) {
   actions.push(`SKIP - messages/${date}.md: runId ${runId} already applied`)
 } else {
   const next = (messages ? messages.replace(/\n*$/, '\n\n') : '') + todo.messagesLogBlock + '\n'

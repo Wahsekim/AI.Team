@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
 # Background watchdog loop, one per Claude session.
-# Spawned by start-watchdog.sh on SessionStart; killed by stop-watchdog.sh on Stop/SessionEnd.
+# Spawned by start-watchdog.sh on SessionStart; killed by stop-watchdog.sh on
+# SessionEnd ONLY (never wire the stop to the Stop hook — it fires per
+# response; see INSTALL.template.md).
 #
 # Usage: watchdog-loop.sh <session_id>
 #
 # Loop:
 #   sleep WATCHDOG_INTERVAL (default 30s)
 #   compute heartbeat age
-#   if age > WATCHDOG_THRESHOLD (default 600s = 10min): alert + log + bail
+#   if age > WATCHDOG_THRESHOLD (default 600s = 10min): alert + log, set the
+#   heartbeat aside as .alerted-<ts>, then KEEP WAITING — monitoring resumes
+#   when the next tool result recreates the heartbeat.
 #
 # Self-terminates if:
-#   - heartbeat file disappears (stop hook ran cleanly)
+#   - heartbeat file disappears with no alert state pending (clean stop)
 #   - max lifetime reached (default 12h - defense against orphaned loops)
 
 set -e
@@ -25,9 +29,15 @@ esac
 session_id=$(printf '%s' "$session_id" | cut -c1-128)
 [ -z "$session_id" ] && session_id="unknown"
 
+# Env preflight (R-10): a non-numeric or non-positive override would make the
+# loop busy-spin (interval 0) or die on arithmetic — fall back to defaults.
+is_positive_num() { case "$1" in ''|*[!0-9.]*|.|*.*.*) return 1 ;; *) awk -v n="$1" 'BEGIN{exit !(n>0)}' ;; esac; }
 INTERVAL_SECONDS=${WATCHDOG_INTERVAL:-30}
 THRESHOLD_SECONDS=${WATCHDOG_THRESHOLD:-600}
 MAX_LIFETIME_SECONDS=${WATCHDOG_MAX_LIFETIME:-43200}  # 12 hours
+is_positive_num "$INTERVAL_SECONDS"     || INTERVAL_SECONDS=30
+is_positive_num "$THRESHOLD_SECONDS"    || THRESHOLD_SECONDS=600
+case "$MAX_LIFETIME_SECONDS" in ''|*[!0-9]*) MAX_LIFETIME_SECONDS=43200 ;; esac
 
 HB_DIR="$HOME/.claude/heartbeats"
 HB_FILE="$HB_DIR/${session_id}.heartbeat"

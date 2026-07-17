@@ -42,7 +42,7 @@ const COMPLETE_DEPLOYMENT = {
   'agents/lessons.md': '# Lessons index\n',
   'memory/pm.md': '# PM memory\n',
   'pm-decisions.md': '# PM decisions\n',
-  '.claude/agents/proj-builder.md': '---\nname: proj-builder\n---\n\nBuilder wrapper.\n',
+  '.claude/agents/proj-builder.md': '---\nname: proj-builder\ndescription: builder for tests\nmodel: sonnet\neffort: "high"\ntools: Read, Grep, Bash, Write, Edit\npermissionMode: default\n---\n\nBuilder wrapper.\n',
 }
 
 const FRESH_KIT = {
@@ -90,11 +90,11 @@ test('fresh kit FAILS under --mode deployment (incomplete deployment must not va
   })
 })
 
-test('complete deployment passes --mode deployment with DEPLOYMENT-READY verdict', async () => {
+test('complete deployment passes --mode deployment with DEPLOYMENT-STRUCTURALLY-COMPLETE verdict', async () => {
   await withFixture(COMPLETE_DEPLOYMENT, async root => {
     const { code, out } = await runValidator(root, '--mode', 'deployment')
     assert.equal(code, 0, out)
-    assert.match(out, /DEPLOYMENT-READY/)
+    assert.match(out, /DEPLOYMENT-STRUCTURALLY-COMPLETE/)
   })
 })
 
@@ -103,7 +103,7 @@ test('complete deployment auto-detects as deployment', async () => {
     const { code, out } = await runValidator(root)
     assert.equal(code, 0, out)
     assert.match(out, /validating as deployment/)
-    assert.match(out, /DEPLOYMENT-READY/)
+    assert.match(out, /DEPLOYMENT-STRUCTURALLY-COMPLETE/)
   })
 })
 
@@ -218,6 +218,43 @@ test('roster ROW declaring inline mode without the file FAILS', async () => {
     const { code, out } = await runValidator(root, '--mode', 'deployment')
     assert.equal(code, 1, out)
     assert.match(out, /roster-wrappers/)
+  })
+})
+
+test('R-05: shell wrapper with only a name fails the frontmatter schema', async () => {
+  const files = {
+    ...COMPLETE_DEPLOYMENT,
+    '.claude/agents/proj-builder.md': '---\nname: proj-builder\n---\n\nShell wrapper.\n',
+  }
+  await withFixture(files, async root => {
+    const { code, out } = await runValidator(root, '--mode', 'deployment')
+    assert.equal(code, 1, out)
+    assert.match(out, /wrapper-frontmatter/)
+    assert.match(out, /missing:.*description/)
+  })
+})
+
+test('R-05: wrapper without tools/permissionMode passes with a least-privilege WARN', async () => {
+  const files = {
+    ...COMPLETE_DEPLOYMENT,
+    '.claude/agents/proj-builder.md': '---\nname: proj-builder\ndescription: b\nmodel: sonnet\neffort: "high"\n---\nBody.\n',
+  }
+  await withFixture(files, async root => {
+    const { code, out } = await runValidator(root, '--mode', 'deployment')
+    assert.equal(code, 0, out)
+    assert.match(out, /WARN - wrapper-frontmatter.*inherits ALL tools/)
+  })
+})
+
+test('R-05: deployment lifecycle without a counter line FAILS', async () => {
+  const files = {
+    ...COMPLETE_DEPLOYMENT,
+    'agents/lifecycle.md': '# Lifecycle\n\n## [001] bootstrap — deployed\n',
+  }
+  await withFixture(files, async root => {
+    const { code, out } = await runValidator(root, '--mode', 'deployment')
+    assert.equal(code, 1, out)
+    assert.match(out, /lifecycle-counter/)
   })
 })
 

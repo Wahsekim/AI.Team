@@ -28,6 +28,8 @@
 set -uo pipefail
 
 failboot() { echo "FAIL - $1"; echo "RESULT: BOOTSTRAP-FAILED"; exit 1; }
+TMP=""
+trap 'rm -f "${TMP:-}" 2>/dev/null' EXIT
 
 PROJECT_NAME=""
 PRODUCT_REPO=""
@@ -110,8 +112,13 @@ for pair in $MANDATORY_PAIRS $OPTIONAL_PAIRS; do
     echo "PLAN - $target: would instantiate from $seed"
     continue
   fi
-  cp "$ROOT/$seed" "$ROOT/$target" || failboot "copy: $seed -> $target failed"
-  substitute "$ROOT/$target"
+  # Atomic render (R-09): copy + substitute into a same-directory temp file,
+  # then rename — an interrupt mid-substitution never leaves a half-rendered
+  # target that a retry would then skip via never-overwrite.
+  TMP="$ROOT/${target}.render-tmp.$$"
+  cp "$ROOT/$seed" "$TMP" || { rm -f "$TMP"; failboot "copy: $seed -> $target failed"; }
+  substitute "$TMP"
+  mv "$TMP" "$ROOT/$target" || { rm -f "$TMP"; failboot "rename: $target failed"; }
   CREATED="$CREATED $target"
   echo "DONE - $target: instantiated from $seed"
 done
@@ -145,19 +152,25 @@ for pair in $MANDATORY_PAIRS $OPTIONAL_PAIRS; do
   fi
 done
 
-# Gates (informational at this stage — they go green only after the interview
-# and wrapper instantiation; bootstrap Done checklists require them to pass
-# CLEAN before first dispatch).
+# Gates: compat is informational (the runtime may be absent on CI machines),
+# but the deployment VALIDATOR decides the verdict (R-09) — 'BOOTSTRAPPED'
+# is only ever printed over a structurally-complete deployment.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 if [ -x "$SCRIPT_DIR/check-claude-compat.sh" ]; then
   "$SCRIPT_DIR/check-claude-compat.sh" "$ROOT" | tail -1 || true
 fi
+VALIDATOR_CLEAN=0
 if [ -x "$SCRIPT_DIR/validate-team.sh" ]; then
-  "$SCRIPT_DIR/validate-team.sh" --mode deployment "$ROOT" | tail -1 || true
+  if VOUT=$("$SCRIPT_DIR/validate-team.sh" --mode deployment "$ROOT" 2>&1); then
+    VALIDATOR_CLEAN=1
+  fi
+  printf '%s\n' "$VOUT" | tail -1
 fi
 if [ "$PENDING" -gt 0 ]; then
   echo "RESULT: INSTANTIATED-PENDING-INTERVIEW${CREATED:+ — created:$CREATED} — $PENDING ask:first_start placeholder(s) remain. Next: PM interview (docs/bootstrap-*.md), staffing (docs/staffing.md), wrappers, then validate-team.sh --mode deployment must exit 0."
+elif [ "$VALIDATOR_CLEAN" != 1 ]; then
+  echo "RESULT: PENDING-STAFFING${CREATED:+ — created:$CREATED} — interview placeholders resolved but the deployment is NOT structurally complete (see validator output above: wrappers/staffing/ledgers still needed). Not BOOTSTRAPPED."
 else
-  echo "RESULT: BOOTSTRAPPED${CREATED:+ — created:$CREATED}. Next: staffing (docs/staffing.md), wrappers, then validate-team.sh --mode deployment must exit 0."
+  echo "RESULT: BOOTSTRAPPED${CREATED:+ — created:$CREATED} — deployment validation passed. Next: scripts/check-claude-compat.sh must also pass on the machine that will run the team."
 fi
 exit 0

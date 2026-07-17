@@ -49,7 +49,11 @@ if [ -f "$PID_FILE" ]; then
     rm -f "$PID_FILE"
 fi
 
-# Removing the heartbeat file is also a stop signal for the loop.
+# Removing the heartbeat file is also a stop signal for the loop. Clear the
+# alert state too (R-10): a leftover `.alerted-*` marker would keep an
+# orphaned loop waiting until max lifetime instead of exiting cleanly.
 rm -f "$HB_FILE"
+find "$HB_DIR" -maxdepth 1 -name "${session_id}.heartbeat.alerted-*" -delete 2>/dev/null || true
+rmdir "$HB_DIR/${session_id}.start-lock" 2>/dev/null || true
 
 exit 0

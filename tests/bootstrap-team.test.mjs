@@ -161,6 +161,31 @@ test('N-07: already-instantiated target satisfies the mandatory-seed check', asy
     await rm(join(root, 'charter.template.md'))
     await writeFile(join(root, 'charter.md'), '# Charter already instantiated\n')
     const out = await run(root)
-    assert.match(out, /RESULT: INSTANTIATED-PENDING-INTERVIEW|RESULT: BOOTSTRAPPED/)
+    assert.match(out, /RESULT: INSTANTIATED-PENDING-INTERVIEW|RESULT: PENDING-STAFFING|RESULT: BOOTSTRAPPED/)
+  })
+})
+
+test('R-09: BOOTSTRAPPED is never printed over an incomplete deployment', async () => {
+  await withKit(async root => {
+    // Seeds without ask:first_start placeholders — old logic would print
+    // BOOTSTRAPPED although wrappers/ledgers are absent.
+    await writeFile(join(root, 'profiles/project.template.md'), 'name: fixed\n')
+    await writeFile(join(root, 'profiles/stack.template.md'), '# Stack fixed\n')
+    await writeFile(join(root, 'agents/_shared/verify-discipline.template.md'), '# Verify fixed\n')
+    const out = await run(root, '--project-name', 'X')
+    assert.match(out, /RESULT: PENDING-STAFFING/, `must not claim BOOTSTRAPPED without a structurally-complete deployment:\n${out}`)
+    assert.ok(!/RESULT: BOOTSTRAPPED/.test(out))
+  })
+})
+
+test('R-09: no render-tmp litter is left behind after a successful run', async () => {
+  await withKit(async root => {
+    await run(root, '--project-name', 'X')
+    const { readdir } = await import('node:fs/promises')
+    const all = []
+    for (const dir of ['.', 'profiles', 'agents/_shared']) {
+      for (const f of await readdir(join(root, dir))) all.push(f)
+    }
+    assert.ok(all.every(f => !f.includes('.render-tmp.')), `tmp litter: ${all.filter(f => f.includes('.render-tmp.'))}`)
   })
 })
