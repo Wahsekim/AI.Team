@@ -26,6 +26,7 @@ heartbeats/
 # Scratch / reconciliation temp files
 *.tmp
 *.reconcile.json
+.team-loop/
 
 # Internal working docs (kept local, not published)
 ai-team-quality-improvement-plan.md

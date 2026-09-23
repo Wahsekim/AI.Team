@@ -114,6 +114,26 @@ It works against either:
 
 ## The Operating Model
 
+### Experimental goal/graph supervisor (simulation only)
+
+An opt-in **Node 24+** foundation now lives in `src/loop/`. It provides strict
+goal contracts, DAG scheduling, a deterministic reducer, and transactional
+SQLite state/events/outbox storage. It does **not** replace `run-n-rounds`.
+
+```bash
+node scripts/team-run.mjs demo .team-loop demo-1
+node scripts/team-run.mjs status .team-loop demo-1
+node scripts/team-run.mjs audit .team-loop demo-1
+```
+
+This demonstration deliberately fails one mock gate, repairs, and passes a
+final-candidate mock gate. Every response is labelled `simulation: true`;
+`COMPLETED` means the simulation completed, **not that product code was built
+or verified**. No Claude calls, product writes, or legacy ledger writes occur.
+See [implementation status and next steps](docs/loop-graph.md).
+
+### Existing team model
+
 The important extraction from the source project is not the ASP.NET stack. The reusable system
 is the operating model:
 
