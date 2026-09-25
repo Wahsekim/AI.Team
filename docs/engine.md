@@ -101,8 +101,38 @@ The rule, in preference order:
 
 ```js
 { rounds, plan, date, nextLifecycleNumber, executionMode, budgetCeilingTokens,
-  failurePolicy?, runId? }
+  failurePolicy?, runId?, launchManifestDigest? }
 ```
+
+**Preflight first (review 2026-09-25, F-02 / Slice B).** Before invoking the
+engine, run the static launch preflight on the exact args file:
+
+```bash
+node scripts/preflight-run.mjs <args.json> --team-root . \
+  --product-root ../<product> --session-started "$(scripts/now-utc.sh)"   # session start, not launch time
+```
+
+It dry-runs the REAL engine validator (zero dispatch), proves every dispatched
+`agentType` exists as a live wrapper whose frontmatter `name` matches, rejects
+seeds/placeholders inside `.claude/agents/`, flags wrappers modified after the
+session started (the runtime's hot reload has documented exceptions), checks the
+product root is a clean git tree, and freezes the whole policy/input bundle
+(wrappers, role files, charter, profiles, shared rules, ADRs, product primer,
+engine, args) behind ONE `launchManifestDigest`. Pass that digest as
+`args.launchManifestDigest`: the engine echoes it in `results` and the `### BATCH`
+header, so a mid-run policy edit is detectable at reconciliation by re-running
+the preflight and comparing digests. The preflight is static: it cannot see the
+runtime's live registry — a `PREFLIGHT-PASS` with `session.freshness: unknown`
+records that uncertainty rather than pretending the guardian was probed.
+
+**Policy freeze + owner directive inbox (recommendations 4, 15, 16).** From
+preflight to reconciliation, every file in the frozen bundle is READ-ONLY —
+wrappers, charter, ADRs, profiles, shared rules AND the product primer. Owner
+instructions that arrive mid-run are queued (acknowledged in `messages/<date>.md`
+with the adoption boundary "next batch") and applied at reconciliation, never
+hot-patched into a running batch. The urgent exceptions take effect immediately
+and are the ONLY reason to stop a batch from outside: stop, security incident,
+permission revocation, exhausted budget.
 
 **Strict validation (fail-closed):** every field is validated BEFORE any
 dispatch; any violation (including a malformed JSON args string) returns
@@ -131,13 +161,37 @@ in lifecycle headers).
 - `runId` (optional, `[A-Za-z0-9._-]{1,64}`) — reconciliation idempotency
   key; derived as `run-<date>-<NNN>` when omitted. It appears in the
   `### BATCH` header so a re-run can be detected before pasting twice.
-- `plan[]` items: `{ticket, agentType, model, brief, isCodeShipping,
+- `plan[]` items: `{ticket, title?, workKind?, layers?, agentType, model, brief,
+  isCodeShipping, deliveryRequired?, estimatedTokens?, verifierEstimatedTokens?,
   verifierBrief, verifierAgentType, verifierModel}`. Models/agentTypes come
   from `agents/roster.md` (single source); briefs are built from
   `agents/templates.md` before the run; verifier briefs re-paste the stack's
   env/command discipline verbatim (`_shared/verify-discipline.md`).
   `isCodeShipping` is a REQUIRED EXPLICIT boolean on every item —
   verification opt-out by omission is rejected at validation.
+  - **Presentation metadata (F-05):** `title` (<= 120 chars, no control
+    characters), `workKind` (`feature|screen|protocol|infrastructure|test|
+    documentation|maintenance|mixed|unspecified`) and `layers` (<= 8 project
+    tags, multi-valued: a task can be UI *and* data). Titles come from the
+    tracker/backlog snapshot the PM planned from and are frozen in the plan —
+    no live tracker fetch in-loop. IDs stay identity; a title never routes,
+    grants, or implies a category (`workKind` is declared, never inferred from
+    a "frontend" wrapper name). Legacy plans without titles get the honest
+    ID-only label; nothing is guessed. Agent labels are the compact form
+    `<ticket> · <title> · <Build|Verify|Audit>` (iteration number and runtime
+    slug stay in `results[]` and the ledgers), built by ONE formatter shared
+    with `src/loop/display.mjs` (parity-tested).
+  - **Delivery requirement (F-01):** `deliveryRequired: true` means the ticket
+    is NOT done until the worker reports `delivery: {status: 'landed', ref}`;
+    a denied commit is `status: 'failed'` (a permission denial is a failed
+    delivery, not a note). Not every task needs a landing step — declare it
+    per item; a failed OPTIONAL landing never blocks accepted work.
+  - **Estimates (F-07):** `estimatedTokens` / `verifierEstimatedTokens` are the
+    PM's pre-dispatch estimates in ENGINE units; the engine turns them into
+    typed variance observations (below).
+- `launchManifestDigest` (optional, `sha256:<64 hex>`) — the frozen-bundle
+  digest from `scripts/preflight-run.mjs` (above); echoed, never verified
+  in-loop (no IO).
 - `budgetCeilingTokens` — the Q5 ceiling. **Computable on every loop:**
   - **First loop (no history):** `sum of per-iter tier estimates
     (worker + verifier, from agents/pm.md Rules bands) x 1.3`.
@@ -152,6 +206,30 @@ in lifecycle headers).
 
 ## Return contract — how to read it
 
+- **Three status axes per iteration (F-01 / Slice C)** — never collapse them:
+
+  ```text
+  executionStatus  = workerStatus: succeeded | terminal_stop | blocked | no_progress | null_result | invalid_worker_result | error
+  acceptanceStatus = pending | accepted | rejected      (code: grounded verifier PASS/FAIL; non-code: execution ok + no drift/ownership violation)
+  deliveryStatus   = not_required | pending | landed | failed   (landed needs a ref; the PM verifies the ref — self-report is not a receipt)
+  done             = execution ok AND accepted AND (not_required | landed)
+  ```
+
+  A green execution tick is never Done. The US-02 shape (worker `progress:true,
+  blocked:false`, commit denied) is `succeeded / accepted / failed / done=false`
+  and routes to `recoveryQueue` (halt under `halt-on-failure`). `doneCount` and
+  `deliveryPendingCount` summarize the batch; `allPassed` requires every
+  iteration `done`.
+- **`coaching` (F-07)** — `{meter, varianceThresholdPct: 50, observations[],
+  beyondThresholdCount}`. Each observation is `{id, kind: worker|verifier,
+  estimatedTokens, measuredTokens, variancePct, beyondThreshold}` with a unique
+  id (`<runId>:iter<N>:<kind>`); the count is derived mechanically with a STRICT
+  `> 50%` rule (the review's five inputs yield four, not five). `meter` states
+  the unit: `budget.spent()` deltas, NOT provider billing — never convert
+  engine deltas with an aggregate ratio or compare across meters; the workflow
+  usage summary is a different meter with different scope (cache, retries).
+- **`launchManifestDigest`** — echoed from args (or `null` = no preflight
+  recorded); also bound into the `### BATCH` header as `manifest: sha256:…`.
 - **One truth derivation, no contradictions** (single source in the script):
   - `allPassed` — batch QUALITY only. STRICT conjunction: every worker
     `succeeded`/`terminal_stop` (a `blocked` or `no_progress` worker is NOT
@@ -265,14 +343,47 @@ iter from `results[]` (using `workerTokens`/`verifierTokens`); dual-records
 self-report vs harness divergence >30% (M4).
 
 Then drain the checklist: tracker sync, fix-retest queue (per the drain rule
-above), Q3/Q4 attestation, guardian findings.
+above), delivery-pending records, Q3/Q4 attestation, guardian findings.
+
+**Q3/Q4 monitoring attestation (I-18 / recommendation 17).** The workflow body
+cannot observe hardware or owner-input halts, and a pre-launch "I will watch"
+line is not evidence that no stop arrived later. Record the attestation for the
+run's actual interval with the reconciler:
+
+```bash
+node scripts/reconcile-run.mjs <result.json> . --monitoring <attestation.json>
+# {"runId": "...", "observer": "Pia (PM, attended)", "intervalStartUtc": "...Z",
+#  "intervalEndUtc": "...Z", "coverage": "attended|partial|unknown",
+#  "q3Events": [], "q4Events": ["owner asked X at 14:30 — deferred"], "notes": "..."}
+```
+
+It lands as ONE idempotent line in `agents/lifecycle.md` (`- Monitoring
+attestation <runId>: …`); a differing attestation for the same run fails closed
+(append a dated correction instead). Without `--monitoring` the reconciler
+prints a WARN and the ledger stays silent: coverage is UNKNOWN, which is never
+read as "no stop occurred" — the guardian's `missedHaltRisk` stays
+action-required.
+
+**Delivery-pending records (F-01).** `deliveryStatus` `pending`/`failed` means
+an accepted candidate is waiting to land. Landing it is a PM action under
+explicit owner authority: verify the exact diff, run `git diff --cached --stat`
+FIRST and commit unrelated staged work separately (a pathspec commit silently
+drops index-only intent — I-10), run the ticket's gates, then record the receipt
+ref in `pm-decisions.md`. A worker-reported `landed` ref is checked with
+`git cat-file -e <ref>` before the ticket goes Done. Permission escalation for
+workers is an owner decision, never an autonomous repair.
+
+**Timestamps.** Every ledger timestamp is host-generated UTC from
+`scripts/now-utc.sh` (never hand-typed, never a local time labelled `Z`);
+corrections to historical timestamps are appended as dated notes, not
+rewritten (I-9/I-22).
 
 ## Keeping the engine honest
 
 Before trusting a new or changed engine script in production, run the chaos
 gate (see `agents/chaos.md`): the kit SHIPS the injected-failure suite —
 `node --test tests/*.test.mjs` exercises the real script through a mock runtime
-(`tests/workflow-harness.mjs`) covering invalid args, worker error/null,
+(`scripts/lib/workflow-harness.mjs`) covering invalid args, worker error/null,
 terminal-stop verification, null/ungrounded/inconsistent verifier verdicts,
 guardian failure, budget gating, and log-injection neutralization. Run it
 after ANY engine edit; all tests must pass. Also verify once per deployment

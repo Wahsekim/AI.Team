@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { validateTaskDisplay } from './display.mjs';
 
 export class LoopError extends Error {
   constructor(code, message) { super(message); this.code = code; }
@@ -85,7 +86,7 @@ export function parseJSON(source, maxBytes = 1024 * 1024) {
 export function validateRunSpec(spec) {
   fields(spec, ['schemaVersion', 'runId', 'goalId', 'supersedesRunId', 'objective', 'mode', 'manifestRef', 'graphVersion', 'initialSnapshotRef', 'criteria', 'tasks', 'limits', 'trustTier', 'approvedSpecDigest'], 'RunSpec');
   invalid(Buffer.byteLength(canonical(spec)) <= 1024 * 1024, 'Spec exceeds 1 MiB');
-  invalid(spec.schemaVersion === 1, 'Unsupported schema version'); id(spec.runId); id(spec.goalId);
+  invalid([1, 2].includes(spec.schemaVersion), 'Unsupported schema version'); id(spec.runId); id(spec.goalId);
   if (spec.supersedesRunId !== null) { id(spec.supersedesRunId); invalid(spec.supersedesRunId !== spec.runId, 'Run cannot supersede itself'); }
   text(spec.objective, 'objective'); text(spec.graphVersion, 'graphVersion');
   invalid(['goal', 'legacy-count'].includes(spec.mode), 'Invalid mode');
@@ -99,9 +100,13 @@ export function validateRunSpec(spec) {
     invalid(typeof c.humanApprovalRequired === 'boolean' && (c.gateIds.length || c.humanApprovalRequired), 'Criterion needs gates or human approval');
     invalid(!criteria.has(c.id), 'Duplicate criterion'); criteria.set(c.id, c);
   }
+  // Version 2 adds exactly one TaskSpec field: presentation-only `display` (never read by the reducer or scheduler).
+  const taskFields = ['id', 'roleId', 'briefRef', 'dependsOn', 'acceptanceIds', 'requiredGateIds', 'scopeId', 'mutatesProduct', 'maxAttempts', 'maxGateRunsPerCandidate', 'priority'];
+  if (spec.schemaVersion === 2) taskFields.push('display');
   for (const t of spec.tasks) {
-    fields(t, ['id', 'roleId', 'briefRef', 'dependsOn', 'acceptanceIds', 'requiredGateIds', 'scopeId', 'mutatesProduct', 'maxAttempts', 'maxGateRunsPerCandidate', 'priority'], 'TaskSpec');
+    fields(t, taskFields, 'TaskSpec');
     [t.id, t.roleId, t.scopeId].forEach(id); ref(t.briefRef); ids(t.dependsOn, 'dependsOn'); ids(t.acceptanceIds, 'acceptanceIds', true); ids(t.requiredGateIds, 'requiredGateIds');
+    if (spec.schemaVersion === 2) { const problems = validateTaskDisplay(t.display, `TaskSpec ${t.id} display`); invalid(problems.length === 0, problems[0]); }
     invalid(typeof t.mutatesProduct === 'boolean', 'mutatesProduct must be boolean');
     integer(t.maxAttempts, 1, 'maxAttempts'); integer(t.maxGateRunsPerCandidate, 1, 'maxGateRunsPerCandidate'); integer(t.priority, 0, 'priority');
     invalid(!tasks.has(t.id), 'Duplicate task'); tasks.set(t.id, t);

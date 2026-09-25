@@ -1,6 +1,6 @@
 import { digest, specDigest } from './contracts.mjs';
 
-export function demoBundle(runId = 'demo') {
+export function demoBundle(runId = 'demo', { schemaVersion = 1 } = {}) {
   const artifacts = {
     brief: 'SIMULATION ONLY: exercise a bounded fail/repair/pass loop. Do not edit product files.',
     snapshot: { simulation: true, candidate: 'initial' },
@@ -11,12 +11,14 @@ export function demoBundle(runId = 'demo') {
     roles: [{ id: 'builder', scopeIds: ['product-code'], adapter: 'mock' }],
     scopes: [{ id: 'product-code', writePaths: [{ repoId: 'product', relativePath: 'src' }] }],
     gates: [{ id: 'test', artifactRef: reference('gate') }], approvalPolicy: 'local-attended', retentionPolicy: 'manual' };
-  const spec = { schemaVersion: 1, runId, goalId: 'demo-goal', supersedesRunId: null,
+  const display = { ticket: 'DEMO-1', title: 'Simulated build and verify', workKind: 'test', layers: ['simulation'] };
+  const spec = { schemaVersion, runId, goalId: 'demo-goal', supersedesRunId: null,
     objective: 'SIMULATION: fail one verification, repair, pass task and final-candidate verification',
     mode: 'goal', manifestRef: reference('manifest'), graphVersion: '1', initialSnapshotRef: reference('snapshot'),
     criteria: [{ id: 'verified', description: 'Mock task and final gate pass', gateIds: ['test'], humanApprovalRequired: false }],
     tasks: [{ id: 'build', roleId: 'builder', briefRef: reference('brief'), dependsOn: [], acceptanceIds: ['verified'],
-      requiredGateIds: ['test'], scopeId: 'product-code', mutatesProduct: true, maxAttempts: 2, maxGateRunsPerCandidate: 1, priority: 0 }],
+      requiredGateIds: ['test'], scopeId: 'product-code', mutatesProduct: true, maxAttempts: 2, maxGateRunsPerCandidate: 1, priority: 0,
+      ...(schemaVersion === 2 ? { display } : {}) }],
     limits: { maxAgentCalls: 2, maxWallMs: 60000, maxTokens: null, maxCostMicroUsd: null,
       closeoutReserveTokens: 0, closeoutReserveMicroUsd: 0, quotaStopRemainingPercent: null, quotaSampleMaxAgeMs: 60000, unknownUsagePolicy: 'pause' },
     trustTier: 'local-attended' };

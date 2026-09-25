@@ -97,7 +97,8 @@ It works against either:
 4. **Verify the deployment** at any time:
 
    ```bash
-   scripts/check-claude-compat.sh .            # runtime version + wrapper frontmatter
+   scripts/check-claude-compat.sh .            # runtime version + wrapper frontmatter + no seeds in the registry
+   node scripts/preflight-run.mjs args.json --team-root . --product-root ../<product>   # before EVERY engine launch
    scripts/validate-team.sh --mode deployment . # deployed instance: full artifact matrix
    scripts/validate-team.sh .                   # fresh kit / auto-detect
    node --test tests/*.test.mjs  # engine + validator + watchdog fault-injection suite
@@ -191,8 +192,11 @@ AI.Team/
   memory/                      # PM state and atomic counters
   messages/                    # inter-agent daily dialogue
   scripts/validate-team.sh     # mechanical integrity checker (kit + deployments)
+  scripts/preflight-run.mjs    # static launch preflight + frozen launch-bundle digest
+  scripts/now-utc.sh           # the only sanctioned ledger timestamp source
+  agents/_seeds/               # wrapper + inline-mode SEEDS (never inside .claude/agents/)
   scripts/watchdog/            # copied hang-detection hooks from the source team workspace
-  .claude/agents/              # project-scoped Claude agent wrapper templates
+  .claude/agents/              # LIVE project-scoped Claude agent wrappers only (seeds: agents/_seeds/)
   .claude/workflows/           # run-n-rounds loop engine
 ```
 

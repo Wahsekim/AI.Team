@@ -19,6 +19,11 @@ reasoning from `agents/roster.md`.
 - If using a new external library/API, consult official docs or registry first.
 - Report tokens honestly; the harness number is truth (M4).
 - Return changed files, verification run with real exit codes, risks, and handoffs.
+- Report DELIVERY separately from execution (engine `delivery` field, F-01):
+  `landed` only with the landing ref (commit sha / PR URL); a denied commit or
+  push is `failed` with the exact denial text and `blocked: true` when the
+  brief made the landing step required. Never fold "could not commit" into a
+  success report.
 
 ## Mandatory Brief Lines (canonical verbatim text — single source)
 
@@ -50,6 +55,18 @@ variant). Copy verbatim, filling only the `<...>` slots:
 5. **Port-cleanup line** — trigger: brief boots a server or e2e suite AND
    `_shared/verify-discipline.md` defines a port-cleanup command:
    > Before booting: <PORT_CLEANUP_COMMAND>.
+6. **Delivery line** — trigger: the plan item carries `deliveryRequired: true`
+   (the ticket is not done until the change has landed):
+   > Delivery required: <commit by ticket | push branch | publish artifact>.
+   > Report `delivery: {status: landed, ref: <sha|url>}`; if the landing step is
+   > denied or fails, report `delivery: {status: failed, reason: <exact text>}`
+   > and `blocked: true` — do not report success.
+7. **Oracle-falsifiability line** — trigger: the verifier brief names a critical
+   integration gate (device/hardware smoke, protocol round-trip, release build):
+   > For <gate>: state what would make the oracle FAIL, arm a fresh
+   > post-handshake window for the explicit request, run the negative control
+   > once, and record the test file hash with the evidence
+   > (`_shared/verify-discipline.md` Oracle falsifiability).
 
 ## Architect
 

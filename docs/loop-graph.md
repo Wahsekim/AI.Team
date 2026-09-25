@@ -18,6 +18,7 @@ node scripts/team-run.mjs demo .team-loop demo-1
 node scripts/team-run.mjs status .team-loop demo-1
 node scripts/team-run.mjs events .team-loop demo-1
 node scripts/team-run.mjs audit .team-loop demo-1
+node scripts/team-run.mjs show .team-loop demo-1      # readable text summary (not JSON)
 node --test tests/loop-core.test.mjs
 node --test tests/*.test.mjs
 ```
@@ -48,7 +49,8 @@ developing and testing orchestration logic only.
 | `reducer.mjs` | deterministic host transitions; bounded attempts; task gates and final-candidate gates; stop, unknown effect, closeout states |
 | `store.mjs` | SQLite transactions for state/event/request/outbox; compare-and-swap versions; idempotency; replay audit |
 | `demo.mjs` | fake fail → repair → pass → final verification; optional host projection callback |
-| `scripts/team-run.mjs` | demo/status/events/audit/stop JSON entry point |
+| `scripts/team-run.mjs` | demo/status/events/audit/stop JSON entry point; `show` text projection |
+| `display.mjs` | presentation-only task metadata: `validateTaskDisplay`, the shared `formatTaskLabel` (mirrored in the legacy engine), `renderRunSummary` |
 | `snapshots.mjs` | real Git tracked/nonignored untracked inventory, deleted files, asset/mode hashes, conservative symlink rejection and path-based scope check |
 | `gates.mjs` | host-bound POSIX local command execution, shell:false, explicit env, timeout/cancellation/output cap, before/after candidate and oracle checks |
 | `projector.mjs` | immutable simulation Markdown; atomic no-replace publication, repeated application and manual-edit conflict detection |
@@ -60,6 +62,35 @@ they do not authenticate a human approval. The local caller remains trusted.
 `openStore().create()` requires `{simulation:true}` and refuses other execution.
 An immutable artifact bundle is stored with the spec. The temporary mock manifest
 is not yet the proposed production permission manifest shared with bootstrap.
+
+## Task display contract (schemaVersion 2)
+
+Review 2026-09-25 (F-06): operators could not tell what a task was about
+without opening its brief. `schemaVersion: 2` adds exactly one required
+TaskSpec field, `display: { ticket, title, workKind, layers }`, validated by
+`validateTaskDisplay` (bounded lengths, closed `workKind` enum, at most 8
+identifier-shaped layers, no control characters). Rules:
+
+- IDs remain identity; `title` is presentation. Nothing routes, grants
+  permissions, or infers dependencies from display text.
+- Display never affects scheduling, authority, or acceptance: the reducer and
+  scheduler do not read it (`tests/loop-display.test.mjs` proves two specs that
+  differ only in display produce identical state and effects).
+- Display is bound to the immutable, digested plan; later tracker edits cannot
+  relabel historical work.
+- `schemaVersion: 1` is unchanged and closed (a v1 task carrying `display` is
+  rejected); persisted v1 runs replay unchanged. `demo` now writes v2 specs.
+- Missing metadata renders as the explicit fallback `(no title)`; nothing is
+  guessed from a role or brief.
+- Simulation is labelled in both outputs: `simulation: true` in every JSON
+  reply, and `SIMULATION — not evidence of a real product build` as the first
+  line of `show`.
+
+`show` prints, per task, `ticket  title  STATUS`, then
+`workKind · layers  role <id>  attempts n/max`, then the gate line. The label
+formatter (`ticket · title · phase`, title-only truncation, escapes and
+control characters stripped) is the same one the legacy engine uses for
+worker/verifier/guardian dispatch labels.
 
 ## State and durability rules
 

@@ -30,3 +30,7 @@ heartbeats/
 
 # Internal working docs (kept local, not published)
 ai-team-quality-improvement-plan.md
+
+# Python bytecode (tests/op_board_test.py)
+__pycache__/
+*.pyc

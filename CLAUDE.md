@@ -28,7 +28,7 @@ operational name and fills placeholders:
 | `agents/roster.template.md` | `agents/roster.md` |
 | `agents/_shared/verify-discipline.template.md` | `agents/_shared/verify-discipline.md` |
 | `agents/_shared/browser-access.template.md` | `agents/_shared/browser-access.md` (UI projects) |
-| `.claude/agents/role-wrapper.template.md` | `.claude/agents/<slug>-<role>.md` (one per spawnable role) — or `INLINE_BASE_AGENT_MODE.md` fallback |
+| `agents/_seeds/role-wrapper.template.md` | `.claude/agents/<slug>-<role>.md` (one per spawnable role) — or `.claude/agents/INLINE_BASE_AGENT_MODE.md` from `agents/_seeds/INLINE_BASE_AGENT_MODE.template.md` (seeds live OUTSIDE the runtime agent registry: the runtime registers every frontmatter file under `.claude/agents/` as a live agent type) |
 
 **Deployed instance:** read ONLY the instantiated files; templates are
 reference. If an instantiated file is missing, bootstrap is incomplete —
@@ -60,7 +60,9 @@ Instantiated names; pre-bootstrap, the `.template.md` seed stands in.
 | `scripts/validate-team.sh` | mechanical integrity checker (PM wake step 0, bootstrap gate; `--mode deployment` on deployed instances) | PM |
 | `scripts/check-claude-compat.sh` | runtime version + wrapper-frontmatter gate (pre-bootstrap) | PM |
 | `scripts/bootstrap-team.sh` | idempotent template instantiation (mechanical half of bootstrap) | PM |
-| `scripts/reconcile-run.mjs` | atomic engine-run reconciliation (ledgers + counter, per-target idempotent) | PM |
+| `scripts/preflight-run.mjs` | static launch preflight (engine dry-validation, live-wrapper registry, session freshness, product candidate) + frozen launch-bundle digest | PM |
+| `scripts/reconcile-run.mjs` | atomic engine-run reconciliation (ledgers + counter, per-target idempotent; `--monitoring` Q3/Q4 attestation) | PM |
+| `scripts/now-utc.sh` | the only sanctioned ledger timestamp source (host UTC) | PM |
 | `scripts/measure-context.sh` + `docs/context-budget.md` | cold-start context ratchet | PM + Coach |
 | `tests/` (`node --test tests/*.test.mjs`) | fault-injection suite for engine, validator, compat gate, watchdog | PM + Auditor |
 | `docs/staffing.md` | hiring step, MVT, expansion/retirement triggers | Coach proposes, owner ratifies |

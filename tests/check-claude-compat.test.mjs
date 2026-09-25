@@ -79,11 +79,13 @@ test('legacy reasoning_effort/token_budget frontmatter in an active wrapper -> F
   })
 })
 
-test('legacy fields in a .template.md are exempt (templates are seeds, not active wrappers)', async () => {
+test('F-02 (review 2026-09-25): a .template.md inside .claude/agents is NOT exempt — the runtime registers it as a live agent', async () => {
   await withStubClaude('2.1.200', {
     '.claude/agents/role-wrapper.template.md': '---\nname: x\nreasoning_effort: "high"\n---\nSeed.\n',
   }, ({ code, out }) => {
-    assert.equal(code, 0, out)
+    assert.equal(code, 1, out)
+    assert.match(out, /FAIL - registry-seeds/)
+    assert.match(out, /role-wrapper\.template\.md/)
   })
 })
 
