@@ -1,4 +1,4 @@
-import { digest, fields, requireThat, validateRunSpec } from './contracts.mjs';
+import { digest, fields, ref, requireThat, validateRunSpec } from './contracts.mjs';
 import { admission, nextTask } from './scheduler.mjs';
 
 export const TERMINAL = new Set(['COMPLETED', 'STOPPED', 'FAILED']);
@@ -31,6 +31,17 @@ function reservation(value) {
 // Input actions are HOST commands, not model reports. Never expose settle/claim to workers.
 // No clock, filesystem, subprocess, random IDs or model calls inside this reducer.
 export function reduce(spec, before, action, payload, now) {
+  if (action === 'settle-evidence') {
+    fields(payload, ['dispatchId', 'result', 'candidate', 'tokens', 'costMicroUsd', 'evidenceRef'], 'Evidence receipt');
+    const { evidenceRef, ...receipt } = payload; ref(evidenceRef);
+    const previousRef = before.dispatches[receipt.dispatchId]?.evidenceRef;
+    expect(!previousRef || digest(previousRef) === digest(evidenceRef), 'Conflicting evidence reference', 'IDEMPOTENCY_CONFLICT');
+    const result = reduce(spec, before, 'settle', receipt, now);
+    // reduce(settle) may return its immutable input for an identical receipt.
+    result.state = structuredClone(result.state);
+    result.state.dispatches[receipt.dispatchId].evidenceRef = structuredClone(evidenceRef);
+    return result;
+  }
   const s = structuredClone(before); const effects = [];
   expect(Number.isSafeInteger(now) && now >= before.lastAt, 'Host clock moved backwards', 'CLOCK_REGRESSION'); s.lastAt = now;
   const emitDispatch = (taskId, stage, gateId, reserve) => {

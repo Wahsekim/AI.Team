@@ -4,6 +4,11 @@ import { bytesDigest, digest, fields, id, pathRef, ref, requireThat } from './co
 import { resolveContained, snapshotRepository } from './snapshots.mjs';
 
 export function gateDigest(spec) { const { specDigest, ...body } = spec; return digest(body); }
+export function gateInvocation(gate, env, maxOutputBytes = 1024 * 1024) {
+  return { schemaVersion: 1, executableRef: gate.executableRef, argv: gate.argv, cwd: gate.cwd,
+    envProfileId: gate.envProfileId, environmentDigest: digest(env), oracleBundleRef: gate.oracleBundleRef,
+    networkPolicyId: gate.networkPolicyId, maxOutputBytes };
+}
 export function validateGate(spec) {
   fields(spec, ['id', 'specDigest', 'repoId', 'executableRef', 'argv', 'cwd', 'envProfileId', 'timeoutMs', 'successExitCodes', 'oracleBundleRef', 'networkPolicyId'], 'GateSpec');
   id(spec.id); ref(spec.executableRef); ref(spec.oracleBundleRef); id(spec.envProfileId);
@@ -56,7 +61,7 @@ function execute(executable, argv, cwd, env, timeoutMs, maxOutputBytes, signal) 
   });
 }
 
-// Trusted host configuration only. This primitive is not yet wired into the simulation reducer.
+// Trusted host configuration only. host-gates.mjs provides the optional journaled bridge.
 // Executables/profiles/oracle files must be approved by the caller, not extracted from worker text.
 export async function runLocalGate({ gate, repoRoots, executables, envProfiles, oracleBundles,
   expectedCandidate, runId, taskId, dispatchId, maxOutputBytes = 1024 * 1024, signal }) {
@@ -88,9 +93,7 @@ export async function runLocalGate({ gate, repoRoots, executables, envProfiles, 
     : transcript.reason || transcript.signal ? 'error' : gate.successExitCodes.includes(transcript.exitCode) ? 'pass' : 'fail';
   const scopeAttestation = { unchanged, postSnapshotError, before: before.treeDigest, networkPolicy: gate.networkPolicyId, trustTier: 'local-attended',
     recoveryRequired: ['cleanup_unknown', 'cancel_error', 'orphaned_process_group'].includes(transcript.reason) };
-  const invocation = { schemaVersion: 1, executableRef: gate.executableRef, argv: gate.argv, cwd: gate.cwd,
-    envProfileId: gate.envProfileId, environmentDigest: digest(env), oracleBundleRef: gate.oracleBundleRef,
-    networkPolicyId: gate.networkPolicyId, maxOutputBytes };
+  const invocation = gateInvocation(gate, env, maxOutputBytes);
   const evidence = { schemaVersion: 2, id: `evidence-${digest({ runId, dispatchId, transcript }).slice(7, 39)}`, runId, taskId, dispatchId,
     candidateSnapshotRef: { id: before.id, digest: digest(before) }, gateRef: { id: gate.id, digest: gate.specDigest }, producerIdentity: 'host-local-gate',
     result, exitCode: transcript.exitCode, startedAt: transcript.startedAt, finishedAt: transcript.finishedAt,

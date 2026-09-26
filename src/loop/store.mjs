@@ -49,6 +49,7 @@ export async function openStore(filename) {
       });
     },
     status(runId) { const r = row(runId); return { runId, stateVersion: r.version, simulation: true, spec: JSON.parse(r.spec), state: JSON.parse(r.state) }; },
+    bundle(runId) { const r = row(runId); return { spec: JSON.parse(r.spec), artifacts: JSON.parse(r.artifacts) }; },
     apply(action, command, now = Date.now()) {
       validateCommand(command);
       // Request identity and expected version are part of the idempotency contract.

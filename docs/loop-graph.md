@@ -54,6 +54,7 @@ developing and testing orchestration logic only.
 | `snapshots.mjs` | real Git tracked/nonignored untracked inventory, deleted files, asset/mode hashes, conservative symlink rejection and path-based scope check |
 | `gates.mjs` | host-bound POSIX local command execution, shell:false, explicit env, timeout/cancellation/output cap, before/after candidate and oracle checks |
 | `evidence.mjs` | versioned SQLite archive for complete host-local gate records; candidate/invocation/oracle/transcript binding, immutable per-dispatch receipts and read-time integrity checks |
+| `host-gates.mjs` | explicit host-only bridge: durable intent, one gate execution, archive-before-settle, candidate/oracle recheck and digest-bound reducer receipts |
 | `projector.mjs` | immutable simulation Markdown; atomic no-replace publication, repeated application and manual-edit conflict detection |
 
 RunSpec follows the design's fields. `approvedSpecDigest` is the canonical digest
@@ -82,10 +83,30 @@ idempotent; a different record for the same run/dispatch is rejected. Use a new
 dispatch ID for a new execution attempt. The archive requires Node 24+ and a
 local filesystem; it is separate from the simulation control database.
 
-This is durable evidence storage, **not yet supervisor ingestion**. It does not
-start a provider, journal intent before a process starts, or settle a scheduler
-effect. A crash before `put` can lose a result; do not automatically rerun an
-unknown effect. Snapshots retain file inventories/digests, not frozen source
+The optional `host-gates.mjs` library bridge can now consume a real gate record
+inside a **simulation run with mock build agents**; the demo CLI remains fake.
+`executeStoredGate({store, archive, runId, dispatchId, config})` resolves the
+approved gate from the immutable run bundle, reserves a durable intent, claims
+the scheduler effect and starts the local gate only after the journal says
+STARTED. It atomically archives the record and marks it RECORDED before
+`settleRecordedGate` checks the current candidate and all oracle files (including
+ignored oracles), then submits a replayable `settle-evidence` event. Local gate
+receipts account for zero model tokens/cost; they are not provider usage.
+
+After a crash, PENDING journal entries have not launched through this bridge;
+STARTED/UNKNOWN must never auto-run again. RECORDED can be ingested without
+rerunning the command. Changed candidates/oracles or uncertain cleanup route to
+RECOVERY_REQUIRED, not automatic repair on a possibly modified tree. Deadline
+and quota admission are rechecked even in the claim-before-journal-start gap.
+The two databases do not form one transaction: the ordering deliberately permits
+an archived-but-unsettled receipt and blocks unknown execution instead of
+claiming exactly-once effects. The intended deployment is one trusted host; no
+cross-process scheduler fencing or live process-handle recovery is supplied.
+
+There is still no live provider. A crash before archival can lose a result;
+do not automatically rerun an unknown effect. Hard stop during a running gate
+still needs its host caller to abort the supplied signal; the bridge does not
+poll the control database or start a watcher. Snapshots retain file inventories/digests, not frozen source
 bytes. Hashes detect mismatches, not fabricated records from a malicious writer;
 the archive API is host-only, not an endpoint for agent-produced JSON. Same-UID
 writers remain trusted, and there is no new OS sandbox or retention automation.

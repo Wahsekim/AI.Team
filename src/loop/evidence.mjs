@@ -63,6 +63,14 @@ export function validateGateRecord(record) {
   return { id: e.id, digest: digest(record) };
 }
 
+export function validateGateIntent(intent) {
+  fields(intent, ['runId', 'dispatchId', 'taskId', 'candidateSnapshotRef', 'gateRef', 'invocationDigest'], 'Gate intent');
+  [intent.runId, intent.dispatchId, intent.taskId].forEach(id);
+  ref(intent.candidateSnapshotRef); ref(intent.gateRef);
+  requireThat(/^sha256:[a-f0-9]{64}$/.test(intent.invocationDigest), 'INVALID_SPEC', 'Invalid invocation digest');
+  return digest(intent);
+}
+
 // Separate versioned archive: opening it never migrates or changes the existing
 // simulation control store. Transactions persist the complete record atomically.
 export async function openEvidenceArchive(filename) {
@@ -78,7 +86,10 @@ export async function openEvidenceArchive(filename) {
     db.exec(`PRAGMA synchronous=FULL; PRAGMA busy_timeout=3000;
       CREATE TABLE IF NOT EXISTS evidence_metadata(version INTEGER PRIMARY KEY);
       CREATE TABLE IF NOT EXISTS gate_records(run_id TEXT NOT NULL, dispatch_id TEXT NOT NULL,
-        evidence_id TEXT NOT NULL, digest TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(run_id,dispatch_id));`);
+        evidence_id TEXT NOT NULL, digest TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(run_id,dispatch_id));
+      CREATE TABLE IF NOT EXISTS gate_intents(run_id TEXT NOT NULL, dispatch_id TEXT NOT NULL,
+        digest TEXT NOT NULL, body TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('PENDING','STARTED','UNKNOWN','RECORDED','CANCELLED')),
+        PRIMARY KEY(run_id,dispatch_id));`);
     const versions = db.prepare('SELECT version FROM evidence_metadata').all();
     if (!versions.length) db.prepare('INSERT OR IGNORE INTO evidence_metadata VALUES (1)').run();
     else requireThat(versions.length === 1 && versions[0].version === 1, 'CAPABILITY_MISSING', 'Unsupported evidence archive version');
@@ -90,15 +101,59 @@ export async function openEvidenceArchive(filename) {
       && record.evidence.dispatchId === row.dispatch_id, 'STALE_EVIDENCE', 'Archive integrity mismatch');
     return { reference, record };
   };
+  const intentRow = (runId, dispatchId) => {
+    id(runId); id(dispatchId);
+    const row = db.prepare('SELECT * FROM gate_intents WHERE run_id=? AND dispatch_id=?').get(runId, dispatchId);
+    requireThat(row, 'UNKNOWN_REFERENCE', 'Gate intent not found');
+    const intent = JSON.parse(row.body);
+    requireThat(validateGateIntent(intent) === row.digest && intent.runId === runId && intent.dispatchId === dispatchId,
+      'STALE_EVIDENCE', 'Gate intent integrity mismatch');
+    return { intent, status: row.status };
+  };
   return {
     close() { db.close(); },
+    reserve(intent) {
+      const hash = validateGateIntent(intent), body = canonical(intent);
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        const previous = db.prepare('SELECT digest FROM gate_intents WHERE run_id=? AND dispatch_id=?').get(intent.runId, intent.dispatchId);
+        if (previous) requireThat(previous.digest === hash, 'IDEMPOTENCY_CONFLICT', 'Conflicting gate intent');
+        else {
+          requireThat(!db.prepare('SELECT 1 FROM gate_records WHERE run_id=? AND dispatch_id=?').get(intent.runId, intent.dispatchId),
+            'IDEMPOTENCY_CONFLICT', 'Cannot attach intent to an existing unjournaled record');
+          db.prepare('INSERT INTO gate_intents VALUES (?,?,?,?,?)').run(intent.runId, intent.dispatchId, hash, body, 'PENDING');
+        }
+        const value = intentRow(intent.runId, intent.dispatchId); db.exec('COMMIT'); return value;
+      } catch (error) { db.exec('ROLLBACK'); throw error; }
+    },
+    intent: intentRow,
+    transition(runId, dispatchId, from, to) {
+      requireThat([['PENDING', 'STARTED'], ['PENDING', 'CANCELLED'], ['STARTED', 'UNKNOWN']].some(([a, b]) => a === from && b === to),
+        'INVALID_TRANSITION', 'Invalid gate execution transition');
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        const current = intentRow(runId, dispatchId);
+        requireThat(current.status === from, 'EFFECT_UNKNOWN', `Gate intent is ${current.status}; never restart an uncertain effect`);
+        db.prepare('UPDATE gate_intents SET status=? WHERE run_id=? AND dispatch_id=?').run(to, runId, dispatchId);
+        db.exec('COMMIT'); return { ...current, status: to };
+      } catch (error) { db.exec('ROLLBACK'); throw error; }
+    },
     put(record) {
       const reference = validateGateRecord(record), body = canonical(record), e = record.evidence;
       db.exec('BEGIN IMMEDIATE');
       try {
+        const journaled = db.prepare('SELECT 1 FROM gate_intents WHERE run_id=? AND dispatch_id=?').get(e.runId, e.dispatchId);
+        if (journaled) {
+          const { intent, status } = intentRow(e.runId, e.dispatchId);
+          requireThat(['STARTED', 'UNKNOWN', 'RECORDED'].includes(status), 'INVALID_TRANSITION', 'Gate was never started');
+          requireThat(intent.taskId === e.taskId && digest(intent.candidateSnapshotRef) === digest(e.candidateSnapshotRef)
+            && digest(intent.gateRef) === digest(e.gateRef) && intent.invocationDigest === e.invocationRef.digest,
+            'STALE_EVIDENCE', 'Evidence differs from gate intent');
+        }
         const existing = db.prepare('SELECT * FROM gate_records WHERE run_id=? AND dispatch_id=?').get(e.runId, e.dispatchId);
         if (existing) requireThat(decode(existing).reference.digest === reference.digest, 'IDEMPOTENCY_CONFLICT', 'Dispatch already has different evidence');
         else db.prepare('INSERT INTO gate_records VALUES (?,?,?,?,?)').run(e.runId, e.dispatchId, reference.id, reference.digest, body);
+        if (journaled) db.prepare('UPDATE gate_intents SET status=? WHERE run_id=? AND dispatch_id=?').run('RECORDED', e.runId, e.dispatchId);
         db.exec('COMMIT'); return reference;
       } catch (error) { db.exec('ROLLBACK'); throw error; }
     },
