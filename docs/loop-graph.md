@@ -55,6 +55,8 @@ developing and testing orchestration logic only.
 | `gates.mjs` | host-bound POSIX local command execution, shell:false, explicit env, timeout/cancellation/output cap, before/after candidate and oracle checks |
 | `evidence.mjs` | versioned SQLite archive for complete host-local gate records; candidate/invocation/oracle/transcript binding, immutable per-dispatch receipts and read-time integrity checks |
 | `host-gates.mjs` | explicit host-only bridge: durable intent, one gate execution, archive-before-settle, candidate/oracle recheck and digest-bound reducer receipts |
+| `process-runner.mjs` | bounded POSIX process handles with inspect/cancel/completion; cancellation never uses an unowned persisted PID |
+| `adapters/fixture-process.mjs` | local fake-agent process adapter with durable dispatch reservations, structured-result validation, owned cancellation and UNKNOWN on unowned unfinished work |
 | `projector.mjs` | immutable simulation Markdown; atomic no-replace publication, repeated application and manual-edit conflict detection |
 
 RunSpec follows the design's fields. `approvedSpecDigest` is the canonical digest
@@ -111,6 +113,29 @@ bytes. Hashes detect mismatches, not fabricated records from a malicious writer;
 the archive API is host-only, not an endpoint for agent-produced JSON. Same-UID
 writers remain trusted, and there is no new OS sandbox or retention automation.
 The existing simulation CLI and old ledgers are unchanged.
+
+## Fixture process adapter (not a live provider)
+
+`openFixtureAdapter({filename, runId, workspace})` exposes `probeCapabilities`,
+`start(dispatchId, request)`, `inspect(handle)`, `cancel(handle)`,
+`collectResult(handle)` and asynchronous `close()`. Requests have exactly
+`{scenario, delayMs, timeoutMs}`. Supported scenarios are `pass`, `fail`,
+`partial`, `crash`, `hang`; delay is 0..1000 ms and timeout is 1..4000 ms.
+Only the built-in `fixture-worker.mjs` runs, with empty environment and capped
+output. It invokes no model, performs no product edits, and reports simulation
+usage only. Its own five-second guard bounds orphan lifetime in tests.
+
+The SQLite journal reserves a dispatch before spawn, then records PID and the
+completed result. Repeating the same dispatch/request returns the same handle;
+a changed request conflicts. A different adapter instance can collect a durable
+completed result but treats unfinished work as UNKNOWN, even if no PID was
+saved. It never respawns that dispatch or signals a PID it does not own. Closing
+an adapter cancels and collects its owned processes before closing its database.
+This conservative behavior is not automatic crash recovery or proof of provider
+cancellation. Tests cover concurrent instances and reopened result collection;
+a killed-host crash-boundary suite, leases/fencing and authenticated recovery
+are still required. No worker adapter is wired into the supervisor/CLI, and the
+run manifest still permits only `mock` roles.
 
 ## Task display contract (schemaVersion 2)
 
@@ -181,8 +206,8 @@ cancellation, real approval authentication or scheduler daemon is claimed.
 | W1 contracts | PARTIALLY_ACCEPTED / implemented RunSpec + mock bundle; production manifest, GateSpec/Evidence/Decision schemas and authenticated binding remain |
 | W2 reducer/scheduler | PARTIALLY_ACCEPTED / serial dependency execution and final candidate gates; reviewer dispositions, WAITING decisions and independent-branch continuation remain |
 | W3 store/outbox | PARTIALLY_ACCEPTED / transactional intent/CAS/idempotency/replay; real process handles, leases/epochs, process-exit reconciliation and crash-boundary harness remain |
-| W4 snapshot/gate | PARTIALLY_ACCEPTED / real inventory, scope checks and bounded local runner implemented; read-only frozen input mount, durable evidence ingestion and supervisor integration remain |
-| W5 Claude adapter | DEFERRED / implement probe/start/inspect/cancel/collect against a fake process first; real smoke requires explicit owner cost cap and permission policy |
+| W4 snapshot/gate | PARTIALLY_ACCEPTED / real inventory, bounded runner, durable records and host-only gate ingestion into simulation runs implemented; frozen source inputs, production authorization and isolated-mode integration remain |
+| W5 Claude adapter | PARTIALLY_ACCEPTED / separate fake-process probe/start/inspect/cancel/collect fixture implemented; worker dispatch integration, killed-host recovery and real Claude adapter remain; real smoke needs an explicit owner cost cap and permission policy |
 | W6 projection bridge | PARTIALLY_ACCEPTED / immutable standalone simulation Markdown with conflict detection and lost-ACK reapplication; legacy writer coordination and production projection remain |
 | W7 decisions/stop/watch/recovery | PARTIALLY_ACCEPTED / core stop and unknown-effect states; authenticated decisions, cancellation, watcher supervision and automatic safe recovery remain |
 | W8 pilot | DEFERRED / requires real smoke, failure/recovery exercise and owner review |
@@ -199,8 +224,9 @@ not establish hostile-process isolation, durable evidence provenance, supervisor
 legacy projection crash safety, watcher recovery or any real-Claude outcome. Do not
 declare the design's full acceptance suite or autonomous readiness achieved.
 
-Next sequence: (1) independent review of the core and local-gate primitive;
-(2) durable snapshots/evidence integration; (3) fake subprocess adapter and crash injection;
+Next sequence: (1) independent review of the evidence bridge and process fixture;
+(2) killed-host crash-boundary tests and worker-dispatch integration;
+(3) stop-to-process cancellation and supervised recovery;
 (4) production/legacy projection coordination; (5) owner-approved live runtime integration.
 Keep the new path opt-in until these gates pass. Do not couple it into the old
 count engine or treat old ledgers as new evidence.
