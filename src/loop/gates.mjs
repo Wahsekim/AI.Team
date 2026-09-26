@@ -1,7 +1,7 @@
 import { readFileSync, realpathSync, statSync } from 'node:fs';
-import { spawn } from 'node:child_process';
 import { bytesDigest, digest, fields, id, pathRef, ref, requireThat } from './contracts.mjs';
 import { resolveContained, snapshotRepository } from './snapshots.mjs';
+import { startBoundedProcess } from './process-runner.mjs';
 
 export function gateDigest(spec) { const { specDigest, ...body } = spec; return digest(body); }
 export function gateInvocation(gate, env, maxOutputBytes = 1024 * 1024) {
@@ -21,44 +21,6 @@ export function validateGate(spec) {
   requireThat(spec.specDigest === gateDigest(spec), 'INVALID_SPEC', 'Gate digest mismatch');
   requireThat(spec.networkPolicyId === 'local-attended-inherit', 'CAPABILITY_MISSING', 'This runner does not enforce network isolation');
   return spec.specDigest;
-}
-
-function execute(executable, argv, cwd, env, timeoutMs, maxOutputBytes, signal) {
-  return new Promise(resolve => {
-    const chunks = { stdout: [], stderr: [] }; let bytes = 0, reason = null, done = false, escalation;
-    const startedAt = new Date().toISOString();
-    const child = spawn(executable, argv, { cwd, env, shell: false, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
-    const kill = sig => {
-      if (!child.pid) return;
-      try { process.kill(-child.pid, sig); } catch (e) { if (e.code !== 'ESRCH') reason = 'cancel_error'; }
-    };
-    const cancel = why => { if (reason) return; reason = why; kill('SIGTERM'); escalation = setTimeout(() => kill('SIGKILL'), 100); };
-    const abort = () => cancel('cancelled');
-    const timer = setTimeout(() => cancel('timeout'), timeoutMs);
-    // A descendant may escape the process group yet retain our pipes. Bound the
-    // host wait; report UNKNOWN cleanup, never pretend that all processes exited.
-    const drainDeadline = setTimeout(() => {
-      reason = 'cleanup_unknown'; child.stdout.destroy(); child.stderr.destroy(); child.unref();
-      finish(null, null, new Error('Process cleanup could not be confirmed'));
-    }, timeoutMs + 1000);
-    signal?.addEventListener('abort', abort, { once: true }); if (signal?.aborted) abort();
-    const finish = (exitCode, exitSignal, error) => {
-      if (done) return; done = true; clearTimeout(timer); clearTimeout(drainDeadline); clearTimeout(escalation); signal?.removeEventListener('abort', abort);
-      // A successful parent may have left detached-in-group background children.
-      let descendants = false;
-      if (child.pid) try { process.kill(-child.pid, 0); descendants = true; } catch (e) { if (e.code !== 'ESRCH') descendants = true; }
-      if (descendants) { kill('SIGKILL'); reason ??= 'orphaned_process_group'; }
-      resolve({ exitCode, signal: exitSignal, error: error?.message ?? null, reason,
-        stdout: Buffer.concat(chunks.stdout).toString('utf8'), stderr: Buffer.concat(chunks.stderr).toString('utf8'),
-        startedAt, finishedAt: new Date().toISOString() });
-    };
-    for (const stream of ['stdout', 'stderr']) child[stream].on('data', chunk => {
-      const remaining = Math.max(0, maxOutputBytes - bytes); if (remaining) chunks[stream].push(chunk.subarray(0, remaining)); bytes += Math.min(remaining, chunk.length);
-      if (chunk.length > remaining) cancel('output_limit');
-    });
-    child.once('error', error => finish(null, null, error));
-    child.once('close', (code, exitSignal) => finish(code, exitSignal, null));
-  });
 }
 
 // Trusted host configuration only. host-gates.mjs provides the optional journaled bridge.
@@ -84,7 +46,7 @@ export async function runLocalGate({ gate, repoRoots, executables, envProfiles, 
   requireThat(digest(before) === expectedCandidate, 'STALE_EVIDENCE', 'Candidate differs from approved snapshot');
   const cwd = resolveContained(root, gate.cwd.relativePath);
   requireThat(statSync(cwd).isDirectory(), 'INVALID_SPEC', 'Gate cwd must be directory');
-  const transcript = await execute(executable, gate.argv, cwd, { ...env }, gate.timeoutMs, maxOutputBytes, signal);
+  const transcript = await startBoundedProcess({ executable, argv: gate.argv, cwd, env, timeoutMs: gate.timeoutMs, maxOutputBytes, signal }).completion;
   let unchanged = false, postSnapshotError = null;
   try { unchanged = snapshotRepository({ root, repoId: gate.repoId }).treeDigest === before.treeDigest;
     for (const entry of oracle) unchanged &&= bytesDigest(readFileSync(resolveContained(root, entry.path))) === entry.digest;
