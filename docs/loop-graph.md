@@ -53,6 +53,7 @@ developing and testing orchestration logic only.
 | `display.mjs` | presentation-only task metadata: `validateTaskDisplay`, the shared `formatTaskLabel` (mirrored in the legacy engine), `renderRunSummary` |
 | `snapshots.mjs` | real Git tracked/nonignored untracked inventory, deleted files, asset/mode hashes, conservative symlink rejection and path-based scope check |
 | `gates.mjs` | host-bound POSIX local command execution, shell:false, explicit env, timeout/cancellation/output cap, before/after candidate and oracle checks |
+| `evidence.mjs` | versioned SQLite archive for complete host-local gate records; candidate/invocation/oracle/transcript binding, immutable per-dispatch receipts and read-time integrity checks |
 | `projector.mjs` | immutable simulation Markdown; atomic no-replace publication, repeated application and manual-edit conflict detection |
 
 RunSpec follows the design's fields. `approvedSpecDigest` is the canonical digest
@@ -62,6 +63,33 @@ they do not authenticate a human approval. The local caller remains trusted.
 `openStore().create()` requires `{simulation:true}` and refuses other execution.
 An immutable artifact bundle is stored with the spec. The temporary mock manifest
 is not yet the proposed production permission manifest shared with bootstrap.
+
+## Durable local gate records (2026-09-26)
+
+`runLocalGate(config)` now returns a complete record: `evidence`, `transcript`,
+`scopeAttestation`, `snapshot`, `gate`, `invocation`, and `oracle`. The evidence
+schema is version 2 (independent of the RunSpec version). Invocation binds argv,
+logical cwd, executable/oracle references, output cap and the digest of the
+explicit environment frozen before execution. Environment values are not copied
+into the record; command output can still contain sensitive data.
+
+Trusted host callers may persist a result using
+`const archive = await openEvidenceArchive(path)` from `src/loop/evidence.mjs`,
+then `const reference = archive.put(record)`. Always close the archive in a
+`finally` block. `archive.get(runId, dispatchId, reference)` verifies the stored
+record and optional expected reference before returning it. Identical puts are
+idempotent; a different record for the same run/dispatch is rejected. Use a new
+dispatch ID for a new execution attempt. The archive requires Node 24+ and a
+local filesystem; it is separate from the simulation control database.
+
+This is durable evidence storage, **not yet supervisor ingestion**. It does not
+start a provider, journal intent before a process starts, or settle a scheduler
+effect. A crash before `put` can lose a result; do not automatically rerun an
+unknown effect. Snapshots retain file inventories/digests, not frozen source
+bytes. Hashes detect mismatches, not fabricated records from a malicious writer;
+the archive API is host-only, not an endpoint for agent-produced JSON. Same-UID
+writers remain trusted, and there is no new OS sandbox or retention automation.
+The existing simulation CLI and old ledgers are unchanged.
 
 ## Task display contract (schemaVersion 2)
 

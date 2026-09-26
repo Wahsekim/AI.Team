@@ -70,7 +70,7 @@ export async function runLocalGate({ gate, repoRoots, executables, envProfiles, 
   const root = realpathSync(repoRoots[gate.repoId]);
   const executable = realpathSync(executables[gate.executableRef.id]);
   requireThat(statSync(executable).isFile() && bytesDigest(readFileSync(executable)) === gate.executableRef.digest, 'INVALID_SPEC', 'Executable digest mismatch');
-  const env = envProfiles[gate.envProfileId];
+  const env = structuredClone(envProfiles[gate.envProfileId]);
   requireThat(env && !Array.isArray(env) && typeof env === 'object' && Object.entries(env).every(([k, v]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(k) && typeof v === 'string' && !v.includes('\0')), 'INVALID_SPEC', 'Invalid explicit environment');
   const oracle = structuredClone(oracleBundles[gate.oracleBundleRef.id]);
   requireThat(Array.isArray(oracle) && oracle.length > 0 && digest(oracle) === gate.oracleBundleRef.digest, 'INVALID_SPEC', 'Oracle bundle digest mismatch');
@@ -88,9 +88,13 @@ export async function runLocalGate({ gate, repoRoots, executables, envProfiles, 
     : transcript.reason || transcript.signal ? 'error' : gate.successExitCodes.includes(transcript.exitCode) ? 'pass' : 'fail';
   const scopeAttestation = { unchanged, postSnapshotError, before: before.treeDigest, networkPolicy: gate.networkPolicyId, trustTier: 'local-attended',
     recoveryRequired: ['cleanup_unknown', 'cancel_error', 'orphaned_process_group'].includes(transcript.reason) };
-  const evidence = { schemaVersion: 1, id: `evidence-${digest({ runId, dispatchId, transcript }).slice(7, 39)}`, runId, taskId, dispatchId,
+  const invocation = { schemaVersion: 1, executableRef: gate.executableRef, argv: gate.argv, cwd: gate.cwd,
+    envProfileId: gate.envProfileId, environmentDigest: digest(env), oracleBundleRef: gate.oracleBundleRef,
+    networkPolicyId: gate.networkPolicyId, maxOutputBytes };
+  const evidence = { schemaVersion: 2, id: `evidence-${digest({ runId, dispatchId, transcript }).slice(7, 39)}`, runId, taskId, dispatchId,
     candidateSnapshotRef: { id: before.id, digest: digest(before) }, gateRef: { id: gate.id, digest: gate.specDigest }, producerIdentity: 'host-local-gate',
     result, exitCode: transcript.exitCode, startedAt: transcript.startedAt, finishedAt: transcript.finishedAt,
-    transcriptRef: { id: 'transcript', digest: digest(transcript) }, scopeAttestationRef: { id: 'scope-attestation', digest: digest(scopeAttestation) } };
-  return { evidence, transcript, scopeAttestation };
+    transcriptRef: { id: 'transcript', digest: digest(transcript) }, scopeAttestationRef: { id: 'scope-attestation', digest: digest(scopeAttestation) },
+    invocationRef: { id: 'invocation', digest: digest(invocation) } };
+  return { evidence, transcript, scopeAttestation, snapshot: before, gate, invocation, oracle };
 }
