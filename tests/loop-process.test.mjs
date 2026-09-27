@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { startBoundedProcess } from '../src/loop/process-runner.mjs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
+import { survivingDescendantSource } from './fixtures/surviving-descendant.mjs';
 
 const config = source => ({ executable: process.execPath, argv: ['-e', source], cwd: process.cwd(), env: {}, timeoutMs: 1000, maxOutputBytes: 1024 });
 test('bounded process exposes owned inspect/cancel/collect lifecycle', async () => {
@@ -25,3 +30,23 @@ test('process spawn errors settle and do not leak a cancellable handle', async (
   assert.equal(result.exitCode, null); assert.match(result.error, /ENOENT/);
   assert.equal(handle.cancel(), false); assert.equal(handle.inspect().status, 'EXITED');
 });
+
+for (const trigger of ['timeout', 'cancelled', 'output_limit']) {
+  test(`surviving descendants require recovery after ${trigger}`, { timeout: 10000 }, async t => {
+    const dir = mkdtempSync(join(tmpdir(), 'ai-descendant-')), readyFile = join(dir, 'ready');
+    t.after(() => rmSync(dir, { recursive: true, force: true }));
+    const handle = startBoundedProcess({ ...config(survivingDescendantSource({ readyFile, overflow: trigger === 'output_limit' })),
+      timeoutMs: trigger === 'timeout' ? 1000 : 3000 });
+    t.after(async () => { handle.cancel(); await handle.completion; });
+    if (trigger === 'cancelled') {
+      const deadline = Date.now() + 2000;
+      while (!existsSync(readyFile) && Date.now() < deadline) await delay(10);
+      assert.ok(existsSync(readyFile), 'child must install its handler before cancellation');
+      assert.equal(handle.cancel(), true);
+    }
+    const result = await handle.completion;
+    assert.ok(existsSync(readyFile), 'reproduction must actually start the descendant');
+    assert.equal(result.reason, 'orphaned_process_group');
+    assert.equal(handle.cancel(), false, 'finished handles cannot signal an unowned/reused PID');
+  });
+}

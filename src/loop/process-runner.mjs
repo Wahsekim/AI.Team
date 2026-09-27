@@ -38,7 +38,12 @@ export function startBoundedProcess({ executable, argv, cwd, env, timeoutMs, max
       if (done) return; done = true; clearTimeout(timer); clearTimeout(drainDeadline); clearTimeout(escalation); signal?.removeEventListener('abort', abort);
       let descendants = false;
       if (child.pid) try { process.kill(-child.pid, 0); descendants = true; } catch (e) { if (e.code !== 'ESRCH') descendants = true; }
-      if (descendants) { kill('SIGKILL'); reason ??= 'orphaned_process_group'; }
+      if (descendants) {
+        kill('SIGKILL');
+        // Issuing SIGKILL does not confirm exit. Cleanup uncertainty must win
+        // over timeout/cancel/output-limit so the host cannot schedule repair.
+        if (!['cancel_error', 'cleanup_unknown'].includes(reason)) reason = 'orphaned_process_group';
+      }
       result = { exitCode, signal: exitSignal, error: error?.message ?? null, reason,
         stdout: Buffer.concat(chunks.stdout).toString('utf8'), stderr: Buffer.concat(chunks.stderr).toString('utf8'),
         startedAt, finishedAt: new Date().toISOString() };

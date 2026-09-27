@@ -11,6 +11,7 @@ import { openEvidenceArchive } from '../src/loop/evidence.mjs';
 import { snapshotRepository } from '../src/loop/snapshots.mjs';
 import { gateDigest, gateInvocation, runLocalGate } from '../src/loop/gates.mjs';
 import { executeStoredGate, settleRecordedGate } from '../src/loop/host-gates.mjs';
+import { survivingDescendantSource } from './fixtures/surviving-descendant.mjs';
 
 const sqlite = { skip: Number(process.versions.node.split('.')[0]) < 24 ? 'Host integration requires Node 24+' : false };
 const executableDigest = bytesDigest(readFileSync(process.execPath));
@@ -136,5 +137,19 @@ test('recovered claim-before-start gap rechecks deadline instead of running', sq
   assert.equal(result.cancelledBeforeStart, true);
   assert.equal(f.archive.intent('run', 'd-2').status, 'CANCELLED');
   assert.equal(f.store.status('run').state.dispatches['d-2'].receipt.result, 'cancelled');
+  assert.equal(f.store.verify('run').ok, true);
+});
+
+test('timeout with surviving descendants enters recovery instead of scheduling repair', sqlite, async t => {
+  const f = await fixture(t, survivingDescendantSource());
+  const result = await executeStoredGate(f.input);
+  const record = f.archive.get('run', 'd-2').record;
+  assert.equal(record.transcript.reason, 'orphaned_process_group');
+  assert.equal(record.scopeAttestation.recoveryRequired, true);
+  assert.equal(result.recoveryRequired, true);
+  const state = f.store.status('run').state;
+  assert.equal(state.status, 'RECOVERY_REQUIRED');
+  assert.notEqual(state.tasks.build.status, 'READY');
+  assert.equal(state.dispatches['d-2'].status, 'UNKNOWN');
   assert.equal(f.store.verify('run').ok, true);
 });
