@@ -56,6 +56,7 @@ developing and testing orchestration logic only.
 | `evidence.mjs` | versioned SQLite archive for complete host-local gate records; candidate/invocation/oracle/transcript binding, immutable per-dispatch receipts and read-time integrity checks |
 | `host-gates.mjs` | explicit host-only bridge: durable intent, one gate execution, archive-before-settle, candidate/oracle recheck and digest-bound reducer receipts |
 | `host-fixtures.mjs` | fixture-only build dispatch bridge: pending claim, owned cancellation, unchanged candidate checks and explicit durable-result reconciliation |
+| `fixture-driver.mjs` | bounded single-host step/stop/close orchestration for fixture builds, real local gates and simulation projections |
 | `process-runner.mjs` | bounded POSIX process handles with inspect/cancel/completion; cancellation never uses an unowned persisted PID |
 | `adapters/fixture-process.mjs` | local fake-agent process adapter with durable dispatch reservations, structured-result validation, owned cancellation and UNKNOWN on unowned unfinished work |
 | `projector.mjs` | immutable simulation Markdown; atomic no-replace publication, repeated application and manual-edit conflict detection |
@@ -163,12 +164,43 @@ function does not clear an existing recovery stop or implement automatic resume.
 To cancel current work, the trusted host must first persist `stop` and then abort
 the signal it supplied. The bridge collects the owned cancellation result without
 reviving acceptance. A control-database stop alone is not a process signal; no
-watcher, supervisor driver or CLI cancellation integration is added here.
+watcher or CLI cancellation integration is added here. The optional driver below
+owns stop/abort ordering for calls made through that driver.
 `adapter.lookup(dispatchId)` is read-only and does not create a reservation.
 
 Integration tests exercise an actual fixture subprocess, real disposable local
 gates, journaled receipts and immutable simulation projection end to end. This is
 offline orchestration evidence, not a successful real-agent product deployment.
+
+### Single-host fixture driver
+
+`createFixtureDriver({store, adapter, archive, runId, root,
+projectionDirectory, gateConfigs, request?, quota?, now?})` connects the three
+effect types without a daemon. `gateConfigs` maps each manifest gate ID to its
+explicit trusted local-gate configuration. It is cloned, as is the fixture
+request; no provider command is inferred from a brief. The existing projection
+directory must be outside the product root. Storage lifetimes remain caller-owned.
+
+- `await driver.step()` admits/executes at most one effect and returns current
+  status. Concurrent steps are rejected. Terminal observations are read-only.
+- `driver.stop({mode, reason})` commits stop before aborting the active owned
+  signal for hard mode. Graceful mode allows the bounded current process to
+  finish, but late success cannot revive acceptance. Call another step to
+  publish closeout when the run does not require recovery.
+- `await driver.close()` hard-stops and drains an active step, rejects future
+  steps, and releases its in-memory ownership guard. Only then close the
+  adapter, archive and control store; close propagates an active step's error.
+- Previously STARTED/UNKNOWN dispatches enter RECOVERY_REQUIRED and are not
+  automatically replayed. An already-written projection may be safely replayed
+  after a lost ACK; manual file edits are preserved and require recovery.
+
+There is no unbounded `run()` loop: the host decides its step count and stop
+policy. Quota samples are supplied by the host callback at admission, not read
+from model text. The ownership guard covers one store object/run in this process
+only; separate store objects/processes require external exclusion. A stop written
+by another CLI is not actively polled and cannot promise prompt cancellation.
+No real provider, cross-process lease/fencing or automatic recovery is enabled.
+The CLI `demo` remains unchanged; this driver is currently a library surface.
 
 ## Task display contract (schemaVersion 2)
 
@@ -240,7 +272,7 @@ cancellation, real approval authentication or scheduler daemon is claimed.
 | W2 reducer/scheduler | PARTIALLY_ACCEPTED / serial dependency execution and final candidate gates; reviewer dispositions, WAITING decisions and independent-branch continuation remain |
 | W3 store/outbox | PARTIALLY_ACCEPTED / transactional intent/CAS/idempotency/replay; real process handles, leases/epochs, process-exit reconciliation and crash-boundary harness remain |
 | W4 snapshot/gate | PARTIALLY_ACCEPTED / real inventory, bounded runner, durable records and host-only gate ingestion into simulation runs implemented; frozen source inputs, production authorization and isolated-mode integration remain |
-| W5 Claude adapter | PARTIALLY_ACCEPTED / fake-process adapter, simulation build bridge and four actual killed-host boundary tests implemented; CLI driver, safe automatic recovery and real Claude adapter remain; real smoke needs an explicit owner cost cap and permission policy |
+| W5 Claude adapter | PARTIALLY_ACCEPTED / fake-process adapter, simulation build bridge, single-host driver and four actual killed-host boundary tests implemented; CLI integration, safe automatic recovery and real Claude adapter remain; real smoke needs an explicit owner cost cap and permission policy |
 | W6 projection bridge | PARTIALLY_ACCEPTED / immutable standalone simulation Markdown with conflict detection and lost-ACK reapplication; legacy writer coordination and production projection remain |
 | W7 decisions/stop/watch/recovery | PARTIALLY_ACCEPTED / core stop and unknown-effect states; authenticated decisions, cancellation, watcher supervision and automatic safe recovery remain |
 | W8 pilot | DEFERRED / requires real smoke, failure/recovery exercise and owner review |

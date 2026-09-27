@@ -14,13 +14,14 @@ import { executeStoredGate } from '../src/loop/host-gates.mjs';
 import { openFixtureAdapter } from '../src/loop/adapters/fixture-process.mjs';
 import { executeStoredFixture, settleRecordedFixture } from '../src/loop/host-fixtures.mjs';
 import { publishProjection } from '../src/loop/projector.mjs';
+import { createFixtureDriver } from '../src/loop/fixture-driver.mjs';
 
 const sqlite = { skip: Number(process.versions.node.split('.')[0]) < 24 ? 'Fixture bridge requires Node 24+' : false };
 const tick = { reservation: { agentCalls: 1, tokens: 0, costMicroUsd: 0 }, quota: null };
 const request = (scenario = 'pass', delayMs = 0, timeoutMs = 1000) => ({ scenario, delayMs, timeoutMs });
-async function fixture(t) {
+async function fixture(t, source = 'process.stdout.write("real local gate")') {
   const directory = mkdtempSync(join(tmpdir(), 'ai-host-fixture-')), root = join(directory, 'product');
-  mkdirSync(root); mkdirSync(join(root, 'src')); writeFileSync(join(root, 'src/check.cjs'), 'process.stdout.write("real local gate")');
+  mkdirSync(root); mkdirSync(join(root, 'src')); writeFileSync(join(root, 'src/check.cjs'), source);
   const git = args => execFileSync('git', ['-C', root, ...args], { stdio: 'pipe' });
   git(['init', '-q']); git(['add', '.']);
   git(['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', 'commit', '-qm', 'fixture']);
@@ -139,4 +140,111 @@ test('claimed-without-journal and preexisting-journal gaps never cause a new spa
   const handle = other.adapter.start('d-1', request('pass')); await other.adapter.collectResult(handle);
   await assert.rejects(executeStoredFixture(other.input), e => e.code === 'EFFECT_UNKNOWN');
   assert.equal(other.store.status('run').state.dispatches['d-1'].status, 'PENDING');
+});
+
+const driverConfig = f => ({ store: f.store, adapter: f.adapter, archive: f.archive, runId: 'run', root: f.root,
+  projectionDirectory: f.directory, gateConfigs: { test: f.gateConfig } });
+
+test('driver completes one effect per step with real gates and idempotent terminal observation', sqlite, async t => {
+  const f = await fixture(t), mutableRequest = request(), config = driverConfig(f);
+  const driver = createFixtureDriver({ ...config, request: mutableRequest });
+  try {
+    mutableRequest.scenario = 'fail'; config.gateConfigs.test.gate.argv[0] = 'unapproved.cjs';
+    const statuses = [];
+    for (let n = 0; n < 4; n++) statuses.push((await driver.step()).state.status);
+    assert.equal(statuses.at(-1), 'COMPLETED');
+    const state = driver.status().state;
+    assert.equal(Object.keys(state.dispatches).length, 3); assert.equal(state.usage.agentCalls, 1);
+    assert.equal(state.projection.status, 'ACKNOWLEDGED');
+    const version = driver.status().stateVersion;
+    await driver.step(); assert.equal(driver.status().stateVersion, version);
+    assert.equal(f.store.verify('run').ok, true);
+  } finally { await driver.close(); }
+});
+
+test('driver rejects overlapping steps/owners and hard stop cancels its running fixture', sqlite, async t => {
+  const f = await fixture(t), config = { ...driverConfig(f), request: request('hang') }, driver = createFixtureDriver(config);
+  try {
+    assert.throws(() => createFixtureDriver(config), e => e.code === 'INVALID_TRANSITION');
+    const active = driver.step(); await Promise.resolve();
+    assert.throws(() => driver.step(), e => e.code === 'INVALID_TRANSITION');
+    assert.equal(f.adapter.inspect(f.adapter.lookup('d-1')).status, 'RUNNING');
+    driver.stop({ mode: 'hard', reason: 'owner cancelled' }); await active;
+    assert.equal(driver.status().state.dispatches['d-1'].receipt.result, 'cancelled');
+    assert.equal((await driver.step()).state.status, 'STOPPED');
+    assert.equal(f.store.verify('run').ok, true);
+  } finally { await driver.close(); }
+});
+
+test('driver hard stop aborts its running real gate and records late evidence without acceptance', sqlite, async t => {
+  const f = await fixture(t, 'setTimeout(() => {}, 900)'), driver = createFixtureDriver(driverConfig(f));
+  try {
+    await driver.step(); const active = driver.step(); await Promise.resolve();
+    assert.equal(f.archive.intent('run', 'd-2').status, 'STARTED');
+    driver.stop({ mode: 'hard', reason: 'cancel gate' }); await active;
+    assert.equal(f.archive.get('run', 'd-2').record.transcript.reason, 'cancelled');
+    assert.notEqual(driver.status().state.tasks.build.status, 'SUCCEEDED');
+    assert.equal((await driver.step()).state.status, 'STOPPED'); assert.equal(f.store.verify('run').ok, true);
+  } finally { await driver.close(); }
+});
+
+test('driver graceful stop collects a successful fixture but cannot revive task acceptance', sqlite, async t => {
+  const f = await fixture(t), driver = createFixtureDriver({ ...driverConfig(f), request: request('pass', 100) });
+  try {
+    const active = driver.step(); await Promise.resolve(); driver.stop({ mode: 'graceful', reason: 'finish only current work' });
+    await active;
+    assert.equal(driver.status().state.dispatches['d-1'].receipt.result, 'pass');
+    assert.notEqual(driver.status().state.tasks.build.status, 'CANDIDATE_READY');
+    assert.equal((await driver.step()).state.status, 'STOPPED');
+  } finally { await driver.close(); }
+});
+
+test('driver close cancels and drains owned work before releasing its guard', sqlite, async t => {
+  const f = await fixture(t), config = { ...driverConfig(f), request: request('hang') }, driver = createFixtureDriver(config);
+  const active = driver.step(); await Promise.resolve();
+  const closing = driver.close(); assert.equal(driver.close(), closing); await closing; await active;
+  assert.equal(driver.status().state.dispatches['d-1'].receipt.result, 'cancelled');
+  assert.throws(() => driver.step(), e => e.code === 'INVALID_TRANSITION');
+  const replacement = createFixtureDriver(config);
+  try { assert.equal((await replacement.step()).state.status, 'STOPPED'); } finally { await replacement.close(); }
+});
+
+test('driver never reruns a claim-before-journal gap', sqlite, async t => {
+  const f = await fixture(t); f.store.apply('claim', command(f.store, 'run', { effectId: 'd-1' }));
+  const driver = createFixtureDriver(driverConfig(f));
+  try {
+    await assert.rejects(driver.step(), e => e.code === 'EFFECT_UNKNOWN');
+    assert.equal(driver.status().state.status, 'RECOVERY_REQUIRED'); assert.equal(f.adapter.lookup('d-1'), null);
+    await assert.rejects(driver.step(), e => e.code === 'EFFECT_UNKNOWN'); assert.equal(f.store.verify('run').ok, true);
+  } finally { await driver.close(); }
+});
+
+test('driver replays a lost projection ACK but preserves a manually edited projection', sqlite, async t => {
+  for (const edited of [false, true]) {
+    const f = await fixture(t), driver = createFixtureDriver(driverConfig(f));
+    try {
+      for (let n = 0; n < 3; n++) await driver.step();
+      f.store.apply('tick', command(f.store, 'run', tick));
+      const effect = f.store.effects('run').find(e => e.kind === 'projection');
+      f.store.apply('claim', command(f.store, 'run', { effectId: effect.id }));
+      const receipt = publishProjection({ directory: f.directory, runId: 'run', effect: { id: effect.id, kind: effect.kind, payload: effect.payload } });
+      if (edited) {
+        writeFileSync(join(f.directory, receipt.fileName), 'owner edit');
+        await assert.rejects(driver.step(), e => e.code === 'PROJECTION_CONFLICT');
+        assert.equal(driver.status().state.status, 'RECOVERY_REQUIRED');
+        assert.equal(readFileSync(join(f.directory, receipt.fileName), 'utf8'), 'owner edit');
+      } else assert.equal((await driver.step()).state.status, 'COMPLETED');
+      assert.equal(f.store.verify('run').ok, true);
+    } finally { await driver.close(); }
+  }
+});
+
+test('driver rejects product projections and expired admission starts no process', sqlite, async t => {
+  const f = await fixture(t), config = driverConfig(f);
+  assert.throws(() => createFixtureDriver({ ...config, projectionDirectory: f.root }), e => e.code === 'SCOPE_DENIED');
+  const driver = createFixtureDriver({ ...config, now: () => f.store.status('run').state.startedAt + 60001 });
+  try {
+    await driver.step(); assert.equal(f.adapter.lookup('d-1'), null);
+    assert.equal((await driver.step()).state.status, 'STOPPED'); assert.equal(driver.status().state.reason, 'time_limit');
+  } finally { await driver.close(); }
 });
