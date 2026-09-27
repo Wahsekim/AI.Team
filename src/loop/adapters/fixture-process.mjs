@@ -4,7 +4,7 @@ import { canonical, digest, fields, id, parseJSON, requireThat } from '../contra
 import { startBoundedProcess } from '../process-runner.mjs';
 
 const worker = fileURLToPath(new URL('./fixture-worker.mjs', import.meta.url));
-function validateRequest(request) {
+export function validateFixtureRequest(request) {
   fields(request, ['scenario', 'delayMs', 'timeoutMs'], 'Fixture request');
   requireThat(['pass', 'fail', 'partial', 'crash', 'hang'].includes(request.scenario)
     && Number.isSafeInteger(request.delayMs) && request.delayMs >= 0 && request.delayMs <= 1000
@@ -34,7 +34,7 @@ export async function openFixtureAdapter({ filename, runId, workspace, onBoundar
     requireThat(handle.runId === runId, 'SCOPE_DENIED', 'Handle belongs to another run');
     const value = db.prepare('SELECT * FROM fixture_dispatches WHERE run_id=? AND dispatch_id=?').get(runId, handle.dispatchId);
     requireThat(value, 'UNKNOWN_REFERENCE', 'Unknown fixture dispatch');
-    const request = JSON.parse(value.request); validateRequest(request);
+    const request = JSON.parse(value.request); validateFixtureRequest(request);
     requireThat(digest(request) === value.request_digest && value.request_digest === handle.requestDigest, 'IDEMPOTENCY_CONFLICT', 'Fixture request mismatch');
     if (value.result !== null) requireThat(digest(JSON.parse(value.result)) === value.result_digest, 'STALE_EVIDENCE', 'Fixture result mismatch');
     return value;
@@ -46,9 +46,15 @@ export async function openFixtureAdapter({ filename, runId, workspace, onBoundar
       recoveryRequired: value.result === null && !active };
   };
   return {
-    probeCapabilities() { return { adapter: 'fixture-process', simulation: true, structuredOutput: 'supported', cancellation: 'owned-handles-only', resume: 'unsupported', liveProvider: false }; },
+    probeCapabilities() { return { adapter: 'fixture-process', runId, simulation: true, structuredOutput: 'supported', cancellation: 'owned-handles-only', resume: 'unsupported', liveProvider: false }; },
+    lookup(dispatchId) {
+      id(dispatchId);
+      const value = db.prepare('SELECT request_digest FROM fixture_dispatches WHERE run_id=? AND dispatch_id=?').get(runId, dispatchId);
+      if (!value) return null;
+      const handle = { runId, dispatchId, requestDigest: value.request_digest }; row(handle); return handle;
+    },
     start(dispatchId, request) {
-      requireThat(!closing, 'INVALID_TRANSITION', 'Adapter is closing'); id(dispatchId); request = structuredClone(request); validateRequest(request);
+      requireThat(!closing, 'INVALID_TRANSITION', 'Adapter is closing'); id(dispatchId); request = structuredClone(request); validateFixtureRequest(request);
       const requestDigest = digest(request), handle = { runId, dispatchId, requestDigest };
       db.exec('BEGIN IMMEDIATE');
       let existing;

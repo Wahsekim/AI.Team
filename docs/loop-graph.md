@@ -55,6 +55,7 @@ developing and testing orchestration logic only.
 | `gates.mjs` | host-bound POSIX local command execution, shell:false, explicit env, timeout/cancellation/output cap, before/after candidate and oracle checks |
 | `evidence.mjs` | versioned SQLite archive for complete host-local gate records; candidate/invocation/oracle/transcript binding, immutable per-dispatch receipts and read-time integrity checks |
 | `host-gates.mjs` | explicit host-only bridge: durable intent, one gate execution, archive-before-settle, candidate/oracle recheck and digest-bound reducer receipts |
+| `host-fixtures.mjs` | fixture-only build dispatch bridge: pending claim, owned cancellation, unchanged candidate checks and explicit durable-result reconciliation |
 | `process-runner.mjs` | bounded POSIX process handles with inspect/cancel/completion; cancellation never uses an unowned persisted PID |
 | `adapters/fixture-process.mjs` | local fake-agent process adapter with durable dispatch reservations, structured-result validation, owned cancellation and UNKNOWN on unowned unfinished work |
 | `projector.mjs` | immutable simulation Markdown; atomic no-replace publication, repeated application and manual-edit conflict detection |
@@ -138,8 +139,36 @@ save, and result stored before acknowledgement. The first three reopen UNKNOWN;
 the last collects the saved result. None respawns the dispatch or signals an
 unowned PID. The fixture-only synchronous `onBoundary` hook is used to hold the
 host at those boundaries; ordinary callers need not provide it. Leases/fencing
-and authenticated recovery are still required. No worker adapter is wired into the supervisor/CLI, and the
-run manifest still permits only `mock` roles.
+and authenticated recovery are still required. The library bridge below now connects
+the fixture to simulation build dispatches; the CLI is still the fake demo, and
+the run manifest still permits only `mock` roles.
+
+### Fixture-to-control bridge (2026-09-27)
+
+`executeStoredFixture({store, adapter, runId, dispatchId, root, request, signal,
+quota, now})` executes one pending simulation build. The run must use a real
+initial product snapshot; the fixture does not modify it or invent a new candidate.
+The adapter must belong to the same run. Request validation, existing-journal
+checks and snapshot matching precede claim; claim rechecks admission. Result
+collection precedes control settlement. Invalid/partial/crashed fixture output
+cannot pass. A successful build still needs its task and final-candidate gates.
+
+`settleRecordedFixture({store, adapter, runId, dispatchId, root, now})` explicitly
+reconciles a durable completed result without spawning. STARTED work is never
+automatically executed again, including a claim-before-journal gap. Missing or
+unfinished results require operator investigation; a saved PID is not cancellation
+authority. Candidate drift or uncertain cleanup enters RECOVERY_REQUIRED. This
+function does not clear an existing recovery stop or implement automatic resume.
+
+To cancel current work, the trusted host must first persist `stop` and then abort
+the signal it supplied. The bridge collects the owned cancellation result without
+reviving acceptance. A control-database stop alone is not a process signal; no
+watcher, supervisor driver or CLI cancellation integration is added here.
+`adapter.lookup(dispatchId)` is read-only and does not create a reservation.
+
+Integration tests exercise an actual fixture subprocess, real disposable local
+gates, journaled receipts and immutable simulation projection end to end. This is
+offline orchestration evidence, not a successful real-agent product deployment.
 
 ## Task display contract (schemaVersion 2)
 
@@ -211,7 +240,7 @@ cancellation, real approval authentication or scheduler daemon is claimed.
 | W2 reducer/scheduler | PARTIALLY_ACCEPTED / serial dependency execution and final candidate gates; reviewer dispositions, WAITING decisions and independent-branch continuation remain |
 | W3 store/outbox | PARTIALLY_ACCEPTED / transactional intent/CAS/idempotency/replay; real process handles, leases/epochs, process-exit reconciliation and crash-boundary harness remain |
 | W4 snapshot/gate | PARTIALLY_ACCEPTED / real inventory, bounded runner, durable records and host-only gate ingestion into simulation runs implemented; frozen source inputs, production authorization and isolated-mode integration remain |
-| W5 Claude adapter | PARTIALLY_ACCEPTED / separate fake-process probe/start/inspect/cancel/collect fixture implemented; worker dispatch integration, killed-host recovery and real Claude adapter remain; real smoke needs an explicit owner cost cap and permission policy |
+| W5 Claude adapter | PARTIALLY_ACCEPTED / fake-process adapter, simulation build bridge and four actual killed-host boundary tests implemented; CLI driver, safe automatic recovery and real Claude adapter remain; real smoke needs an explicit owner cost cap and permission policy |
 | W6 projection bridge | PARTIALLY_ACCEPTED / immutable standalone simulation Markdown with conflict detection and lost-ACK reapplication; legacy writer coordination and production projection remain |
 | W7 decisions/stop/watch/recovery | PARTIALLY_ACCEPTED / core stop and unknown-effect states; authenticated decisions, cancellation, watcher supervision and automatic safe recovery remain |
 | W8 pilot | DEFERRED / requires real smoke, failure/recovery exercise and owner review |
