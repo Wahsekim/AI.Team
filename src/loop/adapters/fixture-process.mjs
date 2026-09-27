@@ -13,8 +13,9 @@ function validateRequest(request) {
 
 // Capability-development fixture only. Not accepted as a live provider by the
 // production manifest; it cannot execute arbitrary programs or edit a product.
-export async function openFixtureAdapter({ filename, runId, workspace }) {
+export async function openFixtureAdapter({ filename, runId, workspace, onBoundary = () => {} }) {
   id(runId); const cwd = realpathSync(workspace);
+  requireThat(typeof onBoundary === 'function', 'INVALID_SPEC', 'Fixture boundary hook must be a function');
   requireThat(Number(process.versions.node.split('.')[0]) >= 24, 'CAPABILITY_MISSING', 'Fixture journal requires Node 24+');
   if (filename !== ':memory:') try {
     const stat = lstatSync(filename); requireThat(stat.isFile() && !stat.isSymbolicLink(), 'SCOPE_DENIED', 'Invalid fixture journal file');
@@ -47,7 +48,7 @@ export async function openFixtureAdapter({ filename, runId, workspace }) {
   return {
     probeCapabilities() { return { adapter: 'fixture-process', simulation: true, structuredOutput: 'supported', cancellation: 'owned-handles-only', resume: 'unsupported', liveProvider: false }; },
     start(dispatchId, request) {
-      requireThat(!closing, 'INVALID_TRANSITION', 'Adapter is closing'); id(dispatchId); validateRequest(request);
+      requireThat(!closing, 'INVALID_TRANSITION', 'Adapter is closing'); id(dispatchId); request = structuredClone(request); validateRequest(request);
       const requestDigest = digest(request), handle = { runId, dispatchId, requestDigest };
       db.exec('BEGIN IMMEDIATE');
       let existing;
@@ -60,6 +61,7 @@ export async function openFixtureAdapter({ filename, runId, workspace }) {
       // Durable reservation BEFORE spawn. Even a PID-less row after host death
       // is UNKNOWN; never guess that spawn did not happen or create a second one.
       if (existing) return handle;
+      onBoundary({ phase: 'reservation-committed', dispatchId, pid: null });
       const process = startBoundedProcess({ executable: globalThis.process.execPath, argv: [worker, request.scenario, String(request.delayMs)],
         cwd, env: {}, timeoutMs: request.timeoutMs, maxOutputBytes: 4096 });
       const entry = { process, completion: null }; owned.set(dispatchId, entry);
@@ -73,15 +75,20 @@ export async function openFixtureAdapter({ filename, runId, workspace }) {
           result = structured.result;
         } catch { structured = null; }
         const receipt = { simulation: true, result, structured, transcript };
+        onBoundary({ phase: 'result-ready', dispatchId, pid: process.pid });
         db.prepare('UPDATE fixture_dispatches SET result=?,result_digest=? WHERE run_id=? AND dispatch_id=? AND result IS NULL')
           .run(canonical(receipt), digest(receipt), runId, dispatchId);
+        onBoundary({ phase: 'result-stored', dispatchId, pid: process.pid });
         return receipt;
       };
       entry.completion = process.completion.then(save);
       // Attach a rejection observer immediately; collectResult still propagates
       // persistence failures, which leave the durable row UNKNOWN after reopen.
       entry.completion.catch(() => {});
-      try { db.prepare('UPDATE fixture_dispatches SET pid=? WHERE run_id=? AND dispatch_id=?').run(process.pid, runId, dispatchId); }
+      try {
+        onBoundary({ phase: 'spawned-before-pid-save', dispatchId, pid: process.pid });
+        db.prepare('UPDATE fixture_dispatches SET pid=? WHERE run_id=? AND dispatch_id=?').run(process.pid, runId, dispatchId);
+      }
       catch (error) { process.cancel(); throw error; }
       return handle;
     },

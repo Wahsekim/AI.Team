@@ -132,9 +132,13 @@ completed result but treats unfinished work as UNKNOWN, even if no PID was
 saved. It never respawns that dispatch or signals a PID it does not own. Closing
 an adapter cancels and collects its owned processes before closing its database.
 This conservative behavior is not automatic crash recovery or proof of provider
-cancellation. Tests cover concurrent instances and reopened result collection;
-a killed-host crash-boundary suite, leases/fencing and authenticated recovery
-are still required. No worker adapter is wired into the supervisor/CLI, and the
+cancellation. Tests now kill an actual fixture host with SIGKILL at four precise
+boundaries: reservation committed, spawned before PID save, result ready before
+save, and result stored before acknowledgement. The first three reopen UNKNOWN;
+the last collects the saved result. None respawns the dispatch or signals an
+unowned PID. The fixture-only synchronous `onBoundary` hook is used to hold the
+host at those boundaries; ordinary callers need not provide it. Leases/fencing
+and authenticated recovery are still required. No worker adapter is wired into the supervisor/CLI, and the
 run manifest still permits only `mock` roles.
 
 ## Task display contract (schemaVersion 2)
@@ -262,7 +266,8 @@ inside the selected root, with no symlinks. Only the explicit policy
 Requests for network isolation fail instead of pretending it exists.
 
 Evidence is returned with a host producer label, transcript and scope
-attestation; none is persisted or authenticated across processes yet. Pass
+attestation; the optional archive persists and checks it, but does not
+authenticate a producer across trust boundaries. Pass
 requires an allowed real exit code and unchanged before/after candidate and
 oracle digests. A changed oracle, signal, output flood or cancellation cannot
 pass; timeout is classified separately. Output is bounded (default 1 MiB) but
@@ -271,8 +276,8 @@ not redacted; callers must apply retention and secret handling before storing it
 POSIX process groups are used for timeout/cancellation. This is cooperative
 attended execution, not containment of a malicious executable that escapes its
 process group, tampers and restores files between snapshots, or writes outside
-the observed repo. The reducer does not yet consume this primitive's evidence;
-the demo continues to use only mock gates. Tests execute real local Node child
+the observed repo. The optional host-gates bridge ingests archived evidence;
+the demo CLI continues to use only mock gates. Tests execute real local Node child
 processes exclusively in disposable fixture repositories; no Claude/API spend.
 
 The host wait has a final drain deadline 1 second beyond the gate timeout. If
