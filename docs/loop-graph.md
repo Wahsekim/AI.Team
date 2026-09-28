@@ -19,6 +19,9 @@ node scripts/team-run.mjs status .team-loop demo-1
 node scripts/team-run.mjs events .team-loop demo-1
 node scripts/team-run.mjs audit .team-loop demo-1
 node scripts/team-run.mjs show .team-loop demo-1      # readable text summary (not JSON)
+node scripts/team-run.mjs fixture .team-fixture fixture-1 # NEW directory; isolated real-process simulation
+node scripts/team-run.mjs show .team-fixture fixture-1
+node scripts/team-run.mjs audit .team-fixture fixture-1
 node --test tests/loop-core.test.mjs
 node --test tests/*.test.mjs
 ```
@@ -39,6 +42,25 @@ It does not test a real product, execute a verification command, or update
 `pm-decisions.md`, `agents/lifecycle.md`, or `memory/pm.md`. It is suitable for
 developing and testing orchestration logic only.
 
+The separate `fixture` command now runs the fixture driver with an actual built-in
+worker process and real local verification commands against a sample Git repository
+it creates itself. It does not accept an existing product or arbitrary executable.
+The state directory must not exist (its parent must exist); retries use a new
+directory. Existing directories, including prior failed runs, are preserved and
+rejected rather than reset or resumed. Git initialization ignores user templates,
+hooks and global configuration. Both task and final gates check the same frozen
+sample inventory; the fixture worker does not edit it.
+
+It runs at most eight driver steps and leaves `loop.sqlite`, `fixture.sqlite`,
+`evidence.sqlite`, the sample `product/`, and the simulation Markdown in that
+directory for inspection. These are not automatically deleted. `status`, `show`,
+`events` and `audit` work on the result. SIGINT/SIGTERM received while the driver
+is active request durable hard stop then owned cancellation and bounded closeout;
+SIGKILL cannot be handled. A crash leaves inspectable state, not an automatically
+resumable run. External `stop` still does not promise immediate process cancellation.
+Exit 0 means the command succeeded; inspect state for COMPLETED versus STOPPED.
+This is offline integration evidence, not real-Claude or product-pilot evidence.
+
 ## Implemented surfaces
 
 | Module | Current responsibility |
@@ -57,6 +79,7 @@ developing and testing orchestration logic only.
 | `host-gates.mjs` | explicit host-only bridge: durable intent, one gate execution, archive-before-settle, candidate/oracle recheck and digest-bound reducer receipts |
 | `host-fixtures.mjs` | fixture-only build dispatch bridge: pending claim, owned cancellation, unchanged candidate checks and explicit durable-result reconciliation |
 | `fixture-driver.mjs` | bounded single-host step/stop/close orchestration for fixture builds, real local gates and simulation projections |
+| `fixture-demo.mjs` | one-shot offline CLI setup: isolated sample repo, bounded driver loop, signal stop and preserved evidence |
 | `process-runner.mjs` | bounded POSIX process handles with inspect/cancel/completion; cancellation never uses an unowned persisted PID |
 | `adapters/fixture-process.mjs` | local fake-agent process adapter with durable dispatch reservations, structured-result validation, owned cancellation and UNKNOWN on unowned unfinished work |
 | `projector.mjs` | immutable simulation Markdown; atomic no-replace publication, repeated application and manual-edit conflict detection |
@@ -114,7 +137,8 @@ poll the control database or start a watcher. Snapshots retain file inventories/
 bytes. Hashes detect mismatches, not fabricated records from a malicious writer;
 the archive API is host-only, not an endpoint for agent-produced JSON. Same-UID
 writers remain trusted, and there is no new OS sandbox or retention automation.
-The existing simulation CLI and old ledgers are unchanged.
+The existing `demo` command and old ledgers are unchanged; the new `fixture`
+command uses this bridge on its isolated sample only.
 
 ## Fixture process adapter (not a live provider)
 
@@ -141,7 +165,7 @@ the last collects the saved result. None respawns the dispatch or signals an
 unowned PID. The fixture-only synchronous `onBoundary` hook is used to hold the
 host at those boundaries; ordinary callers need not provide it. Leases/fencing
 and authenticated recovery are still required. The library bridge below now connects
-the fixture to simulation build dispatches; the CLI is still the fake demo, and
+the fixture to simulation build dispatches; `fixture` exercises that path, and
 the run manifest still permits only `mock` roles.
 
 ### Fixture-to-control bridge (2026-09-27)
@@ -164,8 +188,8 @@ function does not clear an existing recovery stop or implement automatic resume.
 To cancel current work, the trusted host must first persist `stop` and then abort
 the signal it supplied. The bridge collects the owned cancellation result without
 reviving acceptance. A control-database stop alone is not a process signal; no
-watcher or CLI cancellation integration is added here. The optional driver below
-owns stop/abort ordering for calls made through that driver.
+watcher is added here. The optional driver below owns stop/abort ordering;
+the `fixture` command uses it for its own SIGINT/SIGTERM handling.
 `adapter.lookup(dispatchId)` is read-only and does not create a reservation.
 
 Integration tests exercise an actual fixture subprocess, real disposable local
@@ -200,7 +224,7 @@ from model text. The ownership guard covers one store object/run in this process
 only; separate store objects/processes require external exclusion. A stop written
 by another CLI is not actively polled and cannot promise prompt cancellation.
 No real provider, cross-process lease/fencing or automatic recovery is enabled.
-The CLI `demo` remains unchanged; this driver is currently a library surface.
+The CLI `demo` remains unchanged; the separate `fixture` command uses this driver.
 
 ## Task display contract (schemaVersion 2)
 
@@ -272,7 +296,7 @@ cancellation, real approval authentication or scheduler daemon is claimed.
 | W2 reducer/scheduler | PARTIALLY_ACCEPTED / serial dependency execution and final candidate gates; reviewer dispositions, WAITING decisions and independent-branch continuation remain |
 | W3 store/outbox | PARTIALLY_ACCEPTED / transactional intent/CAS/idempotency/replay; real process handles, leases/epochs, process-exit reconciliation and crash-boundary harness remain |
 | W4 snapshot/gate | PARTIALLY_ACCEPTED / real inventory, bounded runner, durable records and host-only gate ingestion into simulation runs implemented; frozen source inputs, production authorization and isolated-mode integration remain |
-| W5 Claude adapter | PARTIALLY_ACCEPTED / fake-process adapter, simulation build bridge, single-host driver and four actual killed-host boundary tests implemented; CLI integration, safe automatic recovery and real Claude adapter remain; real smoke needs an explicit owner cost cap and permission policy |
+| W5 Claude adapter | PARTIALLY_ACCEPTED / fake-process adapter, simulation build bridge, single-host driver, isolated fixture CLI and four actual killed-host boundary tests implemented; safe automatic recovery and real Claude adapter remain; real smoke needs an explicit owner cost cap and permission policy |
 | W6 projection bridge | PARTIALLY_ACCEPTED / immutable standalone simulation Markdown with conflict detection and lost-ACK reapplication; legacy writer coordination and production projection remain |
 | W7 decisions/stop/watch/recovery | PARTIALLY_ACCEPTED / core stop and unknown-effect states; authenticated decisions, cancellation, watcher supervision and automatic safe recovery remain |
 | W8 pilot | DEFERRED / requires real smoke, failure/recovery exercise and owner review |
