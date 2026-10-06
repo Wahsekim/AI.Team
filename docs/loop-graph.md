@@ -5,8 +5,17 @@ not the complete Loop/Graph MVP.
 Baseline: `e12a27b4d7008a0a6d89ef15886a56fbf91dae77`. Implementation: 2026-09-16.
 Checkpoint updated 2026-09-17: 287 tests pass on local macOS/Node 24, including
 all 260 legacy tests. This is local verification, not a completed remote CI run.
+Checkpoint 2026-10-06 (supersedes the 2026-09-17 counts): at
+`fb8e10689ef3d3cff24ce5fe674725a205c22061` (`codex/loop-graph-mvp`),
+`node --test tests/*.test.mjs` on local macOS arm64 passes 395/395 on Node
+24.21.0 (306 legacy plus 89 experimental `tests/loop-*.test.mjs`) and on Node
+25.6.1; Node 22.23.3 gives 348 pass, 47 skipped, 0 fail, all 47 skips being
+Node-24-gated `tests/loop-*` tests. Local verification only: no remote CI run
+exists for this SHA. Evidence: `docs/rollout-evidence/R01/acceptance.md`.
 The existing Claude team, bootstrap, watchdog, and count-directed engine remain
-unchanged. No new live provider adapter is enabled.
+unchanged by the Loop/Graph commits. Separately, commit `bc1c95b` on this branch
+changed the count-directed engine and kit scripts (see
+`docs/review-remediation-2026-09-25.md`). No new live provider adapter is enabled.
 
 ## Run locally
 
@@ -71,7 +80,7 @@ This is offline integration evidence, not real-Claude or product-pilot evidence.
 | `reducer.mjs` | deterministic host transitions; bounded attempts; task gates and final-candidate gates; stop, unknown effect, closeout states |
 | `store.mjs` | SQLite transactions for state/event/request/outbox; compare-and-swap versions; idempotency; replay audit |
 | `demo.mjs` | fake fail → repair → pass → final verification; optional host projection callback |
-| `scripts/team-run.mjs` | demo/status/events/audit/stop JSON entry point; `show` text projection |
+| `scripts/team-run.mjs` | demo/fixture/status/events/audit/stop JSON entry point; `show` text projection |
 | `display.mjs` | presentation-only task metadata: `validateTaskDisplay`, the shared `formatTaskLabel` (mirrored in the legacy engine), `renderRunSummary` |
 | `snapshots.mjs` | real Git tracked/nonignored untracked inventory, deleted files, asset/mode hashes, conservative symlink rejection and path-based scope check |
 | `gates.mjs` | host-bound POSIX local command execution, shell:false, explicit env, timeout/cancellation/output cap, before/after candidate and oracle checks |
@@ -317,6 +326,15 @@ Next sequence: (1) independent review of the evidence bridge and process fixture
 (2) killed-host crash-boundary tests and worker-dispatch integration;
 (3) stop-to-process cancellation and supervised recovery;
 (4) production/legacy projection coordination; (5) owner-approved live runtime integration.
+Update 2026-10-06: for (2), this SHA has killed-host tests at four fixture-adapter
+journal boundaries (reservation-committed, spawned-before-pid-save, result-ready,
+result-stored; one run each, `tests/loop-crash.test.mjs`) and fixture build-dispatch
+integration (`tests/loop-host-fixtures.test.mjs`, where the lost projection ACK is
+simulated, not a killed host). Killed-host coverage of the driver boundaries
+(claim-before-start, process-before-receipt, receipt-before-settle,
+projection-before-ACK; five repetitions each) is not yet implemented (card R02).
+No independent review of the evidence bridge and process fixture in (1) is
+recorded at this SHA.
 Keep the new path opt-in until these gates pass. Do not couple it into the old
 count engine or treat old ledgers as new evidence.
 
