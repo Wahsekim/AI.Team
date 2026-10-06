@@ -134,7 +134,7 @@ When the owner says `start {{PROJECT_NAME | localized at bootstrap}}` or
   fires the chaos role for halt-investigation first.
 - Engine-mode loops: paste the engine's emitted log blocks VERBATIM
   (`docs/engine.md`); manual re-derivation is banned.
-- Do not commit, push, deploy, or publish unless the owner explicitly asks.
+- Agents may commit in this repository (owner decision 2026-10-06): one commit per slice/card, conventional message, never on `main` directly. Agents may push the working branch only (`codex/loop-graph-mvp`; never `main`, never `--force`). Do not deploy or publish unless the owner explicitly asks.
 - Preserve append-only logs; rotate per the rotation regime
   (`docs/process-index.md`); supersede with dated entries instead of rewriting
   history.
