@@ -37,3 +37,7 @@ __pycache__/
 
 # Rollout acceptance evidence (owner decision 2026-10-06: local only, never committed)
 docs/rollout-evidence/
+
+# Rollout planning docs (owner decision 2026-10-06: local only)
+docs/loop-graph-rollout-plan.md
+docs/loop-graph-rollout-handoff.md
