@@ -34,3 +34,6 @@ ai-team-quality-improvement-plan.md
 # Python bytecode (tests/op_board_test.py)
 __pycache__/
 *.pyc
+
+# Rollout acceptance evidence (owner decision 2026-10-06: local only, never committed)
+docs/rollout-evidence/
