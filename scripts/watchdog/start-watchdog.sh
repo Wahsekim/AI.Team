@@ -96,7 +96,8 @@ if [ -x "$LOOP_SCRIPT" ]; then
     disown
     # Keep the start lock until the child has exec'd the loop: before exec its
     # argv is still this hook's, so a racing start would read the PID file as
-    # stale and spawn a second loop. Bounded (~5s) in case exec never happens.
+    # stale and spawn a second loop. Capped at 100 polls (~6-8s, each forks ps
+    # and sleep) in case exec never happens.
     tries=0
     while [ "$tries" -lt 100 ] && kill -0 "$loop_pid" 2>/dev/null && ! pid_is_watchdog "$loop_pid"; do
         sleep 0.05
