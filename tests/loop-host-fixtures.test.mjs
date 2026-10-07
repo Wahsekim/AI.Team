@@ -146,7 +146,7 @@ test('claimed-without-journal and preexisting-journal gaps never cause a new spa
 
 // Drivers require an execution owner (ADR 0002); release runs before the fixture closes its store.
 async function drivenFixture(t, source) {
-  const f = await fixture(t, source), owner = await acquireExecutionOwner({ store: f.store });
+  const f = await fixture(t, source), owner = await acquireExecutionOwner({ store: f.store, target: f.root });
   f.beforeClose.push(() => owner.release());
   return { ...f, owner, fenced: (action, payload) => f.store.apply(action, command(f.store, 'run', payload), undefined, owner.ownerId) };
 }

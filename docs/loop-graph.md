@@ -252,6 +252,28 @@ exit leaves it open by design: the directory refuses execution, never by PID or
 time, until an operator runs the library-only
 `closeOrphanedExecution({store, ownerId, note})`; a CLI arrives with R05b.
 
+### Product target (R03b, 2026-10-07)
+
+ADR 0003. A driver host passes `acquireExecutionOwner({store, target})`; the
+target must be the Git clone the host created as a direct child of its own
+state directory (`fixture` uses `<state-dir>/product`), and the state directory
+must not lie inside any Git repository. Identity is the
+`realpathSync.native` root plus (dev, ino) of the root and of its Git common
+dir, so symlink, relative and case aliases are one target. Before any lock file
+or marker exists, `acquire` refuses with `TARGET_NOT_ISOLATED` a target outside
+the state directory, a non-root or non-Git directory, a linked worktree, a
+separate git dir, a repository with linked worktrees, or one using alternates;
+a state directory inside or equal to the product stays `SCOPE_DENIED`. The
+first bind records a `target_binding` row in the lock database beside
+`store_binding`; a later bind of another clone, or of a root or `.git` replaced
+by a new inode, fails `TARGET_MISMATCH`, as does any fenced action after the
+held target changes. `createFixtureDriver` requires the owner's target to equal
+its `root`. CLI exit 4 adds both codes. Consequences: two state directories
+cannot share a target, because its parent is the only admissible state directory;
+independent clones are different targets by construction. Running legacy
+`run-n-rounds` on the clone is unsupported and documented, not enforced
+(owner decision, ADR 0001; limitation until R19).
+
 ## Task display contract (schemaVersion 2)
 
 Review 2026-09-25 (F-06): operators could not tell what a task was about

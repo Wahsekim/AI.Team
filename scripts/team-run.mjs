@@ -11,7 +11,7 @@ import { acquireExecutionOwner, bindDriver } from '../src/loop/execution-owner.m
 
 const usage = 'node scripts/team-run.mjs <demo|fixture|status|events|audit|stop|show> <state-directory> <run-id>';
 let store, owner;
-const EXCLUSION = new Set(['EXECUTION_OWNER_ACTIVE', 'EXECUTION_OPEN', 'OWNER_LOST', 'STORE_MISMATCH']);
+const EXCLUSION = new Set(['EXECUTION_OWNER_ACTIVE', 'EXECUTION_OPEN', 'OWNER_LOST', 'STORE_MISMATCH', 'TARGET_MISMATCH', 'TARGET_NOT_ISOLATED']);
 try {
   const [action, directory, runId, ...extra] = process.argv.slice(2);
   requireThat(['demo', 'fixture', 'status', 'events', 'audit', 'stop', 'show'].includes(action) && directory && runId && !extra.length, 'INVALID_SPEC', usage);

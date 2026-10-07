@@ -21,7 +21,7 @@ const pause = event => {
 
 const runId = 'run';
 const store = await openStore(join(directory, 'loop.sqlite'));
-const owner = await acquireExecutionOwner({ store });
+const owner = await acquireExecutionOwner({ store, target: root });
 emit({ source: 'owner', ownerId: owner.ownerId });
 const archive = await openEvidenceArchive(join(directory, 'evidence.sqlite'));
 const adapter = await openFixtureAdapter({ filename: join(directory, 'fixture.sqlite'), runId, workspace: directory, onBoundary(event) {

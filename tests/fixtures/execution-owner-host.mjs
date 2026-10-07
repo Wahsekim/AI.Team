@@ -37,7 +37,7 @@ if (mode === 'try') {
   const { createFixtureDriver } = await import('../../src/loop/fixture-driver.mjs');
   const { TERMINAL } = await import('../../src/loop/reducer.mjs');
   const { root, gate, oracle, request } = JSON.parse(readFileSync(join(target, 'config.json'), 'utf8'));
-  const store = await openStore(join(target, 'loop.sqlite')), owner = await acquireExecutionOwner({ store });
+  const store = await openStore(join(target, 'loop.sqlite')), owner = await acquireExecutionOwner({ store, target: root });
   const archive = await openEvidenceArchive(join(target, 'evidence.sqlite'));
   const adapter = await openFixtureAdapter({ filename: join(target, 'fixture.sqlite'), runId: 'run', workspace: target,
     onBoundary(event) { if (event.phase === 'spawned-before-pid-save') emit({ source: 'adapter', ...event }); } });

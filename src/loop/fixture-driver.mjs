@@ -8,7 +8,7 @@ import { executeStoredFixture } from './host-fixtures.mjs';
 import { executeStoredGate } from './host-gates.mjs';
 import { validateFixtureRequest } from './adapters/fixture-process.mjs';
 import { publishProjection } from './projector.mjs';
-import { bindDriver, stateIdentity } from './execution-owner.mjs';
+import { assertOwnedTarget, bindDriver, stateIdentity } from './execution-owner.mjs';
 
 // Single trusted host, fixture builds only. One step runs at most one effect.
 // `owner` (acquireExecutionOwner) is the cross-process authority; one driver per owner handle.
@@ -32,6 +32,7 @@ export function createFixtureDriver({ store, owner, adapter, archive, runId, roo
     requireThat(config?.gate?.specDigest === gate.specDigest && gate.repoId === 'product'
       && realpathSync.native(config.repoRoots.product) === root, 'INVALID_SPEC', 'Missing or mismatched trusted product gate configuration');
   }
+  assertOwnedTarget(owner, root);
   const binding = bindDriver(owner, store), fenced = binding.store;
   let active = null, controller = null, closing = false, closePromise = null;
   const status = () => store.status(runId);

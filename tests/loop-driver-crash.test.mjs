@@ -102,7 +102,7 @@ async function reopen(t, f) {
   await assert.rejects(acquireExecutionOwner({ store }), e => e.code === 'EXECUTION_OPEN');
   assert.deepEqual(store.executions().filter(e => e.open === 1).map(e => e.owner_id), [hostOwner]);
   assert.deepEqual(await closeOrphanedExecution({ store, ownerId: hostOwner, note: 'test: host SIGKILLed at boundary' }), { closed: true });
-  const owner = await acquireExecutionOwner({ store });
+  const owner = await acquireExecutionOwner({ store, target: f.root });
   const archive = await openEvidenceArchive(join(f.directory, 'evidence.sqlite'));
   const phases = [];
   const adapter = await openFixtureAdapter({ filename: join(f.directory, 'fixture.sqlite'), runId, workspace: f.directory,

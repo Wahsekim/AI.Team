@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { hostname } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { LoopError, requireThat } from './contracts.mjs';
+import { targetIdentity } from './product-target.mjs';
 
 // ADR 0002. No other module may open LOCK_FILE: a plain open+close in this process drops the lock.
 export const LOCK_FILE = 'execution-owner.sqlite';
@@ -11,6 +12,11 @@ const LOCK_SQL = 'PRAGMA busy_timeout=0; PRAGMA locking_mode=EXCLUSIVE; BEGIN EX
 // Written and read only under the kernel lock; locking_mode=EXCLUSIVE keeps the lock across this COMMIT.
 const BINDING_SQL = `CREATE TABLE IF NOT EXISTS store_binding(id INTEGER PRIMARY KEY CHECK(id=1),
   store_name TEXT NOT NULL, store_dev TEXT NOT NULL, store_ino TEXT NOT NULL)`;
+// ADR 0003: the host-created product clone, bound like the store; paths are informational, (dev, ino) decide.
+const TARGET_SQL = `CREATE TABLE IF NOT EXISTS target_binding(id INTEGER PRIMARY KEY CHECK(id=1),
+  target_path TEXT NOT NULL, target_dev TEXT NOT NULL, target_ino TEXT NOT NULL,
+  git_common_path TEXT NOT NULL, git_common_dev TEXT NOT NULL, git_common_ino TEXT NOT NULL)`;
+const BINDING_ERRORS = new Set(['STORE_MISMATCH', 'TARGET_MISMATCH']);
 const SQLITE_BUSY = 5, PROBE_TIMEOUT_MS = 2000;
 const UNFENCED = new Set(['stop', 'interrupted']);
 const PROBE_SOURCE = `const { DatabaseSync } = require('node:sqlite');
@@ -43,7 +49,16 @@ function bindStore(db, store) {
   if (!bound) db.prepare('INSERT INTO store_binding VALUES (1,?,?,?)').run(store.name, store.dev, store.ino);
   else if (bound.store_name !== store.name || bound.store_dev !== store.dev || bound.store_ino !== store.ino)
     throw new LoopError('STORE_MISMATCH', `State directory is bound to control store ${bound.store_name} (dev ${bound.store_dev}, ino ${bound.store_ino})`);
-  db.exec('COMMIT; BEGIN EXCLUSIVE');
+}
+
+// One state directory, one product clone: a replaced root or Git common dir (new inode) or another clone is refused.
+function bindTarget(db, target) {
+  db.exec(TARGET_SQL);
+  const row = [target.relativePath, String(target.stat.dev), String(target.stat.ino), target.git.path, String(target.git.stat.dev), String(target.git.stat.ino)];
+  const bound = db.prepare('SELECT * FROM target_binding WHERE id=1').get();
+  if (!bound) db.prepare('INSERT INTO target_binding VALUES (1,?,?,?,?,?,?)').run(...row);
+  else if (bound.target_dev !== row[1] || bound.target_ino !== row[2] || bound.git_common_dev !== row[4] || bound.git_common_ino !== row[5])
+    throw new LoopError('TARGET_MISMATCH', `State directory is bound to product clone ${bound.target_path} (dev ${bound.target_dev}, ino ${bound.target_ino})`);
 }
 
 function checkLockFile(lockPath, directory, { mustExist }) {
@@ -64,7 +79,7 @@ export function probeExclusive(lockPath) {
   return { exclusive: child.status === 0 && errcode === SQLITE_BUSY, errcode, status: child.status, signal: child.signal };
 }
 
-async function lockKernel({ path: stateDirectory, stat: directoryStat, store }) {
+async function lockKernel({ path: stateDirectory, stat: directoryStat, store }, target = null) {
   requireCapability();
   const { DatabaseSync } = await import('node:sqlite');
   const lockPath = join(stateDirectory, LOCK_FILE);
@@ -78,8 +93,8 @@ async function lockKernel({ path: stateDirectory, stat: directoryStat, store }) 
   }
   const unlock = () => { try { db.exec('ROLLBACK'); } catch { /* close drops the lock */ } db.close(); };
   try {
-    try { bindStore(db, store); }
-    catch (error) { if (error.code === 'STORE_MISMATCH') throw error; throw missing(`Store binding unavailable (errcode ${error.errcode ?? error.code ?? 'unknown'})`); }
+    try { bindStore(db, store); if (target) bindTarget(db, target); db.exec('COMMIT; BEGIN EXCLUSIVE'); }
+    catch (error) { if (BINDING_ERRORS.has(error.code)) throw error; throw missing(`Store binding unavailable (errcode ${error.errcode ?? error.code ?? 'unknown'})`); }
     const lockStat = checkLockFile(lockPath, directoryStat, { mustExist: true });
     const probe = probeExclusive(lockPath);
     if (!probe.exclusive) throw missing(`Execution lock is not exclusive across processes (probe errcode ${probe.errcode}, status ${probe.status})`);
@@ -87,10 +102,13 @@ async function lockKernel({ path: stateDirectory, stat: directoryStat, store }) 
   } catch (error) { unlock(); throw error; }
 }
 
-export async function acquireExecutionOwner({ store, now = Date.now }) {
+// `target`: the host-created product clone (ADR 0003); omit only for hosts without product effects (demo).
+export async function acquireExecutionOwner({ store, target, now = Date.now }) {
   requireCapability();
   const state = stateIdentity(store);
-  const lock = await lockKernel(state);
+  // Refused before the lock file or any marker exists.
+  const product = target == null ? null : targetIdentity(target, state.path);
+  const lock = await lockKernel(state, product);
   const ownerId = randomUUID();
   try {
     store.openExecution({ ownerId, statePath: state.path, stateDev: String(state.stat.dev), stateIno: String(state.stat.ino),
@@ -103,9 +121,17 @@ export async function acquireExecutionOwner({ store, now = Date.now }) {
       return sameFile(lstatSync(lock.lockPath, { bigint: true }), lock.lockStat) && sameFile(statSync(state.path, { bigint: true }), state.stat);
     } catch { return false; }
   };
+  const targetHeld = () => {
+    try {
+      return !product || sameFile(statSync(product.path, { bigint: true }), product.stat) && sameFile(statSync(product.git.path, { bigint: true }), product.git.stat);
+    } catch { return false; }
+  };
   const handle = Object.freeze({
-    ownerId, stateDirectory: state.path, lockPath: lock.lockPath,
-    assertHeld() { requireThat(held(), 'OWNER_LOST', 'Execution ownership lost; no further dispatch'); },
+    ownerId, stateDirectory: state.path, lockPath: lock.lockPath, target: product?.path ?? null,
+    assertHeld() {
+      requireThat(held(), 'OWNER_LOST', 'Execution ownership lost; no further dispatch');
+      requireThat(targetHeld(), 'TARGET_MISMATCH', 'Product clone was replaced; no further dispatch');
+    },
     release() {
       if (self.released) return self.result;
       let markerClosed = false;
@@ -117,7 +143,7 @@ export async function acquireExecutionOwner({ store, now = Date.now }) {
       return self.result;
     },
   });
-  internals.set(handle, { self, state, store });
+  internals.set(handle, { self, state, store, product });
   return handle;
 }
 
@@ -136,6 +162,17 @@ export async function closeOrphanedExecution({ store, ownerId, note, now = Date.
     return store.closeExecution({ ownerId, kind: 'operator', note, now: now() });
   }
   finally { lock.unlock(); }
+}
+
+// Driver-only: the product root must resolve to the owner's bound clone.
+export function assertOwnedTarget(owner, root) {
+  const entry = internals.get(owner);
+  requireThat(entry, 'CAPABILITY_MISSING', 'A live execution owner handle is required');
+  requireThat(entry.product, 'TARGET_NOT_ISOLATED', 'Execution owner was acquired without a host-created product target');
+  owner.assertHeld();
+  let path = null;
+  try { path = realpathSync.native(root); } catch { /* an unavailable root is not the owned target */ }
+  requireThat(path === entry.product.path, 'TARGET_MISMATCH', 'Product root is not the owned target');
 }
 
 // Driver-only: one driver per handle; returns the fenced store the driver must use exclusively.

@@ -24,7 +24,7 @@ export async function runFixtureDemo({ directory, runId }) {
     if (error.code === 'EEXIST') requireThat(false, 'IDEMPOTENCY_CONFLICT', 'Fixture requires a new state directory; existing data is preserved');
     throw error;
   }
-  directory = realpathSync(directory);
+  directory = realpathSync.native(directory);
   const root = join(directory, 'product'); mkdirSync(root, { mode: 0o700 }); mkdirSync(join(root, 'src'));
   writeFileSync(join(root, 'src/check.cjs'), 'process.stdout.write("isolated fixture gate passed\\n");\n', { flag: 'wx' });
   const git = args => execFileSync('git', ['-C', root, '-c', 'core.hooksPath=/dev/null', ...args], {
@@ -53,7 +53,7 @@ export async function runFixtureDemo({ directory, runId }) {
   const interrupt = () => stop('SIGINT'), terminate = () => stop('SIGTERM');
   try {
     store = await openStore(join(directory, 'loop.sqlite'));
-    owner = await acquireExecutionOwner({ store }); store.create(spec, artifacts, { simulation: true });
+    owner = await acquireExecutionOwner({ store, target: root }); store.create(spec, artifacts, { simulation: true });
     archive = await openEvidenceArchive(join(directory, 'evidence.sqlite'));
     adapter = await openFixtureAdapter({ filename: join(directory, 'fixture.sqlite'), runId, workspace: directory });
     driver = createFixtureDriver({ store, owner, archive, adapter, runId, root, projectionDirectory: directory,
