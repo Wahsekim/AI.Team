@@ -2,12 +2,15 @@ import { lstatSync, realpathSync, statSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { hostname } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { LoopError, requireThat } from './contracts.mjs';
 
 // ADR 0002. No other module may open LOCK_FILE: a plain open+close in this process drops the lock.
 export const LOCK_FILE = 'execution-owner.sqlite';
 const LOCK_SQL = 'PRAGMA busy_timeout=0; PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE';
+// Written and read only under the kernel lock; locking_mode=EXCLUSIVE keeps the lock across this COMMIT.
+const BINDING_SQL = `CREATE TABLE IF NOT EXISTS store_binding(id INTEGER PRIMARY KEY CHECK(id=1),
+  store_name TEXT NOT NULL, store_dev TEXT NOT NULL, store_ino TEXT NOT NULL)`;
 const SQLITE_BUSY = 5, PROBE_TIMEOUT_MS = 2000;
 const UNFENCED = new Set(['stop', 'interrupted']);
 const PROBE_SOURCE = `const { DatabaseSync } = require('node:sqlite');
@@ -28,8 +31,19 @@ export function stateIdentity(store) {
   const filename = store?.filename;
   requireThat(typeof filename === 'string' && filename !== '' && filename !== ':memory:' && !filename.startsWith('file:'),
     'CAPABILITY_MISSING', 'Execution owner requires a file-backed control store');
-  const path = realpathSync.native(dirname(resolve(filename)));
-  return { path, stat: statSync(path, { bigint: true }) };
+  const path = realpathSync.native(dirname(resolve(filename))), storeStat = statSync(resolve(filename), { bigint: true });
+  return { path, stat: statSync(path, { bigint: true }),
+    store: { name: basename(realpathSync.native(resolve(filename))), dev: String(storeStat.dev), ino: String(storeStat.ino) } };
+}
+
+// One state directory, one control store: the first owner binds it durably; any other store file is refused.
+function bindStore(db, store) {
+  db.exec(BINDING_SQL);
+  const bound = db.prepare('SELECT store_name, store_dev, store_ino FROM store_binding WHERE id=1').get();
+  if (!bound) db.prepare('INSERT INTO store_binding VALUES (1,?,?,?)').run(store.name, store.dev, store.ino);
+  else if (bound.store_name !== store.name || bound.store_dev !== store.dev || bound.store_ino !== store.ino)
+    throw new LoopError('STORE_MISMATCH', `State directory is bound to control store ${bound.store_name} (dev ${bound.store_dev}, ino ${bound.store_ino})`);
+  db.exec('COMMIT; BEGIN EXCLUSIVE');
 }
 
 function checkLockFile(lockPath, directory, { mustExist }) {
@@ -50,7 +64,7 @@ export function probeExclusive(lockPath) {
   return { exclusive: child.status === 0 && errcode === SQLITE_BUSY, errcode, status: child.status, signal: child.signal };
 }
 
-async function lockKernel(stateDirectory, directoryStat) {
+async function lockKernel({ path: stateDirectory, stat: directoryStat, store }) {
   requireCapability();
   const { DatabaseSync } = await import('node:sqlite');
   const lockPath = join(stateDirectory, LOCK_FILE);
@@ -64,6 +78,8 @@ async function lockKernel(stateDirectory, directoryStat) {
   }
   const unlock = () => { try { db.exec('ROLLBACK'); } catch { /* close drops the lock */ } db.close(); };
   try {
+    try { bindStore(db, store); }
+    catch (error) { if (error.code === 'STORE_MISMATCH') throw error; throw missing(`Store binding unavailable (errcode ${error.errcode ?? error.code ?? 'unknown'})`); }
     const lockStat = checkLockFile(lockPath, directoryStat, { mustExist: true });
     const probe = probeExclusive(lockPath);
     if (!probe.exclusive) throw missing(`Execution lock is not exclusive across processes (probe errcode ${probe.errcode}, status ${probe.status})`);
@@ -74,7 +90,7 @@ async function lockKernel(stateDirectory, directoryStat) {
 export async function acquireExecutionOwner({ store, now = Date.now }) {
   requireCapability();
   const state = stateIdentity(store);
-  const lock = await lockKernel(state.path, state.stat);
+  const lock = await lockKernel(state);
   const ownerId = randomUUID();
   try {
     store.openExecution({ ownerId, statePath: state.path, stateDev: String(state.stat.dev), stateIno: String(state.stat.ino),
@@ -105,14 +121,20 @@ export async function acquireExecutionOwner({ store, now = Date.now }) {
   return handle;
 }
 
-// Library-only operator transition (c). Taking the kernel lock proves the recorded owner no longer holds it.
+// Library-only operator transition (c). Taking the kernel lock proves the recorded owner no longer holds it,
+// but only for the same lock file and directory: after a replacement (P6) the close is refused.
 export async function closeOrphanedExecution({ store, ownerId, note, now = Date.now }) {
   requireCapability();
   requireThat(typeof ownerId === 'string' && ownerId.length > 0, 'INVALID_SPEC', 'Exact open owner_id required');
   requireThat(typeof note === 'string' && note.trim().length > 0, 'INVALID_SPEC', 'Non-empty operator note required');
   const state = stateIdentity(store);
-  const lock = await lockKernel(state.path, state.stat);
-  try { return store.closeExecution({ ownerId, kind: 'operator', note, now: now() }); }
+  const lock = await lockKernel(state);
+  try {
+    const row = store.executions().find(e => e.open === 1 && e.owner_id === ownerId);
+    requireThat(!row || row.lock_ino === String(lock.lockStat.ino) && row.state_dev === String(state.stat.dev) && row.state_ino === String(state.stat.ino),
+      'EXECUTION_OWNER_ACTIVE', 'Lock file or state directory changed since this execution opened; its owner may still be alive');
+    return store.closeExecution({ ownerId, kind: 'operator', note, now: now() });
+  }
   finally { lock.unlock(); }
 }
 
@@ -124,7 +146,8 @@ export function bindDriver(owner, store) {
   owner.assertHeld();
   requireThat(!self.bound, 'INVALID_TRANSITION', 'This execution owner already has a fixture driver');
   const identity = stateIdentity(store);
-  requireThat(identity.path === state.path && sameFile(identity.stat, state.stat), 'INVALID_SPEC', 'Store is not in the owned state directory');
+  requireThat(identity.path === state.path && sameFile(identity.stat, state.stat) && identity.store.dev === state.store.dev
+    && identity.store.ino === state.store.ino, 'INVALID_SPEC', 'Store is not the owned control store');
   self.bound = true;
   const fenced = Object.freeze({ ...store, apply(action, command, at) {
     if (UNFENCED.has(action)) return store.apply(action, command, at);

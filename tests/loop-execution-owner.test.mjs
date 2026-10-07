@@ -44,7 +44,7 @@ async function holder(t, file) {
     child.stdout.on('data', onData);
   });
   const held = await line();
-  return { held, async release() { const next = line(); child.stdin.end('release\n'); const event = await next; assert.equal((await exited).code, 0); return event; } };
+  return { held, async kill() { child.kill('SIGKILL'); assert.equal((await exited).signal, 'SIGKILL'); }, async release() { const next = line(); child.stdin.end('release\n'); const event = await next; assert.equal((await exited).code, 0); return event; } };
 }
 
 test('T2: two store instances in one process cannot both own the directory', sqlite, async t => {
@@ -84,8 +84,10 @@ test('T4: release with unresolved work leaves the marker open', sqlite, async t 
 
 test('T6: stale-looking metadata never authorizes takeover; operator close has strict preconditions', sqlite, async t => {
   const s = await stateDir(t);
-  s.store.openExecution({ ownerId: 'ghost', statePath: s.directory, stateDev: '0', stateIno: '0', lockIno: '0',
-    pid: 2 ** 22 + 7, hostname: 'elsewhere.invalid', now: 0 });
+  (await acquireExecutionOwner({ store: s.store })).release(); // creates the lock file and the store binding
+  const dir = statSync(s.directory, { bigint: true });
+  s.store.openExecution({ ownerId: 'ghost', statePath: s.directory, stateDev: String(dir.dev), stateIno: String(dir.ino),
+    lockIno: String(statSync(s.lock, { bigint: true }).ino), pid: 2 ** 22 + 7, hostname: 'elsewhere.invalid', now: 0 });
   await assert.rejects(acquireExecutionOwner({ store: s.store }), code('EXECUTION_OPEN'));
   await assert.rejects(closeOrphanedExecution({ store: s.store, ownerId: 'wrong', note: 'x' }), code('UNKNOWN_REFERENCE'));
   await assert.rejects(closeOrphanedExecution({ store: s.store, ownerId: 'ghost', note: '  ' }), code('INVALID_SPEC'));
@@ -144,6 +146,47 @@ test('T8: lock file replaced while held: the second host meets the marker, the f
   assert.equal(s.store.status('run').stateVersion, 0, 'no dispatch after the loss');
   assert.deepEqual(owner.release(), { markerClosed: false });
   assert.deepEqual(s.store.executions().map(e => e.open), [1]);
+});
+
+test('T8/F2: operator close is refused after a lock-file replacement; the live owner stays open', sqlite, async t => {
+  const s = await stateDir(t), owner = await acquireExecutionOwner({ store: s.store });
+  unlinkSync(s.lock);
+  await assert.rejects(closeOrphanedExecution({ store: s.store, ownerId: owner.ownerId, note: 'operator' }), code('EXECUTION_OWNER_ACTIVE'));
+  assert.deepEqual(s.store.executions().map(e => [e.owner_id, e.open]), [[owner.ownerId, 1]]);
+  assert.equal(attempt(s.file).acquire.code, 'EXECUTION_OPEN', 'the operator lock was released and nothing reopened the directory');
+  assert.deepEqual(owner.release(), { markerClosed: false });
+});
+
+test('F1: a crashed owner of store A blocks execution through any other store in the directory', sqlite, async t => {
+  const s = await stateDir(t), held = await holder(t, s.file);
+  await held.kill();
+  const other = await s.open(join(s.directory, 'other.sqlite'));
+  const { spec, artifacts } = demoBundle('run'); other.create(spec, artifacts, { simulation: true });
+  await assert.rejects(acquireExecutionOwner({ store: other }), code('STORE_MISMATCH'));
+  assert.deepEqual(other.executions(), [], 'no marker row in the other store');
+  assert.equal(other.status('run').stateVersion, 0, 'no dispatch');
+  assert.equal(attempt(join(s.directory, 'other.sqlite')).acquire.code, 'STORE_MISMATCH', 'a separate process is refused too');
+  assert.deepEqual(s.store.executions().map(e => [e.owner_id, e.open]), [[held.held.ownerId, 1]]);
+  await assert.rejects(acquireExecutionOwner({ store: s.store }), code('EXECUTION_OPEN'));
+});
+
+test('F1: the canonical store re-acquires after a graceful close; a replaced store file is refused', sqlite, async t => {
+  const s = await stateDir(t);
+  assert.deepEqual((await acquireExecutionOwner({ store: s.store })).release(), { markerClosed: true });
+  const again = await acquireExecutionOwner({ store: await s.open(join(s.directory, '.', 'loop.sqlite')) });
+  assert.deepEqual(again.release(), { markerClosed: true });
+  const bytes = readFileSync(s.file); unlinkSync(s.file); writeFileSync(s.file, bytes); // same bytes, new inode
+  const replaced = await s.open();
+  await assert.rejects(acquireExecutionOwner({ store: replaced }), code('STORE_MISMATCH'));
+  assert.deepEqual(replaced.executions().map(e => e.open), [0, 0], 'no new marker row');
+});
+
+test('F3: a cross-process probe that does not report BUSY fails closed and releases the lock', sqlite, async t => {
+  const s = await stateDir(t);
+  assert.equal(attempt(s.file, ['noprobe']).acquire.code, 'CAPABILITY_MISSING');
+  assert.deepEqual(s.store.executions(), [], 'no marker row');
+  const owner = await s.own(s.store);
+  owner.assertHeld();
 });
 
 test('T9: store fencing refuses foreign and unfenced dispatch but keeps stop unfenced', sqlite, async t => {

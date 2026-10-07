@@ -4,7 +4,7 @@ import { openStore } from '../../src/loop/store.mjs';
 import { command } from '../../src/loop/demo.mjs';
 
 // Disposable second process for ADR 0002 tests. Every mode self-exits within 8 s.
-// try  <store-file> [win32]: one acquire attempt, then an unfenced tick; reports codes.
+// try  <store-file> [win32|noprobe]: one acquire attempt, then an unfenced tick; reports codes.
 // hold <store-file>:         acquire, report, release on a stdin line.
 // drive <directory>:         real fixture driver; pauses after its first step until a stdin line.
 const [mode, target, flag] = process.argv.slice(2);
@@ -13,6 +13,8 @@ const bound = setTimeout(() => process.exit(9), 8000);
 const nextLine = () => new Promise(resolve => process.stdin.once('data', resolve));
 const attempt = async fn => { try { return { ok: true, value: await fn() }; } catch (error) { return { ok: false, code: error.code ?? error.message }; } };
 if (flag === 'win32') Object.defineProperty(process, 'platform', { value: 'win32' });
+// Test-only: the probe child becomes a non-node binary, so it cannot report BUSY.
+if (flag === 'noprobe') process.execPath = '/usr/bin/true';
 const { acquireExecutionOwner } = await import('../../src/loop/execution-owner.mjs');
 
 if (mode === 'try') {

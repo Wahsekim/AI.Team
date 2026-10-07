@@ -37,7 +37,7 @@ Status: Accepted for implementation (PM sign-off 2026-10-07T07:01:49Z: Q1 yes li
 3. **Transitions.** There are no others: no reopen, no delete, no expiry.
    - (a) *none open → open(me)*: in one `BEGIN IMMEDIATE` on the control store, after the kernel lock is held. If any open row exists, whatever its pid, time or host: `EXECUTION_OPEN`, and the kernel lock is released at once.
    - (b) *open(me) → closed/graceful* on `release()`. It needs no active step and no run in the store that is `RECOVERY_REQUIRED` or has a dispatch STARTED/UNKNOWN without a receipt, or a STARTED projection. Otherwise release drops only the kernel lock and **leaves the marker open**.
-   - (c) *open(other) → closed/operator* via `closeOrphanedExecution({ store, ownerId, note })`. The caller must hold the kernel lock, which proves the recorded owner no longer holds it. It needs the exact open `owner_id` and a non-empty operator note. It does not change run state; reducer recovery (R05 ingest/abandon) is still required. The library function is in R03a scope (Q1). R05b wires the CLI.
+   - (c) *open(other) → closed/operator* via `closeOrphanedExecution({ store, ownerId, note })`. The caller must hold the kernel lock, which proves the recorded owner no longer holds it. It needs the exact open `owner_id` and a non-empty operator note. The open row's `lock_ino`, `state_dev` and `state_ino` must equal the freshly locked file and directory; otherwise `EXECUTION_OWNER_ACTIVE`, because the lock no longer proves the owner is gone (review F2). It does not change run state; reducer recovery (R05 ingest/abandon) is still required. The library function is in R03a scope (Q1). R05b wires the CLI.
 4. **Fencing.**
    - `store.apply(action, command, now, fence)`: inside the same transaction, if an open row exists, `tick`/`claim` without a fence, or with a different `owner_id`, are refused with `EXECUTION_OPEN`.
    - A fenced call with no matching open row → `OWNER_LOST`.
@@ -47,6 +47,7 @@ Status: Accepted for implementation (PM sign-off 2026-10-07T07:01:49Z: Q1 yes li
    - State directory = `realpathSync.native(dirname(store.filename))` plus `statSync` (dev, ino). The store exposes `filename`. `:memory:` → `CAPABILITY_MISSING`.
    - The lock is per inode, so symlink, case, relative and bind aliases meet one lock (P1, P2).
    - The lock file must be a regular non-symlink file with `nlink === 1` on the directory's device; otherwise `CAPABILITY_MISSING`, untouched.
+   - **One control store per state directory** (attempt 2, review F1). The kernel lock is per directory, but the marker lives in a store file. So the first successful acquire records the store's (basename, dev, ino) in a `store_binding` table inside the lock file. It writes the binding under the kernel lock and commits before the lifetime `BEGIN EXCLUSIVE`; `locking_mode=EXCLUSIVE` keeps the lock across that commit. Every later acquire, and every operator close, compares the opened store with the binding. Any mismatch, including the same path with a new inode, gives `STORE_MISMATCH` (CLI exit 4) and writes no marker.
    - P3 guard: the driver refuses (`SCOPE_DENIED`) a state directory inside the product root, because the snapshot would open and close the lock file in-process. Its root resolution moves to `.native` (`fixture-driver.mjs:25,32`). Rule: no module other than `execution-owner.mjs` opens the lock path.
 6. **One driver per owner handle.** The handle replaces the per-store-object `WeakMap` as the authority. A second `createFixtureDriver` on the same handle → `INVALID_TRANSITION`. `createFixtureDriver` requires `owner`; there is no optional bypass.
 7. **Fail-closed matrix.** In every row, inspection and stop are unaffected. They never open the lock file.
@@ -88,6 +89,10 @@ Never: takeover on a dead PID, expiry by time or timeout, a force flag, deleting
   - Direct library calls to `executeStored*` are trusted host code. They are covered only by the unfenced `tick`/`claim` guard.
   - An older binary ignores the marker; there is no metadata version bump (Q5, R07).
   - Linux is unverified until the CI ubuntu Node 24 job runs.
+  - After a lock-file replacement, `closeOrphanedExecution` refuses to close the open row, and the directory stays stuck. R05b must define the manual procedure.
+  - The store binding lives in the lock file. Deleting or replacing the lock file therefore also resets the binding. This is the same same-UID tampering limit as above.
+  - `store.openExecution` and `store.closeExecution` are public and do not take the lock. They are trusted-library surface; only `execution-owner.mjs` calls them.
+  - Direct unfenced `tick`/`claim` on a second, unbound store file in the directory is not blocked, because that store has no marker. Only `acquireExecutionOwner` enforces the binding (trusted-library limit).
 
 ## Follow-ups
 

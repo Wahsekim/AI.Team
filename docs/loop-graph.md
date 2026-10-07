@@ -233,7 +233,7 @@ policy. Quota samples are supplied by the host callback at admission, not read
 from model text. Cross-process exclusion is described below. A stop written
 by another CLI is not actively polled and cannot promise prompt cancellation.
 No real provider, distributed lease or automatic recovery is enabled.
-The CLI `demo` remains unchanged; the separate `fixture` command uses this driver.
+The CLI `demo` drives its fake effects under an execution owner (below); the separate `fixture` command uses this driver.
 
 ### Execution owner (R03a, 2026-10-07)
 
@@ -245,8 +245,9 @@ second process, and opens a row in the control store's append-only `executions`
 table. While a row is open, unfenced `tick`/`claim` fail; the driver fences them
 with its owner id and fails `OWNER_LOST` if the lock file or directory changes.
 `stop`, `status`, `events`, `audit` and `show` never touch the lock. CLI exit 4:
-`EXECUTION_OWNER_ACTIVE` (live owner), `EXECUTION_OPEN` (unclosed row) or
-`OWNER_LOST`. Release closes the row only with no unresolved work. Any unclean
+`EXECUTION_OWNER_ACTIVE` (live owner), `EXECUTION_OPEN` (unclosed row),
+`OWNER_LOST`, or `STORE_MISMATCH` (the directory is bound to its first control
+store by basename and inode). Release closes the row only with no unresolved work. Any unclean
 exit leaves it open by design: the directory refuses execution, never by PID or
 time, until an operator runs the library-only
 `closeOrphanedExecution({store, ownerId, note})`; a CLI arrives with R05b.
