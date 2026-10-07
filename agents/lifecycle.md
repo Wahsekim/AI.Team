@@ -32,7 +32,7 @@ Rotation: slim-active + archive — the standing rule in
 
 ## Counter
 
-Next NNN to assign: **023**
+Next NNN to assign: **025**
 
 ## Counter and header rules
 
@@ -598,15 +598,64 @@ at rotation time.
 - Reasoning: max (prompt-level)
 - Estimated tokens: 200000
 - Sub-decision count: 0
-- Status: spawned
+- Status: completed
+- Completed: 2026-10-07T15:13:56Z
+- Tokens: 248384 (cumulative; attempt 1 231801 + attempt 2 16583)
+- Variance: +24%
+- PM overhead: ~15000 tok (est)
+- Outcome: commit 50cde2e — openStoreReadOnly (lstat then node:sqlite readOnly, no DDL/chmod/metadata; STORE_MISSING / STORE_UNREADABLE), stop opens rw without create (F7 fixed), inspection never opens the lock file (stat only; bindings reported 'not read'), new inspect.mjs + CLI inspect (pidAuthority:false, receipt presence, marker, stop view, usage unknown-not-zero, recoverySteps suggestions), show 'unresolved effects' block; I1-I7 green with 4 red-then-green mutations; 490 tests Node 24. Limitation flagged: hot rollback journal after a mid-commit kill makes the read-only open fail until a writer opens the store
+- Progress: yes
+- Handoffs:
+    - reviewer [023] needs 50cde2e + docs/rollout-evidence/R05a/
+    - R05b: hot-journal handling decision (explicit recorded rollback command?)
+- Retry-of: none
+- Diverged-from: none
+- Round-trip: 1 (resumed for [023] F2/F3/F4/F7 -> second commit 22f6a91; last attempt)
+- Notes: INLINE FALLBACK (see [001]). Only committing agent; CI on the R04b head runs concurrently.
+- Acceptance update: 2026-10-07T15:22:04Z review OK on core; P2 F2/F3 -> attempt 2 via resume (last attempt); F1 hot journal -> R05b precondition
+- Acceptance update: 2026-10-07T15:29:29Z OK locally (reviewed by [023] attempt-2 confirmation), BLOCKED-on-CI; pushed 50cde2e+22f6a91
+- Acceptance update: 2026-10-07T19:15:28Z OK (CI run 37644352082 green on 22f6a91)
+
+## [023] Independent Reviewer (loop-rollout-reviewer) - 2026-10-07T15:13:56Z
+- Ticket: R05a
+- Spawned by: PM (Claude Fable 5.1 main session)
+- Brief: Review 50cde2e against the R05 card (inspection must not rewrite or create; operator sees exactly what is known/unknown; replay idempotent) — first characterize the hot-journal limitation (window, whether the driver-crash boundaries can leave one, whether `stop` silently rolls it back) and recommend the R05b handling; then read-only guarantees (no DDL/chmod/metadata on any read path incl. verify/audit), lock-file rule, inspect truthfulness (pidAuthority, usage unknown never zero, suggestions only), I1-I7 reproduction, mutations, suites; writes docs/rollout-evidence/R05a/review.md only.
+- Model: opus (owner directive "opus 5 max")
+- Reasoning: max (prompt-level)
+- Estimated tokens: 150000
+- Sub-decision count: 0
+- Status: completed
+- Completed: 2026-10-07T15:22:04Z
+- Tokens: 129178 (cumulative; review 122017 + attempt-2 confirmation 7161)
+- Variance: -14%
+- PM overhead: ~10000 tok (est)
+- Outcome: hot journal characterized (DELETE mode, synchronous=FULL; hot only on kill during COMMIT or after a cache spill; R02 boundaries cannot produce one; stop/demo/driver restart roll it back silently; immutable=1 unsafe; copy+rw-open snapshot safe) → P2 F1 as R05b precondition; read-only inventory confirmed; mutations a,c,d,e caught, b (open lock DB) survives → P2 F3 FIFO test; P2 F2 abandon suggested for unknown receipts; P3 F4-F7; 489/0/1 Node 24, 356/0/134 Node 22; recommends OK locally
+- Progress: yes
+- Handoffs:
+    - implementer [022] attempt 2: F2, F3, F4, F7
+    - R05b: F1 snapshot read + recover-journal + spill test; abandon refuses on unreadable receipt source
+- Retry-of: none
+- Diverged-from: none
+- Round-trip: 1 (resumed to confirm 22f6a91; recommends OK locally)
+- Notes: INLINE FALLBACK (see [001]). Push of 50cde2e held until review closes.
+
+## [024] Implementer (loop-rollout-implementer) - 2026-10-07T15:29:29Z
+- Ticket: R05b
+- Spawned by: PM (Claude Fable 5.1 main session)
+- Brief: R05b — conservative recovery commands (plan R05 split b, owner Q6): `ingest-receipt` (settle an UNKNOWN/STARTED dispatch only from an already-durable receipt, usage from the receipt, never zero for unknown), `abandon` with recorded operator confirmation (refuses while any receipt source is unknown; never resets spend/attempts; never re-enables the same job), `close-execution-marker` (CLI over closeOrphanedExecution: exact owner id + non-empty note + identity check), `recover-journal` (explicit, recorded, refuses while the lock is held) and the hot-journal snapshot read for inspection (copy + rw open on the copy, identity re-check, labelled output) with a spill-based test; write commands briefly hold the kernel lock without opening a marker so a live driver is excluded (EXECUTION_OWNER_ACTIVE otherwise). No resume-all, no re-spawn, no kill by saved PID. One commit, no push.
+- Model: opus (owner directive "opus 5 max")
+- Reasoning: max (prompt-level)
+- Estimated tokens: 260000
+- Sub-decision count: 0 (rules fixed by plan R05, ADR 0002 §3(c), owner Q6, R05a review preconditions)
+- Status: running (interrupted once: host machine slept mid-response while writing the acceptance record; implementation + logs on disk, uncommitted; resumed)
 - Completed:
 - Tokens:
 - Variance:
-- PM overhead: ~15000 tok (est)
+- PM overhead: ~20000 tok (est)
 - Outcome:
 - Progress:
 - Handoffs:
 - Retry-of: none
 - Diverged-from: none
 - Round-trip: none
-- Notes: INLINE FALLBACK (see [001]). Only committing agent; CI on the R04b head runs concurrently.
+- Notes: INLINE FALLBACK (see [001]). Only committing agent; CI on the R05a head runs concurrently. Last G0 card; G0 exit review follows.

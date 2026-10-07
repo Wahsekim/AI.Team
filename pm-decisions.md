@@ -97,3 +97,10 @@ the engine's `results[]` (per `docs/engine.md`), under a dated batch line.
 2026-10-07 R04b ACCEPTANCE: OK locally, BLOCKED-on-CI (16ea22f + ca09d36; review [021] confirms). Pushing. Follow-up: R04b-P3 (two test gaps).
 2026-10-07 R05a -> Implementer, est 200000 tok, brief: agents/lifecycle.md#[022], why: next G0 card (R05 split approved Q7); X5 inspection-mutates-state must close before recovery commands
 2026-10-07 R04b ACCEPTED: OK (CI run 37641008156 all green on ca09d36). R04 complete. G0 progress: R01, R02, R02b, R03a, R03b, R04a, R04b, FLAKE-1, PROC-1 OK; R05a in progress; R05b pending; then G0 exit review. Follow-ups queued: STOP-2, STOP-3, PROC-2, R04b-P3.
+2026-10-07 CI on ledger commit: run=834d398 conclusion=success (runs/37641465611).
+2026-10-07 R05a closed-impl: actual 231801 tok (var +16%), outcome: 50cde2e read-only inspection + inspect command; hot-journal limitation flagged; review pending, lifecycle: [022]
+2026-10-07 R05a -> Independent Reviewer, est 150000 tok, brief: agents/lifecycle.md#[023], why: handoff §2; read-only guarantees and the hot-journal crash case need independent characterization
+            -> [023] closed: actual 122017 tok (var -19%), outcome: R05a review OK on core; P2 F2/F3 -> attempt 2; hot-journal snapshot read + recover-journal = binding R05b precondition, lifecycle: [023]
+2026-10-07 R05a ACCEPTANCE: OK locally, BLOCKED-on-CI (50cde2e + 22f6a91; review [023] confirms). Pushing.
+2026-10-07 R05b -> Implementer, est 260000 tok, brief: agents/lifecycle.md#[024], why: last G0 card (R05 split approved Q7); R05a preconditions (snapshot read, recover-journal, abandon guard) are binding
+2026-10-07 R05a ACCEPTED: OK (CI run 37644352082 all green on 22f6a91). G0 progress: R01-R04 (all halves), R05a, FLAKE-1, PROC-1 OK; R05b implementation on disk uncommitted (agent interrupted by host sleep), resumed to verify, record and commit.
