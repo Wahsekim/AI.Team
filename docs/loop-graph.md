@@ -17,6 +17,8 @@ unchanged by the Loop/Graph commits. Separately, commit `bc1c95b` on this branch
 changed the count-directed engine and kit scripts (see
 `docs/review-remediation-2026-09-25.md`). No new live provider adapter is enabled.
 
+G0 exit 2026-10-07: rollout cards R01–R05 (plan §4.A, incl. corrective cards R02-FIX-1, R02b, FLAKE-1, PROC-1) accepted with independent review and green CI on `08f3492` (508 tests on Node 24; 356 pass + explained skips on Node 22). Live execution remains disabled; G1 (R06–R15) stays offline; no paid call is authorized by G0. Decision records: ADR 0001–0005.
+
 ## Run locally
 
 Use Node 24 or later for SQLite. Existing functionality remains on the project's

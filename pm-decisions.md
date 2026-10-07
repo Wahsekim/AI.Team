@@ -104,3 +104,11 @@ the engine's `results[]` (per `docs/engine.md`), under a dated batch line.
 2026-10-07 R05a ACCEPTANCE: OK locally, BLOCKED-on-CI (50cde2e + 22f6a91; review [023] confirms). Pushing.
 2026-10-07 R05b -> Implementer, est 260000 tok, brief: agents/lifecycle.md#[024], why: last G0 card (R05 split approved Q7); R05a preconditions (snapshot read, recover-journal, abandon guard) are binding
 2026-10-07 R05a ACCEPTED: OK (CI run 37644352082 all green on 22f6a91). G0 progress: R01-R04 (all halves), R05a, FLAKE-1, PROC-1 OK; R05b implementation on disk uncommitted (agent interrupted by host sleep), resumed to verify, record and commit.
+2026-10-07 CI on ledger commit: run=2a02398 conclusion=success (runs/37673119871).
+2026-10-07 R05b closed-impl: actual 261095 tok (var 0%), outcome: a5434a2 recovery commands + hot-journal handling + ADR 0005; review pending, lifecycle: [024]
+2026-10-07 R05b -> Independent Reviewer, est 160000 tok, brief: agents/lifecycle.md#[025], why: handoff §2; last G0 card; abandon-with-durable-receipt deviation needs adjudication
+            -> [025] closed: actual 149659 tok (var -6%), outcome: R05b review KO (P2 ingestible-receipt guard, P2 marker identity in recovery writes); attempt 2 sent, lifecycle: [025]
+2026-10-07 R05b ACCEPTANCE: OK locally, BLOCKED-on-CI (a5434a2 + 294f31c; review [025] confirms). Docs commit: ADR 0005 accepted for implementation, README row. Pushing; G0 exit decision follows the CI result on the final SHA.
+2026-10-07 R05b ACCEPTED: OK (CI run 37676130796 all green on 08f3492). R05 complete.
+2026-10-07 G0 EXIT: R01, R02, R02b, R03a, R03b, R04a, R04b, R05a, R05b, FLAKE-1, PROC-1 all OK on 08f3492 with fresh CI. Record: docs/rollout-evidence/G0-exit.md (local). Next: owner ratifies ADR 0002-0005 and supplies R06 inputs; R07 after R06. Follow-ups: STOP-2, STOP-3, PROC-2, R04b-P3, R05b-P3, R05a-P3, R07/R12 inputs.
+2026-10-07 CHECKPOINT-2 (post-G0): 25 dispatches, 3,927,368 harness tokens measured vs 4,560,000 estimated (-14%); implementation median 189,797 (max 292,508), review median 129,486 (max 198,580). Allowances from G1: impl <=300k, review <=200k per card; split above 300k projected impl; two attempts max.

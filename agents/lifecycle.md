@@ -32,7 +32,7 @@ Rotation: slim-active + archive — the standing rule in
 
 ## Counter
 
-Next NNN to assign: **025**
+Next NNN to assign: **026**
 
 ## Counter and header rules
 
@@ -647,15 +647,43 @@ at rotation time.
 - Reasoning: max (prompt-level)
 - Estimated tokens: 260000
 - Sub-decision count: 0 (rules fixed by plan R05, ADR 0002 §3(c), owner Q6, R05a review preconditions)
-- Status: running (interrupted once: host machine slept mid-response while writing the acceptance record; implementation + logs on disk, uncommitted; resumed)
-- Completed:
-- Tokens:
-- Variance:
+- Status: completed (interrupted once by host sleep while writing the record; resumed; verified tree matched logs)
+- Completed: 2026-10-07T19:18:55Z
+- Tokens: 292508 (cumulative; attempt 1 261095 + attempt 2 31413)
+- Variance: +13%
 - PM overhead: ~20000 tok (est)
-- Outcome:
-- Progress:
+- Outcome: commit a5434a2 (+881/-18): recovery.mjs (ingest-receipt, abandon with note+confirm, close-execution-marker, recover-journal), hot-journal.mjs snapshot read, withExclusiveLock (no marker/binding), operator_audit append-only table, ADR 0005; V1-V10 green, M1-M4 red-then-green; 504 tests Node 24 (503/1 skip), 356/148 Node 22. Deviations: interrupted recorded first; gate usage 0 (host-local); STALE_RECEIPT exit 2; abandon allowed with un-ingested durable receipts (flagged for review); new abandon payload with legacy replay; replaced-lock-file manual procedure only
+- Progress: yes
 - Handoffs:
+    - reviewer [025] needs a5434a2 + docs/rollout-evidence/R05b/
+    - PM: decisions/README.md row for 0005; G0 exit review after acceptance
 - Retry-of: none
 - Diverged-from: none
-- Round-trip: none
+- Round-trip: 2 (resume after host-sleep interruption to finish attempt 1; resume for [025] F1/F2 + P3s -> second commit 294f31c; last attempt)
 - Notes: INLINE FALLBACK (see [001]). Only committing agent; CI on the R05a head runs concurrently. Last G0 card; G0 exit review follows.
+- Acceptance update: 2026-10-07T19:29:04Z KO on review (P2 ingestible-receipt guard; P2 marker identity check in recovery writes) -> attempt 2 via resume (last attempt)
+- Acceptance update: 2026-10-07T19:39:18Z OK locally (reviewed by [025] attempt-2 confirmation), BLOCKED-on-CI; pushed a5434a2+294f31c
+- Acceptance update: 2026-10-07T19:52:10Z OK (CI run 37676130796 green on 08f3492)
+
+## [025] Independent Reviewer (loop-rollout-reviewer) - 2026-10-07T19:18:55Z
+- Ticket: R05b
+- Spawned by: PM (Claude Fable 5.1 main session)
+- Brief: Review a5434a2 against the R05 card OK/KO/Tests lines, ADR 0002 §3(c), owner Q6 and ADR 0005 — priority: abandon with un-ingested durable receipts (spend known → unknown?), the exclusion rule (lock without marker), hot-journal snapshot read + recover-journal + operator_audit (append-only, never deletes), ingest idempotency and mismatch refusals, operator-confirmation wording (KO guard), usage never zero for unknown; mutations; suites; writes docs/rollout-evidence/R05b/review.md only.
+- Model: opus (owner directive "opus 5 max")
+- Reasoning: max (prompt-level)
+- Estimated tokens: 160000
+- Sub-decision count: 0
+- Status: completed
+- Completed: 2026-10-07T19:29:04Z
+- Tokens: 170336 (cumulative; review 149659 + attempt-2 confirmation 20677)
+- Variance: +6%
+- PM overhead: ~10000 tok (est)
+- Outcome: no plan KO; P-B/P-C verified (snapshot reads byte-identical originals, recover-journal restores committed state, operator_audit triggers refuse UPDATE/DELETE); P2 F1 abandon with ingestible durable receipt loses known results permanently; P2 F2 recovery writes proceed after lock-file replacement with a live driver; 8 mutations caught, E1/E4 uncaught; P3 F3-F9, O1; 504/503/0/1 Node 24, 356/148 Node 22; recommends KO with attempt 2 limited to F1/F2 (+ wording)
+- Progress: yes
+- Handoffs:
+    - implementer [024] attempt 2: F1 rule + E1/E3 tests, F2 identity check + E4 test, F4/F5/F7, F6 if small, F8/F9 wording
+    - R07: O1 interrupted-after-abandon ordering; operator_audit versioning
+- Retry-of: none
+- Diverged-from: none
+- Round-trip: 1 (resumed to confirm 294f31c; F1/F2 closed; P3 F10; recommends OK locally)
+- Notes: INLINE FALLBACK (see [001]). Push of a5434a2 held until review closes. Last G0 card.
