@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openEvidenceArchive } from '../src/loop/evidence.mjs';
+import { openStore } from '../src/loop/store.mjs';
 const cli = fileURLToPath(new URL('../scripts/team-run.mjs', import.meta.url));
 const sqlite = { skip: Number(process.versions.node.split('.')[0]) < 24 ? 'Requires Node 24+' : false };
 test('fixture CLI executes isolated processes/gates and exposes readable durable results', sqlite, async t => {
@@ -20,6 +21,9 @@ test('fixture CLI executes isolated processes/gates and exposes readable durable
   const archive = await openEvidenceArchive(join(directory, 'evidence.sqlite'));
   try { for (const dispatchId of ['d-2', 'd-3']) assert.equal(archive.get('fixture-run', dispatchId).record.evidence.result, 'pass'); }
   finally { archive.close(); }
+  const store = await openStore(join(directory, 'loop.sqlite'));
+  try { assert.deepEqual(store.executions().map(e => [e.open, e.close_kind]), [[0, 'graceful']], 'fixture ran under one owner and released it'); }
+  finally { store.close(); }
   const before = readFileSync(join(directory, 'loop.sqlite'));
   const repeated = spawnSync(process.execPath, [cli, 'fixture', directory, 'other-run'], { encoding: 'utf8' });
   assert.equal(repeated.status, 2); assert.equal(JSON.parse(repeated.stdout).code, 'IDEMPOTENCY_CONFLICT');

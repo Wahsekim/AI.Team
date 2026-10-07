@@ -38,8 +38,8 @@ node --test tests/*.test.mjs
 Use a new run ID for each demo. Reusing one is a conflict, not a reset.
 stdout contains one JSON reply; diagnostics/runtime warnings may use stderr.
 Exit 0 means the control command succeeded; inspect `value.state.status` for
-the demo outcome. Exit 2 is input/runtime failure, 3 stale state, 7 missing
-capability. Events are paginated at 100 by the CLI; the library supports explicit
+the demo outcome. Exit 2 is input/runtime failure, 3 stale state, 4 execution
+exclusion (see below), 7 missing capability. Events are paginated at 100 by the CLI; the library supports explicit
 cursor and limit. CLI stop requests closeout but does not itself run a worker or
 complete closeout. CLI intentionally has no external receipt injection command.
 
@@ -207,7 +207,7 @@ offline orchestration evidence, not a successful real-agent product deployment.
 
 ### Single-host fixture driver
 
-`createFixtureDriver({store, adapter, archive, runId, root,
+`createFixtureDriver({store, owner, adapter, archive, runId, root,
 projectionDirectory, gateConfigs, request?, quota?, now?})` connects the three
 effect types without a daemon. `gateConfigs` maps each manifest gate ID to its
 explicit trusted local-gate configuration. It is cloned, as is the fixture
@@ -221,19 +221,35 @@ directory must be outside the product root. Storage lifetimes remain caller-owne
   finish, but late success cannot revive acceptance. Call another step to
   publish closeout when the run does not require recovery.
 - `await driver.close()` hard-stops and drains an active step, rejects future
-  steps, and releases its in-memory ownership guard. Only then close the
-  adapter, archive and control store; close propagates an active step's error.
+  steps, and unbinds from its owner handle. Then close the adapter, call
+  `owner.release()`, and close archive and control store; close propagates an
+  active step's error.
 - Previously STARTED/UNKNOWN dispatches enter RECOVERY_REQUIRED and are not
   automatically replayed. An already-written projection may be safely replayed
   after a lost ACK; manual file edits are preserved and require recovery.
 
 There is no unbounded `run()` loop: the host decides its step count and stop
 policy. Quota samples are supplied by the host callback at admission, not read
-from model text. The ownership guard covers one store object/run in this process
-only; separate store objects/processes require external exclusion. A stop written
+from model text. Cross-process exclusion is described below. A stop written
 by another CLI is not actively polled and cannot promise prompt cancellation.
-No real provider, cross-process lease/fencing or automatic recovery is enabled.
+No real provider, distributed lease or automatic recovery is enabled.
 The CLI `demo` remains unchanged; the separate `fixture` command uses this driver.
+
+### Execution owner (R03a, 2026-10-07)
+
+`demo`, `fixture` and every driver host first call `acquireExecutionOwner({store})`
+(`src/loop/execution-owner.mjs`, ADR 0002); `createFixtureDriver` requires the handle,
+one driver per handle. It holds a SQLite exclusive lock on
+`<state-dir>/execution-owner.sqlite` for the whole execution, checks it from a
+second process, and opens a row in the control store's append-only `executions`
+table. While a row is open, unfenced `tick`/`claim` fail; the driver fences them
+with its owner id and fails `OWNER_LOST` if the lock file or directory changes.
+`stop`, `status`, `events`, `audit` and `show` never touch the lock. CLI exit 4:
+`EXECUTION_OWNER_ACTIVE` (live owner), `EXECUTION_OPEN` (unclosed row) or
+`OWNER_LOST`. Release closes the row only with no unresolved work. Any unclean
+exit leaves it open by design: the directory refuses execution, never by PID or
+time, until an operator runs the library-only
+`closeOrphanedExecution({store, ownerId, note})`; a CLI arrives with R05b.
 
 ## Task display contract (schemaVersion 2)
 

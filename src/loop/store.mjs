@@ -3,6 +3,26 @@ import { canonical, digest, LoopError, requireThat, validateCommand } from './co
 import { validateBundle } from './artifacts.mjs';
 import { initialState, reduce } from './reducer.mjs';
 
+const FENCED = new Set(['tick', 'claim']);
+const unresolved = state => state.status === 'RECOVERY_REQUIRED' || state.projection?.status === 'STARTED'
+  || Object.values(state.dispatches).some(d => !d.receipt && ['STARTED', 'UNKNOWN'].includes(d.status));
+// ADR 0002: created lazily by acquireExecutionOwner only; append-only history, at most one open row.
+const EXECUTIONS = `CREATE TABLE IF NOT EXISTS executions(seq INTEGER PRIMARY KEY, owner_id TEXT NOT NULL UNIQUE,
+    open INTEGER NOT NULL CHECK(open IN (0,1)), state_path TEXT NOT NULL, state_dev TEXT NOT NULL, state_ino TEXT NOT NULL,
+    lock_ino TEXT NOT NULL, pid INTEGER, hostname TEXT, opened_at INTEGER NOT NULL, closed_at INTEGER,
+    close_kind TEXT CHECK(close_kind IN ('graceful','operator')), close_note TEXT,
+    CHECK((open=1 AND closed_at IS NULL AND close_kind IS NULL AND close_note IS NULL)
+      OR (open=0 AND closed_at IS NOT NULL AND close_kind IS NOT NULL
+        AND (close_kind='graceful' OR length(trim(coalesce(close_note,'')))>0))));
+  CREATE UNIQUE INDEX IF NOT EXISTS one_open_execution ON executions(open) WHERE open=1;
+  CREATE TRIGGER IF NOT EXISTS executions_update_only_closes BEFORE UPDATE ON executions
+    WHEN OLD.open=0 OR NEW.open<>0 OR NEW.seq IS NOT OLD.seq OR NEW.owner_id IS NOT OLD.owner_id OR NEW.state_path IS NOT OLD.state_path
+      OR NEW.state_dev IS NOT OLD.state_dev OR NEW.state_ino IS NOT OLD.state_ino OR NEW.lock_ino IS NOT OLD.lock_ino
+      OR NEW.pid IS NOT OLD.pid OR NEW.hostname IS NOT OLD.hostname OR NEW.opened_at IS NOT OLD.opened_at
+    BEGIN SELECT RAISE(ABORT, 'execution rows only close once'); END;
+  CREATE TRIGGER IF NOT EXISTS executions_append_only BEFORE DELETE ON executions
+    BEGIN SELECT RAISE(ABORT, 'execution history is append-only'); END;`;
+
 export async function openStore(filename) {
   requireThat(Number(process.versions.node.split('.')[0]) >= 24, 'CAPABILITY_MISSING', 'Goal supervisor requires Node 24+; legacy engine still supports Node 22');
   const { DatabaseSync } = await import('node:sqlite');
@@ -22,6 +42,8 @@ export async function openStore(filename) {
   if (!versions.length) db.prepare('INSERT OR IGNORE INTO metadata VALUES (1)').run();
   else if (versions.length !== 1 || versions[0].version !== 1) { db.close(); throw new LoopError('CAPABILITY_MISSING', 'Unsupported store schema'); }
 
+  const hasExecutions = () => !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='executions'").get();
+  const openMarker = () => hasExecutions() ? db.prepare('SELECT * FROM executions WHERE open=1').get() ?? null : null;
   const transaction = fn => {
     db.exec('BEGIN IMMEDIATE');
     try { const result = fn(); db.exec('COMMIT'); return result; }
@@ -37,6 +59,7 @@ export async function openStore(filename) {
     db.prepare('INSERT INTO events VALUES (?,?,?,?)').run(runId, seq, canonical(event), digest(event));
   };
   return {
+    filename,
     close() { db.close(); },
     create(spec, artifacts, { simulation = false, now = Date.now() } = {}) {
       requireThat(simulation === true, 'CAPABILITY_MISSING', 'Only explicit simulation runs are enabled; no live Claude adapter');
@@ -50,11 +73,15 @@ export async function openStore(filename) {
     },
     status(runId) { const r = row(runId); return { runId, stateVersion: r.version, simulation: true, spec: JSON.parse(r.spec), state: JSON.parse(r.state) }; },
     bundle(runId) { const r = row(runId); return { spec: JSON.parse(r.spec), artifacts: JSON.parse(r.artifacts) }; },
-    apply(action, command, now = Date.now()) {
+    apply(action, command, now = Date.now(), fence = undefined) {
       validateCommand(command);
+      requireThat(fence === undefined || typeof fence === 'string' && fence.length > 0, 'INVALID_SPEC', 'Fence must be an owner id');
       // Request identity and expected version are part of the idempotency contract.
       const inputDigest = digest({ action, command });
       return transaction(() => {
+        const marker = openMarker();
+        if (fence !== undefined) requireThat(marker?.owner_id === fence, 'OWNER_LOST', 'Execution owner no longer holds the open execution marker');
+        else requireThat(!marker || !FENCED.has(action), 'EXECUTION_OPEN', 'An execution is open in this state directory; use its owner or an operator close');
         const r = row(command.runId);
         const old = db.prepare('SELECT digest,reply FROM requests WHERE run_id=? AND key=?').get(command.runId, command.idempotencyKey);
         if (old) { requireThat(old.digest === inputDigest, 'IDEMPOTENCY_CONFLICT', 'Same key with different command'); return JSON.parse(old.reply); }
@@ -69,6 +96,27 @@ export async function openStore(filename) {
         const reply = { ok: true, requestId: command.requestId, stateVersion: version, value: { status: result.state.status, scheduledEffectIds: result.effects.map(e => e.id) } };
         db.prepare('INSERT INTO requests VALUES (?,?,?,?)').run(command.runId, command.idempotencyKey, inputDigest, canonical(reply));
         return reply;
+      });
+    },
+    executions() { return hasExecutions() ? db.prepare('SELECT * FROM executions ORDER BY seq').all().map(e => ({ ...e })) : []; },
+    openExecution(e) {
+      return transaction(() => {
+        db.exec(EXECUTIONS);
+        requireThat(!openMarker(), 'EXECUTION_OPEN', 'An execution is already open in this state directory; an operator close is required');
+        db.prepare(`INSERT INTO executions(owner_id,open,state_path,state_dev,state_ino,lock_ino,pid,hostname,opened_at)
+          VALUES (?,1,?,?,?,?,?,?,?)`).run(e.ownerId, e.statePath, e.stateDev, e.stateIno, e.lockIno, e.pid, e.hostname, e.now);
+        return { ownerId: e.ownerId };
+      });
+    },
+    closeExecution({ ownerId, kind, note = null, now }) {
+      return transaction(() => {
+        const marker = openMarker();
+        if (kind === 'graceful') {
+          requireThat(marker?.owner_id === ownerId, 'OWNER_LOST', 'Execution owner no longer holds the open execution marker');
+          if (db.prepare('SELECT state FROM runs').all().some(r => unresolved(JSON.parse(r.state)))) return { closed: false };
+        } else requireThat(kind === 'operator' && marker?.owner_id === ownerId, 'UNKNOWN_REFERENCE', 'No open execution with this owner_id');
+        db.prepare('UPDATE executions SET open=0, closed_at=?, close_kind=?, close_note=? WHERE owner_id=? AND open=1').run(now, kind, note, ownerId);
+        return { closed: true };
       });
     },
     effects(runId) { row(runId); return db.prepare('SELECT id,kind,payload,status FROM outbox WHERE run_id=? ORDER BY rowid').all(runId).map(e => ({ ...e, payload: JSON.parse(e.payload) })); },

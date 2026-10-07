@@ -8,12 +8,11 @@ import { executeStoredFixture } from './host-fixtures.mjs';
 import { executeStoredGate } from './host-gates.mjs';
 import { validateFixtureRequest } from './adapters/fixture-process.mjs';
 import { publishProjection } from './projector.mjs';
-
-const owners = new WeakMap();
+import { bindDriver, stateIdentity } from './execution-owner.mjs';
 
 // Single trusted host, fixture builds only. One step runs at most one effect.
-// This in-memory guard is not a lease across separate store objects/processes.
-export function createFixtureDriver({ store, adapter, archive, runId, root, projectionDirectory,
+// `owner` (acquireExecutionOwner) is the cross-process authority; one driver per owner handle.
+export function createFixtureDriver({ store, owner, adapter, archive, runId, root, projectionDirectory,
   request = { scenario: 'pass', delayMs: 0, timeoutMs: 1000 }, gateConfigs, quota = () => null, now = () => Date.now() }) {
   const capability = adapter.probeCapabilities();
   requireThat(store.status(runId).simulation === true && capability.adapter === 'fixture-process'
@@ -22,23 +21,24 @@ export function createFixtureDriver({ store, adapter, archive, runId, root, proj
   requireThat(typeof now === 'function' && typeof quota === 'function', 'INVALID_SPEC', 'Host time/quota callbacks required');
   request = structuredClone(request); validateFixtureRequest(request);
   gateConfigs = structuredClone(gateConfigs);
-  root = realpathSync(root); projectionDirectory = realpathSync(projectionDirectory);
-  const rel = relative(root, projectionDirectory);
-  requireThat(isAbsolute(rel) || rel === '..' || rel.startsWith(`..${sep}`), 'SCOPE_DENIED', 'Projection directory must be outside product');
+  root = realpathSync.native(root); projectionDirectory = realpathSync.native(projectionDirectory);
+  const outside = target => { const rel = relative(root, target); return isAbsolute(rel) || rel === '..' || rel.startsWith(`..${sep}`); };
+  requireThat(outside(projectionDirectory), 'SCOPE_DENIED', 'Projection directory must be outside product');
+  // A product snapshot opens files in-process; opening the lock file would drop the kernel lock (ADR 0002 P3).
+  requireThat(outside(stateIdentity(store).path), 'SCOPE_DENIED', 'State directory must be outside product');
   const { spec, artifacts } = store.bundle(runId), manifest = resolveRef(spec.manifestRef, artifacts);
   for (const binding of manifest.gates) {
     const gate = resolveRef(binding.artifactRef, artifacts), config = gateConfigs?.[binding.id];
     requireThat(config?.gate?.specDigest === gate.specDigest && gate.repoId === 'product'
-      && realpathSync(config.repoRoots.product) === root, 'INVALID_SPEC', 'Missing or mismatched trusted product gate configuration');
+      && realpathSync.native(config.repoRoots.product) === root, 'INVALID_SPEC', 'Missing or mismatched trusted product gate configuration');
   }
-  let runs = owners.get(store);
-  if (!runs) { runs = new Set(); owners.set(store, runs); }
-  requireThat(!runs.has(runId), 'INVALID_TRANSITION', 'This store/run already has a fixture driver'); runs.add(runId);
+  const binding = bindDriver(owner, store), fenced = binding.store;
   let active = null, controller = null, closing = false, closePromise = null;
   const status = () => store.status(runId);
-  const apply = (action, payload) => store.apply(action, command(store, runId, payload), now());
+  const apply = (action, payload) => fenced.apply(action, command(store, runId, payload), now());
 
   const work = async signal => {
+    owner.assertHeld();
     let state = status().state;
     if (TERMINAL.has(state.status)) return status();
     requireThat(state.status !== 'RECOVERY_REQUIRED', 'EFFECT_UNKNOWN', 'Explicit operator recovery required');
@@ -53,9 +53,9 @@ export function createFixtureDriver({ store, adapter, archive, runId, root, proj
     }
     const dispatch = Object.values(state.dispatches).find(d => !d.receipt);
     if (dispatch) {
-      if (dispatch.stage === 'build') await executeStoredFixture({ store, adapter, runId, dispatchId: dispatch.id,
+      if (dispatch.stage === 'build') await executeStoredFixture({ store: fenced, adapter, runId, dispatchId: dispatch.id,
         root, request, signal, quota: quota(), now });
-      else await executeStoredGate({ store, archive, runId, dispatchId: dispatch.id,
+      else await executeStoredGate({ store: fenced, archive, runId, dispatchId: dispatch.id,
         config: { ...gateConfigs[dispatch.gateId], signal }, quota: quota(), now });
     } else if (state.projection) {
       const effect = store.effects(runId).find(e => e.id === state.projection.id);
@@ -79,7 +79,7 @@ export function createFixtureDriver({ store, adapter, archive, runId, root, proj
   return Object.freeze({ status, stop,
     step() {
       requireThat(!closing && !active, 'INVALID_TRANSITION', 'Driver is closing or a step is already active');
-      controller = new AbortController();
+      controller = new AbortController(); binding.setActive(true);
       // Queue work so active/owned cancellation exist before any effect starts.
       active = Promise.resolve().then(() => work(controller.signal)).catch(error => {
         const state = status().state;
@@ -87,7 +87,7 @@ export function createFixtureDriver({ store, adapter, archive, runId, root, proj
           && (Object.values(state.dispatches).some(d => !d.receipt && d.status !== 'PENDING')
             || state.projection?.status === 'STARTED' || error.code === 'EFFECT_UNKNOWN')) apply('interrupted', {});
         throw error;
-      }).finally(() => { active = null; controller = null; });
+      }).finally(() => { active = null; controller = null; binding.setActive(false); });
       return active;
     },
     close() {
@@ -95,7 +95,7 @@ export function createFixtureDriver({ store, adapter, archive, runId, root, proj
       if (active) stop({ mode: 'hard', reason: 'Fixture driver closed during active step' });
       closing = true;
       // Caller owns adapter/archive/store lifetime; close them only after this.
-      closePromise = (active ?? Promise.resolve()).finally(() => runs.delete(runId));
+      closePromise = (active ?? Promise.resolve()).finally(() => binding.unbind());
       return closePromise;
     },
   });

@@ -7,9 +7,11 @@ import { id, requireThat } from '../src/loop/contracts.mjs';
 import { publishProjection } from '../src/loop/projector.mjs';
 import { renderRunSummary } from '../src/loop/display.mjs';
 import { runFixtureDemo } from '../src/loop/fixture-demo.mjs';
+import { acquireExecutionOwner, bindDriver } from '../src/loop/execution-owner.mjs';
 
 const usage = 'node scripts/team-run.mjs <demo|fixture|status|events|audit|stop|show> <state-directory> <run-id>';
-let store;
+let store, owner;
+const EXCLUSION = new Set(['EXECUTION_OWNER_ACTIVE', 'EXECUTION_OPEN', 'OWNER_LOST']);
 try {
   const [action, directory, runId, ...extra] = process.argv.slice(2);
   requireThat(['demo', 'fixture', 'status', 'events', 'audit', 'stop', 'show'].includes(action) && directory && runId && !extra.length, 'INVALID_SPEC', usage);
@@ -19,8 +21,9 @@ try {
   let value, text = null;
   if (action === 'fixture') value = await runFixtureDemo({ directory, runId });
   else if (action === 'demo') {
+    owner = await acquireExecutionOwner({ store });
     const bundle = demoBundle(runId, { schemaVersion: 2 }); store.create(bundle.spec, bundle.artifacts, { simulation: true });
-    value = driveDemo(store, runId, () => Date.now(), effect => publishProjection({ directory: resolve(directory), runId, effect }));
+    value = driveDemo(bindDriver(owner, store).store, runId, () => Date.now(), effect => publishProjection({ directory: resolve(directory), runId, effect }));
   }
   else if (action === 'show') text = renderRunSummary(store.status(runId));
   else if (action === 'status') value = store.status(runId);
@@ -30,5 +33,5 @@ try {
   process.stdout.write(text ?? `${JSON.stringify({ ok: true, simulation: true, value })}\n`);
 } catch (error) {
   process.stdout.write(`${JSON.stringify({ ok: false, code: error.code ?? 'INTERNAL_ERROR', message: error.message })}\n`);
-  process.exitCode = error.code === 'CAPABILITY_MISSING' ? 7 : error.code === 'STALE_STATE' ? 3 : 2;
-} finally { store?.close(); }
+  process.exitCode = error.code === 'CAPABILITY_MISSING' ? 7 : error.code === 'STALE_STATE' ? 3 : EXCLUSION.has(error.code) ? 4 : 2;
+} finally { try { owner?.release(); } finally { store?.close(); } }

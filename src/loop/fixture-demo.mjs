@@ -7,6 +7,7 @@ import { openStore } from './store.mjs';
 import { openEvidenceArchive } from './evidence.mjs';
 import { openFixtureAdapter } from './adapters/fixture-process.mjs';
 import { createFixtureDriver } from './fixture-driver.mjs';
+import { acquireExecutionOwner } from './execution-owner.mjs';
 import { snapshotRepository } from './snapshots.mjs';
 import { gateDigest } from './gates.mjs';
 import { TERMINAL } from './reducer.mjs';
@@ -45,16 +46,17 @@ export async function runFixtureDemo({ directory, runId }) {
   artifacts.manifest.gates[0].artifactRef.digest = digest(gate);
   spec.manifestRef.digest = digest(artifacts.manifest); spec.initialSnapshotRef.digest = digest(artifacts.snapshot);
   spec.approvedSpecDigest = specDigest(spec);
-  let store, archive, adapter, driver, signalError;
+  let store, owner, archive, adapter, driver, signalError;
   const stop = signal => {
     try { driver.stop({ mode: 'hard', reason: `Fixture CLI received ${signal}` }); } catch (error) { signalError = error; }
   };
   const interrupt = () => stop('SIGINT'), terminate = () => stop('SIGTERM');
   try {
-    store = await openStore(join(directory, 'loop.sqlite')); store.create(spec, artifacts, { simulation: true });
+    store = await openStore(join(directory, 'loop.sqlite'));
+    owner = await acquireExecutionOwner({ store }); store.create(spec, artifacts, { simulation: true });
     archive = await openEvidenceArchive(join(directory, 'evidence.sqlite'));
     adapter = await openFixtureAdapter({ filename: join(directory, 'fixture.sqlite'), runId, workspace: directory });
-    driver = createFixtureDriver({ store, archive, adapter, runId, root, projectionDirectory: directory,
+    driver = createFixtureDriver({ store, owner, archive, adapter, runId, root, projectionDirectory: directory,
       gateConfigs: { test: { gate, repoRoots: { product: root }, executables: { node: executable }, envProfiles: { empty: {} }, oracleBundles: { oracle } } } });
     process.on('SIGINT', interrupt); process.on('SIGTERM', terminate);
     for (let steps = 0; steps < 8 && !TERMINAL.has(driver.status().state.status); steps++) {
@@ -68,7 +70,7 @@ export async function runFixtureDemo({ directory, runId }) {
     try { await driver?.close(); }
     finally {
       process.removeListener('SIGINT', interrupt); process.removeListener('SIGTERM', terminate);
-      try { await adapter?.close(); } finally { archive?.close(); store?.close(); }
+      try { await adapter?.close(); } finally { try { owner?.release(); } finally { archive?.close(); store?.close(); } }
     }
   }
 }
