@@ -69,7 +69,7 @@ test('preflight rejects stale oracle, unavailable network isolation and pre-canc
   const controller = new AbortController(); controller.abort();
   await assert.rejects(runLocalGate({ ...config(root), signal: controller.signal }), e => e.code === 'CANCELLED');
 });
-test('real timeout, signals, cancellation and output flood never pass', async t => {
+test('real timeout, signals, cancellation and output flood never pass', { timeout: 10000 }, async t => {
   const root = fixture(t);
   const timeout = await runLocalGate(config(root, 'setInterval(() => {}, 1000)', { timeoutMs: 50 })); assert.equal(timeout.evidence.result, 'timeout');
   // The runner's clock is mocked so a slow child start cannot let the timeout outrank the signal/flood outcome.

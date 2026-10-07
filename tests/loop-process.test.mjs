@@ -50,6 +50,7 @@ for (const trigger of ['timeout', 'cancelled', 'output_limit']) {
     const result = await handle.completion;
     assert.ok(existsSync(readyFile), 'reproduction must actually start the descendant');
     assert.equal(result.reason, 'orphaned_process_group');
+    if (trigger === 'timeout') assert.equal(result.signal, 'SIGTERM', 'runner timeout must terminate the parent');
     assert.equal(handle.cancel(), false, 'finished handles cannot signal an unowned/reused PID');
   });
 }
