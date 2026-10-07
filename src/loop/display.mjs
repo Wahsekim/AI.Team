@@ -67,6 +67,20 @@ export function validateTaskDisplay(display, label = 'display') {
 // Markdown-safe fallback text for renderers: never invent a title.
 export const displayTitleOrFallback = display => (display && typeof display.title === 'string' && display.title.trim() ? sanitizeDisplay(display.title, MAX_TITLE_CHARS) : '(no title)');
 
+// R04b: recorded (store) vs observed (active driver) vs cancellation state, derived from durable state only.
+// Cancellation is confirmed only when the observed stop leaves no running or unknown work.
+export function stopView(state) {
+  const record = state.stopRequest ?? null, failed = state.stopObserverFailed ?? null;
+  if (!record && !failed) return null;
+  const seq = record ? record.seq ?? 1 : null, kind = record ? record.kind ?? record.mode : null;
+  const observed = !!record && state.stopObserved?.seq === seq;
+  const running = Object.values(state.dispatches).some(d => !d.receipt && d.status === 'STARTED') || state.projection?.status === 'STARTED';
+  const cancellation = kind !== 'hard' ? null : state.status === 'RECOVERY_REQUIRED' ? 'unconfirmed'
+    : ['COMPLETED', 'STOPPED', 'FAILED'].includes(state.status) || observed && !running ? 'confirmed' : 'pending';
+  return { recorded: !!record, seq, kind, observed, cancellation, keptProjection: state.projection?.keptByStop === seq && !!record,
+    observerFailed: failed ? { cause: failed.cause, at: failed.at } : null };
+}
+
 // Read-only text projection of store.status(runId). Never touches the store.
 export function renderRunSummary(status, { width = 80 } = {}) {
   const w = Math.max(40, width);
@@ -78,6 +92,11 @@ export function renderRunSummary(status, { width = 80 } = {}) {
   lines.push(line(`run ${status.runId} · ${state.status} · v${status.stateVersion}`));
   const stop = state.stopRequest;
   if (stop) lines.push(line(stop.kind ? `stop ${stop.kind} · #${stop.seq} · by ${stop.requestedBy}` : `stop ${stop.mode} · legacy record`));
+  const view = stopView(state);
+  if (view?.recorded) lines.push(line(view.observed ? `stop observed by the driver · #${view.seq}` : 'stop recorded · not yet observed by a driver',
+    view.cancellation === 'unconfirmed' ? 'cancellation unconfirmed · recovery required' : view.cancellation ? `cancellation ${view.cancellation}` : '',
+    view.keptProjection ? 'closing projection kept' : ''));
+  if (view?.observerFailed) lines.push(line(`STOP_OBSERVER_FAILED · ${view.observerFailed.cause} · driver stopped new work`));
   for (const task of spec.tasks) {
     const t = state.tasks[task.id];
     const display = spec.schemaVersion === 2 ? task.display : null;

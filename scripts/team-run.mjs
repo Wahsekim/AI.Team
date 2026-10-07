@@ -5,7 +5,7 @@ import { openStore } from '../src/loop/store.mjs';
 import { demoBundle, driveDemo } from '../src/loop/demo.mjs';
 import { id, requireThat } from '../src/loop/contracts.mjs';
 import { publishProjection } from '../src/loop/projector.mjs';
-import { renderRunSummary } from '../src/loop/display.mjs';
+import { renderRunSummary, stopView } from '../src/loop/display.mjs';
 import { runFixtureDemo } from '../src/loop/fixture-demo.mjs';
 import { acquireExecutionOwner, bindDriver } from '../src/loop/execution-owner.mjs';
 
@@ -28,10 +28,10 @@ try {
     value = driveDemo(bindDriver(owner, store).store, runId, () => Date.now(), effect => publishProjection({ directory: resolve(directory), runId, effect }));
   }
   else if (action === 'show') text = renderRunSummary(store.status(runId));
-  else if (action === 'status') value = store.status(runId);
+  else if (action === 'status') { const current = store.status(runId); value = { ...current, stop: stopView(current.state) }; }
   else if (action === 'events') value = store.events(runId);
   else if (action === 'audit') value = store.verify(runId);
-  // ADR 0004: a durable record only; the active driver observes it (R04b). No lock, no process signal.
+  // ADR 0004: a durable record only; the active driver polls and observes it (R04b). No lock, no process signal.
   else value = store.requestStop(runId, { kind: STOP_FLAGS[extra[0] ?? '--graceful'], requestedBy: 'cli' });
   process.stdout.write(text ?? `${JSON.stringify({ ok: true, simulation: true, value })}\n`);
 } catch (error) {

@@ -31,6 +31,7 @@ export function validateStopRequest(payload) {
 export const stopKind = r => r && (r.kind ?? r.mode);
 // Only graceful -> hard escalates; a repeat or a downgrade records nothing.
 export const stopEscalates = (existing, kind) => !existing || stopKind(existing) === 'graceful' && kind === 'hard';
+export const stopSeq = r => (r ? r.seq ?? 1 : 0);
 // Replay only (store.verify): the pre-R04a {mode, reason} transition, verbatim, so stored digests still match.
 export function replayLegacyStop(before, payload, now) {
   const s = structuredClone(before);
@@ -131,13 +132,23 @@ export function reduce(spec, before, action, payload, now) {
     validateStopRequest(payload); const existing = s.stopRequest ?? null;
     expect(stopEscalates(existing, payload.kind), 'Stop already recorded at this or a stronger kind');
     s.stopRequest = { kind: payload.kind, seq: (existing?.seq ?? (existing ? 1 : 0)) + 1, requestedBy: payload.requestedBy, requestedAt: now };
-    // Escalation only strengthens the record: the first stop already prevented dispatch (R04b cancels).
-    if (!existing) {
+    // R04b (ADR 0004 follow-up): graceful during a closing projection records only and keeps it;
+    // hard, or a hard escalation of a kept projection, drops it into RECOVERY_REQUIRED.
+    if (!existing && payload.kind === 'graceful' && s.projection && s.status === 'FINALIZING') s.projection.keptByStop = s.stopRequest.seq;
+    else if (!existing) {
       const recovering = s.status === 'RECOVERY_REQUIRED';
       stop(s, 'user_stop');
       if (s.projection) { s.projection = null; s.status = 'RECOVERY_REQUIRED'; }
       if (recovering) s.status = 'RECOVERY_REQUIRED';
-    }
+    } else if (s.projection?.keptByStop) { stop(s, 'user_stop'); s.projection = null; s.status = 'RECOVERY_REQUIRED'; }
+  } else if (action === 'stop-observed') {
+    // R04b: the active driver's durable acknowledgement of one stop record; never a stop itself.
+    fields(payload, ['seq'], 'Stop observation');
+    expect(s.stopRequest && payload.seq === stopSeq(s.stopRequest) && !(s.stopObserved?.seq >= payload.seq), 'No new stop record to observe');
+    s.stopObserved = { seq: payload.seq, kind: stopKind(s.stopRequest), at: now };
+  } else if (action === 'stop-observer-failed') {
+    fields(payload, ['cause'], 'Stop observer failure'); id(payload.cause);
+    s.stopObserverFailed = { cause: payload.cause, at: now };
   } else if (action === 'claim') {
     fields(payload, Object.hasOwn(payload, 'quota') ? ['effectId', 'quota'] : ['effectId'], 'Claim');
     if (s.projection?.id === payload.effectId) {

@@ -4,6 +4,8 @@ import { validateBundle } from './artifacts.mjs';
 import { initialState, reduce, replayLegacyStop, stopEscalates, TERMINAL, validateStopRequest } from './reducer.mjs';
 
 const FENCED = new Set(['tick', 'claim']);
+// R04b: only the active driver (its owner fence) acknowledges or reports on stop observation.
+const OWNER_ONLY = new Set(['stop-observed', 'stop-observer-failed']);
 const unresolved = state => state.status === 'RECOVERY_REQUIRED' || state.projection?.status === 'STARTED'
   || Object.values(state.dispatches).some(d => !d.receipt && ['STARTED', 'UNKNOWN'].includes(d.status));
 // ADR 0002: created lazily by acquireExecutionOwner only; append-only history, at most one open row.
@@ -65,12 +67,14 @@ export async function openStore(filename) {
     db.prepare('INSERT INTO events VALUES (?,?,?,?)').run(runId, seq, canonical(event), digest(event));
   };
   const commit = (r, action, payload, now, check = () => {}) => {
-    const result = reduce(JSON.parse(r.spec), JSON.parse(r.state), action, payload, now); check(result);
+    const before = JSON.parse(r.state), result = reduce(JSON.parse(r.spec), before, action, payload, now); check(result);
     const version = r.version + 1;
     db.prepare('UPDATE runs SET state=?,version=? WHERE id=?').run(canonical(result.state), version, r.id);
     for (const e of result.effects) db.prepare('INSERT INTO outbox VALUES (?,?,?,?,?)').run(r.id, e.id, e.kind, canonical(e.payload), 'PENDING');
     for (const d of Object.values(result.state.dispatches)) db.prepare('UPDATE outbox SET status=? WHERE run_id=? AND id=?').run(d.status, r.id, d.id);
     if (result.state.projection) db.prepare('UPDATE outbox SET status=? WHERE run_id=? AND id=?').run(result.state.projection.status, r.id, result.state.projection.id);
+    // ADR 0004 follow-up (R04b): a projection a stop discards is marked, never left PENDING/STARTED.
+    if (action === 'stop' && before.projection && !result.state.projection) db.prepare('UPDATE outbox SET status=? WHERE run_id=? AND id=?').run('DROPPED', r.id, before.projection.id);
     append(r.id, version, action, payload, result.state, now);
     return { result, version };
   };
@@ -93,6 +97,7 @@ export async function openStore(filename) {
       requireThat(action !== 'stop', 'INVALID_SPEC', 'Stop is recorded with requestStop, not a versioned command');
       validateCommand(command);
       requireThat(fence === undefined || typeof fence === 'string' && fence.length > 0, 'INVALID_SPEC', 'Fence must be an owner id');
+      requireThat(!OWNER_ONLY.has(action) || fence !== undefined, 'INVALID_SPEC', 'Only the execution owner records stop observation');
       // Request identity and expected version are part of the idempotency contract.
       const inputDigest = digest({ action, command });
       return transaction(() => {

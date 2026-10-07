@@ -34,12 +34,12 @@ Status: Accepted for implementation (PM sign-off 2026-10-07T14:11:53Z; independe
 - Stores written before R04a replay as legacy records (decision 7; attempt 2, review F1).
 - Limitations (pre-existing, follow-up cards): F4, a first stop overwrites an earlier failure reason (a run quiescing on `final_gate_failed` projects STOPPED, not FAILED); F5, after a stop, settling the last UNKNOWN dispatch while a limit trips leaves RECOVERY_REQUIRED through the receipt, not `abandon`, and replaces `user_stop` with the limit reason (R05 recovery rules).
 - Library callers: `driver.stop({kind, requestedBy})`; `stopRequest.mode/detail` became `kind/seq/requestedBy/requestedAt`.
-- Open for R04b: polling, abort, observer failure, escalation during a running effect, and the driver's R-1 handling. Decided by the PM on 2026-10-07 (see Follow-ups); implemented in R04b: whether a first stop during a pending projection should keep forcing RECOVERY_REQUIRED (assessment decision ii; unchanged here).
+- Implemented in R04b (2026-10-07, `docs/loop-graph.md` "Stop observation"): polling, abort, observer failure (`STOP_OBSERVER_FAILED`), escalation during a running effect, the driver's R-1 handling, and the PM's pending-projection rule (Follow-ups). The observation marker is an owner-fenced event (`stop-observed`, `stop-observer-failed`); the stop record schema is unchanged.
 
 ## Follow-ups
 
 - [ ] PM sign-off; owner ratification.
-- [ ] R04b: observation loop and R-1 driver handling against this rule.
-- [ ] R04b, PM decision 2026-10-07: graceful stop during a pending/started closing projection records the stop only, keeps FINALIZING and the projection, and ends at the projection's outcome. Hard stop: RECOVERY_REQUIRED (today's rule). A graceful→hard escalation while a projection is kept applies the hard rule. In all cases mark the dropped/kept projection's outbox row explicitly.
+- [x] R04b: observation loop and R-1 driver handling against this rule (implemented in R04b).
+- [x] R04b (implemented in R04b; kept projection: `keptByStop`; dropped row: `DROPPED`), PM decision 2026-10-07: graceful stop during a pending/started closing projection records the stop only, keeps FINALIZING and the projection, and ends at the projection's outcome. Hard stop: RECOVERY_REQUIRED (today's rule). A graceful→hard escalation while a projection is kept applies the hard rule. In all cases mark the dropped/kept projection's outbox row explicitly.
 - [ ] Follow-up cards: F4 (keep an existing failure reason on stop), F5 (R05 recovery rules).
 - [ ] R07: version the stop payload change.

@@ -238,7 +238,7 @@ directory must be outside the product root. Storage lifetimes remain caller-owne
 There is no unbounded `run()` loop: the host decides its step count and stop
 policy. Quota samples are supplied by the host callback at admission, not read
 from model text. Cross-process exclusion is described below. A stop written
-by another CLI is not actively polled and cannot promise prompt cancellation.
+by another CLI is polled by the active driver since R04b (see "Stop observation" below); cancellation still has no exit guarantee.
 No real provider, distributed lease or automatic recovery is enabled.
 The CLI `demo` drives its fake effects under an execution owner (below); the separate `fixture` command uses this driver.
 
@@ -275,8 +275,8 @@ tick that would emit a dispatch, with `STOP_REQUESTED` (CLI exit 2), fenced or n
 Settle, interrupted, abandon and the closeout projection stay allowed. The first
 stop never clears RECOVERY_REQUIRED. A first stop while the run's closing
 projection is PENDING or STARTED forces RECOVERY_REQUIRED and nulls the projection,
-leaving its outbox row PENDING/STARTED; only `abandon` exits (R04b decision
-pending). `store.apply('stop', …)` is refused. Stop events written before R04a
+leaving its outbox row PENDING/STARTED; only `abandon` exits (superseded
+by R04b below). `store.apply('stop', …)` is refused. Stop events written before R04a
 (`{mode, reason}`) replay in `audit` as legacy records (`show`: `stop <mode> ·
 legacy record`) and can still escalate to hard (seq 2); new stops refuse that shape.
 `store.readStopRequest(runId)` is the read-only poll (one SELECT; no table, chmod
@@ -286,6 +286,49 @@ driver does not observe an external stop: a CLI `--hard` stop prevents new dispa
 but does not cancel a running effect, and the driver's stale-version path can still
 end in RECOVERY_REQUIRED (fail-closed, R-1). Hard stop never depends on a worker or
 LLM reading a message; status/show report the record, not a completed stop.
+
+### Stop observation (R04b, 2026-10-07)
+
+The fixture driver polls `readStopRequest` at the start of every step and every
+`pollMs` while a step runs (default 250 ms, 1..2000 ms, injectable; target: observed
+within 2 s on a responsive host). A record with a higher `seq` than the last observed
+is acted on once: a hard stop aborts the step's owned signal first (adapter
+`cancel` on the owned handle, or the gate's bounded process: SIGTERM, then SIGKILL
+after 100 ms), then the driver appends the owner-fenced event `stop-observed {seq}`,
+which sets `state.stopObserved = {seq, kind, at}`. Graceful marks only; the running
+step finishes and the next step closes out. A repeat records nothing and is not
+re-observed; graceful → hard is observed as seq 2 and cancels once. The cancelled
+result flows through the existing classification: `cancelled` closes out to STOPPED;
+`cleanup_unknown`, `cancel_error` and `orphaned_process_group` enter
+RECOVERY_REQUIRED. A result already durable in the adapter journal when the cancel
+is issued makes the cancel a no-op and settles as accounting only (the stop's reason
+blocks acceptance and candidate change); a cancel issued first yields `cancelled`.
+A `STALE_STATE` whose intervening events are all `stop` events is re-read, observed
+and re-prepared (at most twice); any other `STALE_STATE` keeps the fail-closed
+`interrupted` path. A claim or tick refused with `STOP_REQUESTED` (or a pre-start
+`INVALID_TRANSITION`) by a stop that landed during the step, with no STARTED or
+UNKNOWN work, ends the step cleanly and returns status.
+
+Closing projection (PM decision, ADR 0004): a first graceful stop while FINALIZING
+with a projection records the stop only, sets `projection.keptByStop = seq`, and the
+run ends at the projection's outcome (its outbox row follows it to ACKNOWLEDGED). A
+first hard stop, or a hard escalation of a kept projection, applies the hard rule:
+RECOVERY_REQUIRED, projection nulled, outbox row marked `DROPPED`.
+
+Observer failure: if the poll or the observation write throws, the driver records
+the owner-fenced event `stop-observer-failed {cause}` when it can
+(`state.stopObserverFailed = {cause, at}`), lets the running step finish (bounded by
+its process timeout), and rejects that step and every later step on this driver with
+`STOP_OBSERVER_FAILED`; nothing new is ticked, claimed or spawned. Only the owner may
+append either observation event (unfenced: `INVALID_SPEC`).
+
+`status` adds `stop: {recorded, seq, kind, observed, cancellation, keptProjection,
+observerFailed}`; `show` prints `stop observed by the driver · #n` or `stop recorded
+· not yet observed by a driver`, then `cancellation confirmed|pending` or
+`cancellation unconfirmed · recovery required` for a hard stop, and
+`STOP_OBSERVER_FAILED · <cause> · driver stopped new work`. Confirmed means the
+observed hard stop leaves no STARTED work (or the run is terminal). Exit codes are
+unchanged. Not in scope: daemon, recovery CLI (R05), live adapter, F4/F5.
 
 ### Product target (R03b, 2026-10-07)
 
