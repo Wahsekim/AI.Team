@@ -70,7 +70,7 @@ export const displayTitleOrFallback = display => (display && typeof display.titl
 // R04b: recorded (store) vs observed (active driver) vs cancellation state, derived from durable state only.
 // Cancellation is confirmed only when the observed stop leaves no running or unknown work.
 export function stopView(state) {
-  const record = state.stopRequest ?? null, failed = state.stopObserverFailed ?? null;
+  const record = state.stopRequest ?? null, failed = state.stopObserverFailed?.recoveredAt ? null : state.stopObserverFailed ?? null;
   if (!record && !failed) return null;
   const seq = record ? record.seq ?? 1 : null, kind = record ? record.kind ?? record.mode : null;
   const observed = !!record && state.stopObserved?.seq === seq;

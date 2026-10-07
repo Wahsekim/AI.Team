@@ -81,6 +81,8 @@ export function createFixtureDriver({ store, owner, adapter, archive, runId, roo
     owner.assertHeld();
     observe(); if (failure) throw failure;
     let state = status().state;
+    // A healthy observer supersedes an earlier driver's durable failure banner (R04b F4).
+    if (state.stopObserverFailed && !state.stopObserverFailed.recoveredAt && !TERMINAL.has(state.status)) { apply('stop-observer-recovered', {}); state = status().state; }
     if (TERMINAL.has(state.status)) return status();
     requireThat(state.status !== 'RECOVERY_REQUIRED', 'EFFECT_UNKNOWN', 'Explicit operator recovery required');
     const unresolved = Object.values(state.dispatches).filter(d => !d.receipt);
@@ -131,7 +133,7 @@ export function createFixtureDriver({ store, owner, adapter, archive, runId, roo
       }).catch(error => {
         const state = status().state;
         // A stop landing during this step refused its dispatch before any effect started: a clean stop.
-        if (['STOP_REQUESTED', 'INVALID_TRANSITION'].includes(error.code) && stopSeq(state.stopRequest) > startSeq && !unresolved(state)) {
+        if ((error.code === 'STOP_REQUESTED' || error.preStart === true) && stopSeq(state.stopRequest) > startSeq && !unresolved(state)) {
           observe(); if (failure) throw failure;
           return status();
         }

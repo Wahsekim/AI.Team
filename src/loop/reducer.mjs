@@ -149,6 +149,9 @@ export function reduce(spec, before, action, payload, now) {
   } else if (action === 'stop-observer-failed') {
     fields(payload, ['cause'], 'Stop observer failure'); id(payload.cause);
     s.stopObserverFailed = { cause: payload.cause, at: now };
+  } else if (action === 'stop-observer-recovered') {
+    fields(payload, [], 'Stop observer recovery'); expect(s.stopObserverFailed && !s.stopObserverFailed.recoveredAt, 'No observer failure to supersede');
+    s.stopObserverFailed = { ...s.stopObserverFailed, recoveredAt: now };
   } else if (action === 'claim') {
     fields(payload, Object.hasOwn(payload, 'quota') ? ['effectId', 'quota'] : ['effectId'], 'Claim');
     if (s.projection?.id === payload.effectId) {

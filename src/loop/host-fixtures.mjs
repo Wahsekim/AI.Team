@@ -1,4 +1,4 @@
-import { digest, requireThat } from './contracts.mjs';
+import { digest, requirePreStart, requireThat } from './contracts.mjs';
 import { command } from './demo.mjs';
 import { resolveRef } from './artifacts.mjs';
 import { snapshotRepository } from './snapshots.mjs';
@@ -51,12 +51,17 @@ export async function executeStoredFixture({ store, adapter, runId, dispatchId, 
   const input = { store, adapter, runId, dispatchId, root, now };
   const { dispatch, state } = binding(input);
   requireThat(!signal?.aborted, 'CANCELLED', 'Fixture cancelled before dispatch');
-  requireThat(!state.reason && dispatch.status === 'PENDING', 'INVALID_TRANSITION', 'Only a pending fixture can execute; reconcile existing claims explicitly');
+  requirePreStart(!state.reason && dispatch.status === 'PENDING', 'Only a pending fixture can execute; reconcile existing claims explicitly');
   requireThat(!adapter.lookup(dispatchId), 'EFFECT_UNKNOWN', 'Fixture journal already contains this dispatch; do not execute again');
   requireThat(matches(root, dispatch.candidate), 'STALE_EVIDENCE', 'Scheduled candidate changed');
   store.apply('claim', command(store, runId, { effectId: dispatchId, quota }), now());
   const claimed = store.status(runId).state;
-  if (claimed.reason || claimed.dispatches[dispatchId].status !== 'STARTED') return { cancelledBeforeStart: true };
+  if (claimed.dispatches[dispatchId].status !== 'STARTED') return { cancelledBeforeStart: true };
+  // A stop committed after the claim refuses the spawn (re-read now: R04b F2); the claim settles cancelled.
+  if (claimed.reason || store.readStopRequest(runId)) {
+    store.apply('settle', command(store, runId, { dispatchId, result: 'cancelled', candidate: dispatch.candidate, tokens: 0, costMicroUsd: 0 }), now());
+    return { cancelledBeforeStart: true };
+  }
   let handle;
   const abort = () => { if (handle) adapter.cancel(handle); };
   try {

@@ -64,7 +64,7 @@ const observations = store => store.events('run', -1, 1000).filter(e => e.action
 
 // In-process driver; `hooks` wrap the store's apply and the adapter like the driver-crash host does.
 async function inProcess(t, options = {}) {
-  const f = prepare(t, options), hooks = { beforeApply: null, boundary: null, readFails: null, holdCollect: null };
+  const f = prepare(t, options), hooks = { beforeApply: null, boundary: null, readFails: null, holdCollect: null, hideStop: false, beforeRead: null };
   const store = await openStore(join(f.directory, 'loop.sqlite'));
   store.create(f.spec, f.artifacts, { simulation: true });
   const owner = await acquireExecutionOwner({ store, target: f.root });
@@ -76,14 +76,16 @@ async function inProcess(t, options = {}) {
     cancel(handle) { const result = inner.cancel(handle); cancels.push({ cancelled: result.cancelled, status: result.status }); return result; },
     async collectResult(handle) { const result = await inner.collectResult(handle); if (hooks.holdCollect) await waitFor(hooks.holdCollect, 'held collect condition'); return result; } };
   const hooked = { ...store,
-    readStopRequest(id) { if (hooks.readFails) throw hooks.readFails; return store.readStopRequest(id); },
+    readStopRequest(id) { if (hooks.readFails) throw hooks.readFails; hooks.beforeRead?.(); return hooks.hideStop ? null : store.readStopRequest(id); },
     apply(action, prepared, at, fence) { hooks.beforeApply?.(action, prepared.payload); return store.apply(action, prepared, at, fence); } };
-  const driver = createFixtureDriver({ store: hooked, owner, adapter, archive, runId: 'run', root: f.root, projectionDirectory: f.directory,
-    request: options.req ?? request(), gateConfigs: f.gateConfigs, pollMs: POLL_MS });
-  t.after(async () => { await driver.close(); await adapter.close(); owner.release(); archive.close(); store.close(); });
+  const drivers = [];
+  const newDriver = () => { const d = createFixtureDriver({ store: hooked, owner, adapter, archive, runId: 'run', root: f.root, projectionDirectory: f.directory,
+    request: options.req ?? request(), gateConfigs: f.gateConfigs, pollMs: POLL_MS }); drivers.push(d); return d; };
+  const driver = newDriver();
+  t.after(async () => { for (const d of drivers) await d.close(); await adapter.close(); owner.release(); archive.close(); store.close(); });
   // Fires `act` once, on the first call whose arguments match.
   const once = (matches, act) => { let done = false; return (...args) => { if (!done && matches(...args)) { done = true; act(...args); } }; };
-  return { ...f, store, owner, archive, adapter, driver, hooks, spawned, cancels, once, state: () => store.status('run').state };
+  return { ...f, store, owner, archive, adapter, driver, newDriver, hooks, spawned, cancels, once, state: () => store.status('run').state };
 }
 
 // Host process for O1/O2: emits a JSON trace; this test is the second process that records the stop.
@@ -257,6 +259,19 @@ test('O7: an observer read failure stops new work and is reported in status/show
   const status = cliRun(p.directory, 'status'), show = cliRun(p.directory, 'show');
   assert.deepEqual(status.json.value.stop.observerFailed.cause, 'ERR_SQLITE_ERROR');
   assert.match(show.stdout, /STOP_OBSERVER_FAILED · ERR_SQLITE_ERROR · driver stopped new work/);
+  // F1(c): a hard stop recorded after the failure is shown as recorded and pending, never observed or confirmed.
+  cliStop(p.directory, 'hard');
+  const after = cliRun(p.directory, 'status'), afterShow = cliRun(p.directory, 'show');
+  assert.equal(after.json.value.stop.observed, false); assert.equal(after.json.value.stop.cancellation, 'pending');
+  assert.match(afterShow.stdout, /^stop recorded · not yet observed by a driver  cancellation pending$/m);
+  // F4: a later healthy driver observes the stop and supersedes the failure banner.
+  await p.driver.close();
+  const healthy = p.newDriver();
+  assert.equal((await healthy.step()).state.status, 'STOPPED');
+  assert.equal(p.state().stopObserverFailed.cause, 'ERR_SQLITE_ERROR'); assert.ok(p.state().stopObserverFailed.recoveredAt >= p.state().stopObserverFailed.at);
+  const recovered = cliRun(p.directory, 'status'), recoveredShow = cliRun(p.directory, 'show');
+  assert.equal(recovered.json.value.stop.observerFailed, null); assert.equal(recovered.json.value.stop.observed, true);
+  assert.doesNotMatch(recoveredShow.stdout, /STOP_OBSERVER_FAILED/); assert.equal(p.store.verify('run').ok, true);
 
   const start = await inProcess(t);
   start.hooks.readFails = failure;
@@ -305,7 +320,10 @@ test('O9: graceful stop keeps a closing projection; hard stop and escalation dro
   }
   for (const [hook, published] of [['claim', 0], ['projected', 1]]) {
     const p = await atProjection(t, { [hook]: 'hard' });
-    assert.equal((await p.driver.step()).state.status, 'RECOVERY_REQUIRED', `hard before ${hook}`);
+    // F5: a refused claim (STOP_REQUESTED) ends the step cleanly; a refused ACK after publication is not swallowed.
+    if (hook === 'claim') assert.equal((await p.driver.step()).state.status, 'RECOVERY_REQUIRED', 'hard before claim');
+    else await assert.rejects(p.driver.step(), e => e.code === 'INVALID_TRANSITION' && !e.preStart, 'hard before projected');
+    assert.equal(p.state().status, 'RECOVERY_REQUIRED');
     const state = p.state();
     assert.equal(state.projection, null); assert.equal(p.outbox(), 'DROPPED'); assert.equal(p.files().length, published);
     assert.equal(state.stopObserved.kind, 'hard'); assert.equal(actions(p.store).includes('interrupted'), false);
@@ -313,7 +331,8 @@ test('O9: graceful stop keeps a closing projection; hard stop and escalation dro
     await assert.rejects(p.driver.step(), e => e.code === 'EFFECT_UNKNOWN'); assert.equal(p.store.verify('run').ok, true);
   }
   const p = await atProjection(t, { claim: 'graceful', projected: 'hard' });
-  assert.equal((await p.driver.step()).state.status, 'RECOVERY_REQUIRED', 'escalation of a kept projection applies the hard rule');
+  await assert.rejects(p.driver.step(), e => e.code === 'INVALID_TRANSITION' && !e.preStart, 'escalation of a kept projection applies the hard rule');
+  assert.equal(p.state().status, 'RECOVERY_REQUIRED');
   const state = p.state();
   assert.equal(state.stopRequest.seq, 2); assert.equal(state.projection, null); assert.equal(p.outbox(), 'DROPPED');
   assert.deepEqual(observations(p.store), [1, 2]); assert.equal(p.store.verify('run').ok, true);
@@ -333,4 +352,51 @@ test('O10: observation is owner-only, replayable and bounded by configuration', 
   assert.equal((await p.driver.step()).state.status, 'STOPPED');
   const terminal = cliRun(p.directory, 'stop', '--hard');
   assert.equal(terminal.status, 2); assert.equal(terminal.json.code, 'RUN_TERMINAL');
+});
+
+test('O11: status/show never report an unobserved or still-running hard stop as confirmed', sqlite, async t => {
+  const p = await inProcess(t, { req: request('hang', 0, 4000) });
+  let released = false;
+  p.hooks.hideStop = true; // the driver's poll keeps reading, but sees no record yet
+  p.hooks.boundary = p.once(event => event.phase === 'spawned-before-pid-save', () => cliStop(p.directory, 'hard'));
+  p.hooks.holdCollect = () => released;
+  const active = p.driver.step();
+  await waitFor(() => !!p.state().stopRequest, 'stop record');
+  // (a) recorded while the build runs, not yet observed.
+  let status = cliRun(p.directory, 'status'), show = cliRun(p.directory, 'show');
+  assert.equal(status.json.value.stop.recorded, true); assert.equal(status.json.value.stop.observed, false);
+  assert.equal(status.json.value.stop.cancellation, 'pending');
+  assert.match(show.stdout, /^stop recorded · not yet observed by a driver  cancellation pending$/m);
+  assert.deepEqual(p.cancels, []); assert.equal(p.state().stopObserved, undefined);
+  // (b) observed and cancelled, but the cancelled result is not settled yet: still pending.
+  p.hooks.hideStop = false;
+  await waitFor(() => p.state().stopObserved?.seq === 1 && p.cancels.length === 1, 'hard observation');
+  assert.equal(p.state().dispatches['d-1'].receipt, null);
+  status = cliRun(p.directory, 'status'); show = cliRun(p.directory, 'show');
+  assert.equal(status.json.value.stop.observed, true); assert.equal(status.json.value.stop.cancellation, 'pending');
+  assert.match(show.stdout, /^stop observed by the driver · #1  cancellation pending$/m);
+  released = true; await active;
+  assert.equal(p.state().dispatches['d-1'].receipt.result, 'cancelled');
+  assert.equal(cliRun(p.directory, 'status').json.value.stop.cancellation, 'confirmed');
+});
+
+test('O12: a stop committed between claim and spawn refuses the spawn and settles the claim as cancelled', sqlite, async t => {
+  const p = await inProcess(t);
+  // Fires on the host's re-read right before adapter.start: the dispatch is claimed, nothing is spawned yet.
+  p.hooks.beforeRead = p.once(() => p.state().dispatches['d-1']?.status === 'STARTED' && p.spawned.length === 0, () => cliStop(p.directory, 'hard'));
+  const status = await p.driver.step();
+  assert.equal(status.state.status, 'QUIESCING'); assert.deepEqual(p.spawned, []); assert.equal(p.adapter.lookup('d-1'), null);
+  assert.deepEqual(p.state().dispatches['d-1'].receipt, { dispatchId: 'd-1', result: 'cancelled', candidate: p.spec.initialSnapshotRef.digest, tokens: 0, costMicroUsd: 0 });
+  assert.equal(actions(p.store).includes('interrupted'), false);
+  assert.equal((await p.driver.step()).state.status, 'STOPPED'); assert.equal(p.store.verify('run').ok, true);
+
+  const marker = join(tmpdir(), `ai-stop-observe-f2-${process.pid}-${Date.now()}.pid`);
+  t.after(() => rmSync(marker, { force: true }));
+  const g = await inProcess(t, { gateSource: `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'ran')` });
+  await g.driver.step();
+  g.hooks.beforeRead = g.once(() => g.state().dispatches['d-2']?.status === 'STARTED' && g.archive.intent('run', 'd-2').status === 'PENDING', () => cliStop(g.directory, 'hard'));
+  assert.equal((await g.driver.step()).state.status, 'QUIESCING');
+  assert.equal(existsSync(marker), false, 'the gate never ran'); assert.equal(g.archive.intent('run', 'd-2').status, 'CANCELLED');
+  assert.equal(g.state().dispatches['d-2'].receipt.result, 'cancelled');
+  assert.equal((await g.driver.step()).state.status, 'STOPPED'); assert.equal(g.store.verify('run').ok, true);
 });

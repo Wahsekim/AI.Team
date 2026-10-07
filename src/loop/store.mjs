@@ -5,7 +5,7 @@ import { initialState, reduce, replayLegacyStop, stopEscalates, TERMINAL, valida
 
 const FENCED = new Set(['tick', 'claim']);
 // R04b: only the active driver (its owner fence) acknowledges or reports on stop observation.
-const OWNER_ONLY = new Set(['stop-observed', 'stop-observer-failed']);
+const OWNER_ONLY = new Set(['stop-observed', 'stop-observer-failed', 'stop-observer-recovered']);
 const unresolved = state => state.status === 'RECOVERY_REQUIRED' || state.projection?.status === 'STARTED'
   || Object.values(state.dispatches).some(d => !d.receipt && ['STARTED', 'UNKNOWN'].includes(d.status));
 // ADR 0002: created lazily by acquireExecutionOwner only; append-only history, at most one open row.

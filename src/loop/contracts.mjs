@@ -7,6 +7,10 @@ export class LoopError extends Error {
 export function requireThat(condition, code, message) {
   if (!condition) throw new LoopError(code, message);
 }
+// R04b: a host refusal before any claim or spawn; the driver may treat it as a clean stop.
+export function requirePreStart(condition, message) {
+  if (!condition) throw Object.assign(new LoopError('INVALID_TRANSITION', message), { preStart: true });
+}
 const invalid = (condition, message) => requireThat(condition, 'INVALID_SPEC', message);
 const ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const DIGEST = /^sha256:[a-f0-9]{64}$/;

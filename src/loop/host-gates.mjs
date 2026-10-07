@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { bytesDigest, digest, requireThat } from './contracts.mjs';
+import { bytesDigest, digest, requirePreStart, requireThat } from './contracts.mjs';
 import { resolveRef } from './artifacts.mjs';
 import { command } from './demo.mjs';
 import { gateInvocation, runLocalGate, validateGate } from './gates.mjs';
@@ -52,7 +52,7 @@ export function settleRecordedGate({ store, archive, runId, dispatchId, repoRoot
 // STARTED/UNKNOWN journal entry; recovery can consume RECORDED without spawning.
 export async function executeStoredGate({ store, archive, runId, dispatchId, config, quota = null, now = () => Date.now() }) {
   const { dispatch, gate, state } = binding(store, runId, dispatchId);
-  requireThat(!dispatch.receipt && !state.reason, 'INVALID_TRANSITION', 'Run is stopped or gate already settled');
+  requirePreStart(!dispatch.receipt && !state.reason, 'Run is stopped or gate already settled');
   requireThat(gate.specDigest === config.gate.specDigest, 'STALE_EVIDENCE', 'Unapproved gate configuration');
   const { signal, ...plain } = config;
   const frozen = structuredClone(plain);
@@ -67,7 +67,8 @@ export async function executeStoredGate({ store, archive, runId, dispatchId, con
   // A previously claimed effect is not an exemption from a new deadline/stop.
   store.apply('tick', command(store, runId, { reservation: { agentCalls: 0, tokens: 0, costMicroUsd: 0 }, quota }), now());
   const current = store.status(runId).state, claimed = current.dispatches[dispatchId];
-  if (claimed.status !== 'STARTED' || current.reason) {
+  // Re-read the stop record right before the spawn (R04b F2).
+  if (claimed.status !== 'STARTED' || current.reason || store.readStopRequest(runId)) {
     archive.transition(runId, dispatchId, 'PENDING', 'CANCELLED');
     if (claimed.status === 'STARTED' && !claimed.receipt) store.apply('settle', command(store, runId,
       { dispatchId, result: 'cancelled', candidate: dispatch.candidate, tokens: 0, costMicroUsd: 0 }), now());

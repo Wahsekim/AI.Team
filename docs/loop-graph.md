@@ -280,11 +280,10 @@ by R04b below). `store.apply('stop', …)` is refused. Stop events written befor
 (`{mode, reason}`) replay in `audit` as legacy records (`show`: `stop <mode> ·
 legacy record`) and can still escalate to hard (seq 2); new stops refuse that shape.
 `store.readStopRequest(runId)` is the read-only poll (one SELECT; no table, chmod
-or version change) that R04b's driver will call between steps and while an effect
-runs, then cancel through the existing bounded process primitive. Until R04b, the
-driver does not observe an external stop: a CLI `--hard` stop prevents new dispatch
-but does not cancel a running effect, and the driver's stale-version path can still
-end in RECOVERY_REQUIRED (fail-closed, R-1). Hard stop never depends on a worker or
+or version change). At R04a the driver did not yet observe an external stop; since
+R04b it polls this record and cancels through the existing bounded process
+primitive, and stop-induced STALE_STATE no longer degrades to RECOVERY_REQUIRED
+(see "Stop observation" below). Hard stop never depends on a worker or
 LLM reading a message; status/show report the record, not a completed stop.
 
 ### Stop observation (R04b, 2026-10-07)
@@ -307,20 +306,36 @@ A `STALE_STATE` whose intervening events are all `stop` events is re-read, obser
 and re-prepared (at most twice); any other `STALE_STATE` keeps the fail-closed
 `interrupted` path. A claim or tick refused with `STOP_REQUESTED` (or a pre-start
 `INVALID_TRANSITION`) by a stop that landed during the step, with no STARTED or
-UNKNOWN work, ends the step cleanly and returns status.
+UNKNOWN work, ends the step cleanly and returns status. Since attempt 2 only the two
+host pre-start refusals (fixture "only a pending fixture can execute", gate "run is
+stopped or gate already settled", marked `preStart`) qualify; any other
+`INVALID_TRANSITION`, such as the ACK of a projection a hard stop dropped, keeps the
+error path. The fixture and gate hosts re-read the stop record after the claim and
+immediately before the spawn; a stop found there refuses the spawn and settles the
+claimed dispatch `cancelled` (gate journal CANCELLED).
 
 Closing projection (PM decision, ADR 0004): a first graceful stop while FINALIZING
 with a projection records the stop only, sets `projection.keptByStop = seq`, and the
 run ends at the projection's outcome (its outbox row follows it to ACKNOWLEDGED). A
 first hard stop, or a hard escalation of a kept projection, applies the hard rule:
-RECOVERY_REQUIRED, projection nulled, outbox row marked `DROPPED`.
+RECOVERY_REQUIRED, projection nulled, outbox row marked `DROPPED`. `DROPPED` means
+discarded by the control plane: the projection file may already be published (hard
+stop between claim and ACK), and recovery reconciles it.
 
 Observer failure: if the poll or the observation write throws, the driver records
 the owner-fenced event `stop-observer-failed {cause}` when it can
 (`state.stopObserverFailed = {cause, at}`), lets the running step finish (bounded by
 its process timeout), and rejects that step and every later step on this driver with
 `STOP_OBSERVER_FAILED`; nothing new is ticked, claimed or spawned. Only the owner may
-append either observation event (unfenced: `INVALID_SPEC`).
+append the observation events (unfenced: `INVALID_SPEC`). If the failure event cannot
+be written (the store itself failing), the failure is reported only by the thrown
+error (`recordError` attached); status/show cannot show it. Limitation of this release
+(PM decision, revisit in R12/R14 for the live adapter): after an observer failure a
+later hard stop does not cancel the running effect; that effect stays bounded by its
+own timeout (fixtures ≤ 4 s, gates their configured `timeoutMs`) and status shows the
+stop as recorded, not observed, cancellation pending. A later driver whose first poll
+succeeds appends `stop-observer-recovered`, which sets `recoveredAt` and removes the
+failure banner from status/show (the event history keeps it).
 
 `status` adds `stop: {recorded, seq, kind, observed, cancellation, keptProjection,
 observerFailed}`; `show` prints `stop observed by the driver · #n` or `stop recorded
