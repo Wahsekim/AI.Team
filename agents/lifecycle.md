@@ -32,7 +32,7 @@ Rotation: slim-active + archive — the standing rule in
 
 ## Counter
 
-Next NNN to assign: **017**
+Next NNN to assign: **019**
 
 ## Counter and header rules
 
@@ -451,15 +451,65 @@ at rotation time.
 - Reasoning: max (prompt-level)
 - Estimated tokens: 250000
 - Sub-decision count: 0 (policy fixed by owner Q5; enforcement semantics documented in ADR 0003 for PM/owner review)
+- Status: completed
+- Completed: 2026-10-07T09:08:20Z
+- Tokens: 195141 (cumulative; attempt 1 170985 + attempt 2 24156)
+- Variance: -22%
+- PM overhead: ~20000 tok (est)
+- Outcome: commit ae082d3 — product-target.mjs identity (.native root + dev/ino of root and git common dir), target_binding in the lock DB, TARGET_NOT_ISOLATED / TARGET_MISMATCH (exit 4), ADR 0003, TI-1..7 green with 5 red-then-green mutations; 453 tests Node 24. Deviation: stricter 'state dir outside any Git repo' rule — PM probe shows the documented `fixture .team-fixture fixture-1` from the repo root now exits 4 TARGET_NOT_ISOLATED (documented-workflow regression; to be adjudicated by review)
+- Progress: yes
+- Handoffs:
+    - reviewer [017] needs ae082d3 + docs/rollout-evidence/R03b/ + the PM probe result
+    - PM: decisions/README.md index entry for ADR 0003 at acceptance
+- Retry-of: none
+- Diverged-from: none
+- Round-trip: 1 (resumed for [017] F-01..F-06 -> second commit 963be6a; last attempt)
+- Notes: INLINE FALLBACK (see [001]). Only committing agent now; CI on 4a11924 runs concurrently. Checkpoint-1 allowance applies (impl <=300k).
+- Acceptance update: 2026-10-07T09:17:32Z KO on review (P1 untested driver target guard; P2 documented commands) -> attempt 2 via resume (last attempt); outside-repo rule kept (containment hazard)
+- Owner decision: 2026-10-07T13:32:07Z behavior change approved (state dirs outside any Git repo)
+- Acceptance update: 2026-10-07T13:34:16Z OK locally (reviewed by [017] attempt-2 confirmation), BLOCKED-on-CI; pushed ae082d3+963be6a
+- Acceptance update: 2026-10-07T13:36:38Z OK (CI run 37629561431 green on f19e221)
+
+## [017] Independent Reviewer (loop-rollout-reviewer) - 2026-10-07T09:08:20Z
+- Ticket: R03b
+- Spawned by: PM (Claude Fable 5.1 main session)
+- Brief: Review ae082d3 against ADR 0001 decision 5, handoff §5 cases and ADR 0003 — first adjudicate the 'state dir outside any Git repo' rule (documented workflow regression found by the PM); then identity derivation, target_binding, held-target checks, mutations, suites, docs/ADR accuracy, CLI exit-4 mapping; writes docs/rollout-evidence/R03b/review.md only.
+- Model: opus (owner directive "opus 5 max")
+- Reasoning: max (prompt-level)
+- Estimated tokens: 150000
+- Sub-decision count: 0
+- Status: completed
+- Completed: 2026-10-07T09:17:32Z
+- Tokens: 131548 (cumulative; review 113033 + attempt-2 confirmation 18515)
+- Variance: -12%
+- PM overhead: ~10000 tok (est)
+- Outcome: priority verdict NECESSARY — constructed the target-containment overlap (outer-repo host inventories/cleans the inner state dir; its snapshot drops the inner lock); reproduction no mismatches (453/452/1 Node 24; 354/0/99 Node 22); 7 mutations caught, 3 survived (core.worktree, assertOwnedTarget removal = P1, ambient GIT_* fails closed); P1 F-01, P2 F-02 docs, P3 F-03..F-06; recommends KO with small attempt 2
+- Progress: yes
+- Handoffs:
+    - implementer [016] attempt 2: F-01 test, F-02 docs + no-debris check, F-03..F-06
+    - owner: approve the documented-workflow change (state dirs outside any repo)
+- Retry-of: none
+- Diverged-from: none
+- Round-trip: 1 (resumed to confirm 963be6a; F-01..F-06 closed; recommends OK locally, BLOCKED-on-CI)
+- Notes: INLINE FALLBACK (see [001]). Push of ae082d3 held until review closes.
+
+## [018] Implementer (loop-rollout-implementer) - 2026-10-07T13:35:22Z
+- Ticket: R04a
+- Spawned by: PM (Claude Fable 5.1 main session)
+- Brief: R04a — explicit, durable hard/graceful stop command written to the control store without taking the execution lock (plan R04 split a, ADR 0001 decision 7): stop record with kind (graceful|hard), requester, timestamp, monotonic stop sequence; idempotent repeat; stop-before-spawn; graceful->hard escalation recorded durably; visible in status/show; CLI `stop --hard|--graceful`; no driver observation yet (R04b). Defines the read interface R04b will poll. One commit, no push.
+- Model: opus (owner directive "opus 5 max")
+- Reasoning: max (prompt-level)
+- Estimated tokens: 220000
+- Sub-decision count: 1 (stop record schema + reducer transitions — documented in a short ADR 0004 draft within the commit for PM/owner review)
 - Status: spawned
 - Completed:
 - Tokens:
 - Variance:
-- PM overhead: ~20000 tok (est)
+- PM overhead: ~15000 tok (est)
 - Outcome:
 - Progress:
 - Handoffs:
 - Retry-of: none
 - Diverged-from: none
 - Round-trip: none
-- Notes: INLINE FALLBACK (see [001]). Only committing agent now; CI on 4a11924 runs concurrently. Checkpoint-1 allowance applies (impl <=300k).
+- Notes: INLINE FALLBACK (see [001]). Only committing agent; CI on f19e221 runs concurrently. Checkpoint-1 allowance applies (impl <=300k).

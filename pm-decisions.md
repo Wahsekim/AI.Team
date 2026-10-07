@@ -71,3 +71,13 @@ the engine's `results[]` (per `docs/engine.md`), under a dated batch line.
 2026-10-07 FLAKE-1 ACCEPTANCE: OK locally, BLOCKED-on-CI (713c390 + 4a11924). PROC-1 + FLAKE-1 pushed together for CI.
 2026-10-07 R03b -> Implementer, est 250000 tok, brief: agents/lifecycle.md#[016], why: next G0 card; owner Q5 policy fixed; R03a primitive available
 2026-10-07 FLAKE-1 ACCEPTED: OK; PROC-1 ACCEPTED: OK (CI run 37596638884 all green on 4a11924). G0 progress: R01, R02, R02b, R03a, FLAKE-1, PROC-1 OK; R03b in progress; R04a/b, R05a/b pending. Follow-up candidates: PROC-2, R12 escaped-descendant note.
+2026-10-07 CI on ledger commit: run=52b1490 conclusion=success (runs/37596936039).
+2026-10-07 R03b closed-impl: actual 170985 tok (var -32%), outcome: ae082d3 implements target isolation; PM probe: documented fixture command from repo root now exits 4 (state dir inside a Git repo) — review to adjudicate, lifecycle: [016]
+2026-10-07 R03b -> Independent Reviewer, est 150000 tok, brief: agents/lifecycle.md#[017], why: handoff §2; stricter-than-briefed rule has a user-visible consequence
+            -> [017] closed: actual 113033 tok (var -25%), outcome: R03b review KO — outside-repo rule kept (containment hazard), P1 untested driver guard, P2 docs; attempt 2 sent, lifecycle: [017]
+2026-10-07 OWNER-DECISION NEEDED: R03b makes state directories inside any Git repository unsupported (documented fixture commands change). Rationale: containment hazard (review [017]).
+2026-10-07 OWNER: approved R03b behavior change — state directories must be outside any Git repository (documented commands updated). R03b attempt 2 = 963be6a (F-01..F-06 fixed); reviewer confirmation requested.
+2026-10-07 R03b ACCEPTANCE: OK locally, BLOCKED-on-CI (ae082d3 + 963be6a; review [017] confirms). Docs commit records owner approval (ADR 0003 status, index, loop-graph.md wording). Pushing.
+            -> [017] final: actual 131548 tok cumulative (var -12%), outcome: R03b attempt 2 confirmed, OK locally pending CI, lifecycle: [017]
+2026-10-07 R04a -> Implementer, est 220000 tok, brief: agents/lifecycle.md#[018], why: next G0 card (R04 split approved Q7); R03a/R03b landed; store-side stop record first, driver observation in R04b
+2026-10-07 R03b ACCEPTED: OK (CI run 37629561431 all green on f19e221). G0 progress: R01, R02, R02b, R03a, R03b, FLAKE-1, PROC-1 OK; R04a in progress; R04b, R05a, R05b pending. R03 (both halves) complete.
