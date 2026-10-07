@@ -32,7 +32,7 @@ Rotation: slim-active + archive — the standing rule in
 
 ## Counter
 
-Next NNN to assign: **019**
+Next NNN to assign: **021**
 
 ## Counter and header rules
 
@@ -501,15 +501,64 @@ at rotation time.
 - Reasoning: max (prompt-level)
 - Estimated tokens: 220000
 - Sub-decision count: 1 (stop record schema + reducer transitions — documented in a short ADR 0004 draft within the commit for PM/owner review)
+- Status: completed
+- Completed: 2026-10-07T13:48:53Z
+- Tokens: 206176 (cumulative; attempt 1 181740 + attempt 2 24436)
+- Variance: -6%
+- PM overhead: ~15000 tok (est)
+- Outcome: commit 7b008e8 — state.stopRequest {kind, seq, requestedBy, requestedAt} in state + hash-chained events; store.requestStop lock-free idempotent/escalating; recorded stop raises the version (STALE_STATE) and refuses dispatch claims / dispatch-emitting ticks (STOP_REQUESTED, exit 2); readStopRequest read-only; CLI stop --graceful|--hard; ADR 0004; S1-S8 green with 3 red-then-green mutations; 467 tests Node 24. Deviations: no blanket post-stop refusal (closeout must proceed); apply('stop') refused; two reducer changes; pre-R04a stop events no longer replay (compat, flagged)
+- Progress: yes
+- Handoffs:
+    - reviewer [019] needs 7b008e8 + docs/rollout-evidence/R04a/
+    - PM: decisions/README.md index for ADR 0004; decision on replay compatibility and on graceful stop during pending projection
+- Retry-of: none
+- Diverged-from: none
+- Round-trip: 1 (resumed for [019] F1/F3/F8 + optional F2 -> second commit 812bbf4; last attempt)
+- Notes: INLINE FALLBACK (see [001]). Only committing agent; CI on f19e221 runs concurrently. Checkpoint-1 allowance applies (impl <=300k).
+- Acceptance update: 2026-10-07T14:02:25Z review OK on core guarantee; P2 legacy-replay compat -> attempt 2 via resume (last attempt)
+- Acceptance update: 2026-10-07T14:11:53Z OK locally (reviewed by [019] attempt-2 confirmation), BLOCKED-on-CI; pushed 7b008e8+812bbf4
+- Acceptance update: 2026-10-07T14:13:48Z OK (CI run 37634701791 green on 551133b)
+
+## [019] Independent Reviewer (loop-rollout-reviewer) - 2026-10-07T13:48:53Z
+- Ticket: R04a
+- Spawned by: PM (Claude Fable 5.1 main session)
+- Brief: Review 7b008e8 against the R04 card, ADR 0002 fencing rules and ADR 0004 — verify the stop record is durable, lock-free, idempotent/escalating, that no dispatch can pass a recorded stop (fenced or unfenced), the R-1 version rule, the two reducer changes, replay compatibility for pre-R04a stop events, CLI/exit mapping, docs; mutations; suites; writes docs/rollout-evidence/R04a/review.md only.
+- Model: opus (owner directive "opus 5 max")
+- Reasoning: max (prompt-level)
+- Estimated tokens: 150000
+- Sub-decision count: 0
+- Status: completed
+- Completed: 2026-10-07T14:02:25Z
+- Tokens: 158113 (cumulative; review 144432 + attempt-2 confirmation 13681)
+- Variance: +5%
+- PM overhead: ~10000 tok (est)
+- Outcome: no dispatch after stop proven (reducer analysis + 30k-walk fuzz); mutations caught except the unreachable tick post-check (P3); P2 F1 legacy stop events break audit/--hard/show — ≤20-line fix prototyped; F6 pending-projection rule proposed for R04b; P3 F2-F5, F7, F8 (incl. decisions README missing 0002); 467/466/0/1 Node 24, 467/355/0/112 Node 22; recommends OK locally with F1 in attempt 2
+- Progress: yes
+- Handoffs:
+    - implementer [018] attempt 2: F1 legacy replay + test, F3, F8 docs, optional F2
+    - PM: decisions/README.md add 0002; follow-up cards STOP-2 (F4) and STOP-3 (F5)
+- Retry-of: none
+- Diverged-from: none
+- Round-trip: 1 (resumed to confirm 812bbf4; F1 closed; recommends OK locally, BLOCKED-on-CI)
+- Notes: INLINE FALLBACK (see [001]). Push of 7b008e8 held until review closes.
+
+## [020] Implementer (loop-rollout-implementer) - 2026-10-07T14:11:53Z
+- Ticket: R04b
+- Spawned by: PM (Claude Fable 5.1 main session)
+- Brief: R04b — the active driver observes the durable stop record within a bounded interval (injectable poll, ≤2 s target) between and during steps, graceful = no new dispatch then closeout, hard = cancel the running process through the existing bounded primitive; STALE_STATE → re-read + readStopRequest + re-prepare (never blind `interrupted`); observer read failure → stop new work and report failure; pending-projection rule per ADR 0004 Follow-ups; stop from another process during build and gate; repeat stop; late success; unconfirmed cleanup → recovery. One commit, no push.
+- Model: opus (owner directive "opus 5 max")
+- Reasoning: max (prompt-level)
+- Estimated tokens: 250000
+- Sub-decision count: 0 (rules fixed by ADR 0004 and the PM decision)
 - Status: spawned
 - Completed:
 - Tokens:
 - Variance:
-- PM overhead: ~15000 tok (est)
+- PM overhead: ~20000 tok (est)
 - Outcome:
 - Progress:
 - Handoffs:
 - Retry-of: none
 - Diverged-from: none
 - Round-trip: none
-- Notes: INLINE FALLBACK (see [001]). Only committing agent; CI on f19e221 runs concurrently. Checkpoint-1 allowance applies (impl <=300k).
+- Notes: INLINE FALLBACK (see [001]). Only committing agent; CI on the R04a head runs concurrently. Checkpoint-1 allowance applies.

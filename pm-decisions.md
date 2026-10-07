@@ -81,3 +81,11 @@ the engine's `results[]` (per `docs/engine.md`), under a dated batch line.
             -> [017] final: actual 131548 tok cumulative (var -12%), outcome: R03b attempt 2 confirmed, OK locally pending CI, lifecycle: [017]
 2026-10-07 R04a -> Implementer, est 220000 tok, brief: agents/lifecycle.md#[018], why: next G0 card (R04 split approved Q7); R03a/R03b landed; store-side stop record first, driver observation in R04b
 2026-10-07 R03b ACCEPTED: OK (CI run 37629561431 all green on f19e221). G0 progress: R01, R02, R02b, R03a, R03b, FLAKE-1, PROC-1 OK; R04a in progress; R04b, R05a, R05b pending. R03 (both halves) complete.
+2026-10-07 CI on ledger commit: run=4a2a0d7 conclusion=success (runs/37629878776).
+2026-10-07 R04a closed-impl: actual 181740 tok (var -17%), outcome: 7b008e8 durable stop record + R-1 version rule + read interface; replay-compat break for pre-R04a stop events flagged; review pending, lifecycle: [018]
+2026-10-07 R04a -> Independent Reviewer, est 150000 tok, brief: agents/lifecycle.md#[019], why: handoff §2; reducer/store change on the stop path
+            -> [019] closed: actual 144432 tok (var -4%), outcome: R04a review OK on core guarantee, P2 legacy replay -> attempt 2; PM decided the R04b pending-projection rule; follow-ups STOP-2/STOP-3, lifecycle: [019]
+2026-10-07 R04a ACCEPTANCE: OK locally, BLOCKED-on-CI (7b008e8 + 812bbf4; review [019] confirms). Docs commit: ADR 0004 status + wording, README rows 0002/0004. Pushing.
+2026-10-07 R04b -> Implementer, est 250000 tok, brief: agents/lifecycle.md#[020], why: second half of R04 (Q7 split); R04a contract + PM pending-projection rule fixed
+2026-10-07 NOTE: docs/loop-graph.md:278 still reads "(R04b decision pending)" across a line break; fix deferred to the R04b docs commit to avoid concurrent edits of the same file. [019] final: actual 158113 tok cumulative (var +5%).
+2026-10-07 R04a ACCEPTED: OK (CI run 37634701791 all green on 551133b). G0 progress: R01, R02, R02b, R03a, R03b, R04a, FLAKE-1, PROC-1 OK; R04b in progress; R05a, R05b pending. Follow-up cards queued: STOP-2, STOP-3, PROC-2.
