@@ -1,7 +1,7 @@
 # ADR 0005: Conservative recovery commands (R05b)
 
 Date: 2026-10-07
-Status: Proposed (implemented in R05b; PM sign-off and owner ratification pending)
+Status: Accepted for implementation (PM sign-off 2026-10-07T19:39:18Z; independently reviewed); owner ratification pending
 
 ## Context
 
