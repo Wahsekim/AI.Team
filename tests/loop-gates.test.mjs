@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,6 +9,7 @@ import { assertWriteScope, changedPaths, resolveContained, snapshotRepository } 
 import { gateDigest, runLocalGate } from '../src/loop/gates.mjs';
 
 const executableDigest = bytesDigest(readFileSync(process.execPath));
+const realSetTimeout = globalThis.setTimeout;
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), 'ai-loop-gate-')); t.after(() => rmSync(root, { recursive: true, force: true }));
   const git = args => execFileSync('git', ['-C', root, ...args], { stdio: 'pipe' });
@@ -71,9 +72,12 @@ test('preflight rejects stale oracle, unavailable network isolation and pre-canc
 test('real timeout, signals, cancellation and output flood never pass', async t => {
   const root = fixture(t);
   const timeout = await runLocalGate(config(root, 'setInterval(() => {}, 1000)', { timeoutMs: 50 })); assert.equal(timeout.evidence.result, 'timeout');
+  // The runner's clock is mocked so a slow child start cannot let the timeout outrank the signal/flood outcome.
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   const signal = await runLocalGate(config(root, 'process.kill(process.pid, "SIGTERM")')); assert.equal(signal.evidence.result, 'error');
   const flood = await runLocalGate({ ...config(root, 'process.stdout.write("x".repeat(100000))'), maxOutputBytes: 100 });
   assert.equal(flood.evidence.result, 'error'); assert.equal(Buffer.byteLength(flood.transcript.stdout), 100);
+  t.mock.timers.reset();
   const controller = new AbortController(); const promise = runLocalGate({ ...config(root, 'setInterval(() => {}, 1000)'), signal: controller.signal });
   const timer = setTimeout(() => controller.abort(), 50);
   try { assert.equal((await promise).transcript.reason, 'cancelled'); } finally { clearTimeout(timer); }
@@ -101,10 +105,20 @@ test('REV-2-001: deleting an explicitly bound ignored oracle fails closed', asyn
   assert.equal(result.evidence.exitCode, 0); assert.equal(result.evidence.result, 'error');
   assert.equal(result.scopeAttestation.unchanged, false); assert.equal(result.scopeAttestation.postSnapshotError, 'ENOENT');
 });
-test('escaped descendant retaining pipes bounds host wait and requires recovery', async t => {
-  const root = fixture(t);
-  const source = 'const c=require("node:child_process").spawn(process.execPath,["-e","setTimeout(()=>{},3000)"],{detached:true,stdio:["ignore",1,2]});process.stdout.write(String(c.pid));c.unref();';
-  const result = await runLocalGate(config(root, source, { timeoutMs: 200 }));
+test('escaped descendant retaining pipes bounds host wait and requires recovery', { timeout: 10000 }, async t => {
+  const root = fixture(t), dir = mkdtempSync(join(tmpdir(), 'ai-loop-escaped-')), readyFile = join(dir, 'pid');
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const source = `const c=require("node:child_process").spawn(process.execPath,["-e","setTimeout(()=>{},3000)"],{detached:true,stdio:["ignore",1,2]});process.stdout.write(String(c.pid));require("node:fs").writeFileSync(${JSON.stringify(readyFile)},String(process.pid));c.unref();`;
+  // The runner's clock is mocked so timeout and drain deadline fire only after the gate child has exited
+  // and been reaped while its escaped descendant still holds the pipes.
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const promise = runLocalGate(config(root, source, { timeoutMs: 200 }));
+  const deadline = Date.now() + 2000;
+  const reaped = () => { try { process.kill(Number(readFileSync(readyFile, 'utf8')), 0); return false; } catch (e) { return e.code === 'ESRCH'; } };
+  while (!(existsSync(readyFile) && reaped()) && Date.now() < deadline) await new Promise(resolve => realSetTimeout(resolve, 10));
+  assert.ok(existsSync(readyFile) && reaped(), 'gate child must spawn the escaped descendant and exit before the timeout');
+  t.mock.timers.tick(200 + 1000);
+  const result = await promise;
   const pid = Number(result.transcript.stdout);
   if (Number.isSafeInteger(pid) && pid > 0) try { process.kill(-pid, 'SIGKILL'); } catch (e) { if (e.code !== 'ESRCH') throw e; }
   assert.equal(result.evidence.result, 'error'); assert.equal(result.scopeAttestation.recoveryRequired, true);

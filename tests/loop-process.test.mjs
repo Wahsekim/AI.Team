@@ -35,15 +35,18 @@ for (const trigger of ['timeout', 'cancelled', 'output_limit']) {
   test(`surviving descendants require recovery after ${trigger}`, { timeout: 10000 }, async t => {
     const dir = mkdtempSync(join(tmpdir(), 'ai-descendant-')), readyFile = join(dir, 'ready');
     t.after(() => rmSync(dir, { recursive: true, force: true }));
+    // The runner's clock is mocked so the timeout fires only after the descendant is observably ready.
+    if (trigger === 'timeout') t.mock.timers.enable({ apis: ['setTimeout'] });
     const handle = startBoundedProcess({ ...config(survivingDescendantSource({ readyFile, overflow: trigger === 'output_limit' })),
       timeoutMs: trigger === 'timeout' ? 1000 : 3000 });
     t.after(async () => { handle.cancel(); await handle.completion; });
-    if (trigger === 'cancelled') {
+    if (trigger !== 'output_limit') {
       const deadline = Date.now() + 2000;
       while (!existsSync(readyFile) && Date.now() < deadline) await delay(10);
-      assert.ok(existsSync(readyFile), 'child must install its handler before cancellation');
-      assert.equal(handle.cancel(), true);
+      assert.ok(existsSync(readyFile), `child must install its handler before ${trigger}`);
     }
+    if (trigger === 'cancelled') assert.equal(handle.cancel(), true);
+    if (trigger === 'timeout') t.mock.timers.tick(1000);
     const result = await handle.completion;
     assert.ok(existsSync(readyFile), 'reproduction must actually start the descendant');
     assert.equal(result.reason, 'orphaned_process_group');
