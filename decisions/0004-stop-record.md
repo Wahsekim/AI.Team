@@ -1,7 +1,7 @@
 # ADR 0004: Durable stop record in the control store (R04a)
 
 Date: 2026-10-07
-Status: Proposed (R04a implementation; PM sign-off and owner ratification pending)
+Status: Accepted for implementation (PM sign-off 2026-10-07T14:11:53Z; independently reviewed); owner ratification pending
 
 ## Context
 
@@ -34,7 +34,7 @@ Status: Proposed (R04a implementation; PM sign-off and owner ratification pendin
 - Stores written before R04a replay as legacy records (decision 7; attempt 2, review F1).
 - Limitations (pre-existing, follow-up cards): F4, a first stop overwrites an earlier failure reason (a run quiescing on `final_gate_failed` projects STOPPED, not FAILED); F5, after a stop, settling the last UNKNOWN dispatch while a limit trips leaves RECOVERY_REQUIRED through the receipt, not `abandon`, and replaces `user_stop` with the limit reason (R05 recovery rules).
 - Library callers: `driver.stop({kind, requestedBy})`; `stopRequest.mode/detail` became `kind/seq/requestedBy/requestedAt`.
-- Open for R04b: polling, abort, observer failure, escalation during a running effect, and the driver's R-1 handling. Open for the PM/owner: whether a first stop during a pending projection should keep forcing RECOVERY_REQUIRED (assessment decision ii; unchanged here).
+- Open for R04b: polling, abort, observer failure, escalation during a running effect, and the driver's R-1 handling. Decided by the PM on 2026-10-07 (see Follow-ups); implemented in R04b: whether a first stop during a pending projection should keep forcing RECOVERY_REQUIRED (assessment decision ii; unchanged here).
 
 ## Follow-ups
 
