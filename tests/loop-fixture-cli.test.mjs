@@ -50,5 +50,5 @@ test('fixture command handles its SIGINT through durable stop and bounded closeo
     process.stdout.write(JSON.stringify(result));`;
   const result = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', source], { encoding: 'utf8', timeout: 15000 }));
   assert.equal(result.state.status, 'STOPPED'); assert.equal(result.state.reason, 'user_stop');
-  assert.equal(result.state.stopRequest.mode, 'hard'); assert.equal(result.state.projection.status, 'ACKNOWLEDGED');
+  assert.equal(result.state.stopRequest.kind, 'hard'); assert.equal(result.state.projection.status, 'ACKNOWLEDGED');
 });

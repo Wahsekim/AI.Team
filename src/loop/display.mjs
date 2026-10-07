@@ -76,6 +76,8 @@ export function renderRunSummary(status, { width = 80 } = {}) {
   const lines = [];
   if (status.simulation) lines.push('SIMULATION — not evidence of a real product build');
   lines.push(line(`run ${status.runId} · ${state.status} · v${status.stateVersion}`));
+  const stop = state.stopRequest;
+  if (stop) lines.push(line(`stop ${stop.kind} · #${stop.seq} · by ${stop.requestedBy}`));
   for (const task of spec.tasks) {
     const t = state.tasks[task.id];
     const display = spec.schemaVersion === 2 ? task.display : null;

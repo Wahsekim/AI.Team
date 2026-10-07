@@ -198,7 +198,7 @@ test('T9: store fencing refuses foreign and unfenced dispatch but keeps stop unf
   assert.throws(() => s.store.apply('tick', command(s.store, 'run', tick)), code('EXECUTION_OPEN'));
   fenced(s.store, owner, 'tick', tick);
   assert.throws(() => s.store.apply('claim', command(s.store, 'run', { effectId: 'd-1' })), code('EXECUTION_OPEN'));
-  assert.equal(s.store.apply('stop', command(s.store, 'run', { mode: 'graceful', reason: 'R04 stop' })).ok, true);
+  assert.equal(s.store.requestStop('run', { kind: 'graceful', requestedBy: 'r04' }).recorded, true);
 });
 
 test('T10: inspection and stop never touch the lock or create the marker table', sqlite, async t => {

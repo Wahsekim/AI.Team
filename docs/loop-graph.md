@@ -46,8 +46,9 @@ stdout contains one JSON reply; diagnostics/runtime warnings may use stderr.
 Exit 0 means the control command succeeded; inspect `value.state.status` for
 the demo outcome. Exit 2 is input/runtime failure, 3 stale state, 4 execution
 exclusion (see below), 7 missing capability. Events are paginated at 100 by the CLI; the library supports explicit
-cursor and limit. CLI stop requests closeout but does not itself run a worker or
-complete closeout. CLI intentionally has no external receipt injection command.
+cursor and limit. CLI `stop [--graceful|--hard]` records a durable stop request
+(default graceful; see "Stop record" below) but does not itself run a worker,
+signal a process or complete closeout. CLI intentionally has no external receipt injection command.
 
 The example is hard-coded fake agent/gate execution. Its CLI writes a real,
 clearly labelled simulation Markdown result as `<run-id>.projection-1.md` in
@@ -222,8 +223,8 @@ directory must be outside the product root. Storage lifetimes remain caller-owne
 
 - `await driver.step()` admits/executes at most one effect and returns current
   status. Concurrent steps are rejected. Terminal observations are read-only.
-- `driver.stop({mode, reason})` commits stop before aborting the active owned
-  signal for hard mode. Graceful mode allows the bounded current process to
+- `driver.stop({kind, requestedBy})` records the stop (`store.requestStop`) before
+  aborting the active owned signal for a hard stop. Graceful mode allows the bounded current process to
   finish, but late success cannot revive acceptance. Call another step to
   publish closeout when the run does not require recovery.
 - `await driver.close()` hard-stops and drains an active step, rejects future
@@ -257,6 +258,29 @@ store by basename and inode). Release closes the row only with no unresolved wor
 exit leaves it open by design: the directory refuses execution, never by PID or
 time, until an operator runs the library-only
 `closeOrphanedExecution({store, ownerId, note})`; a CLI arrives with R05b.
+
+### Stop record (R04a, 2026-10-07)
+
+`store.requestStop(runId, {kind, requestedBy})` (ADR 0004) writes a durable stop
+record `{kind: graceful|hard, seq, requestedBy, requestedAt}` in one transaction:
+the run state and the event log, without the execution lock, the lock file, the
+`executions` table or an expected state version. `requestedBy` is an identifier
+label and `requestedAt` is host time for display only; the record carries no free
+text, and no transition depends on anything but `kind`. Only graceful → hard
+escalates (new `seq`); a repeat or a downgrade records nothing and returns the
+existing record, so hard is never weakened. A stop on a terminal run is
+`RUN_TERMINAL`. A recorded stop raises the state version, so a command prepared
+before it fails `STALE_STATE`; after it the store refuses any dispatch claim, or a
+tick that would emit a dispatch, with `STOP_REQUESTED` (CLI exit 2), fenced or not.
+Settle, interrupted and the closeout projection stay allowed. The first stop never
+clears RECOVERY_REQUIRED. `store.apply('stop', …)` is refused.
+`store.readStopRequest(runId)` is the read-only poll (one SELECT; no table, chmod
+or version change) that R04b's driver will call between steps and while an effect
+runs, then cancel through the existing bounded process primitive. Until R04b, the
+driver does not observe an external stop: a CLI `--hard` stop prevents new dispatch
+but does not cancel a running effect, and the driver's stale-version path can still
+end in RECOVERY_REQUIRED (fail-closed, R-1). Hard stop never depends on a worker or
+LLM reading a message; status/show report the record, not a completed stop.
 
 ### Product target (R03b, 2026-10-07)
 

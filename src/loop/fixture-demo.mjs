@@ -51,7 +51,7 @@ export async function runFixtureDemo({ directory, runId }) {
   spec.approvedSpecDigest = specDigest(spec);
   let store, owner, archive, adapter, driver, signalError;
   const stop = signal => {
-    try { driver.stop({ mode: 'hard', reason: `Fixture CLI received ${signal}` }); } catch (error) { signalError = error; }
+    try { driver.stop({ kind: 'hard', requestedBy: `fixture-cli.${signal}` }); } catch (error) { signalError = error; }
   };
   const interrupt = () => stop('SIGINT'), terminate = () => stop('SIGTERM');
   try {

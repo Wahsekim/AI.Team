@@ -82,7 +82,7 @@ test('hard stop plus owned abort collects cancellation without reviving acceptan
   const f = await fixture(t), controller = new AbortController();
   const running = executeStoredFixture({ ...f.input, request: request('hang'), signal: controller.signal });
   assert.equal(f.adapter.inspect(f.adapter.lookup('d-1')).status, 'RUNNING');
-  f.store.apply('stop', command(f.store, 'run', { mode: 'hard', reason: 'test operator' })); controller.abort();
+  f.store.requestStop('run', { kind: 'hard', requestedBy: 'test-operator' }); controller.abort();
   await running;
   const state = f.store.status('run').state;
   assert.equal(state.reason, 'user_stop'); assert.equal(state.dispatches['d-1'].receipt.result, 'cancelled');
@@ -177,7 +177,7 @@ test('driver rejects overlapping steps/owners and hard stop cancels its running 
     const active = driver.step(); await Promise.resolve();
     assert.throws(() => driver.step(), e => e.code === 'INVALID_TRANSITION');
     assert.equal(f.adapter.inspect(f.adapter.lookup('d-1')).status, 'RUNNING');
-    driver.stop({ mode: 'hard', reason: 'owner cancelled' }); await active;
+    driver.stop({ kind: 'hard', requestedBy: 'owner' }); await active;
     assert.equal(driver.status().state.dispatches['d-1'].receipt.result, 'cancelled');
     assert.equal((await driver.step()).state.status, 'STOPPED');
     assert.equal(f.store.verify('run').ok, true);
@@ -189,7 +189,7 @@ test('driver hard stop aborts its running real gate and records late evidence wi
   try {
     await driver.step(); const active = driver.step(); await Promise.resolve();
     assert.equal(f.archive.intent('run', 'd-2').status, 'STARTED');
-    driver.stop({ mode: 'hard', reason: 'cancel gate' }); await active;
+    driver.stop({ kind: 'hard', requestedBy: 'owner' }); await active;
     assert.equal(f.archive.get('run', 'd-2').record.transcript.reason, 'cancelled');
     assert.notEqual(driver.status().state.tasks.build.status, 'SUCCEEDED');
     assert.equal((await driver.step()).state.status, 'STOPPED'); assert.equal(f.store.verify('run').ok, true);
@@ -199,7 +199,7 @@ test('driver hard stop aborts its running real gate and records late evidence wi
 test('driver graceful stop collects a successful fixture but cannot revive task acceptance', sqlite, async t => {
   const f = await drivenFixture(t), driver = createFixtureDriver({ ...driverConfig(f), request: request('pass', 100) });
   try {
-    const active = driver.step(); await Promise.resolve(); driver.stop({ mode: 'graceful', reason: 'finish only current work' });
+    const active = driver.step(); await Promise.resolve(); driver.stop({ kind: 'graceful', requestedBy: 'owner' });
     await active;
     assert.equal(driver.status().state.dispatches['d-1'].receipt.result, 'pass');
     assert.notEqual(driver.status().state.tasks.build.status, 'CANDIDATE_READY');

@@ -39,7 +39,7 @@ test('unsupported isolation and human approval cannot silently degrade', () => {
 });
 test('stop before dispatch cancels intent and cannot claim it', () => {
   const { spec } = demoBundle(); let s = reduce(spec, initialState(spec, 0), 'tick', tick, 1).state;
-  s = reduce(spec, s, 'stop', { mode: 'hard', reason: 'test' }, 2).state;
+  s = reduce(spec, s, 'stop', { kind: 'hard', requestedBy: 'test' }, 2).state;
   assert.equal(s.dispatches['d-1'].receipt.result, 'cancelled');
   bad(() => reduce(spec, s, 'claim', { effectId: 'd-1' }, 3), 'INVALID_TRANSITION');
   assert.equal(reduce(spec, s, 'tick', tick, 3).state.projection.outcome, 'STOPPED');
@@ -81,7 +81,7 @@ test('REV-1-002: both stop modes preserve recovery for UNKNOWN work', () => {
     const { spec } = demoBundle(); let s = reduce(spec, initialState(spec, 0), 'tick', tick, 1).state;
     s = reduce(spec, s, 'claim', { effectId: 'd-1' }, 2).state;
     s = reduce(spec, s, 'interrupted', {}, 3).state;
-    s = reduce(spec, s, 'stop', { mode, reason: 'operator' }, 4).state;
+    s = reduce(spec, s, 'stop', { kind: mode, requestedBy: 'operator' }, 4).state;
     assert.equal(s.status, 'RECOVERY_REQUIRED');
     s = reduce(spec, s, 'abandon', { confirmedProcessesExited: true }, 5).state;
     s = reduce(spec, s, 'tick', tick, 6).state;

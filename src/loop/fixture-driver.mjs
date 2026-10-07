@@ -69,11 +69,11 @@ export function createFixtureDriver({ store, owner, adapter, archive, runId, roo
     return status();
   };
 
-  const stop = ({ mode = 'hard', reason = 'Fixture driver operator stop' } = {}) => {
+  const stop = ({ kind = 'hard', requestedBy = 'fixture-driver' } = {}) => {
     requireThat(!closing, 'INVALID_TRANSITION', 'Driver is closing');
-    if (!TERMINAL.has(status().state.status)) apply('stop', { mode, reason });
+    if (!TERMINAL.has(status().state.status)) store.requestStop(runId, { kind, requestedBy }, now());
     // Persist the stop first. An abort alone must never allow a repair dispatch.
-    if (mode === 'hard') controller?.abort();
+    if (kind === 'hard') controller?.abort();
     return status();
   };
 
@@ -93,7 +93,7 @@ export function createFixtureDriver({ store, owner, adapter, archive, runId, roo
     },
     close() {
       if (closePromise) return closePromise;
-      if (active) stop({ mode: 'hard', reason: 'Fixture driver closed during active step' });
+      if (active) stop({ kind: 'hard', requestedBy: 'fixture-driver.close' });
       closing = true;
       // Caller owns adapter/archive/store lifetime; close them only after this.
       closePromise = (active ?? Promise.resolve()).finally(() => binding.unbind());

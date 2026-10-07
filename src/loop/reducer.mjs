@@ -1,4 +1,4 @@
-import { digest, fields, ref, requireThat, validateRunSpec } from './contracts.mjs';
+import { digest, fields, id, ref, requireThat, validateRunSpec } from './contracts.mjs';
 import { admission, nextTask } from './scheduler.mjs';
 
 export const TERMINAL = new Set(['COMPLETED', 'STOPPED', 'FAILED']);
@@ -22,6 +22,13 @@ function stop(s, reason) {
     if (d.status === 'PENDING') { d.status = 'ACKNOWLEDGED'; d.receipt = { result: 'cancelled', tokens: 0, costMicroUsd: 0 }; }
   }
 }
+// ADR 0004: a stop record carries only a kind and an identifier label; no free text reaches any agent.
+export const STOP_KINDS = Object.freeze(['graceful', 'hard']);
+export function validateStopRequest(payload) {
+  fields(payload, ['kind', 'requestedBy'], 'Stop'); expect(STOP_KINDS.includes(payload.kind), 'Invalid stop kind', 'INVALID_SPEC'); id(payload.requestedBy);
+}
+// Only graceful -> hard escalates; a repeat or a downgrade records nothing.
+export const stopEscalates = (existing, kind) => !existing || existing.kind === 'graceful' && kind === 'hard';
 function reservation(value) {
   fields(value, ['agentCalls', 'tokens', 'costMicroUsd'], 'Reservation');
   for (const v of Object.values(value)) expect(v === null || Number.isSafeInteger(v) && v >= 0, 'Invalid reservation');
@@ -107,12 +114,16 @@ export function reduce(spec, before, action, payload, now) {
 
   expect(!TERMINAL.has(s.status), 'Run is terminal', 'RUN_TERMINAL');
   if (action === 'stop') {
-    fields(payload, ['mode', 'reason'], 'Stop'); expect(['graceful', 'hard'].includes(payload.mode), 'Invalid stop mode');
-    expect(typeof payload.reason === 'string' && payload.reason.trim(), 'Stop reason required');
-    // Both modes prevent dispatch. Hard cancellation requires a host adapter; unknown effects remain unresolved.
-    stop(s, 'user_stop');
-    s.stopRequest = { mode: payload.mode, detail: payload.reason };
-    if (s.projection) { s.projection = null; s.status = 'RECOVERY_REQUIRED'; }
+    validateStopRequest(payload); const existing = s.stopRequest ?? null;
+    expect(stopEscalates(existing, payload.kind), 'Stop already recorded at this or a stronger kind');
+    s.stopRequest = { kind: payload.kind, seq: (existing?.seq ?? 0) + 1, requestedBy: payload.requestedBy, requestedAt: now };
+    // Escalation only strengthens the record: the first stop already prevented dispatch (R04b cancels).
+    if (!existing) {
+      const recovering = s.status === 'RECOVERY_REQUIRED';
+      stop(s, 'user_stop');
+      if (s.projection) { s.projection = null; s.status = 'RECOVERY_REQUIRED'; }
+      if (recovering) s.status = 'RECOVERY_REQUIRED';
+    }
   } else if (action === 'claim') {
     fields(payload, Object.hasOwn(payload, 'quota') ? ['effectId', 'quota'] : ['effectId'], 'Claim');
     if (s.projection?.id === payload.effectId) {

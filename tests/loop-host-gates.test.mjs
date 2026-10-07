@@ -123,7 +123,7 @@ test('deadline at claim cancels intent before execution', sqlite, async t => {
 test('late result after stop is recorded without reviving acceptance', sqlite, async t => {
   const f = await fixture(t, 'setTimeout(() => {}, 100)');
   const promise = executeStoredGate(f.input);
-  f.store.apply('stop', command(f.store, 'run', { mode: 'hard', reason: 'operator' }));
+  f.store.requestStop('run', { kind: 'hard', requestedBy: 'operator' });
   await promise;
   const state = f.store.status('run').state;
   assert.equal(state.reason, 'user_stop'); assert.notEqual(state.tasks.build.status, 'SUCCEEDED');

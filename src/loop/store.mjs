@@ -1,7 +1,7 @@
 import { chmodSync } from 'node:fs';
 import { canonical, digest, LoopError, requireThat, validateCommand } from './contracts.mjs';
 import { validateBundle } from './artifacts.mjs';
-import { initialState, reduce } from './reducer.mjs';
+import { initialState, reduce, stopEscalates, TERMINAL, validateStopRequest } from './reducer.mjs';
 
 const FENCED = new Set(['tick', 'claim']);
 const unresolved = state => state.status === 'RECOVERY_REQUIRED' || state.projection?.status === 'STARTED'
@@ -53,10 +53,26 @@ export async function openStore(filename) {
     const value = db.prepare('SELECT * FROM runs WHERE id=?').get(runId);
     requireThat(value, 'UNKNOWN_REFERENCE', `Unknown run ${runId}`); return value;
   };
+  // ADR 0004: once a stop is recorded, nothing may claim or emit a dispatch, fenced or not; closeout stays allowed.
+  const refuseDispatchAfterStop = (state, action, payload, result) => {
+    if (!state.stopRequest || !FENCED.has(action)) return;
+    requireThat(!(action === 'claim' && payload?.effectId !== state.projection?.id)
+      && !result?.effects.some(e => e.kind === 'dispatch'), 'STOP_REQUESTED', `Stop #${state.stopRequest.seq} (${state.stopRequest.kind}) refuses dispatch`);
+  };
   const append = (runId, seq, action, payload, state, now) => {
     const previous = db.prepare('SELECT digest FROM events WHERE run_id=? ORDER BY seq DESC LIMIT 1').get(runId);
     const event = { runId, seq, action, payload, stateDigest: digest(state), at: now, previousDigest: previous?.digest ?? null };
     db.prepare('INSERT INTO events VALUES (?,?,?,?)').run(runId, seq, canonical(event), digest(event));
+  };
+  const commit = (r, action, payload, now, check = () => {}) => {
+    const result = reduce(JSON.parse(r.spec), JSON.parse(r.state), action, payload, now); check(result);
+    const version = r.version + 1;
+    db.prepare('UPDATE runs SET state=?,version=? WHERE id=?').run(canonical(result.state), version, r.id);
+    for (const e of result.effects) db.prepare('INSERT INTO outbox VALUES (?,?,?,?,?)').run(r.id, e.id, e.kind, canonical(e.payload), 'PENDING');
+    for (const d of Object.values(result.state.dispatches)) db.prepare('UPDATE outbox SET status=? WHERE run_id=? AND id=?').run(d.status, r.id, d.id);
+    if (result.state.projection) db.prepare('UPDATE outbox SET status=? WHERE run_id=? AND id=?').run(result.state.projection.status, r.id, result.state.projection.id);
+    append(r.id, version, action, payload, result.state, now);
+    return { result, version };
   };
   return {
     filename,
@@ -74,6 +90,7 @@ export async function openStore(filename) {
     status(runId) { const r = row(runId); return { runId, stateVersion: r.version, simulation: true, spec: JSON.parse(r.spec), state: JSON.parse(r.state) }; },
     bundle(runId) { const r = row(runId); return { spec: JSON.parse(r.spec), artifacts: JSON.parse(r.artifacts) }; },
     apply(action, command, now = Date.now(), fence = undefined) {
+      requireThat(action !== 'stop', 'INVALID_SPEC', 'Stop is recorded with requestStop, not a versioned command');
       validateCommand(command);
       requireThat(fence === undefined || typeof fence === 'string' && fence.length > 0, 'INVALID_SPEC', 'Fence must be an owner id');
       // Request identity and expected version are part of the idempotency contract.
@@ -86,17 +103,30 @@ export async function openStore(filename) {
         const old = db.prepare('SELECT digest,reply FROM requests WHERE run_id=? AND key=?').get(command.runId, command.idempotencyKey);
         if (old) { requireThat(old.digest === inputDigest, 'IDEMPOTENCY_CONFLICT', 'Same key with different command'); return JSON.parse(old.reply); }
         requireThat(r.version === command.expectedStateVersion, 'STALE_STATE', `Expected ${r.version}`);
-        const result = reduce(JSON.parse(r.spec), JSON.parse(r.state), action, command.payload, now);
-        const version = r.version + 1;
-        db.prepare('UPDATE runs SET state=?,version=? WHERE id=?').run(canonical(result.state), version, command.runId);
-        for (const e of result.effects) db.prepare('INSERT INTO outbox VALUES (?,?,?,?,?)').run(command.runId, e.id, e.kind, canonical(e.payload), 'PENDING');
-        for (const d of Object.values(result.state.dispatches)) db.prepare('UPDATE outbox SET status=? WHERE run_id=? AND id=?').run(d.status, command.runId, d.id);
-        if (result.state.projection) db.prepare('UPDATE outbox SET status=? WHERE run_id=? AND id=?').run(result.state.projection.status, command.runId, result.state.projection.id);
-        append(command.runId, version, action, command.payload, result.state, now);
+        const before = JSON.parse(r.state);
+        refuseDispatchAfterStop(before, action, command.payload);
+        const { result, version } = commit(r, action, command.payload, now, result => refuseDispatchAfterStop(before, action, command.payload, result));
         const reply = { ok: true, requestId: command.requestId, stateVersion: version, value: { status: result.state.status, scheduledEffectIds: result.effects.map(e => e.id) } };
         db.prepare('INSERT INTO requests VALUES (?,?,?,?)').run(command.runId, command.idempotencyKey, inputDigest, canonical(reply));
         return reply;
       });
+    },
+    // ADR 0004: unfenced, lock-free and version-free; one transaction; a repeat or downgrade records nothing.
+    requestStop(runId, request, now = Date.now()) {
+      validateStopRequest(request);
+      return transaction(() => {
+        const r = row(runId), state = JSON.parse(r.state);
+        requireThat(!TERMINAL.has(state.status), 'RUN_TERMINAL', 'Run is terminal');
+        if (!stopEscalates(state.stopRequest, request.kind)) return { recorded: false, stateVersion: r.version, status: state.status, stopRequest: state.stopRequest };
+        const { result, version } = commit(r, 'stop', { kind: request.kind, requestedBy: request.requestedBy }, now);
+        return { recorded: true, stateVersion: version, status: result.state.status, stopRequest: result.state.stopRequest };
+      });
+    },
+    // Read-only poll for R04b: one SELECT, no table, chmod or version change.
+    readStopRequest(runId) {
+      const value = db.prepare("SELECT json_extract(state,'$.stopRequest') AS stop FROM runs WHERE id=?").get(runId);
+      requireThat(value, 'UNKNOWN_REFERENCE', `Unknown run ${runId}`);
+      return value.stop === null ? null : JSON.parse(value.stop);
     },
     executions() { return hasExecutions() ? db.prepare('SELECT * FROM executions ORDER BY seq').all().map(e => ({ ...e })) : []; },
     openExecution(e) {
