@@ -15,7 +15,7 @@ import { openFixtureAdapter } from '../src/loop/adapters/fixture-process.mjs';
 import { executeStoredFixture, settleRecordedFixture } from '../src/loop/host-fixtures.mjs';
 import { publishProjection } from '../src/loop/projector.mjs';
 import { createFixtureDriver } from '../src/loop/fixture-driver.mjs';
-import { acquireExecutionOwner } from '../src/loop/execution-owner.mjs';
+import { acquireExecutionOwner, bindDriver } from '../src/loop/execution-owner.mjs';
 
 const sqlite = { skip: Number(process.versions.node.split('.')[0]) < 24 ? 'Fixture bridge requires Node 24+' : false };
 const tick = { reservation: { agentCalls: 1, tokens: 0, costMicroUsd: 0 }, quota: null };
@@ -270,4 +270,25 @@ test('T12: driver requires an owner and refuses a state directory inside the pro
   assert.equal(f.adapter.lookup('d-1'), null);
   const driver = createFixtureDriver(config);
   try { assert.equal((await driver.step()).state.dispatches['d-1'].receipt.result, 'pass'); } finally { await driver.close(); }
+});
+
+test('TI-7: the driver refuses an untargeted owner and a root other than the owned target before binding or dispatch', sqlite, async t => {
+  const f = await fixture(t), config = { ...driverConfig(f), owner: await acquireExecutionOwner({ store: f.store }) };
+  f.beforeClose.push(() => config.owner.release());
+  assert.throws(() => createFixtureDriver(config), e => e.code === 'TARGET_NOT_ISOLATED');
+  assert.doesNotThrow(() => bindDriver(config.owner, f.store), 'the refused owner was never bound to a driver');
+  config.owner.release();
+  const other = join(f.directory, 'other'); mkdirSync(other); writeFileSync(join(other, 'file.txt'), 'other');
+  const git = args => execFileSync('git', ['-C', other, ...args], { stdio: 'pipe' });
+  git(['init', '-q']); git(['add', '.']);
+  git(['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', 'commit', '-qm', 'other']);
+  const owner = await acquireExecutionOwner({ store: f.store, target: f.root }); f.beforeClose.push(() => owner.release());
+  // Gate config agrees with the wrong root, so only the owner's target binding can refuse it.
+  const mismatched = { ...config, owner, root: other, gateConfigs: { test: { ...f.gateConfig, repoRoots: { product: other } } } };
+  assert.throws(() => createFixtureDriver(mismatched), e => e.code === 'TARGET_MISMATCH');
+  assert.equal(f.store.status('run').state.dispatches['d-1'].status, 'PENDING', 'no dispatch was claimed');
+  assert.equal(f.adapter.lookup('d-1'), null, 'no fixture process was started');
+  const driver = createFixtureDriver({ ...config, owner });
+  try { assert.equal((await driver.step()).state.dispatches['d-1'].receipt.result, 'pass', 'the refusals left the owner unbound'); }
+  finally { await driver.close(); }
 });

@@ -28,12 +28,18 @@ node scripts/team-run.mjs status .team-loop demo-1
 node scripts/team-run.mjs events .team-loop demo-1
 node scripts/team-run.mjs audit .team-loop demo-1
 node scripts/team-run.mjs show .team-loop demo-1      # readable text summary (not JSON)
-node scripts/team-run.mjs fixture .team-fixture fixture-1 # NEW directory; isolated real-process simulation
-node scripts/team-run.mjs show .team-fixture fixture-1
-node scripts/team-run.mjs audit .team-fixture fixture-1
+node scripts/team-run.mjs fixture "${TMPDIR:-/tmp}/team-fixture-1" fixture-1 # NEW directory outside any Git repo
+node scripts/team-run.mjs show "${TMPDIR:-/tmp}/team-fixture-1" fixture-1
+node scripts/team-run.mjs audit "${TMPDIR:-/tmp}/team-fixture-1" fixture-1
 node --test tests/loop-core.test.mjs
 node --test tests/*.test.mjs
 ```
+
+2026-10-07 (R03b, ADR 0003): the `fixture` state directory must lie outside
+any Git repository, because a host targeting that repository could otherwise
+write into this directory's clone and lock files. Inside a checkout, `fixture`
+exits 4 (`TARGET_NOT_ISOLATED`) before creating anything. This is a behavior
+change awaiting owner approval.
 
 Use a new run ID for each demo. Reusing one is a conflict, not a reset.
 stdout contains one JSON reply; diagnostics/runtime warnings may use stderr.
@@ -272,7 +278,9 @@ its `root`. CLI exit 4 adds both codes. Consequences: two state directories
 cannot share a target, because its parent is the only admissible state directory;
 independent clones are different targets by construction. Running legacy
 `run-n-rounds` on the clone is unsupported and documented, not enforced
-(owner decision, ADR 0001; limitation until R19).
+(owner decision, ADR 0001; limitation until R19). Behavior change awaiting
+owner approval: `fixture` refuses a state directory inside a Git checkout
+(previously documented as `.team-fixture` under the repository root).
 
 ## Task display contract (schemaVersion 2)
 

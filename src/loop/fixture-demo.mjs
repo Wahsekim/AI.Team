@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { bytesDigest, digest, id, requireThat, specDigest } from './contracts.mjs';
 import { demoBundle } from './demo.mjs';
 import { openStore } from './store.mjs';
@@ -9,6 +9,7 @@ import { openFixtureAdapter } from './adapters/fixture-process.mjs';
 import { createFixtureDriver } from './fixture-driver.mjs';
 import { acquireExecutionOwner } from './execution-owner.mjs';
 import { snapshotRepository } from './snapshots.mjs';
+import { outsideAnyRepository } from './product-target.mjs';
 import { gateDigest } from './gates.mjs';
 import { TERMINAL } from './reducer.mjs';
 
@@ -19,6 +20,8 @@ export async function runFixtureDemo({ directory, runId }) {
   requireThat(Number(process.versions.node.split('.')[0]) >= 24 && process.platform !== 'win32',
     'CAPABILITY_MISSING', 'Fixture CLI requires Node 24+ and POSIX process groups');
   directory = resolve(directory);
+  // Checked before anything is created, so a refused run leaves no debris (ADR 0003).
+  requireThat(outsideAnyRepository(realpathSync.native(dirname(directory))), 'TARGET_NOT_ISOLATED', 'State directory must not lie inside a Git repository');
   try { mkdirSync(directory, { mode: 0o700 }); }
   catch (error) {
     if (error.code === 'EEXIST') requireThat(false, 'IDEMPOTENCY_CONFLICT', 'Fixture requires a new state directory; existing data is preserved');

@@ -123,7 +123,7 @@ export async function acquireExecutionOwner({ store, target, now = Date.now }) {
   };
   const targetHeld = () => {
     try {
-      return !product || sameFile(statSync(product.path, { bigint: true }), product.stat) && sameFile(statSync(product.git.path, { bigint: true }), product.git.stat);
+      return !product || sameFile(lstatSync(product.path, { bigint: true }), product.stat) && sameFile(statSync(product.git.path, { bigint: true }), product.git.stat);
     } catch { return false; }
   };
   const handle = Object.freeze({

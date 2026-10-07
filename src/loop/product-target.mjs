@@ -17,10 +17,11 @@ const cleanEnv = () => Object.fromEntries(Object.entries(process.env).filter(([k
 // The ceiling stops discovery from walking above the target.
 const gitEnv = path => ({ ...cleanEnv(), GIT_CEILING_DIRECTORIES: dirname(path) });
 
-// A state directory inside any repository could be another writer's target; only "not a git repository" passes.
-function outsideAnyRepository(statePath) {
+// A state directory inside a repository lies in that repository's work tree, which another host may own as its target.
+// Only "not a git repository" passes; LC_ALL=C keeps that message untranslated.
+export function outsideAnyRepository(statePath) {
   const result = spawnSync('git', ['-C', statePath, 'rev-parse', '--git-dir'], { encoding: 'utf8', timeout: 10000, maxBuffer: 64 * 1024,
-    stdio: ['ignore', 'pipe', 'pipe'], env: { ...cleanEnv(), GIT_DISCOVERY_ACROSS_FILESYSTEM: '1' } });
+    stdio: ['ignore', 'pipe', 'pipe'], env: { ...cleanEnv(), GIT_DISCOVERY_ACROSS_FILESYSTEM: '1', LC_ALL: 'C', LANG: 'C', LANGUAGE: '' } });
   return result.status === 128 && /not a git repository/i.test(result.stderr ?? '');
 }
 

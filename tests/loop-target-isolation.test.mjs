@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -129,6 +129,11 @@ test('TI-3: a replaced clone root or Git common dir is a mismatch; a held owner 
   assert.throws(() => owner.assertHeld(), code('TARGET_MISMATCH'));
   assert.throws(() => fenced.apply('tick', command(t3.store, 'run', tick)), code('TARGET_MISMATCH'));
   assert.deepEqual(t3.store.status('run').state.dispatches, {}, 'no dispatch after the target changed');
+
+  const t4 = await stateDir(t, { run: true }); repo(t4.product);
+  const moved = await t4.own(t4.product);
+  renameSync(t4.product, `${t4.product}.moved`); symlinkSync(`${t4.product}.moved`, t4.product);
+  assert.throws(() => moved.assertHeld(), code('TARGET_MISMATCH'), 'clone moved and replaced by a symlink to it');
 });
 
 test('TI-4: worktrees and shared Git metadata are refused; an independent clone is a different target', sqlite, async t => {
@@ -137,7 +142,9 @@ test('TI-4: worktrees and shared Git metadata are refused; an independent clone 
   mkdirSync(shapes.subdirectory); mkdirSync(shapes.plain);
   git(s.directory, ['init', '-q', `--separate-git-dir=${join(s.directory, 'meta')}`, shapes.separate]);
   git(s.directory, ['clone', '-q', '--shared', main, join(s.directory, 'borrowing')]);
-  for (const target of [...Object.values(shapes), join(s.directory, 'borrowing')]) {
+  const redirected = repo(join(s.directory, 'redirected')), elsewhere = join(s.directory, 'elsewhere'); mkdirSync(elsewhere);
+  git(redirected, ['config', 'core.worktree', elsewhere]);
+  for (const target of [...Object.values(shapes), join(s.directory, 'borrowing'), redirected]) {
     assert.throws(() => targetIdentity(target, s.directory), code('TARGET_NOT_ISOLATED'), target);
   }
   const plainIdentity = targetIdentity(main, s.directory);
@@ -178,4 +185,9 @@ test('TI-6: the fixture CLI binds store and target; inspection never touches the
   const fresh = await stateDir(t, { run: true });
   for (const action of ['status', 'events', 'audit', 'show']) execFileSync(process.execPath, [cli, action, fresh.directory, 'run'], { encoding: 'utf8', timeout: 15000 });
   assert.equal(existsSync(fresh.lock), false, 'inspection never creates the lock file or a target binding');
+
+  const checkout = repo(join(temp(t, 'ai-target-checkout-'), 'repo')), refused = join(checkout, '.team-fixture');
+  const result = spawnSync(process.execPath, [cli, 'fixture', refused, 'fixture-run'], { encoding: 'utf8', timeout: 15000 });
+  assert.equal(result.status, 4); assert.equal(JSON.parse(result.stdout).code, 'TARGET_NOT_ISOLATED');
+  assert.equal(existsSync(refused), false, 'a refused fixture run leaves no state directory, loop.sqlite or product behind');
 });
