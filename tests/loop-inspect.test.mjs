@@ -203,6 +203,22 @@ test('I4a: after a SIGKILLed host, inspect shows the unknown dispatch, its saved
   assert.deepEqual(await fingerprint(k.directory, 'run'), before, 'inspection after a crash changed nothing');
 });
 
+test('I4d: when receipt presence is unknown (journal absent or unreadable), abandon is never suggested', sqlite, async t => {
+  const k = await killedHost(t, 'process-before-receipt', { scenario: 'pass', delayMs: 0, timeoutMs: 1000 });
+  await assertGroupsGone(k.pids);
+  const journal = join(k.directory, 'fixture.sqlite'), saved = readFileSync(journal);
+  for (const [label, prepareJournal] of [['absent', () => rmSync(journal)], ['unreadable', () => writeFileSync(journal, Buffer.from('not a database '.repeat(64)))]]) {
+    prepareJournal();
+    const v = run(['inspect', k.directory, 'run']).json.value, d1 = v.dispatches.find(d => d.id === 'd-1');
+    assert.equal(d1.receipt.present, null, label); assert.equal(v.journals.fixture, label);
+    assert.deepEqual(v.recoverySteps.map(s => [s.action, s.dispatchIds ?? null]), [['receipt-unknown', ['d-1']], ['close-execution-marker', null]], label);
+    assert.match(v.recoverySteps[0].requires, /before any abandon/);
+    assert.match(run(['show', k.directory, 'run']).stdout, /^suggested \(R05b, not automatic\): receipt-unknown · close-execution-marker$/m, label);
+  }
+  writeFileSync(journal, saved);
+  assert.deepEqual(run(['inspect', k.directory, 'run']).json.value.recoverySteps.map(s => s.action), ['abandon', 'close-execution-marker'], 'readable journal without a result');
+});
+
 test('I4b: a durable receipt left by a killed host is reported as ingestible, as a suggestion only', sqlite, async t => {
   const k = await killedHost(t, 'receipt-before-settle', { scenario: 'pass', delayMs: 0, timeoutMs: 1000 });
   await assertGroupsGone(k.pids);
@@ -312,4 +328,19 @@ test('I7: read-only and writing stores agree on status, events, effects and repl
   assert.deepEqual([reader.status('run'), reader.events('run', -1, 1000), reader.effects('run'), reader.verify('run'), reader.executions()], expected);
   assert.equal(typeof reader.apply, 'undefined'); assert.equal(typeof reader.requestStop, 'undefined'); assert.equal(typeof reader.openExecution, 'undefined');
   assert.deepEqual(run(['audit', directory, 'run']).json.value, expected[3]);
+});
+
+// ADR 0002 P3 / probe L2: inspection only lstats the lock file. A FIFO there blocks any open, so an open would hang.
+test('I8: inspection never opens the lock file (a FIFO in its place does not block)', { ...sqlite, timeout: 5000 }, async t => {
+  const directory = scratch(t), store = await openStore(join(directory, 'loop.sqlite'));
+  try { const { spec, artifacts } = demoBundle('run'); store.create(spec, artifacts, { simulation: true }); } finally { store.close(); }
+  execFileSync('mkfifo', [join(directory, LOCK_FILE)]);
+  t.after(() => rmSync(join(directory, LOCK_FILE), { force: true }));
+  for (const action of ['inspect', 'status', 'show']) {
+    const result = run([action, directory, 'run'], 1500);
+    assert.equal(result.status, 0, `${action} blocked or failed: ${result.stdout}`); assert.ok(result.ms < 1500, `${action} took ${result.ms} ms`);
+  }
+  const lockFile = run(['inspect', directory, 'run'], 1500).json.value.marker.lockFile;
+  assert.equal(lockFile.present, true); assert.equal(lockFile.regularFile, false); assert.equal(lockFile.read, false);
+  assert.ok(statSync(join(directory, LOCK_FILE)).isFIFO());
 });

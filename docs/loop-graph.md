@@ -397,9 +397,17 @@ BUSY while an owner holds it, and when no one holds it the read's shared lock
 makes a concurrent acquire fail `EXECUTION_OWNER_ACTIVE` (R05a probe L2). So
 the store/target bindings and the lock state are reported as not read. Inside a
 holder's own process, only `execution-owner.mjs` may open that path (ADR 0002
-P3). Limitation: a hot rollback journal left by a crashed writer cannot be
-rolled back by a read-only open (errcode 776, probe H1); inspection reports `STORE_UNREADABLE` until a
-writer opens the store. Not in scope: ingest, abandon and marker close (R05b).
+P3). Limitation: only a synced ("hot") rollback journal makes a read-only open
+fail, with `STORE_UNREADABLE` (errcode 776, probe H1). It is left by a writer
+killed during COMMIT or after a cache spill; the R02 crash boundaries pause
+before or after a commit and cannot produce one. `stop`, `demo` and a driver
+restart open the store writable and roll a hot journal back silently to the last
+committed state; that discards only the uncommitted transaction, not audit
+history, but `stop` then also records an irreversible stop. A hot journal in
+`fixture.sqlite` or `evidence.sqlite` makes that journal `unreadable`, receipt
+presence unknown, and `inspect` suggests `receipt-unknown` (read the receipt
+source first), never `abandon`, for those dispatches. R05b adds a snapshot read
+for this case. Not in scope: ingest, abandon and marker close (R05b).
 
 ## Task display contract (schemaVersion 2)
 

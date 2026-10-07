@@ -115,8 +115,12 @@ function usage(state, unresolved) {
 function recoverySteps(state, dispatches, markerView) {
   const steps = [];
   for (const d of dispatches) if (d.settle.possible === true) steps.push({ action: 'ingest-receipt', dispatchId: d.id, source: d.receipt.source, availableIn: 'R05b', automatic: false });
-  const blocked = dispatches.filter(d => !d.settled && d.settle.possible === false && ['STARTED', 'UNKNOWN'].includes(d.status));
-  if (state.status === 'RECOVERY_REQUIRED' || blocked.length) steps.push({ action: 'abandon', dispatchIds: blocked.map(d => d.id), availableIn: 'R05b', automatic: false,
+  const claimed = dispatches.filter(d => !d.settled && d.settle.possible === false && ['STARTED', 'UNKNOWN'].includes(d.status));
+  // A receipt that may exist must be read before abandon (run-wide) could discard it (R05a review F2).
+  const unknown = claimed.filter(d => d.receipt.present === null), blocked = claimed.filter(d => d.receipt.present !== null);
+  if (unknown.length) steps.push({ action: 'receipt-unknown', dispatchIds: unknown.map(d => d.id), availableIn: 'R05b', automatic: false,
+    requires: 'read the receipt source (R05b snapshot read) before any abandon; a durable receipt may exist' });
+  else if (state.status === 'RECOVERY_REQUIRED' || blocked.length) steps.push({ action: 'abandon', dispatchIds: blocked.map(d => d.id), availableIn: 'R05b', automatic: false,
     requires: 'operator attestation that the processes exited; the host does not verify it', runStatusRequired: 'RECOVERY_REQUIRED', runStatusNow: state.status,
     effect: 'usage becomes unknown; attempts are kept' });
   if (markerView.open) steps.push({ action: 'close-execution-marker', ownerId: markerView.ownerId, availableIn: 'R05b', automatic: false,
