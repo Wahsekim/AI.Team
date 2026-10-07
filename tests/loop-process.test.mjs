@@ -53,3 +53,53 @@ for (const trigger of ['timeout', 'cancelled', 'output_limit']) {
     assert.equal(handle.cancel(), false, 'finished handles cannot signal an unowned/reused PID');
   });
 }
+
+const RECOVERY_REASONS = ['cleanup_unknown', 'cancel_error', 'orphaned_process_group'];
+const eperm = () => Object.assign(new Error('kill EPERM'), { code: 'EPERM', syscall: 'kill' });
+// The runner's group signals go through process.kill, so a mock injects EPERM deterministically
+// instead of depending on the macOS zombie window (FLAKE-1 logs/zombie-eperm-probe.txt).
+async function startWithKill(t, { ignoreTerm, groupKill }) {
+  const dir = mkdtempSync(join(tmpdir(), 'ai-eperm-')), readyFile = join(dir, 'ready');
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const realKill = process.kill.bind(process);
+  const handle = startBoundedProcess(config(`${ignoreTerm ? "process.on('SIGTERM', () => {});" : ''}
+    require('fs').writeFileSync(${JSON.stringify(readyFile)}, ''); setInterval(() => {}, 1000)`));
+  t.after(async () => { try { realKill(handle.pid, 'SIGKILL'); } catch {} });
+  const deadline = Date.now() + 5000;
+  while (!existsSync(readyFile) && Date.now() < deadline) await delay(10);
+  assert.ok(existsSync(readyFile), 'child must be running before the injected signal failure');
+  t.mock.method(process, 'kill', (pid, sig) => pid === -handle.pid ? groupKill(realKill, pid, sig) : realKill(pid, sig));
+  return handle;
+}
+
+for (const trigger of ['cancelled', 'timeout']) {
+  test(`zombie-window EPERM on the SIGKILL escalation keeps reason ${trigger} once exit is confirmed`, { timeout: 10000 }, async t => {
+    // SIGKILL reaches the group, but the call reports EPERM as macOS does for a zombie-only group.
+    const handle = await startWithKill(t, { ignoreTerm: true,
+      groupKill: (realKill, pid, sig) => { realKill(pid, sig); if (sig === 'SIGKILL') throw eperm(); return true; } });
+    if (trigger === 'cancelled') assert.equal(handle.cancel(), true); else t.mock.timers.tick(1000);
+    t.mock.timers.tick(100);
+    const result = await handle.completion;
+    assert.equal(result.signal, 'SIGKILL', 'the escalation must be what ended the child');
+    assert.equal(result.reason, trigger);
+  });
+}
+test('EPERM on the escalation with no observed exit stays recovery-required', { timeout: 10000 }, async t => {
+  const handle = await startWithKill(t, { ignoreTerm: true,
+    groupKill: (realKill, pid, sig) => { if (sig === 'SIGKILL') throw eperm(); return realKill(pid, sig); } });
+  assert.equal(handle.cancel(), true);
+  t.mock.timers.tick(100);
+  t.mock.timers.tick(1900);
+  const result = await handle.completion;
+  assert.ok(RECOVERY_REASONS.includes(result.reason), `got ${result.reason}`);
+});
+test('EPERM from the group probe after exit stays recovery-required', { timeout: 10000 }, async t => {
+  // The child exits on SIGTERM, but the group still holds a member we cannot signal.
+  const handle = await startWithKill(t, { ignoreTerm: false,
+    groupKill: (realKill, pid, sig) => { if (sig === 0 || sig === 'SIGKILL') throw eperm(); return realKill(pid, sig); } });
+  assert.equal(handle.cancel(), true);
+  const result = await handle.completion;
+  assert.equal(result.signal, 'SIGTERM');
+  assert.ok(RECOVERY_REASONS.includes(result.reason), `got ${result.reason}`);
+});

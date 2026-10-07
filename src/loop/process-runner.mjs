@@ -14,13 +14,15 @@ export function startBoundedProcess({ executable, argv, cwd, env, timeoutMs, max
     && Number.isSafeInteger(maxOutputBytes) && maxOutputBytes > 0 && maxOutputBytes <= 16 * 1024 * 1024, 'INVALID_SPEC', 'Invalid process bounds');
   let pid = null, cancelOwned, result = null;
   const completion = new Promise(resolve => {
-    const chunks = { stdout: [], stderr: [] }; let bytes = 0, reason = null, done = false, escalation;
+    const chunks = { stdout: [], stderr: [] }; let bytes = 0, reason = null, done = false, escalation, exited = false, signalFailed = false;
     const startedAt = new Date().toISOString();
     const child = spawn(executable, [...argv], { cwd, env: { ...env }, shell: false, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
     pid = child.pid ?? null;
     const kill = sig => {
       if (!child.pid) return;
-      try { process.kill(-child.pid, sig); } catch (e) { if (e.code !== 'ESRCH') reason = 'cancel_error'; }
+      // macOS returns EPERM for a group whose only member is an unreaped zombie, so the
+      // failure is judged in finish() once exit is observed and the group is probed again.
+      try { process.kill(-child.pid, sig); } catch (e) { if (e.code !== 'ESRCH') signalFailed = true; }
     };
     const cancel = why => {
       if (done || reason) return false;
@@ -42,8 +44,8 @@ export function startBoundedProcess({ executable, argv, cwd, env, timeoutMs, max
         kill('SIGKILL');
         // Issuing SIGKILL does not confirm exit. Cleanup uncertainty must win
         // over timeout/cancel/output-limit so the host cannot schedule repair.
-        if (!['cancel_error', 'cleanup_unknown'].includes(reason)) reason = 'orphaned_process_group';
-      }
+        if (reason !== 'cleanup_unknown') reason = signalFailed ? 'cancel_error' : 'orphaned_process_group';
+      } else if (signalFailed && !exited && reason !== 'cleanup_unknown') reason = 'cancel_error';
       result = { exitCode, signal: exitSignal, error: error?.message ?? null, reason,
         stdout: Buffer.concat(chunks.stdout).toString('utf8'), stderr: Buffer.concat(chunks.stderr).toString('utf8'),
         startedAt, finishedAt: new Date().toISOString() };
@@ -53,6 +55,7 @@ export function startBoundedProcess({ executable, argv, cwd, env, timeoutMs, max
       const remaining = Math.max(0, maxOutputBytes - bytes); if (remaining) chunks[stream].push(chunk.subarray(0, remaining)); bytes += Math.min(remaining, chunk.length);
       if (chunk.length > remaining) cancel('output_limit');
     });
+    child.once('exit', () => { exited = true; });
     child.once('error', error => finish(null, null, error));
     child.once('close', (code, exitSignal) => finish(code, exitSignal, null));
   });
