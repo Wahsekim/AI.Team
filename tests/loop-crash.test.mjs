@@ -9,7 +9,8 @@ import { openFixtureAdapter } from '../src/loop/adapters/fixture-process.mjs';
 
 const sqlite = { skip: Number(process.versions.node.split('.')[0]) < 24 ? 'Crash fixture requires Node 24+' : false, timeout: 15000 };
 const hostScript = fileURLToPath(new URL('./fixtures/fixture-crash-host.mjs', import.meta.url));
-async function killAtBoundary(t, boundary) {
+const HOST_SELF_EXIT_BOUND_MS = 12000;
+async function reachBoundary(t, boundary) {
   const workspace = mkdtempSync(join(tmpdir(), 'ai-killed-host-')), filename = join(workspace, 'fixture.sqlite');
   const host = spawn(process.execPath, [hostScript, filename, workspace, boundary], { env: {}, stdio: ['ignore', 'pipe', 'pipe'] });
   const exited = new Promise((resolve, reject) => { host.once('error', reject); host.once('exit', (code, signal) => resolve({ code, signal })); });
@@ -36,9 +37,23 @@ async function killAtBoundary(t, boundary) {
   let event;
   try { event = await reached; } finally { clearTimeout(timer); }
   assert.equal(event.phase, boundary);
+  return { filename, workspace, event, host, exited };
+}
+async function killAtBoundary(t, boundary) {
+  const { filename, workspace, event, host, exited } = await reachBoundary(t, boundary);
   host.kill('SIGKILL'); const exit = await exited; assert.equal(exit.signal, 'SIGKILL');
   return { filename, workspace, event };
 }
+
+test('unkilled host paused at a boundary exits by itself within the bound', { ...sqlite, timeout: 20000 }, async t => {
+  const { host, exited } = await reachBoundary(t, 'reservation-committed');
+  let timer;
+  const bound = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Paused host did not self-exit within bound')), HOST_SELF_EXIT_BOUND_MS); });
+  let exit;
+  try { exit = await Promise.race([exited, bound]); } finally { clearTimeout(timer); }
+  assert.deepEqual(exit, { code: 9, signal: null });
+  assert.throws(() => process.kill(host.pid, 0), e => e.code === 'ESRCH');
+});
 
 for (const boundary of ['reservation-committed', 'spawned-before-pid-save', 'result-ready', 'result-stored']) {
   test(`actual killed host at ${boundary} never duplicates a dispatch`, sqlite, async t => {

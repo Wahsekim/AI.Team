@@ -7,7 +7,9 @@ const adapter = await openFixtureAdapter({ filename, workspace, runId: 'crash-ru
   writeSync(1, `${JSON.stringify(event)}\n`);
   // The parent kills this actual host process after observing the precise
   // durability boundary. Do not simulate death by throwing or setting a flag.
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+  // Self-exit bounds an unkilled host.
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10000);
+  process.exit(9);
 } });
 const handle = adapter.start('d-1', { scenario: 'pass', delayMs: 200, timeoutMs: 2000 });
 await adapter.collectResult(handle);
