@@ -32,7 +32,7 @@ Rotation: slim-active + archive — the standing rule in
 
 ## Counter
 
-Next NNN to assign: **013**
+Next NNN to assign: **017**
 
 ## Counter and header rules
 
@@ -356,15 +356,110 @@ at rotation time.
 - Reasoning: max (prompt-level)
 - Estimated tokens: 120000
 - Sub-decision count: 0
+- Status: completed
+- Completed: 2026-10-07T08:33:30Z
+- Tokens: 105965 (cumulative; attempt 1 95067 + attempt 2 10898)
+- Variance: -12%
+- PM overhead: ~10000 tok (est)
+- Outcome: commit 713c390 (tests only) removes scheduler-timing dependence from loop-process:35, loop-gates:71 and :104 via mocked timers + observable-state waits; named cases never reproduced in 120 baseline runs, slow-start proof confirms the mechanism; 0/10 under heavy load after; found product defect in process-runner.mjs:23 (EPERM-on-zombie -> cancel_error) that made Node 24 run 1 fail loop-process:11
+- Progress: yes
+- Handoffs:
+    - reviewer [013] needs 713c390 + docs/rollout-evidence/FLAKE-1/
+    - PROC-1 [014]: fix process-runner.mjs:23 classification
+- Retry-of: none
+- Diverged-from: none
+- Round-trip: 1 (resumed for [013] P2/P3 -> second commit)
+- Notes: INLINE FALLBACK (see [001]). Plan §3: a timeout change is not a fix for a failing required test; here the finding is that the tests' timing assumptions are the defect — the record must show the assertion is unchanged and the test no longer depends on scheduler timing.
+- Acceptance: 2026-10-07T08:33:30Z BLOCKED on PROC-1 (red full-suite run caused by the product defect); review pending
+- Acceptance update: 2026-10-07T08:51:53Z OK locally (reviewed by [013]; P2 fixed in 4a11924), BLOCKED-on-CI; pushed 713c390..4a11924
+- Acceptance update: 2026-10-07T08:54:29Z OK (CI run 37596638884 green on 4a11924)
+
+## [013] Independent Reviewer (loop-rollout-reviewer) - 2026-10-07T08:33:30Z
+- Ticket: FLAKE-1
+- Spawned by: PM (Claude Fable 5.1 main session)
+- Brief: Review 713c390 — verify assertions unchanged in meaning, mocked-timer approach cannot mask real failures, the three cases are deterministic under load, slow-start proof reproduced, no src change; reproduce suites once per Node; writes docs/rollout-evidence/FLAKE-1/review.md only.
+- Model: opus (owner directive "opus 5 max")
+- Reasoning: max (prompt-level)
+- Estimated tokens: 100000
+- Sub-decision count: 0
+- Status: completed
+- Completed: 2026-10-07T08:47:11Z
+- Tokens: 85051
+- Variance: -15%
+- PM overhead: ~8000 tok (est)
+- Outcome: 329 digests OK; all outcome assertions unchanged in meaning (two readiness checks added, stricter); mocked timer scope confirmed test-process only; isolation 0/3 and load 0/5 per file on Node 24/22; full suites green at 713c390; PROC-1 defect confirmed from code + own fork/setsid probe; 1 P2 (timeout case no longer detects a never-firing runner timeout — one-line assertion prescribed and verified), 5 P3; recommends OK-pending-PROC-1
+- Progress: yes
+- Handoffs:
+    - implementer [012] attempt 2: P2 assertion + {timeout:10000} + record wording (sent via resume)
+- Retry-of: none
+- Diverged-from: none
+- Round-trip: none
+- Notes: INLINE FALLBACK (see [001]). Does not commit. Runs concurrently with [014].
+
+## [014] Implementer (loop-rollout-implementer) - 2026-10-07T08:33:30Z
+- Ticket: PROC-1
+- Spawned by: PM (Claude Fable 5.1 main session)
+- Brief: Product defect: src/loop/process-runner.mjs:23 sets reason='cancel_error' on any non-ESRCH kill error, overwriting cancelled/timeout/output_limit; on macOS kill(-pgid) returns EPERM for a zombie-only group in the 100 ms SIGKILL escalation window, so a clean cancel is misreported. Diagnose with a deterministic injection test (red), smallest fail-closed-preserving fix (green), one commit, no push.
+- Model: opus (owner directive "opus 5 max")
+- Reasoning: max (prompt-level)
+- Estimated tokens: 150000
+- Sub-decision count: 0
+- Status: completed
+- Completed: 2026-10-07T08:40:21Z
+- Tokens: 76876
+- Variance: -49%
+- PM overhead: ~10000 tok (est)
+- Outcome: commit 7881d1f (process-runner.mjs +7/-4, loop-process.test.mjs +50): original cancel reason survives only when the child's exit was observed and the post-exit probe returns ESRCH; signal failure without observed exit stays cancel_error (recovery); 2 positive red-then-green + 2 negative tests; mock-free reproduction 10/10 before (cancel_error) and after (cancelled); 447 tests green on Node 24/22
+- Progress: yes
+- Handoffs:
+    - reviewer [015] needs 7881d1f + docs/rollout-evidence/PROC-1/
+- Retry-of: none
+- Diverged-from: none
+- Round-trip: none
+- Notes: INLINE FALLBACK (see [001]). Only committing agent while [013] runs. Fail-closed rule: uncertain descendant state must still route to recovery; only the misclassification of a confirmed-exited child is in scope.
+- Acceptance: 2026-10-07T08:46:37Z OK locally (reviewed by [015]), BLOCKED-on-CI
+- Acceptance update: 2026-10-07T08:54:29Z OK (CI run 37596638884 green on 4a11924)
+
+## [015] Independent Reviewer (loop-rollout-reviewer) - 2026-10-07T08:40:21Z
+- Ticket: PROC-1
+- Spawned by: PM (Claude Fable 5.1 main session)
+- Brief: Review 7881d1f — verify the classification change keeps fail-closed semantics for every consumer of cancel_error/cleanup_unknown/orphaned_process_group (gates.mjs:57, evidence.mjs:58, host-fixtures.mjs:37), reproduce red-then-green and the mock-free zombie-window script, run suites once per Node, check Linux reasoning (ESRCH for zombie-only group); writes docs/rollout-evidence/PROC-1/review.md only.
+- Model: opus (owner directive "opus 5 max")
+- Reasoning: max (prompt-level)
+- Estimated tokens: 110000
+- Sub-decision count: 0
+- Status: completed
+- Completed: 2026-10-07T08:46:37Z
+- Tokens: 84675
+- Variance: -23%
+- PM overhead: ~8000 tok (est)
+- Outcome: digests OK; fail-closed table: single changed row is safe, all others unchanged; mock-free repro 3x10 before/after on Node 24/22 matches; mutations (a),(c) caught, (b) unreachable-state guard (P3); Linux: zombie-only group kill returns 0 so the new branch is never reached; 0 P1/P2, 4 P3 (F1 record wording, F2 defensive guard, F3 escaped descendants pre-existing, F4 PID-reuse window pre-existing -> PROC-2 candidate); recommends OK pending Linux CI
+- Progress: yes
+- Handoffs:
+    - PM: push after [013] closes; CI confirmation
+    - follow-up candidates: PROC-2 (PID reuse after reap), R12 note on escaped descendants
+- Retry-of: none
+- Diverged-from: none
+- Round-trip: none
+- Notes: INLINE FALLBACK (see [001]). Runs concurrently with [013]; neither commits. Push of 713c390+7881d1f held until both reviews close.
+
+## [016] Implementer (loop-rollout-implementer) - 2026-10-07T08:51:53Z
+- Ticket: R03b
+- Spawned by: PM (Claude Fable 5.1 main session)
+- Brief: Product-target exclusion under the owner's isolated-clone policy (ADR 0001 decision 5): the host may execute only against a product clone it created inside its own state directory; external targets, aliases of a different clone, replaced clone roots and git worktrees sharing metadata are refused fail-closed; target identity (dev, ino, git common dir) bound in the R03a lock DB; legacy coexistence documented as unsupported, not enforced. Short ADR 0003 in the same commit. One commit, no push.
+- Model: opus (owner directive "opus 5 max")
+- Reasoning: max (prompt-level)
+- Estimated tokens: 250000
+- Sub-decision count: 0 (policy fixed by owner Q5; enforcement semantics documented in ADR 0003 for PM/owner review)
 - Status: spawned
 - Completed:
 - Tokens:
 - Variance:
-- PM overhead: ~10000 tok (est)
+- PM overhead: ~20000 tok (est)
 - Outcome:
 - Progress:
 - Handoffs:
 - Retry-of: none
 - Diverged-from: none
 - Round-trip: none
-- Notes: INLINE FALLBACK (see [001]). Plan §3: a timeout change is not a fix for a failing required test; here the finding is that the tests' timing assumptions are the defect — the record must show the assertion is unchanged and the test no longer depends on scheduler timing.
+- Notes: INLINE FALLBACK (see [001]). Only committing agent now; CI on 4a11924 runs concurrently. Checkpoint-1 allowance applies (impl <=300k).

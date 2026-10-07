@@ -59,3 +59,15 @@ the engine's `results[]` (per `docs/engine.md`), under a dated batch line.
 2026-10-07 R03a ACCEPTANCE: OK locally, BLOCKED-on-CI (ace398b + 8044a0b; review [011] §8 confirms P1/P2 fixed). Pushed for CI.
 2026-10-07 FLAKE-1 -> Implementer, est 120000 tok, brief: agents/lifecycle.md#[012], why: two load-sensitive experimental tests found during R03a review/verification (plan §3: own fix card)
 2026-10-07 R03a ACCEPTED: OK (CI run 37590174571 all green on 8044a0b). G0 progress: R01, R02, R02b, R03a OK; FLAKE-1 in progress; R03b, R04a/b, R05a/b pending. ADR 0002 awaits owner ratification.
+2026-10-07 CI on ledger commit e1c2edf: conclusion=success (runs/37590427063).
+2026-10-07 FLAKE-1 closed-impl: actual 95067 tok (var -21%), outcome: 713c390 tests-only; BLOCKED on new product defect PROC-1 (process-runner EPERM-on-zombie misclassification), lifecycle: [012]
+2026-10-07 FLAKE-1 -> Independent Reviewer, est 100000 tok, brief: agents/lifecycle.md#[013], why: mocked-timer test changes need independent check they cannot mask real failures
+2026-10-07 PROC-1 -> Implementer, est 150000 tok, brief: agents/lifecycle.md#[014], why: product defect found by FLAKE-1 verification; plan §3 own fix card; affects cancellation semantics (R04/R12)
+2026-10-07 PROC-1 closed-impl: actual 76876 tok (var -49%), outcome: 7881d1f fixes zombie-window EPERM misclassification with red-then-green + mock-free repro; review pending, lifecycle: [014]
+2026-10-07 PROC-1 -> Independent Reviewer, est 110000 tok, brief: agents/lifecycle.md#[015], why: src cancellation-classification change; consumers' fail-closed semantics must be independently verified
+2026-10-07 PROC-1 ACCEPTANCE: OK locally, BLOCKED-on-CI (review [015] clean; record wording on Linux corrected). Follow-up candidates: PROC-2 (PID reuse after reap), R12 escaped-descendant note. Push waits for FLAKE-1 review [013].
+            -> [015] closed: actual 84675 tok (var -23%), outcome: PROC-1 review clean, 0 P1/P2, lifecycle: [015]
+2026-10-07 [013] closed: actual 85051 tok (var -15%), outcome: FLAKE-1 review OK-pending-PROC-1 with 1 P2 (mocked timeout case assertion) -> attempt 2 sent to [012], lifecycle: [013]
+2026-10-07 FLAKE-1 ACCEPTANCE: OK locally, BLOCKED-on-CI (713c390 + 4a11924). PROC-1 + FLAKE-1 pushed together for CI.
+2026-10-07 R03b -> Implementer, est 250000 tok, brief: agents/lifecycle.md#[016], why: next G0 card; owner Q5 policy fixed; R03a primitive available
+2026-10-07 FLAKE-1 ACCEPTED: OK; PROC-1 ACCEPTED: OK (CI run 37596638884 all green on 4a11924). G0 progress: R01, R02, R02b, R03a, FLAKE-1, PROC-1 OK; R03b in progress; R04a/b, R05a/b pending. Follow-up candidates: PROC-2, R12 escaped-descendant note.
