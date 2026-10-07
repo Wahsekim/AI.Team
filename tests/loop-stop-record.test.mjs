@@ -5,6 +5,7 @@ import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync }
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { canonical, digest } from '../src/loop/contracts.mjs';
 import { command, demoBundle, driveDemo } from '../src/loop/demo.mjs';
 import { initialState, reduce } from '../src/loop/reducer.mjs';
 import { openStore } from '../src/loop/store.mjs';
@@ -239,4 +240,68 @@ test('S8: stop on a terminal run stays RUN_TERMINAL; flags are stop-only', sqlit
   for (const args of [['stop', s.directory, 'run', '--soft'], ['stop', s.directory, 'run', '--hard', '--graceful'], ['status', s.directory, 'run', '--hard']]) {
     const result = run(args); assert.equal(result.status, 2); assert.equal(result.json.code, 'INVALID_SPEC', args.join(' '));
   }
+});
+
+// Writes a stop event exactly as the pre-R04a code did ({mode, reason}, stopRequest {mode, detail}), on the same hash chain.
+async function writeLegacyStop(file, runId, now) {
+  const { DatabaseSync } = await import('node:sqlite'), db = new DatabaseSync(file);
+  try {
+    const r = db.prepare('SELECT state, version FROM runs WHERE id=?').get(runId), s = JSON.parse(r.state);
+    s.lastAt = now; s.reason = 'user_stop'; s.status = 'QUIESCING';
+    for (const d of Object.values(s.dispatches)) if (!d.receipt && d.status === 'PENDING') { d.status = 'ACKNOWLEDGED'; d.receipt = { result: 'cancelled', tokens: 0, costMicroUsd: 0 }; }
+    s.stopRequest = { mode: 'graceful', detail: 'CLI operator stop' };
+    const version = r.version + 1, payload = { mode: 'graceful', reason: 'CLI operator stop' };
+    const previous = db.prepare('SELECT digest FROM events WHERE run_id=? ORDER BY seq DESC LIMIT 1').get(runId).digest;
+    const event = { runId, seq: version, action: 'stop', payload, stateDigest: digest(s), at: now, previousDigest: previous };
+    db.prepare('UPDATE runs SET state=?, version=? WHERE id=?').run(canonical(s), version, runId);
+    for (const d of Object.values(s.dispatches)) db.prepare('UPDATE outbox SET status=? WHERE run_id=? AND id=?').run(d.status, runId, d.id);
+    db.prepare('INSERT INTO events VALUES (?,?,?,?)').run(runId, version, canonical(event), digest(event));
+  } finally { db.close(); }
+}
+
+test('S9: a pre-R04a stop event replays as a legacy record and still escalates to hard', sqlite, async t => {
+  const s = await stateDir(t);
+  apply(s.store, 'tick', tick);
+  await writeLegacyStop(s.file, 'run', s.store.status('run').state.lastAt + 1);
+  const audit = run(['audit', s.directory, 'run']);
+  assert.equal(audit.status, 0, audit.stdout); assert.deepEqual(audit.json.value, { ok: true, events: 3, stateVersion: 2 });
+  assert.match(run(['show', s.directory, 'run']).stdout, /^stop graceful · legacy record$/m);
+  const hard = run(['stop', s.directory, 'run', '--hard']);
+  assert.equal(hard.status, 0, hard.stdout); assert.equal(hard.json.value.recorded, true);
+  assert.equal(hard.json.value.stopRequest.kind, 'hard'); assert.equal(hard.json.value.stopRequest.seq, 2);
+  const reaudit = run(['audit', s.directory, 'run']);
+  assert.equal(reaudit.status, 0, reaudit.stdout); assert.deepEqual(reaudit.json.value, { ok: true, events: 4, stateVersion: 3 });
+  assert.match(run(['show', s.directory, 'run']).stdout, /^stop hard · #2 · by cli$/m);
+  assert.throws(() => apply(s.store, 'claim', { effectId: 'd-1' }), code('STOP_REQUESTED'));
+  assert.equal(s.store.requestStop('run', { kind: 'graceful', requestedBy: 'cli' }).recorded, false);
+});
+
+// Deterministic version of the review's fuzz (F2): after any recorded stop, no accepted reduction emits or starts a dispatch.
+test('S10: seeded reducer walks never dispatch after a recorded stop', () => {
+  let seed = 0x5eed;
+  const rand = () => { seed = (seed + 0x6D2B79F5) | 0; let x = Math.imul(seed ^ (seed >>> 15), 1 | seed); x ^= x + Math.imul(x ^ (x >>> 7), 61 | x); return ((x ^ (x >>> 14)) >>> 0) / 4294967296; };
+  const pick = list => list[Math.floor(rand() * list.length)];
+  const { spec } = demoBundle('run'); let afterStop = 0, stops = 0;
+  for (let walk = 0; walk < 3000; walk++) {
+    let s = initialState(spec, 0), now = 0;
+    for (let step = 0; step < 24; step++) {
+      const ids = Object.keys(s.dispatches), action = pick(['tick', 'tick', 'claim', 'settle', 'projected', 'interrupted', 'abandon', 'stop']);
+      const d = s.dispatches[pick(ids.length ? ids : ['d-1'])];
+      const payload = action === 'tick' ? tick : action === 'stop' ? { kind: pick(['graceful', 'hard']), requestedBy: 'fuzz' }
+        : action === 'claim' ? { effectId: s.projection && rand() < 0.5 ? s.projection.id : d?.id ?? 'd-1' }
+        : action === 'projected' ? { effectId: s.projection?.id ?? 'projection-1' }
+        : action === 'interrupted' ? {} : action === 'abandon' ? { confirmedProcessesExited: true }
+        : { dispatchId: d?.id ?? 'd-1', result: pick(['pass', 'fail', 'cancelled']), candidate: d?.stage === 'build' ? digest({ walk, step }) : d?.candidate ?? s.candidate, tokens: 0, costMicroUsd: 0 };
+      let result;
+      try { result = reduce(spec, s, action, payload, ++now); } catch { continue; }
+      if (s.stopRequest) {
+        afterStop++;
+        assert.equal(result.effects.some(e => e.kind === 'dispatch'), false, `walk ${walk} step ${step} ${action}`);
+        assert.equal(Object.values(result.state.dispatches).some(x => x.status === 'STARTED' && s.dispatches[x.id]?.status !== 'STARTED'), false);
+        assert.ok(result.state.stopRequest && result.state.reason);
+      } else if (result.state.stopRequest) stops++;
+      s = result.state;
+    }
+  }
+  assert.ok(stops > 1000 && afterStop > 10000, `coverage: ${stops} stops, ${afterStop} post-stop reductions`);
 });

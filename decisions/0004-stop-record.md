@@ -18,7 +18,8 @@ Status: Proposed (R04a implementation; PM sign-off and owner ratification pendin
 4. **Transition.** The first stop keeps the baseline effect (reason `user_stop`, PENDING intents cancelled, a pending projection → RECOVERY_REQUIRED) and never clears an existing RECOVERY_REQUIRED. An escalation changes only the record; the first stop already barred dispatch. Kind changes nothing else at R04a.
 5. **No later dispatch (store rule).** While a stop record exists, `apply` refuses with `STOP_REQUESTED`, before the reducer and regardless of fence, a `claim` of any effect other than the run's projection, and after reduction any `tick` whose result emits a dispatch. Settle, interrupted, abandon and projection closeout stay allowed, so a stopped run still reaches STOPPED and existing closeout tests hold. CLI maps it to exit 2; exit 4 stays execution exclusion.
 6. **R-1 rule.** A recorded stop raises the state version in the same transaction as its event. Any command prepared against an earlier version fails `STALE_STATE` and changes nothing; re-prepared, a claim or dispatching tick fails `STOP_REQUESTED` and a settle is accepted. A non-recording repeat leaves the version alone and never invalidates a driver's prepared command. So a stop is never lost and no dispatch slips past it. R04b must treat `STALE_STATE` as "re-read, check `readStopRequest`, re-prepare" instead of `interrupted`; until then the driver fails closed into RECOVERY_REQUIRED.
-7. **Read interface.** `store.readStopRequest(runId)` returns the record or null with one `SELECT json_extract(...)`: no table creation, chmod or version change. R04b polls it between steps and during an effect. It does not widen X5 (opening the store still mutates; R05a).
+7. **Legacy replay.** `verify` replays a pre-R04a `{mode, reason}` stop event through `replayLegacyStop`, the baseline transition verbatim, so stored digests match; a legacy record's kind is its `mode`, its seq counts as 1, and a later hard stop records seq 2. The live path still refuses that shape. `'stop'` is removed from execution-owner's `UNFENCED` set (dead after decision 2).
+8. **Read interface.** `store.readStopRequest(runId)` returns the record or null with one `SELECT json_extract(...)`: no table creation, chmod or version change. R04b polls it between steps and during an effect. It does not widen X5 (opening the store still mutates; R05a).
 
 ## Considered Alternatives
 
@@ -30,7 +31,8 @@ Status: Proposed (R04a implementation; PM sign-off and owner ratification pendin
 ## Consequences
 
 - External stop is accepted while a driver runs; no lock contention (S4).
-- Stores written before R04a with a `stop` event (`{mode, reason}`) no longer replay (`audit` fails `INVALID_SPEC`); no versioning until R07. Simulation stores only.
+- Stores written before R04a replay as legacy records (decision 7; attempt 2, review F1).
+- Limitations (pre-existing, follow-up cards): F4, a first stop overwrites an earlier failure reason (a run quiescing on `final_gate_failed` projects STOPPED, not FAILED); F5, after a stop, settling the last UNKNOWN dispatch while a limit trips leaves RECOVERY_REQUIRED through the receipt, not `abandon`, and replaces `user_stop` with the limit reason (R05 recovery rules).
 - Library callers: `driver.stop({kind, requestedBy})`; `stopRequest.mode/detail` became `kind/seq/requestedBy/requestedAt`.
 - Open for R04b: polling, abort, observer failure, escalation during a running effect, and the driver's R-1 handling. Open for the PM/owner: whether a first stop during a pending projection should keep forcing RECOVERY_REQUIRED (assessment decision ii; unchanged here).
 
@@ -38,4 +40,6 @@ Status: Proposed (R04a implementation; PM sign-off and owner ratification pendin
 
 - [ ] PM sign-off; owner ratification.
 - [ ] R04b: observation loop and R-1 driver handling against this rule.
+- [ ] R04b, PM decision 2026-10-07: graceful stop during a pending/started closing projection records the stop only, keeps FINALIZING and the projection, and ends at the projection's outcome. Hard stop: RECOVERY_REQUIRED (today's rule). A graceful→hard escalation while a projection is kept applies the hard rule. In all cases mark the dropped/kept projection's outbox row explicitly.
+- [ ] Follow-up cards: F4 (keep an existing failure reason on stop), F5 (R05 recovery rules).
 - [ ] R07: version the stop payload change.

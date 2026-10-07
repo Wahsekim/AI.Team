@@ -1,7 +1,7 @@
 import { chmodSync } from 'node:fs';
 import { canonical, digest, LoopError, requireThat, validateCommand } from './contracts.mjs';
 import { validateBundle } from './artifacts.mjs';
-import { initialState, reduce, stopEscalates, TERMINAL, validateStopRequest } from './reducer.mjs';
+import { initialState, reduce, replayLegacyStop, stopEscalates, TERMINAL, validateStopRequest } from './reducer.mjs';
 
 const FENCED = new Set(['tick', 'claim']);
 const unresolved = state => state.status === 'RECOVERY_REQUIRED' || state.projection?.status === 'STARTED'
@@ -162,7 +162,10 @@ export async function openStore(filename) {
         requireThat(e.seq === seq && e.previousDigest === previous && digest(e) === entries[seq].digest, 'RECOVERY_REQUIRED', 'Event chain mismatch');
         if (seq === 0) requireThat(digest(e.payload.spec) === digest(JSON.parse(r.spec))
           && digest(e.payload.artifacts) === digest(JSON.parse(r.artifacts)), 'RECOVERY_REQUIRED', 'Immutable run configuration mismatch');
-        state = seq === 0 ? initialState(e.payload.spec, e.at) : reduce(JSON.parse(r.spec), state, e.action, e.payload, e.at).state;
+        // ADR 0004: pre-R04a {mode, reason} stop events replay as legacy records; live stops refuse that shape.
+        state = seq === 0 ? initialState(e.payload.spec, e.at)
+          : e.action === 'stop' && Object.hasOwn(e.payload, 'mode') ? replayLegacyStop(state, e.payload, e.at).state
+          : reduce(JSON.parse(r.spec), state, e.action, e.payload, e.at).state;
         requireThat(digest(state) === e.stateDigest, 'RECOVERY_REQUIRED', 'Replay state mismatch'); previous = entries[seq].digest;
       }
       requireThat(entries.length === r.version + 1 && digest(state) === digest(JSON.parse(r.state)), 'RECOVERY_REQUIRED', 'Materialized state mismatch');

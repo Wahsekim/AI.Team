@@ -18,7 +18,7 @@ const TARGET_SQL = `CREATE TABLE IF NOT EXISTS target_binding(id INTEGER PRIMARY
   git_common_path TEXT NOT NULL, git_common_dev TEXT NOT NULL, git_common_ino TEXT NOT NULL)`;
 const BINDING_ERRORS = new Set(['STORE_MISMATCH', 'TARGET_MISMATCH']);
 const SQLITE_BUSY = 5, PROBE_TIMEOUT_MS = 2000;
-const UNFENCED = new Set(['stop', 'interrupted']);
+const UNFENCED = new Set(['interrupted']);
 const PROBE_SOURCE = `const { DatabaseSync } = require('node:sqlite');
 let errcode = null;
 try { new DatabaseSync(process.argv[1]).exec(${JSON.stringify(LOCK_SQL)}); } catch (error) { errcode = error.errcode ?? null; }

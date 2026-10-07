@@ -272,8 +272,13 @@ existing record, so hard is never weakened. A stop on a terminal run is
 `RUN_TERMINAL`. A recorded stop raises the state version, so a command prepared
 before it fails `STALE_STATE`; after it the store refuses any dispatch claim, or a
 tick that would emit a dispatch, with `STOP_REQUESTED` (CLI exit 2), fenced or not.
-Settle, interrupted and the closeout projection stay allowed. The first stop never
-clears RECOVERY_REQUIRED. `store.apply('stop', …)` is refused.
+Settle, interrupted, abandon and the closeout projection stay allowed. The first
+stop never clears RECOVERY_REQUIRED. A first stop while the run's closing
+projection is PENDING or STARTED forces RECOVERY_REQUIRED and nulls the projection,
+leaving its outbox row PENDING/STARTED; only `abandon` exits (R04b decision
+pending). `store.apply('stop', …)` is refused. Stop events written before R04a
+(`{mode, reason}`) replay in `audit` as legacy records (`show`: `stop <mode> ·
+legacy record`) and can still escalate to hard (seq 2); new stops refuse that shape.
 `store.readStopRequest(runId)` is the read-only poll (one SELECT; no table, chmod
 or version change) that R04b's driver will call between steps and while an effect
 runs, then cancel through the existing bounded process primitive. Until R04b, the
