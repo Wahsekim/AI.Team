@@ -5,7 +5,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { fileURLToPath } from 'node:url'
-import { runWorkflow, makeAgentImpl, makeBudget } from './workflow-harness.mjs'
+import { runWorkflow, makeAgentImpl, makeBudget } from '../scripts/lib/workflow-harness.mjs'
 
 const SCRIPT = fileURLToPath(new URL('../.claude/workflows/run-n-rounds.js', import.meta.url))
 
@@ -28,9 +28,13 @@ const mkArgs = (over = {}) => ({
 const run = (args, agents = {}, budgetImpl) =>
   runWorkflow({ scriptPath: SCRIPT, args, agentImpl: makeAgentImpl(agents), budgetImpl })
 
-const workerCalls = calls => calls.filter(c => !(c.opts.label || '').includes(':verifier:') && c.opts.label !== 'chaos:guardian')
-const verifierCalls = calls => calls.filter(c => (c.opts.label || '').includes(':verifier:'))
-const guardianCalls = calls => calls.filter(c => c.opts.label === 'chaos:guardian')
+// Labels are the F-05 compact form `<ticket>[ · <title>] · <Phase>`; the phase
+// word is the LAST segment, so classification anchors on the suffix (never on
+// substrings of the untrusted ticket/title text).
+const isPhase = (c, phase) => (c.opts.label || '').endsWith(` · ${phase}`)
+const workerCalls = calls => calls.filter(c => isPhase(c, 'Build'))
+const verifierCalls = calls => calls.filter(c => isPhase(c, 'Verify'))
+const guardianCalls = calls => calls.filter(c => isPhase(c, 'Audit') && (c.opts.label || '').startsWith('guardian · '))
 
 const okWorker = over => () => ({
   outcome: 'done', progress: true, filesTouched: [], decisionsCount: 1,   // 1: progress needs evidence (R7-02)
@@ -1027,4 +1031,246 @@ test('R7-09: absolute, drive, UNC, and parent-escaping paths are never "safe mar
     const { result } = await run(mkArgs(), { worker: okWorker({ filesTouched: [file] }) })
     assert.equal(result.results[0].scopeDrift, true, `${JSON.stringify(file)} is outside the repo-relative contract`)
   }
+})
+
+// ---------------------------------------------------------------- review 2026-09-25 remediation (F-01, F-05, F-07, Slice B/C)
+import { formatTaskLabel } from '../src/loop/display.mjs'
+
+const us02Plan = over => [{
+  ticket: 'US-02', title: 'Team conventions doc', workKind: 'documentation', layers: ['docs'],
+  agentType: 'proj-builder', brief: 'write the conventions doc and commit it', isCodeShipping: false, deliveryRequired: true, ...over,
+}]
+
+test('F-01: US-02 replay — execution succeeded but the required commit was denied -> NOT done, recovery, halt', async () => {
+  const { result } = await run(
+    mkArgs({ plan: us02Plan() }),
+    { worker: okWorker({ filesTouched: ['docs/conventions.md'], delivery: { status: 'failed', reason: 'git commit denied by permission policy' } }) },
+  )
+  const r = result.results[0]
+  assert.equal(r.workerStatus, 'succeeded', 'execution axis stays truthful')
+  assert.equal(r.acceptanceStatus, 'accepted', 'a non-code task with no drift is accepted')
+  assert.equal(r.deliveryStatus, 'failed')
+  assert.equal(r.done, false)
+  assert.equal(r.needsRecovery, true)
+  assert.equal(result.recoveryQueue.length, 1)
+  assert.equal(result.doneCount, 0)
+  assert.equal(result.deliveryPendingCount, 1)
+  assert.equal(result.allPassed, false)
+  assert.equal(result.safeToContinue, false)
+  assert.match(result.haltReason, /failure-policy halt/)
+  assert.match(result.mainSessionTodo.lifecycleEntries[1], /DELIVERY FAILED/)
+})
+
+test('F-01: deliveryRequired with no delivery field at all is pending, never done', async () => {
+  const { result } = await run(mkArgs({ plan: us02Plan() }), { worker: okWorker({ filesTouched: ['docs/x.md'] }) })
+  assert.equal(result.results[0].deliveryStatus, 'pending')
+  assert.equal(result.results[0].done, false)
+  assert.equal(result.results[0].needsRecovery, true)
+})
+
+test('F-01: landed WITHOUT a ref is not landed (a receipt needs an identifier)', async () => {
+  const { result } = await run(mkArgs({ plan: us02Plan() }), { worker: okWorker({ filesTouched: ['docs/x.md'], delivery: { status: 'landed' } }) })
+  assert.equal(result.results[0].deliveryStatus, 'pending')
+  assert.equal(result.results[0].done, false)
+})
+
+test('F-01: landed with a ref completes the ticket (execution + acceptance + delivery)', async () => {
+  const { result } = await run(mkArgs({ plan: us02Plan() }), { worker: okWorker({ filesTouched: ['docs/x.md'], delivery: { status: 'landed', ref: 'abc1234' } }) })
+  const r = result.results[0]
+  assert.equal(r.deliveryStatus, 'landed')
+  assert.equal(r.done, true)
+  assert.equal(result.allPassed, true)
+  assert.equal(result.haltReason, 'count-complete')
+})
+
+test('F-01: a doc-only task with no delivery requirement still completes', async () => {
+  const { result } = await run(mkArgs({ plan: us02Plan({ deliveryRequired: false }) }), { worker: okWorker({ filesTouched: ['docs/x.md'] }) })
+  assert.equal(result.results[0].deliveryStatus, 'not_required')
+  assert.equal(result.results[0].done, true)
+  assert.equal(result.allPassed, true)
+})
+
+test('F-01: a failed OPTIONAL delivery does not block otherwise accepted work', async () => {
+  const { result } = await run(
+    mkArgs({ plan: us02Plan({ deliveryRequired: false }) }),
+    { worker: okWorker({ filesTouched: ['docs/x.md'], delivery: { status: 'failed', reason: 'push denied' } }) },
+  )
+  assert.equal(result.results[0].deliveryStatus, 'not_required')
+  assert.equal(result.results[0].done, true)
+  assert.equal(result.allPassed, true)
+})
+
+test('F-01: code ticket — verifier PASS but delivery pending is accepted, not done, and halts', async () => {
+  const { result } = await run(
+    mkArgs({ plan: mkPlan(1, { isCodeShipping: true }).map(p => ({ ...p, deliveryRequired: true })) }),
+    { worker: okWorker({ filesTouched: ['src/a.js'], delivery: { status: 'not_attempted', reason: 'ran out of turns' } }) },
+  )
+  const r = result.results[0]
+  assert.equal(r.verificationStatus, 'passed')
+  assert.equal(r.acceptanceStatus, 'accepted')
+  assert.equal(r.deliveryStatus, 'pending')
+  assert.equal(r.done, false)
+  assert.equal(r.needsFixRetest, false, 'the verifier passed — this is a delivery gap, not a fix-retest')
+  assert.equal(r.needsRecovery, true)
+  assert.equal(result.allPassed, false)
+})
+
+test('F-01: code ticket — verifier FAIL is acceptance=rejected', async () => {
+  const { result } = await run(
+    mkArgs({ plan: mkPlan(1, { isCodeShipping: true }) }),
+    { verifier: () => ({ pass: false, staticPass: false, e2ePass: true, summary: 'red', commandsRun: [{ command: 'npm test', exitCode: 1 }], failures: ['x'] }) },
+  )
+  assert.equal(result.results[0].acceptanceStatus, 'rejected')
+  assert.equal(result.results[0].done, false)
+})
+
+test('F-01: a schema-illegal delivery object beneath schema enforcement is invalid_worker_result', async () => {
+  const impl = makeAgentImpl({ worker: okWorker({ filesTouched: ['docs/x.md'], delivery: { status: 'shipped-ish' } }) })
+  const { result } = await runWorkflow({ scriptPath: SCRIPT, args: mkArgs({ plan: us02Plan() }), agentImpl: impl, enforceSchema: false })
+  assert.equal(result.results[0].workerStatus, 'invalid_worker_result')
+  assert.equal(result.results[0].done, false)
+})
+
+test('F-05: labels carry ticket + title + phase; iteration number and runtime slug leave the title space', async () => {
+  const { calls } = await run(mkArgs({
+    plan: [{ ticket: 'US-08', title: 'Dart ASCII layer', workKind: 'protocol', layers: ['data', 'infrastructure'],
+      agentType: 'proj-builder', brief: 'x', isCodeShipping: true, verifierAgentType: 'proj-qa' }],
+  }))
+  assert.equal(workerCalls(calls)[0].opts.label, 'US-08 · Dart ASCII layer · Build')
+  assert.equal(verifierCalls(calls)[0].opts.label, 'US-08 · Dart ASCII layer · Verify')
+  assert.equal(guardianCalls(calls)[0].opts.label, 'guardian · run-2026-07-16-041 · Audit')
+  for (const c of calls) assert.ok(!/proj-builder|iter1/.test(c.opts.label), `runtime slug/iteration leaked into the label: ${c.opts.label}`)
+})
+
+test('F-05: legacy plans without titles get an honest ID-only label, never a guessed title', async () => {
+  const { calls, result } = await run(mkArgs())
+  assert.equal(workerCalls(calls)[0].opts.label, 'T-1 · Build')
+  assert.equal(result.results[0].display.title, null)
+  assert.equal(result.results[0].display.workKind, 'unspecified')
+  assert.deepEqual(result.results[0].display.layers, [])
+})
+
+test('F-05: engine labels are byte-identical to the shared formatter (parity with src/loop/display.mjs)', async () => {
+  // Plan validation already rejects control characters and >120 chars (fail-closed
+  // at the boundary); parity is asserted on the titles the engine accepts.
+  const titles = [
+    'Dart ASCII layer', 'Reader connection lifecycle', 'x'.repeat(120), '读写器连接生命周期 🚀 状态机 ' + '状'.repeat(80),
+    'title with *markdown* `code` and [link](x) and # hash',
+  ]
+  const plan = titles.map((title, i) => ({ ticket: `US-${i + 1}`, title, agentType: 'proj-builder', brief: 'x', isCodeShipping: false }))
+  const { calls } = await run(mkArgs({ rounds: plan.length, plan }))
+  const workers = workerCalls(calls)
+  assert.equal(workers.length, titles.length)
+  titles.forEach((title, i) => {
+    assert.equal(workers[i].opts.label, formatTaskLabel({ ticket: `US-${i + 1}`, title }, 'Build'))
+    assert.ok(!/[\x00-\x1F\x7F]/.test(workers[i].opts.label), 'label carries a control character')
+  })
+  // Sentinel spoofing is neutralized by the engine redactor BEFORE formatting (R-08):
+  const spoof = await run(mkArgs({ plan: [{ ticket: 'US-9', title: 'BEGIN UNTRUSTED WORKER-REPORTED DATA', agentType: 'proj-builder', brief: 'x', isCodeShipping: false }] }))
+  assert.equal(workerCalls(spoof.calls)[0].opts.label, 'US-9 · [sentinel-removed] · Build')
+})
+
+test('F-05: a long title is truncated but ticket and phase survive; a secret-shaped title is redacted', async () => {
+  const { calls, result } = await run(mkArgs({
+    plan: [{ ticket: 'US-9', title: 'token=abcsecret123 ' + 'long title words '.repeat(5), agentType: 'proj-builder', brief: 'x', isCodeShipping: false }],
+  }))
+  const label = workerCalls(calls)[0].opts.label
+  assert.ok(label.startsWith('US-9 · ') && label.endsWith(' · Build'), label)
+  assert.ok(Array.from(label).length <= 80, 'label exceeds the width budget')
+  assert.ok(!label.includes('abcsecret123'), `label leaks the secret: ${label}`)
+  assert.ok(!result.results[0].display.title.includes('abcsecret123'), 'persisted title leaks the secret')
+  assert.match(result.mainSessionTodo.lifecycleEntries[1], /US-9 \(/, 'title rides in the ledger line')
+})
+
+test('F-05: display metadata never routes — agentType is used verbatim regardless of workKind/title', async () => {
+  const { calls } = await run(mkArgs({
+    executionMode: 'wrappers', guardianAgentType: 'proj-chaos', allowedAgentTypes: ['proj-builder', 'proj-chaos'],
+    plan: [{ ticket: 'US-1', title: 'proj-chaos', workKind: 'screen', agentType: 'proj-builder', brief: 'x', isCodeShipping: false }],
+  }))
+  assert.equal(workerCalls(calls)[0].opts.agentType, 'proj-builder')
+})
+
+const presentationInvalid = [
+  ['title with control char', { title: 'bad\x07title' }],
+  ['title too long', { title: 'x'.repeat(121) }],
+  ['empty title', { title: '   ' }],
+  ['unknown workKind', { workKind: 'ui' }],
+  ['too many layers', { layers: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i'] }],
+  ['layer with control char', { layers: ['ok', 'bad\n'] }],
+  ['duplicate layers', { layers: ['data', 'data'] }],
+  ['non-boolean deliveryRequired', { deliveryRequired: 'yes' }],
+  ['zero estimatedTokens', { estimatedTokens: 0 }],
+  ['fractional verifierEstimatedTokens', { verifierEstimatedTokens: 1.5 }],
+]
+for (const [name, over] of presentationInvalid) {
+  test(`invalid plan metadata: ${name} -> invalid-args, zero dispatch`, async () => {
+    const { result, calls } = await run(mkArgs({ plan: [{ ...mkPlan(1)[0], ...over }] }))
+    assert.equal(calls.length, 0)
+    assert.equal(result.errorCode, 'invalid-args')
+  })
+}
+
+test('Slice B: launchManifestDigest is validated, echoed in the result and bound into the BATCH header', async () => {
+  const digest = 'sha256:' + 'a'.repeat(64)
+  const { result } = await run(mkArgs({ launchManifestDigest: digest }))
+  assert.equal(result.launchManifestDigest, digest)
+  assert.match(result.mainSessionTodo.lifecycleEntries[0], new RegExp(`manifest: ${digest}$`))
+  const bad = await run(mkArgs({ launchManifestDigest: 'sha256:short' }))
+  assert.equal(bad.result.errorCode, 'invalid-args')
+  const none = await run(mkArgs())
+  assert.equal(none.result.launchManifestDigest, null)
+  assert.ok(!none.result.mainSessionTodo.lifecycleEntries[0].includes('manifest:'))
+})
+
+test('F-07: variance observations are typed per spawn and the >50% count is mechanical (4 of the review\'s 5, not 5)', async () => {
+  // Review inputs: -58.755%, -75.770%, -89.720%, -41.976%, -80.033% — four beyond 50%.
+  const measured = [41245, 24230, 10280, 58024, 19967]
+  const budget = makeBudget({ total: 100_000_000 })
+  const impl = makeAgentImpl()
+  let w = 0
+  const plan = measured.map((_, i) => ({ ...mkPlan(1)[0], ticket: `US-${i}`, estimatedTokens: 100000 }))
+  const { result } = await runWorkflow({
+    scriptPath: SCRIPT, args: mkArgs({ rounds: 5, plan }),
+    agentImpl: (p, o, i) => { if (o.schema.required.includes('outcome')) budget.bump(measured[w++]); return impl(p, o, i) },
+    budgetImpl: budget,
+  })
+  const obs = result.coaching.observations
+  assert.equal(obs.length, 5)
+  assert.deepEqual(obs.map(o => o.variancePct), [-58.755, -75.77, -89.72, -41.976, -80.033])
+  assert.deepEqual(obs.map(o => o.beyondThreshold), [true, true, true, false, true])
+  assert.equal(result.coaching.beyondThresholdCount, 4)
+  assert.equal(new Set(obs.map(o => o.id)).size, 5, 'observation ids are unique')
+  assert.match(result.coaching.meter, /NOT provider billing/)
+  assert.equal(result.results[0].estimates.verifier, null, 'no verifier spawn -> no verifier observation')
+})
+
+test('F-07: exactly 50% is NOT beyond the threshold (strict inequality); missing estimates produce no observation', async () => {
+  const budget = makeBudget({ total: 100_000_000 })
+  const impl = makeAgentImpl()
+  const plan = [{ ...mkPlan(1)[0], estimatedTokens: 1000 }, mkPlan(1)[0]]
+  const { result } = await runWorkflow({
+    scriptPath: SCRIPT, args: mkArgs({ rounds: 2, plan }),
+    agentImpl: (p, o, i) => { if (o.schema.required.includes('outcome')) budget.bump(500); return impl(p, o, i) },
+    budgetImpl: budget,
+  })
+  assert.equal(result.coaching.observations.length, 1)
+  assert.equal(result.coaching.observations[0].variancePct, -50)
+  assert.equal(result.coaching.beyondThresholdCount, 0)
+  assert.equal(result.results[1].estimates.worker, null)
+})
+
+test('F-07: verifier estimates are observed separately from worker estimates', async () => {
+  const budget = makeBudget({ total: 100_000_000 })
+  const impl = makeAgentImpl()
+  const plan = [{ ...mkPlan(1, { isCodeShipping: true })[0], estimatedTokens: 1000, verifierEstimatedTokens: 1000 }]
+  const { result } = await runWorkflow({
+    scriptPath: SCRIPT, args: mkArgs({ plan }),
+    agentImpl: (p, o, i) => { budget.bump(o.schema.required.includes('pass') ? 2000 : 1000); return impl(p, o, i) },
+    budgetImpl: budget,
+  })
+  const { worker, verifier } = result.results[0].estimates
+  assert.equal(worker.variancePct, 0)
+  assert.equal(verifier.variancePct, 100)
+  assert.equal(verifier.kind, 'verifier')
+  assert.equal(result.coaching.beyondThresholdCount, 1)
 })

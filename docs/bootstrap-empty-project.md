@@ -76,11 +76,13 @@ deployed instance").
 10. **Instantiate the dispatch path (BLOCKING — dispatch is impossible without
     it).** Default: create one `.claude/agents/<project>-<role>.md` wrapper
     for each ACTIVE roster row (only active rows get wrappers —
-    `docs/staffing.md`) from `.claude/agents/role-wrapper.template.md`,
+    `docs/staffing.md`) from `agents/_seeds/role-wrapper.template.md`,
     copying model/reasoning from the roster and setting token budget.
     Documented fallback (only if the runtime cannot install wrappers): copy
-    `.claude/agents/INLINE_BASE_AGENT_MODE.template.md` to
-    `INLINE_BASE_AGENT_MODE.md` and note inline mode in `agents/roster.md`.
+    `agents/_seeds/INLINE_BASE_AGENT_MODE.template.md` to
+    `.claude/agents/INLINE_BASE_AGENT_MODE.md` and note inline mode in `agents/roster.md`.
+    Never copy a seed INTO `.claude/agents/` unfilled — the runtime registers it
+    as a live agent type (`scripts/validate-team.sh` check `registry-seeds`).
     One of the two MUST exist as real files before any dispatch. Fill the
     roster's wrapper column with the paths you actually created — never with
     paths that do not exist.

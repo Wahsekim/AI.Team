@@ -181,6 +181,45 @@ test('R-10: concurrent SessionStart hooks spawn at most one loop (start lock)', 
   })
 })
 
+test('R02-FIX-1: start lock is held until the spawned loop has exec\'d (no second loop from a pre-exec PID)', async () => {
+  await withHome(async home => {
+    const hb = join(home, '.claude', 'heartbeats')
+    // A FIFO stdout log blocks the spawned child in its pre-exec redirection,
+    // where its argv is still start-watchdog.sh's: a racing start must not read
+    // that PID as stale and spawn a second loop.
+    const fifo = join(home, '.claude', 'watchdog.stdout.log')
+    await exec('mkfifo', [fifo])
+    const first = runHook('start-watchdog.sh', home, '{"session_id":"s15"}')
+    let reader
+    try {
+      const deadline = Date.now() + 5000
+      while (!(await readFile(join(hb, 's15.watchdog-pid'), 'utf8').catch(() => '')).trim()) {
+        assert.ok(Date.now() < deadline, 'first start never wrote its PID file within 5s')
+        await new Promise(r => setTimeout(r, 10))
+      }
+      // stdio ignored: an unfixed second start's own child would block on the
+      // FIFO holding inherited pipes open; wait for the hook's exit, not close.
+      const second = spawn('bash', [join(DIR, 'start-watchdog.sh')], {
+        env: { ...process.env, HOME: home }, stdio: ['pipe', 'ignore', 'ignore'],
+      })
+      second.stdin.end('{"session_id":"s15"}')
+      assert.equal(await new Promise(r => second.on('exit', r)), 0)
+      reader = spawn('cat', [fifo], { stdio: ['ignore', 'ignore', 'ignore'] })
+      assert.equal((await first).code, 0)
+      const { stdout } = await exec('sh', ['-c', 'ps ax -o command= | grep "watchdog-loop.sh s15$" | grep -v grep | wc -l'])
+      assert.equal(parseInt(stdout.trim(), 10), 1, `expected exactly one loop, got ${stdout.trim()}`)
+    } finally {
+      // Always open the FIFO so a still-blocked child can exec and the first
+      // hook can close; only then stop the loop(s) and drop the reader.
+      reader ??= spawn('cat', [fifo], { stdio: ['ignore', 'ignore', 'ignore'] })
+      await first
+      await runHook('stop-watchdog.sh', home, '{"session_id":"s15"}')
+      await exec('sh', ['-c', 'pkill -f "watchdog-loop.sh s15$" || true'])
+      reader.kill('SIGKILL')
+    }
+  })
+})
+
 test('R-10: stop clears alert-state markers so no orphan loop lingers', async () => {
   await withHome(async home => {
     const hb = join(home, '.claude', 'heartbeats')

@@ -52,3 +52,33 @@ allow-list a new warning without explicit owner ack.
 
 Always recursive: `find <path> -name '<pattern>'` (or `ls -R`) - a bare
 `ls <dir>` misses nested files and produces false flags.
+
+## Oracle falsifiability (review 2026-09-25, F-03)
+
+For every CRITICAL integration gate (device/hardware smoke, protocol
+round-trip, release build) the verifier answers, in the report, "what would
+make this oracle fail?" — and the answer must name the specific operation under
+test, not adjacent traffic:
+
+- arm a FRESH transaction window AFTER the handshake/ready state, send the
+  explicit request, correlate ITS response (never search the whole received
+  buffer for a token the connection handshake also emits);
+- run a NEGATIVE CONTROL once per suite: suppress the send/reply under test and
+  confirm the test FAILS; a test that cannot fail is not evidence;
+- release resources on the timeout/disconnect paths (`finally`);
+- record the oracle identity with the evidence: test file path + content hash
+  (`sha256sum <test file>`), so a green command is bound to the assertion that
+  produced it.
+
+A green command alone is insufficient when the oracle is weak; the PM treats a
+gate without a falsifiability line as N/A-with-reason, never as PASS.
+
+## Landing / git index discipline (review 2026-09-25, I-10, recommendation 12)
+
+Before ANY commit that names paths (`git commit <pathspec>`), run
+`git diff --cached --stat`: if the index holds unrelated staged changes, commit
+them separately (or unstage them) FIRST — a pathspec commit silently drops
+index-only intent for the paths it does not name. Do not blanket-ban pathspec
+commits; inspect staged intent and preserve unrelated work. Report the landing
+as `delivery: {status, ref}` (engine worker contract): a denied commit is
+`status: failed` with the exact denial text, never a note under a green tick.

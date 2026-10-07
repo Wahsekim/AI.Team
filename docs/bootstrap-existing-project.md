@@ -54,7 +54,7 @@ Create or update:
 - one role file per ACTIVE role at `agents/<role_id>.md`
 - **the dispatch path (BLOCKING):** one `.claude/agents/<project>-<role>.md`
   wrapper for each ACTIVE roster row (only active rows get wrappers —
-  `docs/staffing.md`) from `role-wrapper.template.md` (model/reasoning
+  `docs/staffing.md`) from `agents/_seeds/role-wrapper.template.md` (model/reasoning
   copied from the roster) — OR, only if the runtime cannot install wrappers,
   `INLINE_BASE_AGENT_MODE.md` from its template, noted in the roster. Fill the
   roster wrapper column with paths that actually exist
