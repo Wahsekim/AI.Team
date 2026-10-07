@@ -28,6 +28,7 @@ node scripts/team-run.mjs status .team-loop demo-1
 node scripts/team-run.mjs events .team-loop demo-1
 node scripts/team-run.mjs audit .team-loop demo-1
 node scripts/team-run.mjs show .team-loop demo-1      # readable text summary (not JSON)
+node scripts/team-run.mjs inspect .team-loop demo-1   # read-only known/unknown report (JSON)
 node scripts/team-run.mjs fixture "${TMPDIR:-/tmp}/team-fixture-1" fixture-1 # NEW directory outside any Git repo
 node scripts/team-run.mjs show "${TMPDIR:-/tmp}/team-fixture-1" fixture-1
 node scripts/team-run.mjs audit "${TMPDIR:-/tmp}/team-fixture-1" fixture-1
@@ -368,6 +369,37 @@ independent clones are different targets by construction. Running legacy
 (owner decision, ADR 0001; limitation until R19). Behavior change awaiting
 owner approval: `fixture` refuses a state directory inside a Git checkout
 (previously documented as `.team-fixture` under the repository root).
+
+### Read-only inspection (R05a, 2026-10-07)
+
+`status`, `events`, `audit`, `show` and the new `inspect` open the control store
+with `openStoreReadOnly` (node:sqlite `readOnly: true`): no DDL, chmod, metadata
+insert, journal-mode change or format upgrade, and no `executions` table. A
+missing store (or state directory) is `STORE_MISSING`, exit 2, and nothing is
+created; an empty, foreign, corrupt or unreadable file is `STORE_UNREADABLE`,
+exit 2, untouched. `stop` keeps the writing path but opens an existing store
+only (`openStore(file, {create: false})`, a `?mode=rw` URI), so it no longer
+creates `loop.sqlite` (R04a review F7) or initializes an empty file. `fixture`
+and `demo` still create. `inspect <dir> <run>` prints one JSON reply: run
+status, version and replay check; each dispatch with its state, an `effect`
+label (`unknown` when claimed without an accepted receipt, since inspection
+cannot tell running from exited), its saved PID labelled `pidAuthority: false`,
+receipt presence from `fixture.sqlite` or `evidence.sqlite` (read-only; an absent
+journal is reported as unknown, not as no receipt) and the reducer's settle
+preconditions; each projection's outbox status, disposition
+(pending/kept/dropped/acknowledged) and published file; the execution marker;
+the R04 stop view; usage as known, partial (unresolved dispatches excluded) or
+unknown, never 0 for unknown; and `recoverySteps` naming the R05b actions
+(ingest receipt, abandon, close marker) as suggestions with `automatic: false`.
+`show` appends the same essentials. Lock-file rule: inspection never opens
+`execution-owner.sqlite`, only `lstat`s it. A read-only SQLite read of it gets
+BUSY while an owner holds it, and when no one holds it the read's shared lock
+makes a concurrent acquire fail `EXECUTION_OWNER_ACTIVE` (R05a probe L2). So
+the store/target bindings and the lock state are reported as not read. Inside a
+holder's own process, only `execution-owner.mjs` may open that path (ADR 0002
+P3). Limitation: a hot rollback journal left by a crashed writer cannot be
+rolled back by a read-only open (errcode 776, probe H1); inspection reports `STORE_UNREADABLE` until a
+writer opens the store. Not in scope: ingest, abandon and marker close (R05b).
 
 ## Task display contract (schemaVersion 2)
 

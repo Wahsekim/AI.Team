@@ -81,8 +81,24 @@ export function stopView(state) {
     observerFailed: failed ? { cause: failed.cause, at: failed.at } : null };
 }
 
+// R05a: the essentials of inspectRun; facts and suggestions only, no action.
+function unresolvedLines(inspection, line) {
+  const { unresolved, dispatches, marker, usage, recoverySteps } = inspection;
+  const open = dispatches.filter(d => unresolved.dispatches.includes(d.id));
+  const spend = ['tokens', 'costMicroUsd'].filter(k => usage[k].status !== 'known').map(k => line(`usage ${k} ${usage[k].status}`));
+  if (!open.length && !unresolved.projection && !unresolved.recoveryRequired && !unresolved.markerOpen) return [line('unresolved effects: none'), ...spend];
+  const receipt = r => r.durable ? 'durable receipt' : r.present === null ? 'receipt unknown' : r.present ? 'receipt not durable' : 'no receipt';
+  return [line('unresolved effects:'),
+    ...open.map(d => line(`${d.id} ${d.stage} ${d.status}`, receipt(d.receipt), d.savedPid?.value != null ? `saved pid ${d.savedPid.value} (no authority)` : '')),
+    ...(unresolved.projection ? [line(`${unresolved.projection} projection not acknowledged`)] : []),
+    ...(unresolved.recoveryRequired ? [line('run RECOVERY_REQUIRED')] : []),
+    ...(marker.open ? [line(`execution marker open · owner ${marker.ownerId}`)] : []),
+    ...spend,
+    line(`suggested (R05b, not automatic): ${recoverySteps.map(s => s.action).join(' · ') || 'none'}`)];
+}
+
 // Read-only text projection of store.status(runId). Never touches the store.
-export function renderRunSummary(status, { width = 80 } = {}) {
+export function renderRunSummary(status, { width = 80, inspection = null } = {}) {
   const w = Math.max(40, width);
   // Sanitize per part, then join on two spaces: sanitizeDisplay would collapse the column gap.
   const line = (...parts) => cps(parts.map(p => sanitizeDisplay(p, w)).filter(Boolean).join('  ')).slice(0, w).join('');
@@ -104,5 +120,6 @@ export function renderRunSummary(status, { width = 80 } = {}) {
     lines.push(line(display ? `${display.workKind} · ${display.layers.join('/') || '-'}` : 'unspecified · -', `role ${task.roleId}`, `attempts ${t.attempts}/${task.maxAttempts}`));
     lines.push(line(task.requiredGateIds.map(g => `gate ${g}: ${t.gates[g] === state.candidate ? 'passed' : 'pending'}`).join(' · ') || 'no gates'));
   }
+  if (inspection) lines.push(...unresolvedLines(inspection, line));
   return `${lines.join('\n')}\n`;
 }
