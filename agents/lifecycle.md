@@ -32,7 +32,7 @@ Rotation: slim-active + archive — the standing rule in
 
 ## Counter
 
-Next NNN to assign: **021**
+Next NNN to assign: **023**
 
 ## Counter and header rules
 
@@ -550,15 +550,63 @@ at rotation time.
 - Reasoning: max (prompt-level)
 - Estimated tokens: 250000
 - Sub-decision count: 0 (rules fixed by ADR 0004 and the PM decision)
+- Status: completed
+- Completed: 2026-10-07T14:32:46Z
+- Tokens: 255667 (cumulative; attempt 1 223423 + attempt 2 32244)
+- Variance: +2%
+- PM overhead: ~20000 tok (est)
+- Outcome: commit 16ea22f — driver polls readStopRequest per step and every pollMs (default 250 ms, 1-2000) while a step runs; hard stop cancels via adapter handle / gate SIGTERM->SIGKILL then appends owner-fenced stop-observed{seq}; stop-only STALE_STATE re-read/re-prepared (max 2); observer failure -> stop-observer-failed, no new work; pending projection: graceful keeps (keptByStop, outbox ACKNOWLEDGED), hard -> RECOVERY_REQUIRED (outbox DROPPED); status 'stop' view; O1-O10 green x3 (~14 s), red-then-green O1/O7/O8; 479 tests Node 24
+- Progress: yes
+- Handoffs:
+    - reviewer [021] needs 16ea22f + docs/rollout-evidence/R04b/
+    - PM: deferred docs wording (loop-graph.md 'R04b decision pending') in the acceptance docs commit if still present
+- Retry-of: none
+- Diverged-from: none
+- Round-trip: 1 (resumed for [021] F1/F2/F4/F5 + docs -> second commit ca09d36; last attempt)
+- Notes: INLINE FALLBACK (see [001]). Only committing agent; CI on the R04a head runs concurrently. Checkpoint-1 allowance applies.
+- Acceptance update: 2026-10-07T14:44:09Z review OK on safety; P2 status-state tests -> attempt 2 via resume (last attempt)
+- Acceptance update: 2026-10-07T14:56:58Z OK locally (reviewed by [021] attempt-2 confirmation), BLOCKED-on-CI; pushed 16ea22f+ca09d36
+- Acceptance update: 2026-10-07T15:00:08Z OK (CI run 37641008156 green on ca09d36)
+
+## [021] Independent Reviewer (loop-rollout-reviewer) - 2026-10-07T14:32:46Z
+- Ticket: R04b
+- Spawned by: PM (Claude Fable 5.1 main session)
+- Brief: Review 16ea22f against the R04 card OK/KO lines and ADR 0004 rules — observation bound, cancel-once, no dispatch after observation, STALE_STATE re-preparation only for stop-only deltas, observer-failure semantics, O6 boundary vs R02 durability boundaries, pending-projection rule, status/show truthfulness (never 'completed stop' while work continues), mutations, suites; writes docs/rollout-evidence/R04b/review.md only.
+- Model: opus (owner directive "opus 5 max")
+- Reasoning: max (prompt-level)
+- Estimated tokens: 160000
+- Sub-decision count: 0
+- Status: completed
+- Completed: 2026-10-07T14:44:09Z
+- Tokens: 165273 (cumulative; review 149651 + attempt-2 confirmation 15622)
+- Variance: +3%
+- PM overhead: ~10000 tok (est)
+- Outcome: no P1; cancelled work never accepted, no dispatch after observation, cancel-once acceptable, no saved-PID authority, O6 window safe, STALE_STATE rule reads events, pending-projection conforms; 479/478/0/1 Node 24, 479/356/0/123 Node 22; mutations a-f,h caught, display mutations g/g2/g3 survive -> P2 F1 status-state tests; P3 F2-F8; recommends OK locally, BLOCKED-on-CI
+- Progress: yes
+- Handoffs:
+    - implementer [020] attempt 2: F1 tests, F5 narrowing, F2/F4 if small, docs F3/F6/F7/F8
+- Retry-of: none
+- Diverged-from: none
+- Round-trip: 1 (resumed to confirm ca09d36; recommends OK locally, BLOCKED-on-CI; P3 A2-1/A2-2 test gaps)
+- Notes: INLINE FALLBACK (see [001]). Push of 16ea22f held until review closes.
+
+## [022] Implementer (loop-rollout-implementer) - 2026-10-07T14:56:58Z
+- Ticket: R05a
+- Spawned by: PM (Claude Fable 5.1 main session)
+- Brief: R05a — read-only inspection (plan R05 split a, ADR 0001 decision 7; assessment X5/X8): a read-only store open (node:sqlite readOnly) that never creates, chmods or runs DDL; missing database -> clear error, no file; status/events/audit/show use it; new `inspect` command listing exactly what is known/unknown (STARTED/UNKNOWN dispatches with saved PID flagged non-authoritative, pending/dropped projections, open execution marker, stop record/observed state, usage known/unknown); tolerant of a missing executions table and legacy events; works while another process holds the execution lock. No ingest/abandon/close (R05b). One commit, no push.
+- Model: opus (owner directive "opus 5 max")
+- Reasoning: max (prompt-level)
+- Estimated tokens: 200000
+- Sub-decision count: 0
 - Status: spawned
 - Completed:
 - Tokens:
 - Variance:
-- PM overhead: ~20000 tok (est)
+- PM overhead: ~15000 tok (est)
 - Outcome:
 - Progress:
 - Handoffs:
 - Retry-of: none
 - Diverged-from: none
 - Round-trip: none
-- Notes: INLINE FALLBACK (see [001]). Only committing agent; CI on the R04a head runs concurrently. Checkpoint-1 allowance applies.
+- Notes: INLINE FALLBACK (see [001]). Only committing agent; CI on the R04b head runs concurrently.

@@ -89,3 +89,11 @@ the engine's `results[]` (per `docs/engine.md`), under a dated batch line.
 2026-10-07 R04b -> Implementer, est 250000 tok, brief: agents/lifecycle.md#[020], why: second half of R04 (Q7 split); R04a contract + PM pending-projection rule fixed
 2026-10-07 NOTE: docs/loop-graph.md:278 still reads "(R04b decision pending)" across a line break; fix deferred to the R04b docs commit to avoid concurrent edits of the same file. [019] final: actual 158113 tok cumulative (var +5%).
 2026-10-07 R04a ACCEPTED: OK (CI run 37634701791 all green on 551133b). G0 progress: R01, R02, R02b, R03a, R03b, R04a, FLAKE-1, PROC-1 OK; R04b in progress; R05a, R05b pending. Follow-up cards queued: STOP-2, STOP-3, PROC-2.
+2026-10-07 CI on ledger commit: run=7f13bc6 conclusion=success (runs/37634961493).
+2026-10-07 R04b closed-impl: actual 223423 tok (var -11%), outcome: 16ea22f driver stop observation + cancellation + pending-projection rule + observer-failure reporting; review pending, lifecycle: [020]
+2026-10-07 R04b -> Independent Reviewer, est 160000 tok, brief: agents/lifecycle.md#[021], why: handoff §2; driver/reducer change on the cancellation path
+2026-10-07 NOTE: the deferred loop-graph.md wording ('R04b decision pending') was removed by the R04b docs rewrite in 16ea22f; no PM edit needed.
+            -> [021] closed: actual 149651 tok (var -6%), outcome: R04b review OK on safety, P2 status-state tests -> attempt 2; PM decision: post-observer-failure hard stop not cancelling the running effect = documented limitation (revisit R12/R14), lifecycle: [021]
+2026-10-07 R04b ACCEPTANCE: OK locally, BLOCKED-on-CI (16ea22f + ca09d36; review [021] confirms). Pushing. Follow-up: R04b-P3 (two test gaps).
+2026-10-07 R05a -> Implementer, est 200000 tok, brief: agents/lifecycle.md#[022], why: next G0 card (R05 split approved Q7); X5 inspection-mutates-state must close before recovery commands
+2026-10-07 R04b ACCEPTED: OK (CI run 37641008156 all green on ca09d36). R04 complete. G0 progress: R01, R02, R02b, R03a, R03b, R04a, R04b, FLAKE-1, PROC-1 OK; R05a in progress; R05b pending; then G0 exit review. Follow-ups queued: STOP-2, STOP-3, PROC-2, R04b-P3.
