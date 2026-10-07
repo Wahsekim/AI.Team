@@ -6,6 +6,7 @@ ADRs are numbered and append-only. Use `0000-template.md` for new decisions.
 |---|---|---|---|
 | 0000 | YYYY-MM-DD | template | ADR template |
 | 0001 | 2026-10-06 | Accepted | Loop/Graph rollout execution decisions |
+| 0003 | 2026-10-07 | Accepted for implementation (owner approved the behavior change; ratification pending) | Product-target isolation (R03b) |
 
 ## When To Write An ADR
 

@@ -39,7 +39,7 @@ node --test tests/*.test.mjs
 any Git repository, because a host targeting that repository could otherwise
 write into this directory's clone and lock files. Inside a checkout, `fixture`
 exits 4 (`TARGET_NOT_ISOLATED`) before creating anything. This is a behavior
-change awaiting owner approval.
+change approved by the owner on 2026-10-07.
 
 Use a new run ID for each demo. Reusing one is a conflict, not a reset.
 stdout contains one JSON reply; diagnostics/runtime warnings may use stderr.

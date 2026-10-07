@@ -1,7 +1,7 @@
 # ADR 0003: Execution binds only the host-created product clone (R03b)
 
 Date: 2026-10-07
-Status: Accepted for implementation (policy: owner, ADR 0001 decision 5); owner ratification pending
+Status: Accepted for implementation (PM sign-off; owner approved the state-directory behavior change 2026-10-07T13:32:25Z); ADR ratification by the owner pending
 
 ## Context
 
@@ -32,7 +32,7 @@ Status: Accepted for implementation (policy: owner, ADR 0001 decision 5); owner 
 - Path aliases resolve to one identity; independent clones are different targets by construction.
 - Worktrees and shared metadata are refused until a separate policy exists.
 - Host death with an unresolved child: the R03a marker stays open; no takeover.
-- A state directory inside a Git work tree (e.g. under a project checkout) is refused; use a directory outside any repository. The fixture CLI checks this before creating anything. Behavior change awaiting owner approval.
+- A state directory inside a Git work tree (e.g. under a project checkout) is refused; use a directory outside any repository. The fixture CLI checks this before creating anything. Behavior change approved by the owner on 2026-10-07.
 - Limitations: legacy `run-n-rounds` on the clone is not detected (owner decision, until R19). Same-UID code can still replace files; replacement is detected (`TARGET_MISMATCH`), not prevented. A state directory that another actor turns into a repository mid-execution is refused only at its next acquire. A `target_binding` lives in the lock file, so deleting that file resets it (ADR 0002 limit). `snapshots.mjs` keeps JS `realpathSync` on both sides of its root check; it is not an exclusion identity.
 - Library callers that drive a product must pass `target` (compatibility break, tests updated).
 
