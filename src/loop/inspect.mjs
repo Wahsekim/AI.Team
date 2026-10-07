@@ -15,7 +15,7 @@ const RECOVERY_REASONS = new Set(['cleanup_unknown', 'cancel_error', 'orphaned_p
 const failure = error => `${error.code ?? 'ERROR'}${error.errcode ? ` (errcode ${error.errcode})` : ''}: ${error.message}`;
 
 // Journals beside the store: absent, unreadable or the selected rows; opened read-only, never created.
-async function readJournal(path, queries, runId) {
+export async function readJournal(path, queries, runId) {
   const none = Object.fromEntries(Object.keys(queries).map(k => [k, []]));
   try { lstatSync(path); } catch (error) { return error.code === 'ENOENT' ? { state: 'absent', ...none } : { state: 'unreadable', error: failure(error), ...none }; }
   const { DatabaseSync } = await import('node:sqlite');
@@ -119,7 +119,7 @@ function recoverySteps(state, dispatches, markerView) {
   // A receipt that may exist must be read before abandon (run-wide) could discard it (R05a review F2).
   const unknown = claimed.filter(d => d.receipt.present === null), blocked = claimed.filter(d => d.receipt.present !== null);
   if (unknown.length) steps.push({ action: 'receipt-unknown', dispatchIds: unknown.map(d => d.id), availableIn: 'R05b', automatic: false,
-    requires: 'read the receipt source (R05b snapshot read) before any abandon; a durable receipt may exist' });
+    requires: 'read the receipt source before any abandon (a hot journal: recover-journal --all); a durable receipt may exist' });
   else if (state.status === 'RECOVERY_REQUIRED' || blocked.length) steps.push({ action: 'abandon', dispatchIds: blocked.map(d => d.id), availableIn: 'R05b', automatic: false,
     requires: 'operator attestation that the processes exited; the host does not verify it', runStatusRequired: 'RECOVERY_REQUIRED', runStatusNow: state.status,
     effect: 'usage becomes unknown; attempts are kept' });
@@ -159,6 +159,7 @@ export async function inspectRun({ store, directory, runId }) {
     usage: usage(state, unresolved),
     journals: { fixture: fixture.state, evidence: archive.state, ...(fixture.error ? { fixtureError: fixture.error } : {}), ...(archive.error ? { evidenceError: archive.error } : {}) },
     recoverySteps: recoverySteps(state, dispatches, markerView),
+    operatorAudit: store.operatorAudit(),
     note: 'recoverySteps are suggestions only; inspection performs no action',
   };
 }

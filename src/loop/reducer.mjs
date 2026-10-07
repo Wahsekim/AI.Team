@@ -173,8 +173,18 @@ export function reduce(spec, before, action, payload, now) {
     for (const d of pending(s)) if (d.status === 'STARTED') d.status = 'UNKNOWN';
     s.status = 'RECOVERY_REQUIRED';
   } else if (action === 'abandon') {
-    fields(payload, ['confirmedProcessesExited'], 'Recovery');
-    expect(s.status === 'RECOVERY_REQUIRED' && payload.confirmedProcessesExited === true, 'Recovery requires operator confirmation');
+    // R05b (ADR 0005): an operator confirmation token and note, recorded as such; nothing verifies a process exit.
+    // The pre-R05b boolean shape still replays and stays accepted for library callers.
+    if (Object.hasOwn(payload, 'confirmedProcessesExited')) {
+      fields(payload, ['confirmedProcessesExited'], 'Recovery'); expect(payload.confirmedProcessesExited === true, 'Recovery requires operator confirmation');
+    } else {
+      fields(payload, ['operatorConfirmation', 'note'], 'Recovery');
+      expect(payload.operatorConfirmation === spec.runId, 'Operator confirmation must repeat the run id', 'INVALID_SPEC');
+      expect(typeof payload.note === 'string' && payload.note.trim() && payload.note.length <= 500 && !/[\x00-\x1F\x7F]/.test(payload.note),
+        'Operator note: 1-500 characters without control characters required', 'INVALID_SPEC');
+    }
+    expect(s.status === 'RECOVERY_REQUIRED', 'Recovery requires a run in RECOVERY_REQUIRED');
+    if (!Object.hasOwn(payload, 'confirmedProcessesExited')) s.abandonment = { by: 'operator', operatorConfirmation: payload.operatorConfirmation, note: payload.note, at: now };
     for (const d of pending(s)) { d.status = 'ACKNOWLEDGED'; d.receipt = { result: 'cancelled', tokens: null, costMicroUsd: null }; }
     // Unknown spend is preserved as unknown. Recovery only closes, never retries or resets counters.
     s.usage.tokens = null; s.usage.costMicroUsd = null; s.projection = null; stop(s, 'recovery_abandoned');

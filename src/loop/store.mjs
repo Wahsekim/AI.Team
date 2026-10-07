@@ -1,8 +1,9 @@
-import { chmodSync, lstatSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { canonical, digest, LoopError, requireThat, validateCommand } from './contracts.mjs';
 import { validateBundle } from './artifacts.mjs';
 import { initialState, reduce, replayLegacyStop, stopEscalates, TERMINAL, validateStopRequest } from './reducer.mjs';
+import { copyForRollback, SNAPSHOT_SOURCE, SQLITE_READONLY_ROLLBACK } from './hot-journal.mjs';
 
 const FENCED = new Set(['tick', 'claim']);
 // R04b: only the active driver (its owner fence) acknowledges or reports on stop observation.
@@ -25,13 +26,21 @@ const EXECUTIONS = `CREATE TABLE IF NOT EXISTS executions(seq INTEGER PRIMARY KE
     BEGIN SELECT RAISE(ABORT, 'execution rows only close once'); END;
   CREATE TRIGGER IF NOT EXISTS executions_append_only BEFORE DELETE ON executions
     BEGIN SELECT RAISE(ABORT, 'execution history is append-only'); END;`;
+// R05b (ADR 0005): operator actions outside any run's event chain; created lazily, append-only.
+const OPERATOR_AUDIT = `CREATE TABLE IF NOT EXISTS operator_audit(seq INTEGER PRIMARY KEY, at INTEGER NOT NULL,
+    action TEXT NOT NULL CHECK(action IN ('recover-journal','close-execution-marker')), detail TEXT NOT NULL,
+    note TEXT NOT NULL CHECK(length(trim(note))>0));
+  CREATE TRIGGER IF NOT EXISTS operator_audit_no_update BEFORE UPDATE ON operator_audit
+    BEGIN SELECT RAISE(ABORT, 'operator audit is append-only'); END;
+  CREATE TRIGGER IF NOT EXISTS operator_audit_no_delete BEFORE DELETE ON operator_audit
+    BEGIN SELECT RAISE(ABORT, 'operator audit is append-only'); END;`;
 
 async function loadSqlite() {
   requireThat(Number(process.versions.node.split('.')[0]) >= 24, 'CAPABILITY_MISSING', 'Goal supervisor requires Node 24+; legacy engine still supports Node 22');
   return (await import('node:sqlite')).DatabaseSync;
 }
 const unreadable = error => error instanceof LoopError ? error
-  : new LoopError('STORE_UNREADABLE', `Control store unreadable (errcode ${error.errcode ?? error.code ?? 'unknown'}): ${error.message}`);
+  : Object.assign(new LoopError('STORE_UNREADABLE', `Control store unreadable (errcode ${error.errcode ?? error.code ?? 'unknown'}): ${error.message}`), { errcode: error.errcode });
 // Inspection and stop never create a control store (R05a).
 function requireExisting(filename) {
   try { lstatSync(filename); }
@@ -46,7 +55,8 @@ function requireSchema(db) {
 
 // SELECT-only views shared by the writing store and the read-only inspection store.
 function reader(db, filename) {
-  const hasExecutions = () => !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='executions'").get();
+  const hasTable = name => !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name);
+  const hasExecutions = () => hasTable('executions');
   const row = runId => {
     const value = db.prepare('SELECT * FROM runs WHERE id=?').get(runId);
     requireThat(value, 'UNKNOWN_REFERENCE', `Unknown run ${runId}`); return value;
@@ -64,6 +74,8 @@ function reader(db, filename) {
       return value.stop === null ? null : JSON.parse(value.stop);
     },
     executions() { return hasExecutions() ? db.prepare('SELECT * FROM executions ORDER BY seq').all().map(e => ({ ...e })) : []; },
+    operatorAudit() { return hasTable('operator_audit') ? db.prepare('SELECT * FROM operator_audit ORDER BY seq').all().map(e => ({ ...e, detail: JSON.parse(e.detail) })) : []; },
+    runIds() { return db.prepare('SELECT id FROM runs ORDER BY id').all().map(r => r.id); },
     effects(runId) { row(runId); return db.prepare('SELECT id,kind,payload,status FROM outbox WHERE run_id=? ORDER BY rowid').all(runId).map(e => ({ ...e, payload: JSON.parse(e.payload) })); },
     events(runId, after = -1, limit = 100) {
       row(runId); requireThat(Number.isSafeInteger(after) && after >= -1 && Number.isSafeInteger(limit) && limit > 0 && limit <= 1000, 'INVALID_SPEC', 'Invalid event cursor/limit');
@@ -90,7 +102,8 @@ function reader(db, filename) {
 }
 
 // R05a: no DDL, chmod, metadata insert, journal-mode change or upgrade; a missing file is never created.
-export async function openStoreReadOnly(filename) {
+// R05b `snapshot`: a hot journal (776) is rolled back on a private copy; the originals are never opened writable.
+export async function openStoreReadOnly(filename, { snapshot = false } = {}) {
   const DatabaseSync = await loadSqlite();
   requireExisting(filename);
   let db;
@@ -98,9 +111,26 @@ export async function openStoreReadOnly(filename) {
     db = new DatabaseSync(filename, { readOnly: true });
     db.exec('PRAGMA busy_timeout=3000');
     requireLoopStore(db); requireSchema(db);
-  } catch (error) { db?.close(); throw unreadable(error); }
+  } catch (error) {
+    db?.close();
+    if (snapshot && error.errcode === SQLITE_READONLY_ROLLBACK) return openSnapshot(DatabaseSync, filename);
+    throw unreadable(error);
+  }
   const { row, openMarker, ...views } = reader(db, filename);
   return Object.freeze(views);
+}
+
+function openSnapshot(DatabaseSync, filename) {
+  const copy = copyForRollback(filename);
+  let db;
+  try {
+    db = new DatabaseSync(copy.file);
+    db.exec('PRAGMA busy_timeout=0');
+    requireLoopStore(db); requireSchema(db);
+    requireThat(!existsSync(`${copy.file}-journal`), 'STORE_UNREADABLE', 'Snapshot copy was not rolled back');
+  } catch (error) { db?.close(); copy.remove(); throw unreadable(error); }
+  const { row, openMarker, close, ...views } = reader(db, filename);
+  return Object.freeze({ ...views, source: SNAPSHOT_SOURCE, close() { try { close(); } finally { copy.remove(); } } });
 }
 
 // `create: false` (stop): an existing store only; `?mode=rw` makes creation impossible even after the check.
@@ -209,6 +239,13 @@ export async function openStore(filename, { create = true } = {}) {
         db.prepare(`INSERT INTO executions(owner_id,open,state_path,state_dev,state_ino,lock_ino,pid,hostname,opened_at)
           VALUES (?,1,?,?,?,?,?,?,?)`).run(e.ownerId, e.statePath, e.stateDev, e.stateIno, e.lockIno, e.pid, e.hostname, e.now);
         return { ownerId: e.ownerId };
+      });
+    },
+    appendOperatorAudit({ action, detail, note, now }) {
+      return transaction(() => {
+        db.exec(OPERATOR_AUDIT);
+        const { lastInsertRowid } = db.prepare('INSERT INTO operator_audit(at,action,detail,note) VALUES (?,?,?,?)').run(now, action, canonical(detail), note);
+        return { seq: Number(lastInsertRowid) };
       });
     },
     closeExecution({ ownerId, kind, note = null, now }) {

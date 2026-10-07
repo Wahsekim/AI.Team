@@ -409,6 +409,39 @@ presence unknown, and `inspect` suggests `receipt-unknown` (read the receipt
 source first), never `abandon`, for those dispatches. R05b adds a snapshot read
 for this case. Not in scope: ingest, abandon and marker close (R05b).
 
+### Recovery commands (R05b, 2026-10-07, ADR 0005)
+
+Four explicit operator commands, none automatic (`src/loop/recovery.mjs`).
+`ingest-receipt <dir> <run> <dispatch>` settles a STARTED/UNKNOWN dispatch only
+from a receipt already durable in `fixture.sqlite` or `evidence.sqlite`, read
+read-only: digest and dispatch expectations must match (`RECEIPT_MISMATCH`),
+the run and the bound product clone must still be at the dispatch candidate
+(`STALE_RECEIPT`), a cleanup-unknown transcript is refused (`EFFECT_UNKNOWN`);
+an unreadable source is `RECEIPT_SOURCE_UNKNOWN`, no receipt `RECEIPT_MISSING`;
+each refusal leaves the store unchanged. Build usage comes from the receipt and
+stays unknown (`null`) when the receipt has none; host-local gates record 0
+(no provider). A repeat returns `alreadySettled` and records nothing. If the
+run was not yet RECOVERY_REQUIRED, `interrupted` is recorded first, so the run
+stays RECOVERY_REQUIRED after ingest. `abandon <dir> <run> --note <text>
+--confirm <run>` uses the reducer's `abandon` with `{operatorConfirmation,
+note}` (state `abandonment`, labelled operator confirmation; the host never
+verifies a process exit). It refuses while any claimed dispatch's receipt
+source is unknown, keeps attempts and agent calls, makes tokens and cost
+unknown, and leaves the cancelled dispatch unclaimable. Both commands hold the
+kernel lock for their duration without a marker row or binding write
+(`withExclusiveLock`): a live owner gives `EXECUTION_OWNER_ACTIVE` (exit 4;
+`stop` it first). `close-execution-marker <dir> --owner <id> --note <text>`
+wraps `closeOrphanedExecution` and appends to `operator_audit`.
+`recover-journal <dir> --note <text> [--all]` refuses while the lock is held,
+opens `loop.sqlite` (and with `--all` the fixture and evidence journals)
+writable once only if its journal is hot, verifies every run's chain and
+appends sizes before/after to `operator_audit`, an append-only table outside
+the run event chains. Write commands refuse a hot `loop.sqlite` (`HOT_JOURNAL`)
+instead of rolling it back implicitly. `status`, `events`, `audit`, `show` and
+`inspect` read a hot store through a private copy that SQLite rolls back,
+labelled `snapshot: uncommitted transaction pending rollback; store untouched`;
+the originals are only read and the copy is deleted. Exit codes unchanged.
+
 ## Task display contract (schemaVersion 2)
 
 Review 2026-09-25 (F-06): operators could not tell what a task was about

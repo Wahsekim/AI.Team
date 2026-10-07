@@ -79,7 +79,17 @@ export function probeExclusive(lockPath) {
   return { exclusive: child.status === 0 && errcode === SQLITE_BUSY, errcode, status: child.status, signal: child.signal };
 }
 
-async function lockKernel({ path: stateDirectory, stat: directoryStat, store }, target = null) {
+// R05b (ADR 0005): verifies an existing store binding and reads the target binding; never creates either.
+function readBindings(db, store) {
+  const has = name => !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name);
+  const bound = has('store_binding') ? db.prepare('SELECT store_name, store_dev, store_ino FROM store_binding WHERE id=1').get() : null;
+  if (bound && (bound.store_name !== store.name || bound.store_dev !== store.dev || bound.store_ino !== store.ino))
+    throw new LoopError('STORE_MISMATCH', `State directory is bound to control store ${bound.store_name} (dev ${bound.store_dev}, ino ${bound.store_ino})`);
+  const target = has('target_binding') ? db.prepare('SELECT * FROM target_binding WHERE id=1').get() : null;
+  return target ? { ...target } : null;
+}
+
+async function lockKernel({ path: stateDirectory, stat: directoryStat, store }, target = null, { bind = true } = {}) {
   requireCapability();
   const { DatabaseSync } = await import('node:sqlite');
   const lockPath = join(stateDirectory, LOCK_FILE);
@@ -92,14 +102,28 @@ async function lockKernel({ path: stateDirectory, stat: directoryStat, store }, 
     throw missing(`Execution lock unavailable (errcode ${error.errcode ?? error.code ?? 'unknown'})`);
   }
   const unlock = () => { try { db.exec('ROLLBACK'); } catch { /* close drops the lock */ } db.close(); };
+  let targetBinding = null;
   try {
-    try { bindStore(db, store); if (target) bindTarget(db, target); db.exec('COMMIT; BEGIN EXCLUSIVE'); }
+    try {
+      if (bind) { bindStore(db, store); if (target) bindTarget(db, target); } else targetBinding = readBindings(db, store);
+      db.exec('COMMIT; BEGIN EXCLUSIVE');
+    }
     catch (error) { if (BINDING_ERRORS.has(error.code)) throw error; throw missing(`Store binding unavailable (errcode ${error.errcode ?? error.code ?? 'unknown'})`); }
     const lockStat = checkLockFile(lockPath, directoryStat, { mustExist: true });
     const probe = probeExclusive(lockPath);
     if (!probe.exclusive) throw missing(`Execution lock is not exclusive across processes (probe errcode ${probe.errcode}, status ${probe.status})`);
-    return { lockPath, lockStat, unlock };
+    return { lockPath, lockStat, unlock, targetBinding };
   } catch (error) { unlock(); throw error; }
+}
+
+// R05b (ADR 0005): excludes a live owner for one recovery command without a marker row or a binding write.
+// `store` needs only its file name; `fn` runs while the kernel lock is held.
+export async function withExclusiveLock({ store }, fn) {
+  requireCapability();
+  const state = stateIdentity(store);
+  const lock = await lockKernel(state, null, { bind: false });
+  try { return await fn({ statePath: state.path, targetBinding: lock.targetBinding }); }
+  finally { lock.unlock(); }
 }
 
 // `target`: the host-created product clone (ADR 0003); omit only for hosts without product effects (demo).
