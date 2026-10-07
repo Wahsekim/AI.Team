@@ -426,16 +426,20 @@ stays RECOVERY_REQUIRED after ingest. `abandon <dir> <run> --note <text>
 --confirm <run>` uses the reducer's `abandon` with `{operatorConfirmation,
 note}` (state `abandonment`, labelled operator confirmation; the host never
 verifies a process exit). It refuses while any claimed dispatch's receipt
-source is unknown, keeps attempts and agent calls, makes tokens and cost
+source is unknown or a durable receipt would pass the ingest checks
+(`RECEIPT_INGESTIBLE`); durable receipts refused for good are listed in the
+result and the event as `receiptsNotIngested`. It keeps attempts and agent calls, makes tokens and cost
 unknown, and leaves the cancelled dispatch unclaimable. Both commands hold the
 kernel lock for their duration without a marker row or binding write
-(`withExclusiveLock`): a live owner gives `EXECUTION_OWNER_ACTIVE` (exit 4;
+(`withExclusiveLock`): a live owner, or an open marker whose lock file or
+directory identity no longer matches, gives `EXECUTION_OWNER_ACTIVE` (exit 4;
 `stop` it first). `close-execution-marker <dir> --owner <id> --note <text>`
 wraps `closeOrphanedExecution` and appends to `operator_audit`.
 `recover-journal <dir> --note <text> [--all]` refuses while the lock is held,
 opens `loop.sqlite` (and with `--all` the fixture and evidence journals)
 writable once only if its journal is hot, verifies every run's chain and
-appends sizes before/after to `operator_audit`, an append-only table outside
+appends sizes before/after to `operator_audit` (exit 2 `CHAIN_UNVERIFIED` if a
+chain fails, audit kept), an append-only table outside
 the run event chains. Write commands refuse a hot `loop.sqlite` (`HOT_JOURNAL`)
 instead of rolling it back implicitly. `status`, `events`, `audit`, `show` and
 `inspect` read a hot store through a private copy that SQLite rolls back,

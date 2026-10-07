@@ -13,6 +13,8 @@ import { openStore, openStoreReadOnly } from './store.mjs';
 
 // R05b (ADR 0005): explicit operator recovery. Never spawns, resumes, signals a saved PID or deletes a row.
 const RECOVERY_REASONS = new Set(['cleanup_unknown', 'cancel_error', 'orphaned_process_group']);
+// Ingest refusals that make a durable receipt non-ingestible for good; abandon may then proceed and names them.
+const FINAL_REFUSALS = new Set(['RECEIPT_MISMATCH', 'STALE_RECEIPT', 'EFFECT_UNKNOWN']);
 const JOURNALS = ['fixture.sqlite', 'evidence.sqlite'];
 const storeFile = directory => join(resolve(directory), 'loop.sqlite');
 const parse = text => { try { return JSON.parse(text); } catch { return null; } };
@@ -39,7 +41,13 @@ async function withRecoveryStore(directory, fn) {
   return withExclusiveLock({ store: { filename } }, async lock => {
     await requireNoHotJournal(filename);
     const store = await openStore(filename, { create: false });
-    try { return await fn(store, lock); } finally { store.close(); }
+    try {
+      // Attempt 2 (review F2): as closeOrphanedExecution, a replaced lock file or directory proves nothing about the marker's owner.
+      const open = store.executions().find(e => e.open === 1);
+      requireThat(!open || open.lock_ino === lock.lockIno && open.state_dev === lock.stateDev && open.state_ino === lock.stateIno,
+        'EXECUTION_OWNER_ACTIVE', 'Lock file or state directory changed since the open execution started; its owner may still be alive');
+      return await fn(store, lock);
+    } finally { store.close(); }
   });
 }
 
@@ -100,7 +108,7 @@ async function gateReceipt({ directory, runId, d, spec, artifacts }) {
     && e.taskId === (d.taskId ?? 'run-final') && e.gateRef.digest === gate.specDigest && e.candidateSnapshotRef.digest === d.candidate,
   'RECEIPT_MISMATCH', 'Archived evidence does not match the scheduled gate dispatch');
   // A host-local gate has no provider usage: its reservation is zero and its producer is host-local-gate (ADR 0005).
-  return { action: 'settle-evidence', usageSource: 'host-local gate: no provider usage',
+  return { action: 'settle-evidence', usageSource: 'host-local gate: no provider usage (known zero)',
     payload: { dispatchId: d.id, result: e.result, candidate: d.candidate, tokens: 0, costMicroUsd: 0, evidenceRef: reference },
     current(state, lock) {
       requireThat(!body.scopeAttestation.recoveryRequired && body.scopeAttestation.unchanged, 'EFFECT_UNKNOWN', 'Gate evidence reports a scope change or unverified cleanup; not ingestible');
@@ -140,10 +148,24 @@ export async function ingestReceipt({ directory, runId, dispatchId, now = Date.n
   });
 }
 
+// Attempt 2 (review F1): a durable receipt that ingest would accept must be ingested before abandon.
+async function refuseIngestible(store, lock, directory, runId, durable) {
+  const { state } = store.status(runId), { spec, artifacts } = store.bundle(runId), refused = [];
+  for (const view of durable) {
+    const d = state.dispatches[view.id];
+    try {
+      const receipt = await (d.stage === 'build' ? buildReceipt : gateReceipt)({ directory: resolve(directory), runId, d, spec, artifacts });
+      receipt.current(state, lock);
+    } catch (error) { if (!FINAL_REFUSALS.has(error.code)) throw error; refused.push({ dispatchId: d.id, refusal: error.code }); continue; }
+    throw new LoopError('RECEIPT_INGESTIBLE', `Durable receipt for ${d.id} is ingestible; run ingest-receipt ${runId} ${d.id} first`);
+  }
+  return refused;
+}
+
 export async function abandonRun({ directory, runId, note, confirm, now = Date.now }) {
   id(runId); requireNote(note);
   requireThat(confirm === runId, 'INVALID_SPEC', 'Confirmation must repeat the run id (--confirm <runId>)');
-  return withRecoveryStore(directory, async store => {
+  return withRecoveryStore(directory, async (store, lock) => {
     store.verify(runId);
     const view = await inspectRun({ store, directory: resolve(directory), runId });
     requireThat(!TERMINAL.has(view.status), 'RUN_TERMINAL', 'Run is terminal');
@@ -152,10 +174,12 @@ export async function abandonRun({ directory, runId, note, confirm, now = Date.n
     const unknown = claimed.filter(d => d.receipt.present === null).map(d => d.id);
     requireThat(!unknown.length, 'RECEIPT_SOURCE_UNKNOWN', `Receipt source unknown for ${unknown.join(', ')}; make it readable (recover-journal --all) or ingest first`);
     requireThat(view.status === 'RECOVERY_REQUIRED' || claimed.length, 'INVALID_TRANSITION', `Run is ${view.status} with no unresolved dispatch; nothing to abandon`);
+    const notIngested = await refuseIngestible(store, lock, directory, runId, claimed.filter(d => d.receipt.durable));
     const interruptedFirst = markInterrupted(store, runId, now);
-    const reply = store.apply('abandon', command(store, runId, { operatorConfirmation: confirm, note }), now()), after = store.status(runId).state;
+    const payload = { operatorConfirmation: confirm, note, ...(notIngested.length ? { receiptsNotIngested: notIngested } : {}) };
+    const reply = store.apply('abandon', command(store, runId, payload), now()), after = store.status(runId).state;
     return { abandoned: true, confirmation: 'operator confirmation', processExit: 'not verified by the host', interruptedFirst,
-      dispatches: claimed.map(d => d.id), durableReceiptsNotIngested: claimed.filter(d => d.receipt.durable).map(d => d.id),
+      dispatches: claimed.map(d => d.id), durableReceiptsNotIngested: notIngested,
       status: after.status, reason: after.reason, usage: after.usage, stateVersion: reply.stateVersion,
       attempts: Object.fromEntries(Object.entries(after.tasks).map(([k, t]) => [k, t.attempts])) };
   });
@@ -170,10 +194,9 @@ export async function closeExecutionMarker({ directory, ownerId, note, now = Dat
   const store = await openStore(filename, { create: false });
   try {
     const open = store.executions().find(e => e.open === 1 && e.owner_id === ownerId) ?? null;
-    const result = await closeOrphanedExecution({ store, ownerId, note, now });
-    const audit = store.appendOperatorAudit({ action: 'close-execution-marker', note, now: now(),
-      detail: { ownerId, pid: open?.pid ?? null, pidAuthority: false, openedAt: open?.opened_at ?? null } });
-    return { ...result, ownerId, closeKind: 'operator', auditSeq: audit.seq, runStateChanged: false, processExit: 'not verified by the host' };
+    const result = await closeOrphanedExecution({ store, ownerId, note, now,
+      audit: { action: 'close-execution-marker', detail: { ownerId, pid: open?.pid ?? null, pidAuthority: false, openedAt: open?.opened_at ?? null } } });
+    return { ...result, ownerId, closeKind: 'operator', runStateChanged: false, processExit: 'not verified by the host' };
   } finally { store.close(); }
 }
 
@@ -190,6 +213,9 @@ export async function recoverJournals({ directory, all = false, note, now = Date
         try { return { runId, ...store.verify(runId) }; } catch (error) { return { runId, ok: false, code: error.code ?? 'ERROR' }; }
       });
       const at = now(), audit = store.appendOperatorAudit({ action: 'recover-journal', detail: { files, chains }, note, now: at });
+      // Review F7: the rollback and its audit row stand; an unverified chain is still a failure.
+      const failed = chains.filter(c => !c.ok).map(c => `${c.runId} (${c.code})`);
+      requireThat(!failed.length, 'CHAIN_UNVERIFIED', `Journal recovery audited as #${audit.seq}, but event chains failed to verify: ${failed.join(', ')}`);
       return { files, chains, at, auditSeq: audit.seq, effect: 'rollback discards only an uncommitted transaction; committed history is unchanged' };
     } finally { store.close(); }
   });

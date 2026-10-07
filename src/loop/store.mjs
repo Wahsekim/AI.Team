@@ -248,7 +248,7 @@ export async function openStore(filename, { create = true } = {}) {
         return { seq: Number(lastInsertRowid) };
       });
     },
-    closeExecution({ ownerId, kind, note = null, now }) {
+    closeExecution({ ownerId, kind, note = null, audit = null, now }) {
       return transaction(() => {
         const marker = openMarker();
         if (kind === 'graceful') {
@@ -256,7 +256,10 @@ export async function openStore(filename, { create = true } = {}) {
           if (db.prepare('SELECT state FROM runs').all().some(r => unresolved(JSON.parse(r.state)))) return { closed: false };
         } else requireThat(kind === 'operator' && marker?.owner_id === ownerId, 'UNKNOWN_REFERENCE', 'No open execution with this owner_id');
         db.prepare('UPDATE executions SET open=0, closed_at=?, close_kind=?, close_note=? WHERE owner_id=? AND open=1').run(now, kind, note, ownerId);
-        return { closed: true };
+        if (!audit) return { closed: true };
+        db.exec(OPERATOR_AUDIT);
+        const { lastInsertRowid } = db.prepare('INSERT INTO operator_audit(at,action,detail,note) VALUES (?,?,?,?)').run(now, audit.action, canonical(audit.detail), note);
+        return { closed: true, auditSeq: Number(lastInsertRowid) };
       });
     },
   };

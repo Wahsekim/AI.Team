@@ -178,13 +178,21 @@ export function reduce(spec, before, action, payload, now) {
     if (Object.hasOwn(payload, 'confirmedProcessesExited')) {
       fields(payload, ['confirmedProcessesExited'], 'Recovery'); expect(payload.confirmedProcessesExited === true, 'Recovery requires operator confirmation');
     } else {
-      fields(payload, ['operatorConfirmation', 'note'], 'Recovery');
+      // R05b attempt 2: durable receipts the host refused to ingest are named in the event (codes only).
+      fields(payload, Object.hasOwn(payload, 'receiptsNotIngested') ? ['operatorConfirmation', 'note', 'receiptsNotIngested'] : ['operatorConfirmation', 'note'], 'Recovery');
+      expect(!Object.hasOwn(payload, 'receiptsNotIngested') || Array.isArray(payload.receiptsNotIngested) && payload.receiptsNotIngested.length > 0
+        && payload.receiptsNotIngested.length <= 64, 'Invalid receipt refusal list', 'INVALID_SPEC');
+      for (const r of payload.receiptsNotIngested ?? []) {
+        fields(r, ['dispatchId', 'refusal'], 'Receipt not ingested');
+        expect(Object.hasOwn(s.dispatches, r.dispatchId) && ['RECEIPT_MISMATCH', 'STALE_RECEIPT', 'EFFECT_UNKNOWN'].includes(r.refusal), 'Invalid receipt refusal', 'INVALID_SPEC');
+      }
       expect(payload.operatorConfirmation === spec.runId, 'Operator confirmation must repeat the run id', 'INVALID_SPEC');
       expect(typeof payload.note === 'string' && payload.note.trim() && payload.note.length <= 500 && !/[\x00-\x1F\x7F]/.test(payload.note),
         'Operator note: 1-500 characters without control characters required', 'INVALID_SPEC');
     }
     expect(s.status === 'RECOVERY_REQUIRED', 'Recovery requires a run in RECOVERY_REQUIRED');
-    if (!Object.hasOwn(payload, 'confirmedProcessesExited')) s.abandonment = { by: 'operator', operatorConfirmation: payload.operatorConfirmation, note: payload.note, at: now };
+    if (!Object.hasOwn(payload, 'confirmedProcessesExited')) s.abandonment = { by: 'operator', operatorConfirmation: payload.operatorConfirmation, note: payload.note, at: now,
+      ...(payload.receiptsNotIngested ? { receiptsNotIngested: structuredClone(payload.receiptsNotIngested) } : {}) };
     for (const d of pending(s)) { d.status = 'ACKNOWLEDGED'; d.receipt = { result: 'cancelled', tokens: null, costMicroUsd: null }; }
     // Unknown spend is preserved as unknown. Recovery only closes, never retries or resets counters.
     s.usage.tokens = null; s.usage.costMicroUsd = null; s.projection = null; stop(s, 'recovery_abandoned');

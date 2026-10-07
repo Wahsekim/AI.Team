@@ -122,7 +122,7 @@ export async function withExclusiveLock({ store }, fn) {
   requireCapability();
   const state = stateIdentity(store);
   const lock = await lockKernel(state, null, { bind: false });
-  try { return await fn({ statePath: state.path, targetBinding: lock.targetBinding }); }
+  try { return await fn({ statePath: state.path, stateDev: String(state.stat.dev), stateIno: String(state.stat.ino), lockIno: String(lock.lockStat.ino), targetBinding: lock.targetBinding }); }
   finally { lock.unlock(); }
 }
 
@@ -173,7 +173,8 @@ export async function acquireExecutionOwner({ store, target, now = Date.now }) {
 
 // Library-only operator transition (c). Taking the kernel lock proves the recorded owner no longer holds it,
 // but only for the same lock file and directory: after a replacement (P6) the close is refused.
-export async function closeOrphanedExecution({ store, ownerId, note, now = Date.now }) {
+// `audit` (R05b): an operator_audit row written in the same transaction as the close.
+export async function closeOrphanedExecution({ store, ownerId, note, audit = null, now = Date.now }) {
   requireCapability();
   requireThat(typeof ownerId === 'string' && ownerId.length > 0, 'INVALID_SPEC', 'Exact open owner_id required');
   requireThat(typeof note === 'string' && note.trim().length > 0, 'INVALID_SPEC', 'Non-empty operator note required');
@@ -183,7 +184,7 @@ export async function closeOrphanedExecution({ store, ownerId, note, now = Date.
     const row = store.executions().find(e => e.open === 1 && e.owner_id === ownerId);
     requireThat(!row || row.lock_ino === String(lock.lockStat.ino) && row.state_dev === String(state.stat.dev) && row.state_ino === String(state.stat.ino),
       'EXECUTION_OWNER_ACTIVE', 'Lock file or state directory changed since this execution opened; its owner may still be alive');
-    return store.closeExecution({ ownerId, kind: 'operator', note, now: now() });
+    return store.closeExecution({ ownerId, kind: 'operator', note, audit, now: now() });
   }
   finally { lock.unlock(); }
 }

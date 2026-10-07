@@ -286,9 +286,11 @@ test('V5: gate evidence missing or unreadable refuses ingest; abandon waits unti
 test('V5b: durable gate evidence is ingested through the archive, once', sqlite, async t => {
   const k = await killedHost(t, 'gate-receipt-before-settle');
   const value = ok(run(['ingest-receipt', k.directory, 'run', 'd-2']), 'ingest');
-  assert.equal(value.result, 'pass'); assert.equal(value.usage.source, 'host-local gate: no provider usage');
+  assert.equal(value.result, 'pass');
+  assert.deepEqual(value.usage, { tokens: 0, costMicroUsd: 0, source: 'host-local gate: no provider usage (known zero)' });
   const s = state(k.directory);
-  assert.equal(s.dispatches['d-2'].receipt.result, 'pass'); assert.match(s.dispatches['d-2'].evidenceRef.id, /^evidence-/);
+  assert.equal(s.dispatches['d-2'].receipt.result, 'pass'); assert.equal(s.dispatches['d-2'].receipt.tokens, 0); assert.equal(s.dispatches['d-2'].receipt.costMicroUsd, 0);
+  assert.match(s.dispatches['d-2'].evidenceRef.id, /^evidence-/);
   assert.equal(s.status, 'RECOVERY_REQUIRED');
   const settled = await facts(k.directory);
   assert.equal(ok(run(['ingest-receipt', k.directory, 'run', 'd-2'])).alreadySettled, true);
@@ -404,9 +406,64 @@ test('V8b: abandon is refused while the fixture journal is hot and allowed after
   grows(history, (await facts(k.directory)).history, 'abandon');
 });
 
-test('V9: recovery modules contain no row deletion, PID signal or process spawn', sqlite, () => {
-  for (const name of ['recovery.mjs', 'hot-journal.mjs']) {
-    const source = readFileSync(fileURLToPath(new URL(`../src/loop/${name}`, import.meta.url)), 'utf8');
-    assert.doesNotMatch(source, /\bDELETE\s+FROM\b|\bDROP\s+TABLE\b|\bprocess\.kill\b|child_process|unlinkSync/i, name);
+test('V9: recovery modules and the store contain no row deletion, audit rewrite, PID signal or process spawn', sqlite, () => {
+  const source = name => readFileSync(fileURLToPath(new URL(`../src/loop/${name}`, import.meta.url)), 'utf8');
+  for (const name of ['recovery.mjs', 'hot-journal.mjs', 'store.mjs']) {
+    assert.doesNotMatch(source(name), /\bDELETE\s+FROM\b|\bDROP\s+(TABLE|TRIGGER)\b|\bUPDATE\s+operator_audit\b|\bprocess\.kill\b|child_process|unlinkSync/i, name);
   }
+  // Review F5: the append-only guards themselves stay declared.
+  for (const trigger of ['operator_audit_no_update', 'operator_audit_no_delete', 'executions_append_only']) assert.match(source('store.mjs'), new RegExp(`CREATE TRIGGER IF NOT EXISTS ${trigger}`));
+});
+
+test('E1: abandon is refused while a durable receipt is ingestible, and allowed once it is ingested', sqlite, async t => {
+  const k = await killedHost(t, 'receipt-before-settle');
+  const initial = await facts(k.directory);
+  refused(run(['abandon', k.directory, 'run', '--note', 'E1', '--confirm', 'run']), 2, 'RECEIPT_INGESTIBLE', 'ingestible receipt');
+  assert.deepEqual(await facts(k.directory), initial, 'the refusal changed nothing');
+  ok(run(['ingest-receipt', k.directory, 'run', 'd-1']), 'ingest');
+  const value = ok(run(['abandon', k.directory, 'run', '--note', 'E1 after ingest', '--confirm', 'run']), 'abandon');
+  assert.deepEqual(value.durableReceiptsNotIngested, []);
+  assert.equal(state(k.directory).dispatches['d-1'].receipt.result, 'pass', 'the known result is kept');
+});
+
+test('E3: a durable receipt refused as stale lets abandon proceed and is named in the result and the event', sqlite, async t => {
+  const k = await killedHost(t, 'receipt-before-settle');
+  writeFileSync(join(k.root, 'src/check.cjs'), `${readFileSync(join(k.root, 'src/check.cjs'))}\n// changed after the build`);
+  refused(run(['ingest-receipt', k.directory, 'run', 'd-1']), 2, 'STALE_RECEIPT', 'stale');
+  const value = ok(run(['abandon', k.directory, 'run', '--note', 'E3 stale receipt', '--confirm', 'run']), 'abandon');
+  const listed = [{ dispatchId: 'd-1', refusal: 'STALE_RECEIPT' }];
+  assert.deepEqual(value.durableReceiptsNotIngested, listed);
+  const event = run(['events', k.directory, 'run']).json.value.at(-1);
+  assert.equal(event.action, 'abandon'); assert.deepEqual(event.payload.receiptsNotIngested, listed);
+  assert.deepEqual(state(k.directory).abandonment.receiptsNotIngested, listed);
+  assert.equal(ok(run(['audit', k.directory, 'run'])).ok, true);
+});
+
+test('E4: after the lock file is replaced under a live driver, ingest and abandon are refused and the driver completes', { ...sqlite, timeout: 45000 }, async t => {
+  const directory = scratch(t), bundle = prepare(directory, { scenario: 'pass', delayMs: 0, timeoutMs: 2000 });
+  await createRun(directory, bundle);
+  const host = startChild(t, [ownerHost, 'drive', directory]);
+  await host.next(e => e.paused);
+  const lock = join(directory, LOCK_FILE), held = `${lock}.held`;
+  // The driver keeps its lock on the moved inode; a byte copy takes the path, so the kernel lock alone proves nothing.
+  renameSync(lock, held); writeFileSync(lock, readFileSync(held));
+  const before = await facts(directory);
+  refused(run(['ingest-receipt', directory, 'run', 'd-1']), 4, 'EXECUTION_OWNER_ACTIVE', 'ingest after replacement');
+  refused(run(['abandon', directory, 'run', '--note', 'E4', '--confirm', 'run']), 4, 'EXECUTION_OWNER_ACTIVE', 'abandon after replacement');
+  assert.deepEqual((await facts(directory)).history, before.history, 'no event appended'); assert.deepEqual((await facts(directory)).versions, before.versions);
+  renameSync(held, lock);
+  host.child.stdin.end('go\n');
+  const done = await host.next(e => e.done);
+  assert.equal(done.status, 'COMPLETED'); assert.deepEqual(done.released, { markerClosed: true });
+  assert.equal((await host.exited).code, 0);
+});
+
+test('F7: recover-journal still audits but exits 2 when a run chain fails to verify', sqlite, async t => {
+  const directory = scratch(t), file = join(directory, 'loop.sqlite'), store = await openStore(file);
+  try { const { spec, artifacts } = demoBundle('run'); store.create(spec, artifacts, { simulation: true }); } finally { store.close(); }
+  const { DatabaseSync } = await import('node:sqlite'), raw = new DatabaseSync(file);
+  try { raw.prepare("UPDATE events SET digest='sha256:' || hex(zeroblob(32)) WHERE seq=0").run(); } finally { raw.close(); }
+  refused(run(['recover-journal', directory, '--note', 'F7']), 2, 'CHAIN_UNVERIFIED', 'broken chain');
+  const reader = await openStoreReadOnly(file);
+  try { assert.deepEqual(reader.operatorAudit().map(a => [a.action, a.detail.chains[0].ok]), [['recover-journal', false]]); } finally { reader.close(); }
 });
