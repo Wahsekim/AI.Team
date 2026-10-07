@@ -46,3 +46,7 @@ the engine's `results[]` (per `docs/engine.md`), under a dated batch line.
 2026-10-07 R02-FIX-1 ACCEPTANCE: local OK, BLOCKED-on-CI. Pushing 1038a1c+ec6eefa to codex/loop-graph-mvp for the Linux confirmation.
 2026-10-07 R02-FIX-1 ACCEPTED: OK (CI run 37583184155 all green on ec6eefa). R02 ACCEPTED: OK (same run; new tests pass on ubuntu/macOS). Ledgers committed and pushed per owner Q4.
 2026-10-07 R02b -> Implementer, est 60000 tok, brief: agents/lifecycle.md#[008], why: R02 review P2 F1 (untimed Atomics.wait in existing crash host) — smallest corrective card
+2026-10-07 CI green on ledger commit 7480b0e (run 37583441118). Branch head = PR #1 head = 7480b0e; working tree clean except R02b in progress.
+            -> closed: actual 61881 tok (var +3%), outcome: R02b commit 53296f6, PM direct review OK, pushed, CI pending, lifecycle: [008]
+2026-10-07 R03a -> Implementer (step 1 design record), est 300000 tok total, brief: agents/lifecycle.md#[009], why: next card after R02/R02b OK; assessment requires lock design sign-off before code
+2026-10-07 R02b ACCEPTED: OK (CI run 37583985152 all green on 53296f6). G0 progress: R01 OK, R02 OK, R02b OK; R03a step 1 (design) in progress; R03b, R04a/b, R05a/b pending.

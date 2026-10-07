@@ -32,7 +32,7 @@ Rotation: slim-active + archive — the standing rule in
 
 ## Counter
 
-Next NNN to assign: **009**
+Next NNN to assign: **010**
 
 ## Counter and header rules
 
@@ -260,15 +260,39 @@ at rotation time.
 - Reasoning: max (prompt-level)
 - Estimated tokens: 60000
 - Sub-decision count: 0
+- Status: completed
+- Completed: 2026-10-07T06:52:51Z
+- Tokens: 61881
+- Variance: +3%
+- PM overhead: ~8000 tok (est)
+- Outcome: commit 53296f6 bounds the fixture crash host pause (Atomics.wait 10 s + exit 9) with a red-then-green self-exit test; 424/424 Node 24, 349/75/0 Node 22; no orphans; PM direct review OK; pushed, CI pending
+- Progress: yes
+- Handoffs:
+    - PM: CI confirmation on 53296f6
+- Retry-of: none
+- Diverged-from: none
+- Round-trip: none
+- Notes: INLINE FALLBACK (see [001]). Smallest corrective card per handoff §8; PM reviews the diff directly if <= 30 lines, else dispatches a reviewer.
+- Acceptance: 2026-10-07T06:52:51Z OK locally (PM direct review + reproduction), BLOCKED-on-CI
+- Acceptance update: 2026-10-07T06:55:13Z OK (CI run 37583985152 green on 53296f6)
+
+## [009] Implementer (loop-rollout-implementer) - 2026-10-07T06:52:51Z
+- Ticket: R03a
+- Spawned by: PM (Claude Fable 5.1 main session)
+- Brief: R03a state-directory execution exclusion. Step 1 (stop and report): one-page decision record draft (decisions/0002, uncommitted) + definition of ready — kernel lock on a separate lock file plus durable execution-open marker, no PID/time-based takeover, inspection without the lock, realpathSync.native identity, fail closed where unsupported. Step 2 after PM sign-off: implement + tests (two processes/two stores compete; graceful close; SIGKILL crash; stale metadata; path aliases; surviving child cannot be overlapped), one commit, no push.
+- Model: opus (owner directive "opus 5 max")
+- Reasoning: max (prompt-level)
+- Estimated tokens: 300000
+- Sub-decision count: 1 (lock primitive + marker semantics — decided in step 1, PM signs off)
 - Status: spawned
 - Completed:
 - Tokens:
 - Variance:
-- PM overhead: ~8000 tok (est)
+- PM overhead: ~25000 tok (est)
 - Outcome:
 - Progress:
 - Handoffs:
 - Retry-of: none
 - Diverged-from: none
 - Round-trip: none
-- Notes: INLINE FALLBACK (see [001]). Smallest corrective card per handoff §8; PM reviews the diff directly if <= 30 lines, else dispatches a reviewer.
+- Notes: INLINE FALLBACK (see [001]). Checkpoint-1 allowance: impl <=300k, review <=150k. R03b (product-target exclusion) is a separate later card; owner Q5 policy applies there.
