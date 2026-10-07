@@ -32,7 +32,7 @@ Rotation: slim-active + archive — the standing rule in
 
 ## Counter
 
-Next NNN to assign: **010**
+Next NNN to assign: **013**
 
 ## Counter and header rules
 
@@ -284,15 +284,87 @@ at rotation time.
 - Reasoning: max (prompt-level)
 - Estimated tokens: 300000
 - Sub-decision count: 1 (lock primitive + marker semantics — decided in step 1, PM signs off)
+- Status: completed
+- Completed: 2026-10-07T07:01:49Z
+- Tokens: 143752 (step 1 design only)
+- Variance: -52% vs the 300k whole-card estimate; step 2 reassigned to [010]
+- PM overhead: ~25000 tok (est)
+- Outcome: ADR 0002 drafted (kernel EXCLUSIVE lock on <stateDir>/execution-owner.sqlite + append-only executions marker with partial unique index/triggers; fencing of tick/claim; .native+inode identity; fail-closed matrix incl. cross-process probe); 13-case test matrix; probes P1-P9 on Node 24/25; 5 sign-off questions — PM answered yes to all with conditions
+- Progress: yes
+- Handoffs:
+    - [010] implements step 2 from decisions/0002 + R03a acceptance.md DoR
+    - owner: ratify ADR 0002
+- Retry-of: none
+- Diverged-from: none
+- Round-trip: none
+- Notes: INLINE FALLBACK (see [001]). Checkpoint-1 allowance: impl <=300k, review <=150k. R03b (product-target exclusion) is a separate later card; owner Q5 policy applies there.
+
+## [010] Implementer (loop-rollout-implementer) - 2026-10-07T07:01:49Z
+- Ticket: R03a (step 2 implementation)
+- Spawned by: PM (Claude Fable 5.1 main session)
+- Brief: Implement ADR 0002 (signed off): src/loop/execution-owner.mjs, executions marker + fencing in store.mjs, driver requires owner + assertHeld + SCOPE_DENIED for state dir inside product root, fixture/demo CLI under the owner (exit code 4), R02 reopen() adaptation, tests T1-T13 in priority order, docs/loop-graph.md note; one commit incl. ADR 0002; no push.
+- Model: opus (owner directive "opus 5 max")
+- Reasoning: max (prompt-level)
+- Estimated tokens: 250000
+- Sub-decision count: 0 (all design decisions fixed in ADR 0002)
+- Status: completed
+- Completed: 2026-10-07T07:21:59Z
+- Tokens: 227412 (cumulative; attempt 1 188910 + attempt 2 38502)
+- Variance: -9%
+- PM overhead: ~20000 tok (est)
+- Outcome: commit ace398b implements ADR 0002 in full — T1-T13 green, nothing deferred; 13 files, +735/-54; 439 tests (438 pass, 1 explained skip) Node 24, 350/89/0 Node 22; red-then-green for T1/T5; no orphans; 10 deviations/notes recorded for review
+- Progress: yes
+- Handoffs:
+    - reviewer [011] needs ace398b + docs/rollout-evidence/R03a/
+    - owner: ratify ADR 0002
+- Retry-of: none
+- Diverged-from: [009] - step 2 by a fresh agent on the signed-off ADR instead of resuming a 144k-token context
+- Round-trip: 1 (resumed for review P1 F1 / P2 F2, F3 / P3 F7 -> second commit 8044a0b; last allowed attempt)
+- Notes: INLINE FALLBACK (see [001]). Hard stop at 250k/90 min: deliver the green subset, record the remainder as R03a-2. Card total allowance noted for checkpoint-2: design 144k + impl <=250k.
+- Acceptance update: 2026-10-07T07:38:16Z KO on review (P1 F1 second-store bypass of the marker; P2 F2/F3) -> attempt 2 via resume (last attempt)
+- Acceptance update: 2026-10-07T07:53:31Z OK locally (reviewed by [011] §8), BLOCKED-on-CI; pushed ace398b+8044a0b
+- Acceptance update: 2026-10-07T07:55:48Z OK (CI run 37590174571 green on 8044a0b)
+
+## [011] Independent Reviewer (loop-rollout-reviewer) - 2026-10-07T07:21:00Z
+- Ticket: R03a
+- Spawned by: PM (Claude Fable 5.1 main session)
+- Brief: Independent review of commit ace398b against ADR 0002 and the R03 card — reproduce suites (Node 24/22), new file x3, T1/T5 red-then-green via temporary mutations, orphan check; verify lock/marker/fencing semantics line by line incl. the 10 reported deviations; check inspection/stop never touch the lock; check CLI exit code 4 and docs; writes docs/rollout-evidence/R03a/review.md only.
+- Model: opus (owner directive "opus 5 max")
+- Reasoning: max (prompt-level)
+- Estimated tokens: 150000
+- Sub-decision count: 0
+- Status: completed
+- Completed: 2026-10-07T07:38:16Z
+- Tokens: 198580 (cumulative; review 168474 + attempt-2 confirmation 30106)
+- Variance: +32%
+- PM overhead: ~10000 tok (est)
+- Outcome: all 22 digests OK; suites reproduced (Node 22 run hit pre-existing load flake loop-process.test.mjs:35 once, isolated 3/3 pass); 10 mutations — every plan-KO mutation caught; P1 F1 second control store bypasses post-crash marker; P2 F2 operator close can close a live owner after lock-file replacement; P2 F3 no probe fail-closed test; P3 F4-F7; all 10 deviations accepted (D2 conditional on F2); recommends KO
+- Progress: yes
+- Handoffs:
+    - implementer [010] attempt 2: F1 binding, F2 identity check, F3 test, F7 docs
+    - follow-up candidates: F5 flake card, F6 cleanup ordering
+- Retry-of: none
+- Diverged-from: none
+- Round-trip: 1 (resumed to confirm 8044a0b; F1/F2/F3 confirmed fixed; recommends OK locally, BLOCKED-on-CI)
+- Notes: INLINE FALLBACK (see [001]). Reviewer != implementer. Push held until this review closes.
+
+## [012] Implementer (loop-rollout-implementer) - 2026-10-07T07:53:31Z
+- Ticket: FLAKE-1
+- Spawned by: PM (Claude Fable 5.1 main session)
+- Brief: Corrective card for two pre-existing load-sensitive experimental tests: tests/loop-process.test.mjs:35 (surviving descendants require recovery after timeout) and tests/loop-gates.test.mjs:71 (self-SIGTERM gate classified timeout instead of error when child start exceeds the 1 s default). Make both deterministic without weakening what they assert; reproduce under synthetic load first; one commit, no push, test files only.
+- Model: opus (owner directive "opus 5 max")
+- Reasoning: max (prompt-level)
+- Estimated tokens: 120000
+- Sub-decision count: 0
 - Status: spawned
 - Completed:
 - Tokens:
 - Variance:
-- PM overhead: ~25000 tok (est)
+- PM overhead: ~10000 tok (est)
 - Outcome:
 - Progress:
 - Handoffs:
 - Retry-of: none
 - Diverged-from: none
 - Round-trip: none
-- Notes: INLINE FALLBACK (see [001]). Checkpoint-1 allowance: impl <=300k, review <=150k. R03b (product-target exclusion) is a separate later card; owner Q5 policy applies there.
+- Notes: INLINE FALLBACK (see [001]). Plan §3: a timeout change is not a fix for a failing required test; here the finding is that the tests' timing assumptions are the defect — the record must show the assertion is unchanged and the test no longer depends on scheduler timing.

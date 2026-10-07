@@ -50,3 +50,12 @@ the engine's `results[]` (per `docs/engine.md`), under a dated batch line.
             -> closed: actual 61881 tok (var +3%), outcome: R02b commit 53296f6, PM direct review OK, pushed, CI pending, lifecycle: [008]
 2026-10-07 R03a -> Implementer (step 1 design record), est 300000 tok total, brief: agents/lifecycle.md#[009], why: next card after R02/R02b OK; assessment requires lock design sign-off before code
 2026-10-07 R02b ACCEPTED: OK (CI run 37583985152 all green on 53296f6). G0 progress: R01 OK, R02 OK, R02b OK; R03a step 1 (design) in progress; R03b, R04a/b, R05a/b pending.
+2026-10-07 CI green on ledger commit 12f78ea (run 37584217904). PR #1 head = 12f78ea, every run since the R02-FIX-1 push green.
+            -> closed: actual 143752 tok (step 1), outcome: ADR 0002 drafted; PM signed off Q1-Q5 yes with conditions; step 2 -> [010], lifecycle: [009]
+2026-10-07 R03a step 2 -> Implementer (fresh), est 250000 tok, brief: agents/lifecycle.md#[010], why: implement signed-off ADR 0002; fresh agent cheaper than 144k resume
+2026-10-07 R03a -> Independent Reviewer, est 150000 tok, brief: agents/lifecycle.md#[011], why: handoff §2; store/driver change needs independent reproduction before push
+            -> closed: actual 188910 tok (var -24%), outcome: R03a implemented in ace398b, T1-T13 green, review pending, push held, lifecycle: [010]
+            -> closed: actual 168474 tok (var +12%), outcome: R03a review KO — P1 second-store marker bypass, P2 operator-close identity + probe test; attempt 2 sent to [010], lifecycle: [011]
+2026-10-07 R03a ACCEPTANCE: OK locally, BLOCKED-on-CI (ace398b + 8044a0b; review [011] §8 confirms P1/P2 fixed). Pushed for CI.
+2026-10-07 FLAKE-1 -> Implementer, est 120000 tok, brief: agents/lifecycle.md#[012], why: two load-sensitive experimental tests found during R03a review/verification (plan §3: own fix card)
+2026-10-07 R03a ACCEPTED: OK (CI run 37590174571 all green on 8044a0b). G0 progress: R01, R02, R02b, R03a OK; FLAKE-1 in progress; R03b, R04a/b, R05a/b pending. ADR 0002 awaits owner ratification.
