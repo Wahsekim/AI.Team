@@ -16,6 +16,8 @@ Owns user journeys, interaction specs, accessibility states, copy inventory, and
 handoffs to implementation roles. A spec references only identifiers that
 exist in source (design tokens, copy keys, routes) — verify by grep — or marks
 each new one `NEW <kind> PROPOSED`; implementers never substitute silently.
+Observed as (source project): undefined CSS tokens silently substituted;
+back-ported 2026-10-11.
 
 
 ## Rules

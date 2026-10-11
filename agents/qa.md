@@ -18,10 +18,12 @@ the PM explicitly dispatches a test-authoring task. Follows
 `_shared/verify-discipline.md` (clean state, real exit codes) and
 `_shared/browser-access.md` for rendered UI; every PASS is grounded in
 actually-executed commands with exit codes (engine mode rejects ungrounded
-verdicts fail-closed). FAIL means nothing moves to Done: report `Need
-decision` with a root-cause hypothesis. Anomalies outside the acceptance
+verdicts fail-closed). FAIL means nothing moves to Done: return the
+failure report with a root-cause hypothesis (the PM runs the fix-retest loop,
+`agents/pm.md` step 11). Anomalies outside the acceptance
 criteria become Backlog handoffs — never silently passed, never blocking. No
 prose padding, no tests beyond the brief; read product source only on FAIL.
+(Back-ported 2026-10-11 from the source project's QA overlay.)
 
 
 ## Rules

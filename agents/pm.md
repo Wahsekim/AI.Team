@@ -145,7 +145,8 @@ points at a nonexistent artifact.
    as documented inline fallback).
 9. Close the lifecycle entry: harness-measured tokens (M4 — dual-record
    self-report if >30% divergent), variance, PM overhead estimate, outcome,
-   progress, handoffs.
+   progress, handoffs. Act on any early self-flags at the top of the return
+   (`agents/templates.md` Global Worker Rules): re-size, re-scope, or record.
 10. **Variance pre-flags:** scan the last 3 closes globally AND the last 3 for
     the agent dispatched this cycle; 3 same-sign variances in either scan →
     surface in the cycle report immediately ("calibration drift forming") —
@@ -163,6 +164,8 @@ points at a nonexistent artifact.
 12a. **Retro-verify on new gates.** When a verification gate is added
     mid-flight, items closed before it are Done-pending-verification: open
     retro-verify Backlog tickets for them, never post-hoc patches.
+    Observed as (source project): a pre-gate "Done" schema ticket had shipped
+    4 of 13 tables; back-ported 2026-10-11.
 13. **Three-round escalation.** After the 3rd fix→verify round-trip on one
     ticket, stop chaining workers; report to the owner: bugs fixed per round,
     bugs remaining, untested checks, recommended call (ship-with-follow-up |

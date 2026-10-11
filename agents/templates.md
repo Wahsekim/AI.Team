@@ -21,14 +21,15 @@ reasoning from `agents/roster.md`.
 - Never re-open locked decisions (stack, ADR-ratified choices, other roles'
   lanes); flag a conflict to the PM instead.
 - Read an upstream ADR's full Consequences section, never its summary alone.
-- Self-flag early (first ~2K tokens), one line each, then continue unless the
-  PM course-corrects: `OPTION-C FLAG` (both briefed options have footguns —
+- Decide these early (first ~2K tokens) and put them as the FIRST lines of
+  your return, one line each (the PM reads them at close): `OPTION-C FLAG` (both briefed options have footguns —
   propose C + one-sentence why), `OPTION-CHOICE FLAG` (picking the heavier
   option + estimated burn), `BUDGET FLAG` (brief undersized for its
   investigate/verify scope + your estimate), `UPSTREAM DIVERGENCE` (two input
   artifacts disagree on <field>; proceeding with <pick>). Scope that grows
   mid-task: `SCOPE-EXPANSION FLAG` naming what belongs to which ticket.
 - List every edit beyond the brief in a `Bonus edits:` line.
+  (Rules above back-ported 2026-10-11 from source-project worker overlays.)
 - Report tokens honestly; the harness number is truth (M4).
 - Return changed files, verification run with real exit codes, risks, and handoffs.
 - Report DELIVERY separately from execution (engine `delivery` field, F-01):
@@ -95,6 +96,7 @@ Locked inputs:
 
 Decision space:
 - Cap alternatives at 2 unless the PM explicitly asks for broader research.
+  The cap limits options considered, not analysis depth.
 - Name trade-offs, reversibility, and failure modes.
 
 Output:

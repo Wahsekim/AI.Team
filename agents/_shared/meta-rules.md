@@ -65,7 +65,9 @@ HANDOFF-HYPOTHESIS CHECK: prior <agent> claimed <X>; verifying via <evidence>.
 
 When two evidence sources disagree (DB says X, log says Y), list 2-3
 explanations and rule out environment / wrong-file / wrong-config causes
-before declaring a code bug.
+before declaring a code bug. Observed as (source project): QA
+divergences that were environment or wrong-file state, not code; back-ported
+2026-10-11.
 
 Outgoing handoffs mirror this: state a cause as VERIFIED (with method and
 evidence) or as an UNVERIFIED hypothesis - never assert an unverified cause as

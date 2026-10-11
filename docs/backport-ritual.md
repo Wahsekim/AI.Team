@@ -28,7 +28,9 @@ its own template source; see `docs/owner-contract.md` duty 6).
 2. **Place it** — one home only, per the single-source map
    (`agents/_shared/README.md`): meta-rule family → `_shared/meta-rules.md`;
    sizing/band logic → `agents/pm.md` Rules; brief contract →
-   `agents/templates.md`; staffing trigger → `docs/staffing.md`; runtime
+   `agents/templates.md`; role-scoped standing duty → that role's
+   `## Project Overlay` (never `## Rules`, which holds instance lessons);
+   staffing trigger → `docs/staffing.md`; runtime
    assumption → `docs/harness-assumptions.md`; mechanical check →
    `scripts/validate-team.sh`.
 3. **Stamp provenance** — add the date and source project to the entry (the

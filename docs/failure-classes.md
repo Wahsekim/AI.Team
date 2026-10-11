@@ -122,7 +122,10 @@ exact file/feature, (d) residual risk, honestly stated.
   the fix brief — the downstream agent gets evidence, not narrative.
   Back-ported 2026-10-11: M3 also covers conflicting evidence (enumerate
   2-3 explanations before declaring a code bug) and the `UPSTREAM
-  DIVERGENCE` flag when two input artifacts disagree.
+  DIVERGENCE` flag when two input artifacts disagree; workers read an
+  upstream ADR's full Consequences (never the summary) and never re-open
+  locked decisions; data-role destructive operations confirm the target path
+  and enumerate real schema objects first (`agents/data.md`).
 - **Residual risk:** the confirming probe is itself agent-run; a lazy probe
   can rubber-stamp. The ~2K-vs-30-50K cost asymmetry keeps the control
   positive-value even at partial compliance.
@@ -222,7 +225,8 @@ exact file/feature, (d) residual risk, honestly stated.
   (>14 days on `memory/pm.md` / `agents/lifecycle.md`) so an abandoned state
   surface is flagged before it is trusted. A gate added mid-flight makes
   earlier Done items Done-pending-verification (`agents/pm.md` step 12a;
-  back-ported 2026-10-11).
+  back-ported 2026-10-11). UX specs reference only identifiers verified in
+  source or marked `NEW … PROPOSED` (`agents/ux.md`).
 - **Residual risk:** pre-flight greps are narrow by design; semantic staleness
   (a criterion that changed meaning rather than got fixed) needs the verifier
   or the owner.
@@ -270,7 +274,10 @@ exact file/feature, (d) residual risk, honestly stated.
   tests replay US-02 (`tests/run-n-rounds.test.mjs`, F-01 cases).
 - **Residual risk:** `delivery` is still worker-reported — a lying `landed`
   passes the engine; the PM's `git cat-file -e <ref>` check at reconciliation is
-  the host-side receipt. Host-issued gate receipts (review Slice D) are not
+  the host-side receipt. Back-ported 2026-10-11: workers disclose
+  out-of-brief work in a `Bonus edits:` line, and QA routes anomalies outside
+  the acceptance criteria to Backlog handoffs instead of passing or blocking
+  on them (`agents/qa.md`). Host-issued gate receipts (review Slice D) are not
   implemented yet.
 
 ## Update rule
