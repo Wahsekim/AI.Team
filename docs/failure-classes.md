@@ -272,12 +272,12 @@ exact file/feature, (d) residual risk, honestly stated.
   ref, otherwise the iteration enters `recoveryQueue` and halts the loop under
   `halt-on-failure`; `allPassed` requires every iteration `done`. Regression
   tests replay US-02 (`tests/run-n-rounds.test.mjs`, F-01 cases).
+  Back-ported 2026-10-11: workers disclose out-of-brief work in a `Bonus
+  edits:` line, and QA routes anomalies outside the acceptance criteria to
+  Backlog handoffs instead of passing or blocking on them (`agents/qa.md`).
 - **Residual risk:** `delivery` is still worker-reported — a lying `landed`
   passes the engine; the PM's `git cat-file -e <ref>` check at reconciliation is
-  the host-side receipt. Back-ported 2026-10-11: workers disclose
-  out-of-brief work in a `Bonus edits:` line, and QA routes anomalies outside
-  the acceptance criteria to Backlog handoffs instead of passing or blocking
-  on them (`agents/qa.md`). Host-issued gate receipts (review Slice D) are not
+  the host-side receipt. Host-issued gate receipts (review Slice D) are not
   implemented yet.
 
 ## Update rule

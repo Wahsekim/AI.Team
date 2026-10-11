@@ -29,7 +29,8 @@ reasoning from `agents/roster.md`.
   artifacts disagree on <field>; proceeding with <pick>). Scope that grows
   mid-task: `SCOPE-EXPANSION FLAG` naming what belongs to which ticket.
 - List every edit beyond the brief in a `Bonus edits:` line.
-  (Rules above back-ported 2026-10-11 from source-project worker overlays.)
+  (These five rules, from the registry-URL line down, back-ported 2026-10-11
+  from source-project worker overlays.)
 - Report tokens honestly; the harness number is truth (M4).
 - Return changed files, verification run with real exit codes, risks, and handoffs.
 - Report DELIVERY separately from execution (engine `delivery` field, F-01):
