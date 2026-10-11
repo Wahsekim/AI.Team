@@ -16,7 +16,19 @@ reasoning from `agents/roster.md`.
 - Verify handoff hypotheses before coding against them (M3 — the PM pastes the
   relevant `_shared/meta-rules.md` and `_shared/verify-discipline.md` excerpts
   into the brief; follow them verbatim).
-- If using a new external library/API, consult official docs or registry first.
+- If using a new external library/API, consult official docs or registry first;
+  cite the registry/doc URL in the ADR or return — assertion is not evidence.
+- Never re-open locked decisions (stack, ADR-ratified choices, other roles'
+  lanes); flag a conflict to the PM instead.
+- Read an upstream ADR's full Consequences section, never its summary alone.
+- Self-flag early (first ~2K tokens), one line each, then continue unless the
+  PM course-corrects: `OPTION-C FLAG` (both briefed options have footguns —
+  propose C + one-sentence why), `OPTION-CHOICE FLAG` (picking the heavier
+  option + estimated burn), `BUDGET FLAG` (brief undersized for its
+  investigate/verify scope + your estimate), `UPSTREAM DIVERGENCE` (two input
+  artifacts disagree on <field>; proceeding with <pick>). Scope that grows
+  mid-task: `SCOPE-EXPANSION FLAG` naming what belongs to which ticket.
+- List every edit beyond the brief in a `Bonus edits:` line.
 - Report tokens honestly; the harness number is truth (M4).
 - Return changed files, verification run with real exit codes, risks, and handoffs.
 - Report DELIVERY separately from execution (engine `delivery` field, F-01):

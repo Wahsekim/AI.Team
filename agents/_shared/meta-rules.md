@@ -63,6 +63,10 @@ HANDOFF-HYPOTHESIS CHECK: prior <agent> claimed <X>; verifying via <evidence>.
 {Confirmed: continuing.} OR {Mis-diagnosed: actual <Y>; pivoting; flagging PM.}
 ```
 
+When two evidence sources disagree (DB says X, log says Y), list 2-3
+explanations and rule out environment / wrong-file / wrong-config causes
+before declaring a code bug.
+
 Outgoing handoffs mirror this: state a cause as VERIFIED (with method and
 evidence) or as an UNVERIFIED hypothesis - never assert an unverified cause as
 fact. The cost asymmetry is what makes the rule universal: a confirming probe

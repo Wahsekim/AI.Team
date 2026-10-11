@@ -160,6 +160,9 @@ points at a nonexistent artifact.
 12. **Retry-divergence gate.** Any retry must differ from the failed attempt in
     at least one of: agent, tool, brief content/inputs, approach. Identical
     brief + identical failure mode = owner escalation, not retry.
+12a. **Retro-verify on new gates.** When a verification gate is added
+    mid-flight, items closed before it are Done-pending-verification: open
+    retro-verify Backlog tickets for them, never post-hoc patches.
 13. **Three-round escalation.** After the 3rd fix→verify round-trip on one
     ticket, stop chaining workers; report to the owner: bugs fixed per round,
     bugs remaining, untested checks, recommended call (ship-with-follow-up |
