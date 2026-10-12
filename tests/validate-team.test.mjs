@@ -448,7 +448,7 @@ test('R6-07a: role-wrapper.template.md referenced as an active row wrapper FAILS
   })
 })
 
-// Mirrors the real seed (.claude/agents/INLINE_BASE_AGENT_MODE.template.md):
+// Mirrors the real seed (agents/_seeds/INLINE_BASE_AGENT_MODE.template.md):
 // heading, 'Base Agent' requirement, dispatch assembly rule, >= 200 bytes —
 // a genuine bootstrap copy of the seed must satisfy inline_mode_ok (R6-07d).
 const GENUINE_INLINE =
@@ -715,5 +715,44 @@ test('R7-06: duplicate "Next NNN to assign" counter lines FAIL on deployments', 
     assert.equal(code, 1, out)
     assert.match(out, /lifecycle-counter/)
     assert.match(out, /must appear EXACTLY once/)
+  })
+})
+
+test('F-02 (review 2026-09-25): a seed inside .claude/agents FAILS registry-seeds in deployment mode even when the roster never names it', async () => {
+  const files = {
+    ...COMPLETE_DEPLOYMENT,
+    '.claude/agents/role-wrapper.template.md': '---\nname: "{{PROJECT_AGENT_SLUG}}"\ndescription: "{{USE_WHEN_DESCRIPTION}}"\n---\nSeed body.\n',
+  }
+  await withFixture(files, async root => {
+    const { code, out } = await runValidator(root, '--mode', 'deployment')
+    assert.equal(code, 1, out)
+    assert.match(out, /FAIL - registry-seeds/)
+    assert.match(out, /role-wrapper\.template\.md\(seed-in-registry\)/)
+  })
+})
+
+test('F-02: a live-named wrapper whose frontmatter name is still a placeholder FAILS registry-seeds', async () => {
+  const files = {
+    ...COMPLETE_DEPLOYMENT,
+    '.claude/agents/proj-qa.md': '---\nname: "{{PROJECT_AGENT_SLUG}}"\ndescription: qa\nmodel: sonnet\neffort: high\nmaxTurns: 40\n---\nBody.\n',
+  }
+  await withFixture(files, async root => {
+    const { code, out } = await runValidator(root, '--mode', 'deployment')
+    assert.equal(code, 1, out)
+    assert.match(out, /registry-seeds/)
+    assert.match(out, /proj-qa\.md\(placeholder-agent-name\)/)
+  })
+})
+
+test('F-02: kit mode also FAILS on a seed in the registry; a clean registry PASSES', async () => {
+  await withFixture({ ...FRESH_KIT, '.claude/agents/role-wrapper.template.md': '---\nname: "{{X}}"\n---\n' }, async root => {
+    const { code, out } = await runValidator(root, '--mode', 'kit')
+    assert.equal(code, 1, out)
+    assert.match(out, /FAIL - registry-seeds/)
+  })
+  await withFixture({ ...FRESH_KIT, '.claude/agents/README.md': '# readme\n', 'agents/_seeds/role-wrapper.template.md': '---\nname: "{{X}}"\n---\n' }, async root => {
+    const { code, out } = await runValidator(root, '--mode', 'kit')
+    assert.equal(code, 0, out)
+    assert.match(out, /PASS - registry-seeds/)
   })
 })

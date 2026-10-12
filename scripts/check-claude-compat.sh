@@ -56,10 +56,14 @@ fi
 ALLOWED_KEYS=" name description model effort maxTurns tools disallowedTools permissionMode color background isolation skills mcpServers memory initialPrompt hooks "
 if [ -d "$ROOT/.claude/agents" ]; then
   BAD=""
+  SEEDS=""
   SCANNED=0
   for w in "$ROOT"/.claude/agents/*.md; do
     [ -f "$w" ] || continue
-    case "$w" in *.template.md|*/README.md) continue ;; esac
+    # A seed is NOT exempt (review 2026-09-25, F-02): the runtime registers it
+    # as a live agent type ('{{PROJECT_AGENT_SLUG}}' was observed in the agent
+    # list). Seeds live in agents/_seeds/; only README carries no frontmatter.
+    case "$w" in *.template.md) SEEDS="$SEEDS ${w#"$ROOT"/}"; continue ;; */README.md|*INLINE_BASE_AGENT_MODE.md) continue ;; esac
     SCANNED=$((SCANNED+1))
     # frontmatter = lines between the first two '---' markers; keys = top-level 'key:'
     KEYS=$(awk '/^---$/{n++; next} n==1 && /^[A-Za-z_][A-Za-z0-9_]*:/{sub(/:.*/,""); print} n>=2{exit}' "$w")
@@ -70,10 +74,13 @@ if [ -d "$ROOT/.claude/agents" ]; then
       esac
     done
   done
+  if [ -n "$SEEDS" ]; then
+    fail "registry-seeds" "seed(s) inside the runtime agent registry .claude/agents/ register as LIVE agent types:$SEEDS — move them to agents/_seeds/"
+  fi
   if [ -n "$BAD" ]; then
     fail "wrapper-frontmatter" "unknown/legacy frontmatter key(s) — SILENTLY IGNORED by the runtime, the control is a no-op:$BAD (allowed: $ALLOWED_KEYS)"
   elif [ "$SCANNED" -eq 0 ]; then
-    warn "wrapper-frontmatter" "no active wrappers in $ROOT/.claude/agents to scan (templates/README excluded)"
+    warn "wrapper-frontmatter" "no active wrappers in $ROOT/.claude/agents to scan (README excluded)"
   else
     pass "wrapper-frontmatter" "$SCANNED active wrapper(s): all frontmatter keys on the official allowlist"
   fi

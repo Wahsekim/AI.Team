@@ -30,6 +30,7 @@ exact file/feature, (d) residual risk, honestly stated.
 | FC-8 | Counter drift | `scripts/validate-team.sh` checks 1a-1d (continuity, dupes, second-close, counter cross-check) + atomic counter block | new + existing |
 | FC-9 | Stale-state bookkeeping | Mandatory Brief Line 4 stale-finding pre-flight + validator staleness warning | existing + new |
 | FC-10 | Defect-class recurrence | M6 sentinel (test/grep gate) + staffing expansion trigger (`docs/staffing.md`) | existing + new |
+| FC-11 | Green-tick conflation (execution read as Done) | engine status axes `executionStatus / acceptanceStatus / deliveryStatus` + `deliveryRequired` + worker `delivery` contract (`docs/engine.md`) | new (review 2026-09-25) |
 
 ## FC-1 — Brief undersizing
 
@@ -237,6 +238,30 @@ exact file/feature, (d) residual risk, honestly stated.
 - **Residual risk:** sentinel creation is agent work and can be skipped under
   pressure; defect classes without a cheap test/grep signature resist
   sentinels and stay coaching-dependent.
+
+## FC-11 — Green-tick conflation (execution success read as Done)
+
+- **Abstract:** an agent that produced an artifact reports success even when a
+  REQUIRED landing or acceptance step did not happen (commit denied, gate not
+  run); the harness reads the green execution tick as "ticket done" and no
+  recovery fires. Optimistic self-assessment plus a single success boolean.
+- **Observed as (UHF Locator POC, 2026-09-24, US-02):** worker report said the
+  commit was denied, yet `progress=true, blocked=false` produced
+  `workerStatus=succeeded`, `verificationStatus=not_applicable`,
+  `needsRecovery=false`; attended PM reading caught it.
+- **Detection signal:** a `delivery.status` of `failed`/`not_attempted` on a
+  `deliveryRequired` item; a `landed` ref that `git cat-file -e` cannot find;
+  narrative "could not commit" in an iteration with no queue entry.
+- **Mechanical control:** `run-n-rounds.js` derives three axes per iteration
+  (`executionStatus`, `acceptanceStatus`, `deliveryStatus`) and `done` as their
+  conjunction; `deliveryRequired` items need a worker-reported `landed` WITH a
+  ref, otherwise the iteration enters `recoveryQueue` and halts the loop under
+  `halt-on-failure`; `allPassed` requires every iteration `done`. Regression
+  tests replay US-02 (`tests/run-n-rounds.test.mjs`, F-01 cases).
+- **Residual risk:** `delivery` is still worker-reported — a lying `landed`
+  passes the engine; the PM's `git cat-file -e <ref>` check at reconciliation is
+  the host-side receipt. Host-issued gate receipts (review Slice D) are not
+  implemented yet.
 
 ## Update rule
 

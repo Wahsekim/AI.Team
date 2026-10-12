@@ -97,7 +97,8 @@ It works against either:
 4. **Verify the deployment** at any time:
 
    ```bash
-   scripts/check-claude-compat.sh .            # runtime version + wrapper frontmatter
+   scripts/check-claude-compat.sh .            # runtime version + wrapper frontmatter + no seeds in the registry
+   node scripts/preflight-run.mjs args.json --team-root . --product-root ../<product>   # before EVERY engine launch
    scripts/validate-team.sh --mode deployment . # deployed instance: full artifact matrix
    scripts/validate-team.sh .                   # fresh kit / auto-detect
    node --test tests/*.test.mjs  # engine + validator + watchdog fault-injection suite
@@ -113,6 +114,26 @@ It works against either:
    review, SAFE-MODE when absent) are defined in `docs/owner-contract.md`.
 
 ## The Operating Model
+
+### Experimental goal/graph supervisor (simulation only)
+
+An opt-in **Node 24+** foundation now lives in `src/loop/`. It provides strict
+goal contracts, DAG scheduling, a deterministic reducer, and transactional
+SQLite state/events/outbox storage. It does **not** replace `run-n-rounds`.
+
+```bash
+node scripts/team-run.mjs demo .team-loop demo-1
+node scripts/team-run.mjs status .team-loop demo-1
+node scripts/team-run.mjs audit .team-loop demo-1
+```
+
+This demonstration deliberately fails one mock gate, repairs, and passes a
+final-candidate mock gate. Every response is labelled `simulation: true`;
+`COMPLETED` means the simulation completed, **not that product code was built
+or verified**. No Claude calls, product writes, or legacy ledger writes occur.
+See [implementation status and next steps](docs/loop-graph.md).
+
+### Existing team model
 
 The important extraction from the source project is not the ASP.NET stack. The reusable system
 is the operating model:
@@ -171,8 +192,11 @@ AI.Team/
   memory/                      # PM state and atomic counters
   messages/                    # inter-agent daily dialogue
   scripts/validate-team.sh     # mechanical integrity checker (kit + deployments)
+  scripts/preflight-run.mjs    # static launch preflight + frozen launch-bundle digest
+  scripts/now-utc.sh           # the only sanctioned ledger timestamp source
+  agents/_seeds/               # wrapper + inline-mode SEEDS (never inside .claude/agents/)
   scripts/watchdog/            # copied hang-detection hooks from the source team workspace
-  .claude/agents/              # project-scoped Claude agent wrapper templates
+  .claude/agents/              # LIVE project-scoped Claude agent wrappers only (seeds: agents/_seeds/)
   .claude/workflows/           # run-n-rounds loop engine
 ```
 
