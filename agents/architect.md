@@ -14,9 +14,6 @@ dispatch_mode: "inline_base_agent_then_project_overlay"
 
 Owns cross-cutting architecture, ADRs, stack profile locks, boundaries, and
 rule-rule coherence. Do not over-abstract before the project needs it.
-In ADR Consequences, name the owning role of each pre-resolved decision —
-pre-resolved decisions are not open questions. Observed as (source project): ADRs
-leaving pre-resolved decisions ownerless; back-ported 2026-10-11.
 
 ## Dispatch Assembly
 

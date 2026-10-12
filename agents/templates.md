@@ -16,21 +16,7 @@ reasoning from `agents/roster.md`.
 - Verify handoff hypotheses before coding against them (M3 — the PM pastes the
   relevant `_shared/meta-rules.md` and `_shared/verify-discipline.md` excerpts
   into the brief; follow them verbatim).
-- If using a new external library/API, consult official docs or registry first;
-  cite the registry/doc URL in the ADR or return — assertion is not evidence.
-- Never re-open locked decisions (stack, ADR-ratified choices, other roles'
-  lanes); flag a conflict to the PM instead.
-- Read an upstream ADR's full Consequences section, never its summary alone.
-- Decide these early (first ~2K tokens) and put them as the FIRST lines of
-  your return, one line each (the PM reads them at close): `OPTION-C FLAG` (both briefed options have footguns —
-  propose C + one-sentence why), `OPTION-CHOICE FLAG` (picking the heavier
-  option + estimated burn), `BUDGET FLAG` (brief undersized for its
-  investigate/verify scope + your estimate), `UPSTREAM DIVERGENCE` (two input
-  artifacts disagree on <field>; proceeding with <pick>). Scope that grows
-  mid-task: `SCOPE-EXPANSION FLAG` naming what belongs to which ticket.
-- List every edit beyond the brief in a `Bonus edits:` line.
-  (These five rules, from the registry-URL line down, back-ported 2026-10-11
-  from source-project worker overlays.)
+- If using a new external library/API, consult official docs or registry first.
 - Report tokens honestly; the harness number is truth (M4).
 - Return changed files, verification run with real exit codes, risks, and handoffs.
 - Report DELIVERY separately from execution (engine `delivery` field, F-01):
@@ -97,7 +83,6 @@ Locked inputs:
 
 Decision space:
 - Cap alternatives at 2 unless the PM explicitly asks for broader research.
-  The cap limits options considered, not analysis depth.
 - Name trade-offs, reversibility, and failure modes.
 
 Output:
