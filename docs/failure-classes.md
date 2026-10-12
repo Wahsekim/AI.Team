@@ -47,7 +47,11 @@ exact file/feature, (d) residual risk, honestly stated.
   advice); the charter variance threshold mechanically queues a Coach trigger;
   the engine's `budgetCeilingTokens` formula (`docs/engine.md`) derives loop
   ceilings from tier estimates, bounding the damage of any one misestimate;
-  the per-spawn hard cap (charter table) forces splits at scoping.
+  the per-spawn hard cap (charter table) forces splits at scoping. Worker
+  side: the `BUDGET FLAG` / `OPTION-CHOICE FLAG` / `SCOPE-EXPANSION FLAG`
+  early self-flags (`agents/templates.md` Global Worker Rules; back-ported
+  2026-10-11 from source-project worker overlays) surface a misestimate in
+  the first ~2K tokens instead of at close.
 - **Residual risk:** estimation itself stays judgement; bands are START values
   needing recalibration. The controls bound damage and force feedback — they
   do not make the first estimate right.
@@ -67,7 +71,8 @@ exact file/feature, (d) residual risk, honestly stated.
   actually-executed `commandsRun` at exit 0, so a fabricated dependency cannot
   survive a code-shipping gate (the build is the oracle). Upstream, the WF-13
   primary-source line is a standing brief contract (`agents/templates.md`
-  Global Worker Rules).
+  Global Worker Rules), which requires citing the registry/doc URL
+  (back-ported 2026-10-11: assertion alone is not evidence).
 - **Residual risk:** references that are never executed (docs text, comments,
   advice-only output) bypass the build oracle; the primary-source check itself
   is agent-executed. A runtime web-verification hook would close the gap —
@@ -114,6 +119,12 @@ exact file/feature, (d) residual risk, honestly stated.
   demand the confirmed/mis-diagnosed report in the output. Engine fix-retest
   drain (`docs/engine.md`) pastes the verifier failure report VERBATIM into
   the fix brief — the downstream agent gets evidence, not narrative.
+  Back-ported 2026-10-11: M3 also covers conflicting evidence (enumerate
+  2-3 explanations before declaring a code bug) and the `UPSTREAM
+  DIVERGENCE` flag when two input artifacts disagree; workers read an
+  upstream ADR's full Consequences (never the summary) and never re-open
+  locked decisions; data-role destructive operations confirm the target path
+  and enumerate real schema objects first (`agents/data.md`).
 - **Residual risk:** the confirming probe is itself agent-run; a lazy probe
   can rubber-stamp. The ~2K-vs-30-50K cost asymmetry keeps the control
   positive-value even at partial compliance.
@@ -131,6 +142,9 @@ exact file/feature, (d) residual risk, honestly stated.
   MUST require the file-by-file outcome table `{path, status, rationale}`, and
   the PAIRED QA brief carries `Pre-pass check: no table -> BLOCK as incomplete
   before running anything` — a schema-shaped gate executed by a second agent.
+  Back-ported 2026-10-11: workers disclose out-of-brief work in a `Bonus
+  edits:` line, and QA routes anomalies outside the acceptance criteria to
+  Backlog handoffs instead of passing or blocking on them (`agents/qa.md`).
 - **Residual risk:** table rows can themselves be confabulated; QA
   spot-verifies rows rather than re-executing every one. `validate-team.sh`
   cannot see product sweeps — this control lives entirely in the
@@ -211,7 +225,10 @@ exact file/feature, (d) residual risk, honestly stated.
   criteria and skipping them (conditional-mandatory per `agents/pm.md`
   estimation rules). `validate-team.sh` adds a mtime staleness WARNING
   (>14 days on `memory/pm.md` / `agents/lifecycle.md`) so an abandoned state
-  surface is flagged before it is trusted.
+  surface is flagged before it is trusted. A gate added mid-flight makes
+  earlier Done items Done-pending-verification (`agents/pm.md` step 12a;
+  back-ported 2026-10-11). UX specs reference only identifiers verified in
+  source or marked `NEW … PROPOSED` (`agents/ux.md`).
 - **Residual risk:** pre-flight greps are narrow by design; semantic staleness
   (a criterion that changed meaning rather than got fixed) needs the verifier
   or the owner.
