@@ -18,6 +18,7 @@ Rotation: slim-active + archive — the standing rule in
 - Status: spawned | running | completed | failed | aborted
 - Completed: {{UTC_TIMESTAMP}}
 - Tokens: {{INTEGER}}                     # harness-measured; dual-record self-report >30% divergence (M4)
+- Lessons: {{LNN, ... | none}}            # optional; lessons applied in this dispatch (scripts/lessons-stats.sh counts them)
 - Variance: {{+/-N%}}
 - PM overhead: ~{{INTEGER}} tok (est)
 - Outcome: {{ONE_LINE_RESULT}}

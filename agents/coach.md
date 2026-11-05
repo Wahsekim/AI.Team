@@ -52,8 +52,19 @@ the Coach codifies a lesson she does all three:
    single source — never per-overlay tier tables);
 3. if long rationale is needed, writes a dated file under `agents/archive/`.
 
+**Citation counts (mechanical):** every coaching read starts with
+`bash scripts/lessons-stats.sh .` — it counts `- Lessons:` lines across the
+active lifecycle file and its archives and prints `LNN status cited=N roles=R
+last=[NNN]` plus advisories. Counts live on stdout only, never in the index.
+Thresholds (single source — not restated in `lessons.md`):
+- `candidate` -> `active`: >=2 citations in distinct lifecycle entries;
+- `active` -> `obsolete` candidate: 0 citations across the last 30
+  dispatches (advisory — a lesson younger than the window is not stale);
+- fold proposal: >=5 citations across >=2 roles, OR a family of 3+ lessons
+  with one root cause.
+
 **Consolidation authority:** the Coach owns keeping the index CURATED, not just
-appended. When a lesson family recurs (3+ lessons with one root cause), fold it
+appended. When a fold threshold above fires, fold the family
 into a meta-rule (`_shared/meta-rules.md`) or a single band-table row, and mark
 the index lines `folded` / `superseded`. An append-only lessons file with no
 curator grows unreadable and stops changing behavior — the source project
