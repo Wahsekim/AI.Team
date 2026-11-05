@@ -72,6 +72,12 @@ Compressed one-line entries are valid closes in this mode.
 7. Progress must be observable.
 8. Any halt of a count-directed loop outside the charter halt list triggers a
    chaos-role halt-investigation BEFORE the halt.
+9. `Tokens:` comes from a harness meter, never the worker. When the Agent-tool
+   result gives no figure, measure the transcript:
+   `node scripts/measure-spawn.mjs <session-dir> --agent <agentId>` (the
+   `agentId` is in the Agent-tool result; four token classes, deduplicated).
+   When an engine delta AND a transcript measurement both exist and diverge
+   >30%, dual-record both in `Tokens:` (extends M4, does not replace it).
 
 ## Rotation
 
