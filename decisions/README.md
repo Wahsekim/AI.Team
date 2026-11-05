@@ -10,6 +10,7 @@ ADRs are numbered and append-only. Use `0000-template.md` for new decisions.
 | 0003 | 2026-10-07 | Accepted for implementation (owner approved the behavior change; ratification pending) | Product-target isolation (R03b) |
 | 0004 | 2026-10-07 | Accepted for implementation (PM sign-off; owner ratification pending) | Durable stop record (R04a) |
 | 0005 | 2026-10-07 | Accepted for implementation (PM sign-off; owner ratification pending) | Conservative recovery commands (R05b) |
+| 0006 | 2026-11-05 | Proposed (owner ratification pending) | Pilot operating contract (R06) |
 
 ## When To Write An ADR
 
