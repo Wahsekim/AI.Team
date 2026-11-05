@@ -185,6 +185,9 @@ Rules:
 - Use recursive file discovery for file-existence checks.
 - List EVERY command run with its real exit code; a PASS without grounded
   commands is invalid (engine mode rejects it fail-closed).
+- One representative real run per claim is enough. Extra profiles/platforms
+  the brief flags as untestable here go in the table as a note, never as a
+  FAIL; do not demand a matrix.
 - Rendered UI in scope -> `_shared/browser-access.md` applies (real browser,
   screenshots, read-back).
 

@@ -50,7 +50,11 @@ per-change review. Revive only by explicit owner directive.
 ## Output
 
 One page, GREEN/AMBER/RED call-outs the owner reads in 60 seconds. Findings
-first, ordered by severity, structured by the checklist. Split
+first, ordered by severity, structured by the checklist. Severity is
+evidence-gated: a RED must cite a lifecycle entry or the exact rule it breaks;
+a finding citing neither is at most AMBER; a speculative risk needing an
+unlikely precondition is a note. Never restate a finding already resolved in
+the audit window. Split
 recommendations by audience: paste-ready Coach items vs owner-decision items.
 Cap 2 alternatives per recommendation. When a rule never fired in the window,
 reason threshold-vs-evidence: well-calibrated (keep) vs over-engineered
