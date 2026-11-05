@@ -79,7 +79,10 @@ Compressed one-line entries are valid closes in this mode.
    `agentId` is in the Agent-tool result) and write its `harness_eq` column
    (input + cache-creation tokens — the same scale as the Agent-tool
    `subagent_tokens` figure every band and estimate is calibrated on). Never
-   write `total`: it adds cache reads and runs 10-50x higher.
+   write `total`: it adds cache reads and runs 10-50x higher. `Tokens:` is an
+   effort scale, not spend: it omits output tokens (the priciest class), so
+   writing workers are under-counted relative to reading ones. Cost questions
+   use the script's four-class view with a filled `scripts/lib/model-pricing.json`.
    Measure only after the agent has finished (the script warns otherwise).
    When an engine delta AND a transcript measurement both exist and diverge
    past the M4 threshold, dual-record both in Notes exactly as M4 does for
