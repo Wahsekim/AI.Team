@@ -43,6 +43,8 @@ runtimes/versions: walk this table before bootstrap and record deviations in
 | Hooks | run `scripts/validate-team.sh` manually at wake step 0 and before session close; git policy enforced by rule only | `agents/pm.md` wake step 0 |
 | Per-spawn token measurement | estimates + self-report DUAL-RECORDED with an explicit "unmeasured" flag in lifecycle Notes; variance-based coaching triggers suspended (they would train on fiction) | M4, `agents/lifecycle.md` |
 | Workflow-spawned session continuation | fresh scoped fix spawn inlining the verifier failure report; log `Session: resumed-fresh` | `docs/engine.md` fix-retest drain rule |
+| Runtime agent-registry introspection (no API to list live agent types; hot reload of new wrappers has documented exceptions) | static preflight: `scripts/preflight-run.mjs` proves wrapper files + frontmatter names + no seeds in `.claude/agents/`, and with `--session-started` rejects wrappers modified after the session began; `session.freshness: unknown` is recorded, never assumed fresh; confirm via `/agents` in the live session before the first paid dispatch | `docs/engine.md` preflight; review 2026-09-25 F-02 |
+| Single token meter (engine `budget.spent()` deltas, workflow usage summary and worker self-reports disagree 1.8–2.9x in the pilot; scope/units unspecified) | treat the engine delta as the ONLY in-loop meter (Q5 gate, tier bands, `coaching.observations`); record the workflow aggregate separately as a second meter; never convert one into the other with a ratio; unknown usage blocks any "hard budget assurance" claim | `docs/engine.md` return contract; review 2026-09-25 I-6 / recommendation 3 |
 
 ## Agent stalls — checkpoint-to-disk protocol
 

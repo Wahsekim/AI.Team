@@ -1,4 +1,7 @@
 // Mock runtime harness for Dynamic Workflow scripts (no Claude API calls).
+// Shared by the fault-injection tests (tests/run-n-rounds.test.mjs) and the
+// launch preflight (scripts/preflight-run.mjs), which dry-runs the REAL engine
+// validator with an aborting agent so nothing is dispatched.
 // Reads the real script, wraps its body in an AsyncFunction, and injects
 // mock agent/budget/log/phase globals so the deterministic control flow can
 // be tested with injected failures (docs/engine.md "Keeping the engine honest").

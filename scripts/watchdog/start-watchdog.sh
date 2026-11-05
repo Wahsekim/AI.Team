@@ -91,8 +91,18 @@ if [ -x "$LOOP_SCRIPT" ]; then
     nohup bash "$LOOP_SCRIPT" "$session_id" \
         >> "$HOME/.claude/watchdog.stdout.log" \
         2>> "$HOME/.claude/watchdog.stderr.log" &
-    echo $! > "$PID_FILE"
+    loop_pid=$!
+    echo "$loop_pid" > "$PID_FILE"
     disown
+    # Keep the start lock until the child has exec'd the loop: before exec its
+    # argv is still this hook's, so a racing start would read the PID file as
+    # stale and spawn a second loop. Capped at 100 polls (~6-8s, each forks ps
+    # and sleep) in case exec never happens.
+    tries=0
+    while [ "$tries" -lt 100 ] && kill -0 "$loop_pid" 2>/dev/null && ! pid_is_watchdog "$loop_pid"; do
+        sleep 0.05
+        tries=$((tries + 1))
+    done
 fi
 
 exit 0

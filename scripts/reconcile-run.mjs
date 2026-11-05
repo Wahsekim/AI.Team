@@ -27,8 +27,22 @@ import { dirname, join, resolve } from 'node:path'
 
 const die = msg => { console.error(`FAIL - ${msg}`); process.exit(1) }
 
-const [, , resultPath, rootArg] = process.argv
-if (!resultPath) die('usage: node scripts/reconcile-run.mjs <engine-result.json> [TEAM_ROOT]')
+// --monitoring <attestation.json> (review 2026-09-25, I-18 / recommendation 17):
+// the engine cannot observe Q3 (hardware) or Q4 (owner input); a pre-launch
+// "I will watch" checkbox is not evidence either. The attestation binds an
+// OBSERVER to the run's time interval, a coverage level, and the events seen,
+// and is appended to agents/lifecycle.md as one idempotent line. Without it
+// the ledger stays silent and coverage is UNKNOWN — never "no stop occurred".
+const positional = []
+let monitoringPath = null
+const rawArgv = process.argv.slice(2)
+for (let i = 0; i < rawArgv.length; i++) {
+  if (rawArgv[i] === '--monitoring') monitoringPath = rawArgv[++i] ?? null
+  else if (rawArgv[i].startsWith('--')) die(`unknown flag ${rawArgv[i]}`)
+  else positional.push(rawArgv[i])
+}
+const [resultPath, rootArg] = positional
+if (!resultPath) die('usage: node scripts/reconcile-run.mjs <engine-result.json> [TEAM_ROOT] [--monitoring <attestation.json>]')
 const ROOT = resolve(rootArg || '.')
 
 // Concurrency lock (R-06/F-06): two concurrent reconciles would each read->
@@ -159,6 +173,32 @@ if (!msgHeader.startsWith(msgCanonicalPrefix)) die(`messagesLogBlock header is n
 todo.messagesLogBlock.split('\n').forEach((l, i) => {
   if (i > 0 && l.startsWith('## ')) die(`messagesLogBlock line ${i + 1} starts with '## ' — a second H2 would make the block not replay-recognizable (the idempotency scan stops at the next heading and would call the ledger DIVERGED on re-run); the engine never emits H2 body lines`)
 })
+
+// ---- monitoring attestation: validated BEFORE any write; one single line.
+const ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/
+const noCtrl = s => typeof s === 'string' && !/[\x00-\x1F\x7F]/.test(s)
+let monitoringLine = null
+if (monitoringPath !== null) {
+  if (!monitoringPath) die('--monitoring requires a file path')
+  let m
+  try { m = JSON.parse(await readFile(monitoringPath, 'utf8')) } catch (e) { die(`cannot read/parse monitoring attestation at ${monitoringPath}: ${e.message}`) }
+  if (!m || typeof m !== 'object' || Array.isArray(m)) die('monitoring attestation must be a JSON object')
+  const known = ['runId', 'observer', 'intervalStartUtc', 'intervalEndUtc', 'coverage', 'q3Events', 'q4Events', 'notes']
+  for (const k of Object.keys(m)) if (!known.includes(k)) die(`monitoring attestation: unknown field '${k}'`)
+  if (m.runId !== runId) die(`monitoring attestation is for runId '${m.runId}' but the result is '${runId}'`)
+  if (!noCtrl(m.observer) || m.observer.trim().length === 0 || m.observer.length > 120) die('monitoring attestation: observer must be a non-empty string <= 120 chars without control characters')
+  if (!ISO_UTC.test(m.intervalStartUtc) || !ISO_UTC.test(m.intervalEndUtc)) die("monitoring attestation: intervalStartUtc/intervalEndUtc must be ISO-8601 UTC instants ending in 'Z' (use scripts/now-utc.sh)")
+  if (Date.parse(m.intervalEndUtc) < Date.parse(m.intervalStartUtc)) die('monitoring attestation: intervalEndUtc precedes intervalStartUtc')
+  if (!['attended', 'partial', 'unknown'].includes(m.coverage)) die("monitoring attestation: coverage must be 'attended' | 'partial' | 'unknown'")
+  for (const k of ['q3Events', 'q4Events']) {
+    if (!Array.isArray(m[k]) || m[k].length > 50 || !m[k].every(e => noCtrl(e) && e.trim().length > 0 && e.length <= 200)) die(`monitoring attestation: ${k} must be an array (<= 50) of non-empty strings <= 200 chars without control characters`)
+  }
+  if (m.notes !== undefined && (!noCtrl(m.notes) || m.notes.length > 500)) die('monitoring attestation: notes must be a string <= 500 chars without control characters')
+  const events = [...m.q3Events.map(e => `Q3:${e}`), ...m.q4Events.map(e => `Q4:${e}`)]
+  monitoringLine = `- Monitoring attestation ${runId}: observer=${m.observer.trim()}; interval=${m.intervalStartUtc}/${m.intervalEndUtc}; coverage=${m.coverage}; q3Events=${m.q3Events.length}; q4Events=${m.q4Events.length}`
+    + (events.length ? `; events: ${events.join(' | ')}` : '') + (m.notes ? `; notes: ${m.notes.trim()}` : '')
+  if (/#/.test(monitoringLine)) die("monitoring attestation: '#' is not allowed (it would forge markdown headings in the ledger)")
+}
 
 const NNN = n => String(n).padStart(3, '0')
 const lifecyclePath = join(ROOT, 'agents', 'lifecycle.md')
@@ -305,6 +345,21 @@ if (existingLc) {
     actions.push(`APPLY - lifecycle counter ${NNN(current)} -> ${NNN(target)}`)
   }
 }
+// ---- monitoring attestation line (idempotent by exact line; diverging = fail closed)
+if (monitoringLine !== null) {
+  const prefix = `- Monitoring attestation ${runId}: `
+  const existing = lifecycle.split('\n').filter(l => l.startsWith(prefix))
+  if (existing.length > 1) die(`agents/lifecycle.md carries ${existing.length} monitoring attestation lines for runId ${runId} — uniqueness violation; repair the ledger manually. Nothing was written.`)
+  if (existing.length === 1 && existing[0] !== monitoringLine) die(`agents/lifecycle.md already carries a DIFFERENT monitoring attestation for runId ${runId} — attestations are append-only evidence; record a dated correction instead of overwriting. Nothing was written.`)
+  if (existing.length === 1) actions.push(`SKIP - monitoring: attestation for runId ${runId} already recorded (identical)`)
+  else {
+    lifecycle = lifecycle.replace(/\n*$/, '\n') + monitoringLine + '\n'
+    lifecycleChanged = true
+    actions.push(`APPLY - monitoring: Q3/Q4 attestation appended (coverage=${/coverage=([a-z]+)/.exec(monitoringLine)[1]})`)
+  }
+} else {
+  actions.push(`WARN - monitoring: NO Q3/Q4 attestation recorded for runId ${runId} — coverage is UNKNOWN (re-run with --monitoring <attestation.json>; unknown is never "no stop occurred")`)
+}
 if (lifecycleChanged) await atomicWrite(lifecyclePath, lifecycle)
 
 // ---- target 2: messages/<date>.md ----
@@ -321,7 +376,7 @@ if (existingMsg) {
 
 for (const a of actions) console.log(a)
 const applied = actions.filter(a => a.startsWith('APPLY')).length
-const skipped = actions.filter(a => a.startsWith('SKIP')).length
+const skipped = actions.filter(a => a.startsWith('SKIP')).length - actions.filter(a => a.startsWith('SKIP - monitoring')).length
 console.log(applied === 0
   ? `RESULT: ALREADY-RECONCILED — runId ${runId} present in all targets, nothing written.`
   : skipped > 0

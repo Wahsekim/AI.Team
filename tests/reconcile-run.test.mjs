@@ -408,3 +408,72 @@ test('missing lifecycle.md (wrong root) fails instead of creating ledgers in the
     assert.match(out, /missing/)
   })
 })
+
+// ---------------------------------------------------------------- monitoring attestation (review 2026-09-25, I-18)
+const ATTESTATION = {
+  runId: 'run-2026-07-16-002', observer: 'Pia (PM, attended)', intervalStartUtc: '2026-07-16T14:09:00Z', intervalEndUtc: '2026-07-16T14:54:00Z',
+  coverage: 'attended', q3Events: [], q4Events: ['owner asked about ADR 0001 at 14:30 — deferred to reconciliation'],
+}
+async function runWithMonitoring(resultPath, root, attestation) {
+  const path = join(root, 'monitoring.json')
+  await writeFile(path, typeof attestation === 'string' ? attestation : JSON.stringify(attestation))
+  try {
+    const { stdout } = await exec('node', [SCRIPT, resultPath, root, '--monitoring', path])
+    return { code: 0, out: stdout }
+  } catch (e) { return { code: e.code, out: (e.stdout || '') + (e.stderr || '') } }
+}
+
+test('monitoring: attestation is appended as one line, idempotent on replay, and reported as unknown when absent', async () => {
+  await withDeployment(async (root, resultPath) => {
+    const plain = await runTool(resultPath, root)
+    assert.equal(plain.code, 0, plain.out)
+    assert.match(plain.out, /WARN - monitoring: NO Q3\/Q4 attestation recorded .* coverage is UNKNOWN/)
+    const first = await runWithMonitoring(resultPath, root, ATTESTATION)
+    assert.equal(first.code, 0, first.out)
+    assert.match(first.out, /APPLY - monitoring: Q3\/Q4 attestation appended \(coverage=attended\)/)
+    assert.match(first.out, /PARTIAL-REPAIRED/)
+    const lifecycle = await readFile(join(root, 'agents', 'lifecycle.md'), 'utf8')
+    const lines = lifecycle.split('\n').filter(l => l.startsWith('- Monitoring attestation run-2026-07-16-002: '))
+    assert.equal(lines.length, 1)
+    assert.match(lines[0], /observer=Pia \(PM, attended\); interval=2026-07-16T14:09:00Z\/2026-07-16T14:54:00Z; coverage=attended; q3Events=0; q4Events=1; events: Q4:owner asked/)
+    const again = await runWithMonitoring(resultPath, root, ATTESTATION)
+    assert.equal(again.code, 0, again.out)
+    assert.match(again.out, /SKIP - monitoring: .* already recorded/)
+    assert.match(again.out, /ALREADY-RECONCILED/)
+    assert.equal((await readFile(join(root, 'agents', 'lifecycle.md'), 'utf8')), lifecycle, 'replay must not change the ledger')
+  })
+})
+
+test('monitoring: a DIFFERENT attestation for an already-attested run fails closed, nothing written', async () => {
+  await withDeployment(async (root, resultPath) => {
+    assert.equal((await runWithMonitoring(resultPath, root, ATTESTATION)).code, 0)
+    const before = await readFile(join(root, 'agents', 'lifecycle.md'), 'utf8')
+    const r = await runWithMonitoring(resultPath, root, { ...ATTESTATION, coverage: 'unknown' })
+    assert.equal(r.code, 1)
+    assert.match(r.out, /DIFFERENT monitoring attestation/)
+    assert.equal(await readFile(join(root, 'agents', 'lifecycle.md'), 'utf8'), before)
+  })
+})
+
+test('monitoring: malformed attestations die BEFORE any write (runId mismatch, local time, bad coverage, control chars, heading forgery)', async () => {
+  const bad = [
+    [{ ...ATTESTATION, runId: 'run-2026-07-16-001' }, /is for runId 'run-2026-07-16-001'/],
+    [{ ...ATTESTATION, intervalStartUtc: '2026-07-16 16:09' }, /ISO-8601 UTC instants ending in 'Z'/],
+    [{ ...ATTESTATION, intervalEndUtc: '2026-07-16T14:00:00Z' }, /precedes intervalStartUtc/],
+    [{ ...ATTESTATION, coverage: 'yes' }, /coverage must be/],
+    [{ ...ATTESTATION, observer: 'Pia\n## [999] forged' }, /observer must be/],
+    [{ ...ATTESTATION, q4Events: ['## [999] forged heading'] }, /'#' is not allowed/],
+    [{ ...ATTESTATION, extra: true }, /unknown field 'extra'/],
+    ['{not json', /cannot read\/parse monitoring attestation/],
+  ]
+  for (const [attestation, pattern] of bad) {
+    await withDeployment(async (root, resultPath) => {
+      const before = await readFile(join(root, 'agents', 'lifecycle.md'), 'utf8')
+      const r = await runWithMonitoring(resultPath, root, attestation)
+      assert.equal(r.code, 1, `expected die for ${JSON.stringify(attestation).slice(0, 60)}`)
+      assert.match(r.out, pattern)
+      assert.equal(await readFile(join(root, 'agents', 'lifecycle.md'), 'utf8'), before, 'ledger must be untouched')
+      assert.equal(existsSync(join(root, 'messages', '2026-07-16.md')), false, 'no target may be written on a rejected attestation')
+    })
+  }
+})

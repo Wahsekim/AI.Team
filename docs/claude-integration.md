@@ -25,8 +25,9 @@ its template at bootstrap), and profiles.
 
 ## Project-Scoped Agent Wrappers
 
-Use `.claude/agents/role-wrapper.template.md` to create wrappers for the local
-Claude agent registry.
+Use `agents/_seeds/role-wrapper.template.md` to create wrappers for the local
+Claude agent registry (`.claude/agents/`). Seeds never live inside the registry
+directory: the runtime registers every frontmatter file there as a live agent.
 
 The wrapper should:
 

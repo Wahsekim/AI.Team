@@ -62,7 +62,7 @@ inline_mode_ok() { # R5-06: the inline-mode file must be a REAL dispatch doc,
   # not a placeholder — at least one markdown heading and >= 200 bytes.
   # A '-s' test alone lets a one-byte 'x' pass as configuration.
   # R6-07(d): a heading plus padding is still hollow — require the key
-  # sections the instantiated seed (INLINE_BASE_AGENT_MODE.template.md)
+  # sections the instantiated seed (agents/_seeds/INLINE_BASE_AGENT_MODE.template.md)
   # actually carries: the Base Agent requirement and the dispatch/assembly
   # guidance. Permissive on wording so a genuine bootstrap output passes.
   IM_FILE="$ROOT/.claude/agents/INLINE_BASE_AGENT_MODE.md"
@@ -576,7 +576,7 @@ if [ "$DEPLOYED" = 1 ] && [ -d "$ROOT/.claude/agents" ]; then
       low|medium|high|xhigh|max) ;;    # runtime effort enum
       *) FM_FAILS="$FM_FAILS ${w#$ROOT/}(invalid-effort:$EFF,allowed:low|medium|high|xhigh|max)" ;;
     esac
-    # maxTurns is part of the wrapper contract (role-wrapper.template.md):
+    # maxTurns is part of the wrapper contract (agents/_seeds/role-wrapper.template.md):
     # required, positive integer (comment-stripped first — R6-06c).
     MT=$(fm_clean_value "$(printf '%s\n' "$FM" | sed -nE 's/^maxTurns:[[:space:]]*//p' | head -1)")
     MT=${MT#\"}; MT=${MT%\"}
@@ -585,7 +585,7 @@ if [ "$DEPLOYED" = 1 ] && [ -d "$ROOT/.claude/agents" ]; then
     # R7-04(a): a wrapper is frontmatter + a DISPATCH BODY. Valid frontmatter
     # over an empty (or whitespace-only) body dispatches nothing; and a body
     # that never references an agents/ path is not an instantiation of
-    # role-wrapper.template.md, whose body routes the runtime at the role
+    # agents/_seeds/role-wrapper.template.md, whose body routes the runtime at the role
     # file (agents/<role_id>.md) and the shared agents/ surfaces.
     WBODY=$(awk '/^---$/{n++; next} n>=2{print}' "$w")
     if ! printf '%s' "$WBODY" | grep -q '[^[:space:]]'; then
@@ -721,6 +721,28 @@ else
   else
     pass "staleness" "$(echo $CHECKED_FILES) touched within ${STALE_DAYS}d"
   fi
+fi
+
+# ------------- check 7: no executable-looking seeds in the runtime agent registry
+# (review 2026-09-25, F-02): the runtime registers EVERY frontmatter-bearing
+# .claude/agents/*.md as a live agent type — a seed named {{PROJECT_AGENT_SLUG}}
+# was observed in the runtime agent list, and the compat gate skipped it as a
+# "template". Seeds live in agents/_seeds/; README.md and an instantiated
+# INLINE_BASE_AGENT_MODE.md carry no frontmatter and are exempt. Both modes.
+REG_HITS=""
+if [ -d "$ROOT/.claude/agents" ]; then
+  for w in "$ROOT"/.claude/agents/*.md; do
+    [ -f "$w" ] || continue
+    case "$w" in *.template.md) REG_HITS="$REG_HITS ${w#"$ROOT"/}(seed-in-registry)"; continue ;; esac
+    case "$w" in */README.md|*INLINE_BASE_AGENT_MODE.md) continue ;; esac
+    FM_NAME=$(awk '/^---$/{n++; next} n==1 && /^name:/{sub(/^name:[ \t]*/,""); print; exit} n>=2{exit}' "$w")
+    case "$FM_NAME" in *'{{'*) REG_HITS="$REG_HITS ${w#"$ROOT"/}(placeholder-agent-name)" ;; esac
+  done
+fi
+if [ -n "$REG_HITS" ]; then
+  fail "registry-seeds" "seed/placeholder agent(s) inside the runtime registry .claude/agents/ — the runtime registers them as LIVE agent types:$REG_HITS (seeds belong in agents/_seeds/)"
+else
+  pass "registry-seeds" "no seeds or placeholder agent names in .claude/agents/"
 fi
 
 # ---------------------------------------------------------------------- summary

@@ -38,12 +38,22 @@ export const meta = {
 //                                         // workers never build on a polluted workspace. 'continue' is for explicitly isolated,
 //                                         // dependency-free plans ONLY (per-ticket worktree/sandbox) — the caller asserts that.
 //   runId?: string,                       // idempotency key for reconciliation ([A-Za-z0-9._-]{1,64}); derived as run-<date>-<NNN> if omitted
+//   launchManifestDigest?: string,        // 'sha256:<64 hex>' from scripts/preflight-run.mjs — binds this run to the frozen policy/input
+//                                         // bundle (wrappers, charter, profiles, product primer, plan). Echoed in results + BATCH header;
+//                                         // the engine cannot verify it (no IO in-loop) — provenance, not enforcement (review 2026-09-25 Slice B).
 //   plan: [{
 //     ticket: string,                     // non-empty, <= 200 chars, no control characters (it lands in lifecycle headers)
+//     title?: string,                     // PRESENTATION ONLY (F-05): <= 120 chars, no control chars; shown in agent labels + ledgers.
+//     workKind?: string,                  // PRESENTATION ONLY: feature|screen|protocol|infrastructure|test|documentation|maintenance|mixed|unspecified
+//     layers?: string[],                  // PRESENTATION ONLY: <= 8 project-defined layer tags ([A-Za-z0-9._/-]{1,32}); multi-valued by design
 //     agentType: string,                  // wrapper name per agents/roster.md (single source); [A-Za-z0-9._-]+ <= 128 chars (R6-03)
 //     model?: string,                     // per agents/roster.md (single source)
 //     brief: string,                      // the full worker brief (built from agents/templates.md by the PM before the run); <= 200k chars
 //     isCodeShipping: boolean,            // REQUIRED EXPLICITLY — true: verifier gate fires; false: verification not applicable.
+//     deliveryRequired?: boolean,         // default false. true: the ticket is NOT done until the worker reports delivery.status='landed'
+//                                         // with a ref (F-01) — a denied commit leaves an accepted candidate awaiting delivery, never a green tick.
+//     estimatedTokens?: number,           // PM's pre-dispatch worker estimate (engine units) -> mechanical variance observation (F-07)
+//     verifierEstimatedTokens?: number,   // same for the verifier spawn
 //     verifierBrief?: string,             // verifier brief WITH stack env/prefix lines re-pasted verbatim (see _shared/verify-discipline.md)
 //     verifierAgentType?: string, verifierModel?: string    // per agents/roster.md; REQUIRED (non-generic) for code-shipping items in wrappers mode
 //   }],
@@ -107,6 +117,12 @@ if (A.failurePolicy !== undefined && A.failurePolicy !== 'halt-on-failure' && A.
 if (A.runId !== undefined && !(typeof A.runId === 'string' && /^[A-Za-z0-9._-]{1,64}$/.test(A.runId))) {
   validationErrors.push('runId, when given, must match [A-Za-z0-9._-]{1,64}')
 }
+if (A.launchManifestDigest !== undefined && !(typeof A.launchManifestDigest === 'string' && /^sha256:[a-f0-9]{64}$/.test(A.launchManifestDigest))) {
+  validationErrors.push("launchManifestDigest, when given, must be 'sha256:<64 lowercase hex>' as emitted by scripts/preflight-run.mjs")
+}
+// Presentation vocabulary (F-05): closed enum — a title never routes, a
+// workKind never grants, and neither is inferred from agentType.
+const WORK_KINDS = ['feature', 'screen', 'protocol', 'infrastructure', 'test', 'documentation', 'maintenance', 'mixed', 'unspecified']
 for (const k of ['guardianAgentType', 'guardianModel']) {
   if (A[k] !== undefined && !isIdent(A[k], 128)) validationErrors.push(`${k}, when given, must match [A-Za-z0-9._-]+ (<= 128 chars)`)
 }
@@ -145,6 +161,19 @@ if (!Array.isArray(A.plan) || A.plan.length === 0) {
     if (typeof p.brief !== 'string' || p.brief.trim().length === 0) validationErrors.push(`${at}.brief must be a non-empty string`)
     else if (p.brief.length > MAX_BRIEF_CHARS) validationErrors.push(`${at}.brief exceeds ${MAX_BRIEF_CHARS} chars`)
     if (typeof p.isCodeShipping !== 'boolean') validationErrors.push(`${at}.isCodeShipping must be an EXPLICIT boolean — verification opt-out by omission is not allowed`)
+    if (p.deliveryRequired !== undefined && typeof p.deliveryRequired !== 'boolean') validationErrors.push(`${at}.deliveryRequired, when given, must be a boolean`)
+    // Presentation fields (F-05): bounded, control-free, closed vocabulary.
+    if (p.title !== undefined && !isNonEmptyStr(p.title, 120)) validationErrors.push(`${at}.title, when given, must be a non-empty string <= 120 chars without control characters (presentation only)`)
+    if (p.workKind !== undefined && !WORK_KINDS.includes(p.workKind)) validationErrors.push(`${at}.workKind, when given, must be one of ${WORK_KINDS.join('|')}`)
+    if (p.layers !== undefined && !(Array.isArray(p.layers) && p.layers.length <= 8
+      && p.layers.every(l => typeof l === 'string' && /^[A-Za-z0-9._/-]{1,32}$/.test(l))
+      && new Set(p.layers).size === p.layers.length)) {
+      validationErrors.push(`${at}.layers, when given, must be <= 8 unique tags matching [A-Za-z0-9._/-]{1,32}`)
+    }
+    // Estimates (F-07): typed observations, never free-text arithmetic.
+    for (const k of ['estimatedTokens', 'verifierEstimatedTokens']) {
+      if (p[k] !== undefined && !isPosInt(p[k])) validationErrors.push(`${at}.${k}, when given, must be a positive safe integer (engine budget units)`)
+    }
     // Identifier fields get the same strict charset as agentType —
     // 'model: "\n"' or ' general-purpose ' must not reach a dispatch (F-10/R6-03).
     for (const k of ['model', 'verifierAgentType', 'verifierModel']) {
@@ -197,6 +226,32 @@ const ceiling = A.budgetCeilingTokens
 const spent0 = budget.spent()
 const spentInLoop = () => budget.spent() - spent0
 const budgetTripped = () => spentInLoop() >= 0.8 * ceiling
+const launchManifestDigest = A.launchManifestDigest || null
+
+// ---- BEGIN formatter (mirrored from src/loop/display.mjs — keep byte-identical; tests/loop-display.test.mjs checks parity) ----
+// Terminal escapes first (CSI, OSC, single-char ESC sequences), then every
+// remaining control character becomes a space, then whitespace collapses.
+const ANSI = /\x1B\[[0-9;?]*[ -/]*[@-~]|\x1B\][^\x07\x1B]*(?:\x07|\x1B\\)|\x1B[@-_]/g;
+const CTRL_ALL = /[\x00-\x1F\x7F]/g;
+const cps = s => Array.from(s);
+const sanitizeDisplay = (s, max) => {
+  const clean = String(s ?? '').replace(ANSI, '').replace(CTRL_ALL, ' ').replace(/\s+/g, ' ').trim();
+  return cps(clean).slice(0, max).join('');
+};
+const formatTaskLabel = (task, phase, widthBudget = 80) => {
+  const ticket = sanitizeDisplay(task && task.ticket, 200) || '(no ticket)';
+  const phaseWord = sanitizeDisplay(phase, 20) || 'Work';
+  let title = task && task.title != null ? sanitizeDisplay(task.title, 120) : '';
+  const join = t => (t ? [ticket, t, phaseWord] : [ticket, phaseWord]).join(' · ');
+  let label = join(title);
+  if (title && cps(label).length > widthBudget) {
+    const room = widthBudget - cps(ticket).length - cps(phaseWord).length - 2 * ' · '.length;
+    title = room >= 2 ? cps(title).slice(0, room - 1).join('') + '…' : '';
+    label = join(title);
+  }
+  return label;
+};
+// ---- END formatter ----
 
 const iters = Math.min(rounds, plan.length)
 log(`run-n-rounds ${runId}: N=${rounds}, plan=${plan.length} iters -> running ${iters}; mode=${executionMode}; failurePolicy=${failurePolicy}; ceiling=${ceiling}; spent0 baseline=${spent0}`)
@@ -212,6 +267,16 @@ const WORKER_SCHEMA = {
     selfReportTokens: { type: 'integer', description: 'worker token self-estimate, non-negative (meta-rule M4: distrust — the engine records harness spend deltas per spawn; guardian cross-checks)' },
     blocked: { type: 'boolean', description: 'this TICKET is blocked (recoverable). It does NOT count as success: the iteration enters the recovery queue and, under halt-on-failure, stops the loop for main-session triage.' },
     terminalStop: { type: 'boolean', description: 'this WHOLE LOOP must stop now (terminal signal the engine can break on deterministically). Distinct from blocked. The stopping iteration STILL gets its verifier gate if code-shipping. Only catches stops a worker can surface; pure out-of-band owner-input Q4 still needs the main-session batch discipline.' },
+    delivery: {
+      type: 'object', additionalProperties: false,
+      required: ['status'],
+      properties: {
+        status: { type: 'string', enum: ['landed', 'failed', 'not_attempted'], description: "'landed' ONLY when the required landing step (commit/push/publish per the brief) actually completed; 'failed' when it was attempted and denied/failed (a denied permission is a FAILED delivery, not a note); 'not_attempted' otherwise." },
+        ref: { type: 'string', minLength: 1, maxLength: 200, description: 'the landing identifier (commit sha, PR/MR URL, artifact id) — REQUIRED for status=landed; the main session verifies it exists (self-report is not a receipt, M4)' },
+        reason: { type: 'string', maxLength: 500, description: 'why delivery failed or was not attempted (e.g. the exact denial text)' },
+      },
+      description: 'F-01: execution success is NOT delivery. When the plan item has deliveryRequired=true the ticket stays acceptance/delivery-pending until status=landed with a ref. Omit only when the brief demands no landing step.',
+    },
     notes: { type: 'string', maxLength: 4000 },
   },
 }
@@ -300,8 +365,10 @@ const emitLogs = (r, verdict) => {
   // Per-spawn attribution: worker and verifier spend are SEPARATE harness deltas (never fused,
   // never aggregate/N) so lifecycle entries + coaching KPIs keep the per-spawn variance signal.
   const tok = `~${r.workerTokens} tok worker` + (r.verifier ? ` / ~${r.verifierTokens} tok verifier` : '')
-  lifecycleEntries.push(`## [${entryNo}] ${oneLine(r.agentType) || 'worker'} ${oneLine(r.ticket)} — ${verdict}, ${tok}, ${summary}`)
-  msgBullets.push(`- [${entryNo}] iter${r.iter} ${oneLine(r.ticket)} (${oneLine(r.agentType) || 'worker'}): ${verdict} — ${summary}`)
+  // Title rides in the ledger for the reader (F-05); ticket stays the identity.
+  const who = `${oneLine(r.ticket)}${r.display && r.display.title ? ` (${oneLine(r.display.title)})` : ''}`
+  lifecycleEntries.push(`## [${entryNo}] ${oneLine(r.agentType) || 'worker'} ${who} — ${verdict}, ${tok}, ${summary}`)
+  msgBullets.push(`- [${entryNo}] iter${r.iter} ${who} (${oneLine(r.agentType) || 'worker'}): ${verdict} — ${summary}`)
 }
 let haltReason = null
 for (let i = 0; i < iters; i++) {
@@ -311,6 +378,15 @@ for (let i = 0; i < iters; i++) {
   // both leave the engine as telemetry, so they get the same redaction as
   // results[]/ledgers. p.ticket raw is only ever read here.
   const safeTicket = redact(p.ticket)
+  // Presentation metadata (F-05): redacted + sanitized ONCE, then used for the
+  // agent labels and ledgers. Never read for routing or acceptance.
+  const display = {
+    title: p.title !== undefined ? sanitizeDisplay(redact(p.title), 120) : null,
+    workKind: p.workKind || 'unspecified',
+    layers: Array.isArray(p.layers) ? [...p.layers] : [],
+  }
+  const labelTask = { ticket: safeTicket, title: display.title }
+  const deliveryRequired = p.deliveryRequired === true
   // Q5 token-burnout — the ONLY halt the script body can observe.
   // Q3 (hardware) and Q4 (owner mid-loop input) are invisible here BY DESIGN (no IO/clock in a
   // workflow body) -> the main session owns them.
@@ -340,7 +416,7 @@ for (let i = 0; i < iters; i++) {
   try {
     worker = await agent(p.brief, {
       agentType: p.agentType, model: p.model,
-      label: `iter${i + 1}:${safeTicket}:${p.agentType}`, phase: 'Loop', schema: WORKER_SCHEMA,
+      label: formatTaskLabel(labelTask, 'Build'), phase: 'Loop', schema: WORKER_SCHEMA,
     })
     // Validation runs on the RAW report (R7-08): sanitizing first would let a
     // raw-illegal report (e.g. an oversized outcome that the redactor happens
@@ -366,6 +442,13 @@ for (let i = 0; i < iters; i++) {
       && Number.isSafeInteger(worker.selfReportTokens) && worker.selfReportTokens >= 0
       && (worker.terminalStop === undefined || typeof worker.terminalStop === 'boolean')
       && (worker.notes === undefined || (typeof worker.notes === 'string' && worker.notes.length <= 4000))
+      // delivery (F-01) is optional but, when present, must be the contract
+      // shape — a schema-illegal delivery object is an unattested report.
+      && (worker.delivery === undefined || (worker.delivery && typeof worker.delivery === 'object' && !Array.isArray(worker.delivery)
+        && ['landed', 'failed', 'not_attempted'].includes(worker.delivery.status)
+        && (worker.delivery.ref === undefined || (typeof worker.delivery.ref === 'string' && worker.delivery.ref.trim().length > 0 && worker.delivery.ref.length <= 200))
+        && (worker.delivery.reason === undefined || (typeof worker.delivery.reason === 'string' && worker.delivery.reason.length <= 500))
+        && Object.keys(worker.delivery).every(k => ['status', 'ref', 'reason'].includes(k))))
     // Mandatory-progress evidence (R7-02): the harness rule is >=1 of
     // {written artifact, ticket transition, recorded decision}; transitions
     // are banned in-loop, so progress:true with zero files AND zero decisions
@@ -414,6 +497,7 @@ for (let i = 0; i < iters; i++) {
   if (ownershipViolation) log(`iter ${i + 1} ${safeTicket}: OWNERSHIP VIOLATION — worker reports writes to PM/owner-only surfaces (${forbiddenTouched.slice(0, 3).map(f => oneLine(f)).join(', ')}) — routing to recovery`)
 
   let verifier = null
+  let verifierDispatched = false
   let verifierGroundingFailure = null
   let verificationStatus
   let budgetTrippedBeforeVerifier = false
@@ -451,9 +535,10 @@ for (let i = 0; i < iters; i++) {
     // code-shipping iteration still gets its safety close-out — terminalStop only controls
     // whether FURTHER iterations run.
     try {
+      verifierDispatched = true
       verifier = await agent(
         p.verifierBrief || `Verify ticket ${safeTicket} against its acceptance criteria. Run the code-shipping verification commands from profiles/stack.md (static suite + e2e gate where configured; gates whose surfaces do not exist on this ticket are N/A — say so with a note), following _shared/verify-discipline.md (clean state, env prefix verbatim if the stack defines one, real exit codes). You MUST actually EXECUTE the verification commands — do not infer results from reading code. Report EVERY command you ran with its REAL exit code in the commandsRun field; set staticPass and e2ePass honestly (true-with-note when n/a); the engine rejects any pass verdict with an empty commandsRun, a nonzero exitCode, or staticPass/e2ePass=false.`,
-        { agentType: p.verifierAgentType || 'general-purpose', model: p.verifierModel, label: `iter${i + 1}:verifier:${safeTicket}`, phase: 'Loop', schema: VERIFIER_SCHEMA },
+        { agentType: p.verifierAgentType || 'general-purpose', model: p.verifierModel, label: formatTaskLabel(labelTask, 'Verify'), phase: 'Loop', schema: VERIFIER_SCHEMA },
       )
     } catch (e) {
       verifier = null
@@ -516,20 +601,57 @@ for (let i = 0; i < iters; i++) {
   // Blocked / no-progress / error / null workers ALWAYS need recovery — "dispatched N rounds"
   // must never read as "N tickets effectively done".
   const needsFixRetest = p.isCodeShipping ? verificationStatus !== 'passed' : false
+  // ---- Status axes (F-01 / review Slice C): execution != acceptance != delivery.
+  //   executionStatus  = workerStatus — what the agent did.
+  //   acceptanceStatus = pending | accepted | rejected — code tickets need a grounded
+  //                      verifier PASS; non-code tickets are accepted when execution
+  //                      succeeded with no drift/ownership violation (no verifier gate
+  //                      is declared for them — the PM accepts attended).
+  //   deliveryStatus   = not_required | pending | landed | failed — deliveryRequired
+  //                      items need a worker-reported 'landed' WITH a ref; the main
+  //                      session verifies the ref (self-report is not a receipt, M4).
+  // 'done' is the conjunction. A green execution tick alone is never Done: the
+  // US-02 shape (commit denied, progress:true, blocked:false) must route to recovery.
+  const executionOk = workerStatus === 'succeeded' || workerStatus === 'terminal_stop'
+  const acceptanceStatus = p.isCodeShipping
+    ? (verificationStatus === 'passed' ? 'accepted' : verificationStatus === 'failed' ? 'rejected' : 'pending')
+    : (executionOk && !scopeDrift && !ownershipViolation ? 'accepted' : 'pending')
+  const d = worker && worker.delivery ? worker.delivery : null
+  const deliveryStatus = !deliveryRequired ? 'not_required'
+    : (d && d.status === 'landed' && typeof d.ref === 'string' && d.ref.trim().length > 0) ? 'landed'
+    : (d && d.status === 'failed') ? 'failed'
+    : 'pending'
+  const deliveryPending = deliveryStatus === 'pending' || deliveryStatus === 'failed'
+  if (deliveryPending && executionOk) log(`iter ${i + 1} ${safeTicket}: DELIVERY ${deliveryStatus.toUpperCase()} — deliveryRequired but the worker reported ${d ? cleanLine(d.status + (d.reason ? ': ' + d.reason : ''), 120) : 'no delivery field'}; execution succeeded, ticket NOT done — routing to recovery`)
+  const done = executionOk && acceptanceStatus === 'accepted' && (deliveryStatus === 'not_required' || deliveryStatus === 'landed')
   const needsRecovery = needsFixRetest
     || workerStatus === 'error' || workerStatus === 'null_result' || workerStatus === 'invalid_worker_result'
     || workerStatus === 'blocked' || workerStatus === 'no_progress'
-    || scopeDrift || ownershipViolation
+    || scopeDrift || ownershipViolation || deliveryPending
+  // Estimate observations (F-07): typed, per spawn, in ENGINE units (budget.spent()
+  // deltas). Not provider billing — never converted here; the count of
+  // beyond-threshold observations is derived mechanically in the return.
+  const observe = (kind, est, measured) => est === undefined ? null : {
+    id: `${runId}:iter${i + 1}:${kind}`, kind, estimatedTokens: est, measuredTokens: measured,
+    variancePct: Math.round(((measured - est) / est) * 100000) / 1000,
+  }
+  const estimates = {
+    worker: observe('worker', p.estimatedTokens, workerTokens),
+    verifier: verifierDispatched ? observe('verifier', p.verifierEstimatedTokens, verifierTokens) : null,
+  }
   spentTrace.push(spentInLoop())
   const r = {
     // ticket text is tracker-sourced (untrusted): the copy that leaves the
     // engine (results[], iterFacts, ledgers) is redacted + sentinel-safe (F-01/F-04)
     iter: i + 1, ticket: safeTicket, agentType: p.agentType,
+    display,                        // presentation only (F-05): {title|null, workKind, layers}
     workerStatus, verificationStatus, sideEffects,
+    executionStatus: workerStatus, acceptanceStatus, deliveryStatus, deliveryRequired, done,
     terminalStopRequested, scopeDrift, ownershipViolation,
     verificationRequired: p.isCodeShipping,
     worker, verifier,               // redacted at capture — safe to persist (R-03)
     workerTokens, verifierTokens,   // SEPARATE per-spawn harness deltas (per-spawn attribution rule)
+    estimates,                      // F-07 typed observations (null when the plan item carried no estimate)
     verifierPass: verificationStatus === 'passed' ? true : (verificationStatus === 'failed' ? false : null),
     verifierGroundingFailure,
     needsFixRetest, needsRecovery,
@@ -538,6 +660,7 @@ for (let i = 0; i < iters; i++) {
   }
   results.push(r)
   const stopSuffix = terminalStopRequested && workerStatus !== 'terminal_stop' ? ' + TERMINAL-STOP requested' : ''
+  const deliveryTag = deliveryPending ? ` + DELIVERY ${deliveryStatus.toUpperCase()} (required landing step not landed — NOT done) -> recovery` : ''
   const verdict = workerStatus === 'error' ? 'WORKER ERROR (side effects unknown) -> recovery'
     : workerStatus === 'null_result' ? 'WORKER NULL (skipped/died, side effects unknown) -> recovery'
     : workerStatus === 'invalid_worker_result' ? `WORKER REPORT INVALID (required fields missing, side effects unknown)${stopSuffix} -> recovery`
@@ -545,10 +668,10 @@ for (let i = 0; i < iters; i++) {
     : workerStatus === 'no_progress' ? `NO PROGRESS${stopSuffix} -> recovery`
     : ownershipViolation ? 'OWNERSHIP VIOLATION (worker wrote PM/owner-only surfaces) -> recovery'
     : scopeDrift ? 'SCOPE DRIFT (non-code plan touched code files) -> recovery'
-    : verificationStatus === 'not_applicable' ? (workerStatus === 'terminal_stop' ? 'TERMINAL-STOP (non-code, no verifier gate)' : 'no verifier gate (non-code-shipping)')
+    : verificationStatus === 'not_applicable' ? (workerStatus === 'terminal_stop' ? 'TERMINAL-STOP (non-code, no verifier gate)' : 'no verifier gate (non-code-shipping)') + deliveryTag
     : verificationStatus === 'missing' ? 'verifier gate MISSING -> fail-closed fix-retest'
     : verificationStatus === 'failed' ? (verifierGroundingFailure ? 'verifier FAIL (ungrounded/inconsistent pass rejected) -> fix-retest' : 'verifier FAIL -> fix-retest')
-    : (workerStatus === 'terminal_stop' ? 'TERMINAL-STOP, verifier PASS' : 'verifier PASS')
+    : (workerStatus === 'terminal_stop' ? 'TERMINAL-STOP, verifier PASS' : 'verifier PASS') + deliveryTag
   emitLogs(r, verdict)
   // Halt precedence: worker error > terminal-stop REQUEST (any outcome) > budget > failure policy.
   if (workerStatus === 'error') {
@@ -591,8 +714,9 @@ phase('Guardian')
 const iterFacts = results.map(r => {
   const w = r.worker || {}
   return {
-    iter: r.iter, ticket: r.ticket, agentType: r.agentType,
+    iter: r.iter, ticket: r.ticket, title: r.display.title, agentType: r.agentType,
     workerStatus: r.workerStatus, verificationStatus: r.verificationStatus, sideEffects: r.sideEffects,
+    acceptanceStatus: r.acceptanceStatus, deliveryStatus: r.deliveryStatus, done: r.done,
     needsFixRetest: r.needsFixRetest, needsRecovery: r.needsRecovery, progress: r.progress, blocked: w.blocked === true,
     workerTokens: r.workerTokens, verifierTokens: r.verifierTokens,
     workerReportedNotes: cleanLine(w.notes, 200),
@@ -639,7 +763,7 @@ try {
   const g = await agent(guardianBrief, {
     agentType: A.guardianAgentType || 'general-purpose',   // generic reachable ONLY in inline mode (validated above)
     model: A.guardianModel,          // per agents/roster.md (single source) — pass explicitly
-    label: 'chaos:guardian', phase: 'Guardian', schema: GUARDIAN_SCHEMA,
+    label: formatTaskLabel({ ticket: 'guardian', title: runId }, 'Audit'), phase: 'Guardian', schema: GUARDIAN_SCHEMA,
   })
   if (g) {
     // findings are model text — redact before they reach ledgers/return (R-03);
@@ -702,9 +826,22 @@ const allPassed =
   results.every(r => r.workerStatus === 'succeeded' || r.workerStatus === 'terminal_stop') &&
   results.every(r => r.sideEffects !== 'unknown') &&
   results.filter(r => r.verificationRequired).every(r => r.verificationStatus === 'passed') &&
+  results.every(r => r.done) &&                 // F-01: accepted AND delivered (when required), not just executed
   fixRetestQueue.length === 0 &&
   recoveryQueue.length === 0 &&
   guardianClean
+// Coaching observations (F-07): derived mechanically from typed per-spawn
+// estimates; deduplicated by observation id; strict '>' threshold; engine
+// units only (no provider-billing conversion — that is a separate meter).
+const VARIANCE_THRESHOLD_PCT = 50
+const observations = results.flatMap(r => [r.estimates.worker, r.estimates.verifier]).filter(Boolean)
+  .map(o => ({ ...o, beyondThreshold: Math.abs(o.variancePct) > VARIANCE_THRESHOLD_PCT }))
+const coaching = {
+  meter: 'engine budget.spent() deltas per spawn (harness units) — NOT provider billing; do not convert or compare across meters',
+  varianceThresholdPct: VARIANCE_THRESHOLD_PCT,
+  observations,
+  beyondThresholdCount: new Set(observations.filter(o => o.beyondThreshold).map(o => o.id)).size,
+}
 const nextInvocationBlocked = !guardianClean || fixRetestQueue.length > 0 || recoveryQueue.length > 0
   || budgetGateTripped || haltRequiresAcknowledgement
 const safeToContinue = allPassed && !runIncomplete && !planShortfall && !budgetGateTripped && !haltRequiresAcknowledgement
@@ -716,7 +853,7 @@ lifecycleEntries.push(`## [${guardianEntryNo}] guardian (chaos) — status: ${gu
 // runId in the header is the reconciliation idempotency key. PREFER applying this block with
 // scripts/reconcile-run.mjs (atomic, all targets, counter update) over manual pasting.
 const lifecycleBlock = [
-  `### BATCH ${A.date} ${runId} — run-n-rounds N=${rounds}, dispatched ${results.length}, halt: ${haltReason}`,
+  `### BATCH ${A.date} ${runId} — run-n-rounds N=${rounds}, dispatched ${results.length}, halt: ${haltReason}${launchManifestDigest ? `, manifest: ${launchManifestDigest}` : ''}`,
   ...lifecycleEntries,
 ]
 const messagesLogBlock = [
@@ -729,10 +866,14 @@ const messagesLogBlock = [
 return {
   runId, rounds, executionMode, failurePolicy,
   dispatchedCount: results.length,                                        // structural: how many iters have records (0 => DOA — check errorCode/validationErrors, docs/engine.md)
+  launchManifestDigest,                                                   // provenance echo of the frozen launch bundle (scripts/preflight-run.mjs); null = no preflight recorded
   workerSucceededCount: results.filter(r => r.workerStatus === 'succeeded' || r.workerStatus === 'terminal_stop').length,
   verificationRequiredCount: results.filter(r => r.verificationRequired).length,
   verificationPassedCount: results.filter(r => r.verificationStatus === 'passed').length,
+  doneCount: results.filter(r => r.done).length,                          // F-01: executed AND accepted AND delivered-when-required
+  deliveryPendingCount: results.filter(r => r.deliveryStatus === 'pending' || r.deliveryStatus === 'failed').length,
   recoveryRequiredCount: recoveryQueue.length,
+  coaching,                                                               // F-07: typed variance observations + mechanical beyond-threshold count (engine units)
   allPassed,                                                              // strict conjunction — DISTINCT from count-complete; read THIS for batch quality
   safeToContinue,                                                         // allPassed AND nothing left undispatched (incl. plan shortfall, R5-04) — the one field automation may read alone
   itersRun: results.length, haltReason,
@@ -760,7 +901,8 @@ return {
       'Do ALL tracker transitions now, attended (workflow is banned from tracker/MCP in-loop).',
       'DRAIN fixRetestQueue: `haltReason: count-complete` means all N DISPATCHED, NOT all passed. Every queued item MUST be fix-retested (or PM-direct-verified) BEFORE the batch is declared closed (count-complete must never mask not-done). Path per the engine fix-retest drain rule (docs/engine.md): same-session continuation if the harness exposes the workflow-spawned session; otherwise a fresh scoped fix spawn inlining the verifier failure report, logged `Session: resumed-fresh`.',
       'DRAIN recoveryQueue: error/null records have UNKNOWN side effects — inspect the working tree (git status/diff) for each before dispatching anything else; blocked/no-progress records need triage (unblock, re-scope, or return to the board).',
-      'Confirm you watched Q3 (hardware) + Q4 (owner input) during the run — the workflow could not.',
+      'For any deliveryStatus pending/failed record (F-01): the candidate may be ACCEPTED but is NOT landed — land it yourself under explicit owner authority (verify the exact diff, `git diff --cached --stat` first so unrelated staged work is preserved, run the relevant gates, record the receipt ref) or return it to the board. Never mark the ticket Done on execution success alone. For deliveryStatus=landed, verify the reported ref exists (`git cat-file -e <ref>`) — a self-reported ref is not a receipt.',
+      'Record the Q3/Q4 monitoring attestation for THIS run interval with `node scripts/reconcile-run.mjs <result.json> . --monitoring <attestation.json>` (observer, interval, coverage, events) — the workflow could not observe hardware or owner input; an unrecorded attestation means coverage UNKNOWN, never "no stop occurred".',
       'If budgetGateTripped or haltRequiresAcknowledgement: acknowledge the halt cause FIRST (re-budget the ceiling / act on the terminal-stop or failure) — nextInvocationBlocked stays true until then; safeToContinue is the only field automation may read alone.',
       'For any scopeDrift record: a non-code plan item touched code-shaped files — read the REAL git diff before trusting or reverting the work (worker file reports are untrusted).',
       'If guardian.status != "ok": the run is UNAUDITED — run the guardian audit manually (agents/chaos.md) before the next invocation. If guardian.verdict != "clean" or guardianConsistencyFailure is set, act on guardian.findings first. nextInvocationBlocked=true until queues are drained AND the guardian question is settled.',
