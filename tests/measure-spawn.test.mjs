@@ -69,11 +69,12 @@ const baseSession = () => makeSession({
   agents: [
     {
       id: 'a1',
-      meta: { agentType: 'Explore', description: 'explore repo', toolUseId: 'toolu_1' },
+      meta: { agentType: 'Explore', description: 'explore repo', toolUseId: 'toolu_1', finished: true },
       rows: [
         assistant('a1x', usage(2, 20000, 0, 8, { server_tool_use: {}, iterations: 1 }), 'a1'),
         assistant('a1x', usage(2, 20000, 0, 8), 'a1'), // duplicate id, identical usage
         assistant('a1x', usage(2, 20000, 0, 120), 'a1'), // later chunk: output grows
+        assistant('a1x', usage(2, 20000, 0, 100), 'a1'), // later chunk smaller: max wins, not last
         assistant('a1y', usage(3, 0, 30000, 400), 'a1'),
         { type: 'user', isSidechain: true, agentId: 'a1', message: { role: 'user', content: 'x' } },
         { type: 'attachment', isSidechain: true, agentId: 'a1' },
@@ -99,9 +100,9 @@ test('sums the four token classes per subagent, max per field across a duplicate
     { input: 5, cacheCreate: 20000, cacheRead: 30000, output: 520 },
   )
   assert.equal(a1.total, 50525)
-  assert.equal(a1.entries, 4)
+  assert.equal(a1.entries, 5)
   assert.equal(a1.uniqueMessages, 2)
-  assert.equal(a1.duplicates, 2)
+  assert.equal(a1.duplicates, 3)
 })
 
 test('joins subagent files to meta.json and the main file Agent-tool results', async () => {
@@ -135,6 +136,24 @@ test('main-session totals deduplicate too and the transcript path form is accept
   assert.equal(out.session.uniqueMessages, 2)
   assert.equal(out.session.total, 10 + 100 + 1000 + 5 + 20 + 2000 + 7)
   assert.equal(out.subagents.length, 3)
+})
+
+test('surfaces meta finished and warns on stderr for partial subagents', async () => {
+  const s = baseSession()
+  const { stdout, stderr } = await exec('node', [SCRIPT, s.sessionDir, '--json'])
+  const out = JSON.parse(stdout)
+  assert.equal(out.subagents.find(a => a.agentId === 'a1').finished, true)
+  assert.equal(out.subagents.find(a => a.agentId === 'a2').finished, null)
+  assert.doesNotMatch(stderr, /WARN - partial: agent a1 /)
+  assert.doesNotMatch(stderr, /WARN - partial: agent a2 /) // no flag: not a per-row claim
+  assert.match(stderr, /WARN - partial\?: 2 subagent\(s\) have no 'finished' flag/)
+  const running = makeSession({ mainRows: [], agents: [{ id: 'r', meta: { finished: false }, rows: [assistant('rx', usage(1, 1, 1, 1), 'r')] }] })
+  const r1 = await exec('node', [SCRIPT, running.sessionDir])
+  assert.match(r1.stderr, /WARN - partial: agent r finished=false entries=1/)
+  const empty = makeSession({ mainRows: [], agents: [{ id: 'e', meta: { finished: true }, rows: [] }] })
+  const r2 = await exec('node', [SCRIPT, empty.sessionDir])
+  assert.match(r2.stderr, /WARN - partial: agent e finished=true entries=0/)
+  assert.match(r2.stdout, /\be\b.*\byes\b/)
 })
 
 test('--agent filters to one subagent', async () => {

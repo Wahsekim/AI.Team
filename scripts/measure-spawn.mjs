@@ -20,7 +20,9 @@
 // under-report output_tokens. Every assistant entry MUST carry the
 // four fields; unknown extra usage keys are tolerated. Schema drift exits 2.
 // Pricing is optional: a table with a tableVersion; unknown models stay
-// unpriced (null), never $0.
+// unpriced (null), never $0. A subagent whose meta.json says finished:false
+// or that has no assistant entries gets a WARN on stderr (partial total);
+// a missing flag (older runtime, or still running) gets one summary WARN.
 
 import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
@@ -175,15 +177,21 @@ function measure(opts) {
       agentType: meta.agentType ?? null,
       description: meta.description ?? launch.description ?? null,
       toolUseId: meta.toolUseId ?? null,
+      finished: meta.finished === true ? true : (meta.finished === false ? false : null),
       model: sums.models.length === 1 ? sums.models[0] : (launch.resolvedModel ?? (sums.models.join('+') || null)),
       launchStatus: launch.status ?? null,
       file,
       ...sums,
     }
     row.microUsd = price(row, pricing)
+    if (row.finished === false || row.entries === 0) {
+      console.error(`WARN - partial: agent ${agentId} finished=${row.finished} entries=${row.entries} — measure after the agent finishes before citing Tokens:`)
+    }
     subagents.push(row)
   }
   if (opts.agent && subagents.length === 0) die(`args: no subagent file for agent '${opts.agent}'`)
+  const unknownDone = subagents.filter(r => r.finished === null).length
+  if (unknownDone) console.error(`WARN - partial?: ${unknownDone} subagent(s) have no 'finished' flag in meta.json (older runtime or still running) — confirm the agent finished before citing Tokens:`)
 
   return {
     mainFile,
@@ -206,6 +214,7 @@ const COLS = [
   ['output', r => r.output, 8],
   ['total', r => r.total, 9],
   ['usd', r => (r.microUsd == null ? '-' : (r.microUsd / 1e6).toFixed(4)), 9],
+  ['done', r => (r.finished === true ? 'yes' : (r.finished === false ? 'no' : '?')), 4],
   ['run / description', r => [r.workflowRunId, r.description].filter(Boolean).join(' ').slice(0, 48), 0],
 ]
 

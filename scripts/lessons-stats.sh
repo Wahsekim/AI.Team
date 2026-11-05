@@ -31,11 +31,10 @@ FOLD_MIN=5
 FOLD_ROLES=2
 
 # Archives first, active last: "last" citation follows file order then entry order.
-FILES=""
-for f in "$ROOT"/agents/archive/lifecycle-*.md; do [ -f "$f" ] && FILES="$FILES $f"; done
-FILES="$FILES $ACTIVE"
+FILES=()
+for f in "$ROOT"/agents/archive/lifecycle-*.md; do [ -f "$f" ] && FILES+=("$f"); done
+FILES+=("$ACTIVE")
 
-# shellcheck disable=SC2086
 awk -v index_file="$INDEX" -v active_file="$ACTIVE" \
     -v stale_window="$STALE_WINDOW" -v promote_min="$PROMOTE_MIN" \
     -v fold_min="$FOLD_MIN" -v fold_roles="$FOLD_ROLES" '
@@ -50,6 +49,7 @@ BEGIN {
   }
   close(index_file)
 }
+FNR == 1 { entry = ""; role = "" }
 /^## \[[0-9]+\]/ {
   entry = $2; sub(/^\[/, "", entry); sub(/\]$/, "", entry)
   role = ""
@@ -58,10 +58,12 @@ BEGIN {
   next
 }
 /^- Lessons:/ {
+  if (entry == "") next
   rest = $0; sub(/^- Lessons:[ \t]*/, "", rest)
-  while (match(rest, /L[0-9][0-9][0-9]?[0-9]?/)) {
-    id = substr(rest, RSTART, RLENGTH)
-    rest = substr(rest, RSTART + RLENGTH)
+  ntok = split(rest, toks, /[^A-Za-z0-9]+/)
+  for (ti = 1; ti <= ntok; ti++) {
+    id = toks[ti]
+    if (id !~ /^L[0-9][0-9][0-9]?[0-9]?$/) continue
     key = id SUBSEP entry
     if (!(key in cited_in)) {
       cited_in[key] = 1
@@ -94,4 +96,4 @@ END {
   }
   for (id in unknown) printf "WARN - unknown: %s cited in [%s] but not in the index\n", id, unknown[id]
   print "LESSONS-STATS-OK"
-}' $FILES
+}' "${FILES[@]}"

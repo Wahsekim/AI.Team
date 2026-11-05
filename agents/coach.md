@@ -59,7 +59,8 @@ last=[NNN]` plus advisories. Counts live on stdout only, never in the index.
 Thresholds (single source — not restated in `lessons.md`):
 - `candidate` -> `active`: >=2 citations in distinct lifecycle entries;
 - `active` -> `obsolete` candidate: 0 citations across the last 30
-  dispatches (advisory — a lesson younger than the window is not stale);
+  dispatches in the active file (advisory — a lesson younger than the window
+  is not stale; silent until 30 entries exist after a rotation);
 - fold proposal: >=5 citations across >=2 roles, OR a family of 3+ lessons
   with one root cause.
 

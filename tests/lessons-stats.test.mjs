@@ -89,10 +89,23 @@ test('active lesson uncited in the last 30 active entries gets a stale advisory,
   assert.doesNotMatch(r2.stdout, /WARN - stale/)
 })
 
-test('citation of a lesson missing from the index is reported', async () => {
-  const root = makeRoot({ index: INDEX, active: entry(1, 'QA', 'qa', 'L77') })
+test('citation of a lesson missing from the index is reported; tokens inside words are not', async () => {
+  const root = makeRoot({ index: INDEX, active: entry(1, 'QA', 'qa', 'L77, HTML100') })
   const { stdout } = await exec('bash', [SCRIPT, root])
   assert.match(stdout, /^WARN - unknown: L77 cited in \[001\] but not in the index/m)
+  assert.doesNotMatch(stdout, /L100/)
+})
+
+test('a Lessons line before any entry header is ignored, and a root path with spaces works', async () => {
+  const root = makeRoot({ index: INDEX, active: '- Lessons: L01\n\n' + entry(1, 'QA', 'qa', 'L01'), archive: '- Lessons: L01\n' })
+  const { stdout } = await exec('bash', [SCRIPT, root])
+  assert.match(stdout, /^L01 active cited=1 roles=1 last=\[001\]$/m)
+  const spaced = join(mkdtempSync(join(tmpdir(), 'lessons stats ')), 'my kit')
+  mkdirSync(join(spaced, 'agents'), { recursive: true })
+  writeFileSync(join(spaced, 'agents', 'lessons.md'), INDEX)
+  writeFileSync(join(spaced, 'agents', 'lifecycle.md'), entry(1, 'QA', 'qa', 'L01'))
+  const r2 = await exec('bash', [SCRIPT, spaced])
+  assert.match(r2.stdout, /^L01 active cited=1 roles=1 last=\[001\]$/m)
 })
 
 test('empty index is reported without failing', async () => {

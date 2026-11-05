@@ -77,8 +77,10 @@ Compressed one-line entries are valid closes in this mode.
    result gives no figure, measure the transcript:
    `node scripts/measure-spawn.mjs <session-dir> --agent <agentId>` (the
    `agentId` is in the Agent-tool result; four token classes, deduplicated).
+   Measure only after the agent has finished (the script warns otherwise).
    When an engine delta AND a transcript measurement both exist and diverge
-   >30%, dual-record both in `Tokens:` (extends M4, does not replace it).
+   past the M4 threshold, dual-record both in Notes exactly as M4 does for
+   self-report (extends M4, does not replace it).
 
 ## Rotation
 
