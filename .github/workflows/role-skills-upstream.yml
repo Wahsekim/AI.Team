@@ -1,22 +1,15 @@
-name: Propose role skill updates
+name: Report role skill upstream drift
 on:
   schedule:
     - cron: '17 7 * * 1'
   workflow_dispatch:
-  push:
-    branches: ['codex/role-skill-packs']
-permissions: {}
+permissions:
+  contents: read
 jobs:
-  propose:
-    if: github.ref_type == 'branch' && (github.ref_name == github.event.repository.default_branch || github.ref_name == 'codex/role-skill-packs')
+  compare:
+    if: github.ref_type == 'branch' && github.ref_name == github.event.repository.default_branch
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    concurrency:
-      group: role-skill-proposals-${{ github.ref }}
-      cancel-in-progress: false
-    permissions:
-      contents: write
-      pull-requests: write
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
@@ -24,31 +17,16 @@ jobs:
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
           node-version: 22
-      - name: Prepare from allowlisted Git blobs (no upstream scripts executed)
-        id: prepare
+      - name: Compare upstream and report to PM
+        shell: bash
         run: |
-          set -eu
+          set -euo pipefail
           report="$RUNNER_TEMP/role-skills-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.md"
           node scripts/role-skills.mjs prepare-update "$report"
-          if test -f "$report"; then
-            echo 'changed=true' >> "$GITHUB_OUTPUT"
-            echo "report=$report" >> "$GITHUB_OUTPUT"
+          if [[ -f "$report" ]]; then
+            node scripts/role-skills.mjs verify
+            cat "$report" >> "$GITHUB_STEP_SUMMARY"
+            echo '::warning::Upstream skill changes detected. PM review required; nothing published.'
+            exit 1
           fi
-      - name: Verify candidate and run offline role-skill tests
-        if: steps.prepare.outputs.changed == 'true'
-        env:
-          REPORT: ${{ steps.prepare.outputs.report }}
-        run: |
-          set -eu
-          node scripts/role-skills.mjs verify
-          node --test tests/role-skills.test.mjs tests/role-skill-proposal.test.mjs
-          bash -n scripts/propose-role-skills.sh
-          printf '\nValidation passed: pin verification and role-skill tests (Node 22). [Workflow log](%s/%s/actions/runs/%s). Full release CI not asserted.\n' \
-            "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" >> "$REPORT"
-      - name: Open a review PR; never merge
-        if: steps.prepare.outputs.changed == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          REPORT: ${{ steps.prepare.outputs.report }}
-        run: bash scripts/propose-role-skills.sh "$REPORT"
+          echo 'Selected files unchanged.' >> "$GITHUB_STEP_SUMMARY"

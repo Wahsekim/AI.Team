@@ -7,6 +7,14 @@ import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { brief } from '../scripts/role-skills.mjs';
 
+test('weekly skill monitor is read-only and has no branch publisher', () => {
+  const workflow = readFileSync(new URL('../.github/workflows/role-skills-upstream.yml',import.meta.url),'utf8');
+  assert.match(workflow,/^permissions:\n  contents: read$/m);
+  assert.match(workflow,/persist-credentials: false/);
+  assert.doesNotMatch(workflow,/^\s*push:|:\s*write(?:-all)?\s*$|gh pr create|git (?:commit|push)\b|propose-role-skills\.sh/m);
+  assert.equal(existsSync(new URL('../scripts/propose-role-skills.sh',import.meta.url)),false);
+});
+
 test('only exact role and task pairs receive a pinned method', () => {
   for (const [role, task, skill] of [['pm','spec','to-spec'], ['pm','tickets','to-tickets'],
     ['backend','debug','diagnosing-bugs'], ['frontend','debug','diagnosing-bugs'],
@@ -17,26 +25,26 @@ test('only exact role and task pairs receive a pinned method', () => {
     assert.equal(brief(...pair), '');
 });
 
-test('selected upstream content is present without unsafe orchestration phases', () => {
-  assert.match(brief('pm','spec'), /Implementation Decisions/);
+test('rendered methods do not delegate to unbundled skills or publish tickets', () => {
   assert.doesNotMatch(brief('pm','tickets'), /### 5\. Publish/);
-  assert.match(brief('architect','interface-design'), /Shallow module/);
   assert.doesNotMatch(brief('architect','interface-design'), /Run the \*\*arena|arena runners|grok-4/);
-  assert.match(brief('qa','impact-review'), /Prove the one fact/);
-  assert.doesNotMatch(brief('qa','impact-review'), /run it as an `arena`/);
-  assert.match(brief('backend','debug'), /red-capable/);
+  assert.doesNotMatch(brief('qa','impact-review'), /run it as an `arena`|`why`/);
 });
 
 test('offline integrity failure produces no partial brief', t => {
   const root = fileURLToPath(new URL('../', import.meta.url));
   const dir = mkdtempSync(join(tmpdir(), 'ai-role-skill-test-'));
   t.after(() => rmSync(dir, {recursive:true, force:true}));
-  mkdirSync(join(dir,'scripts')); mkdirSync(join(dir,'agents'));
-  cpSync(join(root,'scripts/role-skills.mjs'), join(dir,'scripts/role-skills.mjs'));
-  cpSync(join(root,'agents/skill-packs'), join(dir,'agents/skill-packs'), { recursive:true });
-  const run = args => spawnSync(process.execPath, ['scripts/role-skills.mjs', ...args], {cwd:dir, encoding:'utf8'});
+  const kit = join(dir,'AI.Team');
+  mkdirSync(join(kit,'scripts'),{recursive:true}); mkdirSync(join(kit,'agents'));
+  cpSync(join(root,'scripts/role-skills.mjs'), join(kit,'scripts/role-skills.mjs'));
+  cpSync(join(root,'agents/skill-packs'), join(kit,'agents/skill-packs'), { recursive:true });
+  const run = args => spawnSync(process.execPath, ['AI.Team/scripts/role-skills.mjs', ...args], {cwd:dir, encoding:'utf8'});
   assert.equal(run(['verify']).status, 0);
-  writeFileSync(join(dir,'agents/skill-packs/pstack/skills/architect/references/design-red-flags.md'), 'changed');
+  const debug = run(['brief','frontend','debug']);
+  const helper = join(kit,'agents/skill-packs/matt/skills/engineering/diagnosing-bugs/scripts/hitl-loop.template.sh');
+  assert.equal(debug.status,0); assert.ok(debug.stdout.includes(helper)); assert.ok(existsSync(helper));
+  writeFileSync(join(kit,'agents/skill-packs/pstack/skills/architect/references/design-red-flags.md'), 'changed');
   const failed = run(['brief','architect','interface-design']);
   assert.equal(failed.status, 2); assert.equal(failed.stdout, ''); assert.match(failed.stderr, /Unverified skill file/);
   assert.equal(run(['verify']).status, 2);
@@ -84,8 +92,14 @@ test('upstream changes are detected without adoption; explicit refresh imports o
   assert.equal(cli('prepare-update',report).status,2,'do not overwrite an existing report');
   // Independently verify explicit manual refresh from the original pinned state.
   cpSync(join(root,'agents/skill-packs'),join(dir,'kit/agents/skill-packs'),{recursive:true});
-  const updated = cli('refresh','matt',git(matt,'rev-parse','HEAD'));
-  assert.equal(updated.status,0,updated.stderr); assert.equal(cli('verify').status,0);
+  const rev = git(matt,'rev-parse','HEAD');
+  for (const url of ['git@github.com:mattpocock/skills.git','ssh://git@github.com/mattpocock/skills','https://github.com/mattpocock/skills.git']) {
+    git(matt,'config','remote.origin.url',url);
+    const updated = cli('refresh','matt',rev,matt); assert.equal(updated.status,0,updated.stderr);
+  }
+  git(matt,'config','remote.origin.url','git@github.com:other/skills.git');
+  assert.equal(cli('refresh','matt',rev,matt).status,2);
+  assert.equal(cli('verify').status,0);
   assert.match(cli('brief','frontend','debug').stdout,/EXAMPLE_UPSTREAM_REVISION/);
   assert.equal(cli('check-upstream').status,0);
 });

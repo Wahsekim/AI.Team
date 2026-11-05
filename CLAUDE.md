@@ -134,7 +134,7 @@ When the owner says `start {{PROJECT_NAME | localized at bootstrap}}` or
   fires the chaos role for halt-investigation first.
 - Engine-mode loops: paste the engine's emitted log blocks VERBATIM
   (`docs/engine.md`); manual re-derivation is banned.
-- Agents may commit in this repository (owner decision 2026-10-06): one commit per slice/card, conventional message, never on `main` directly. Agents may push the working branch only (`codex/loop-graph-mvp`; never `main`, never `--force`). Do not deploy or publish unless the owner explicitly asks.
+- **Only the PM session may commit in this repository.** Workers return uncommitted changes and verification results; bots and CI do not commit, push branches, or open PRs. The PM uses one conventional commit per slice/card on a working branch, never directly on `main`. Existing push authorization is limited to `codex/loop-graph-mvp`; another branch needs explicit owner authorization. Never push `main` or force-push. Do not deploy or publish unless the owner explicitly asks. See [ADR 0007](decisions/0007-pm-only-commits.md).
 - Preserve append-only logs; rotate per the rotation regime
   (`docs/process-index.md`); supersede with dated entries instead of rewriting
   history.

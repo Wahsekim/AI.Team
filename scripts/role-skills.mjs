@@ -1,9 +1,8 @@
-// Opt-in, role-scoped brief rendering. Only the maintainer commands access Git.
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, posix, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const script = fileURLToPath(import.meta.url);
@@ -12,11 +11,11 @@ const lockfile = join(pack, 'lock.json');
 const hex = /^[0-9a-f]{40}$/;
 const sha = data => createHash('sha256').update(data).digest('hex');
 const sources = {
-  matt: { repo: 'https://github.com/mattpocock/skills.git', prefix: '', paths: [
+  matt: { repo: 'https://github.com/mattpocock/skills.git', prefix: '', skillDir: 'skills/engineering', paths: [
     'LICENSE', 'skills/engineering/to-spec/SKILL.md', 'skills/engineering/to-tickets/SKILL.md',
     'skills/engineering/diagnosing-bugs/SKILL.md', 'skills/engineering/diagnosing-bugs/scripts/hitl-loop.template.sh',
   ] },
-  pstack: { repo: 'https://github.com/cursor/plugins.git', prefix: 'pstack/', paths: [
+  pstack: { repo: 'https://github.com/cursor/plugins.git', prefix: 'pstack/', skillDir: 'skills', paths: [
     'LICENSE', 'skills/architect/SKILL.md', 'skills/architect/references/rationale-template.md',
     'skills/architect/references/design-red-flags.md', 'skills/blast-radius/SKILL.md',
   ] },
@@ -42,14 +41,14 @@ function section(text, from, until) {
   return text.slice(start, end).trim();
 }
 function method(name, read) {
-  const text = read('SKILL.md');
+  const text = name === 'architect' ? undefined : read('SKILL.md');
   switch (name) {
     case 'to-spec': return 'Draft only. Confirm test seams with the owner. Use the agreed context and this template:\n' + section(text, '<spec-template>', '</spec-template>') + '\n</spec-template>';
     case 'to-tickets': return ['Draft only. Ask the owner to confirm slices and blocking edges.', section(text, '### 3. Draft vertical slices', '### 5. Publish'), section(text, '<local-ticket-template>', '</local-ticket-template>') + '\n</local-ticket-template>'].join('\n\n');
     case 'diagnosing-bugs': {
       const start = text.indexOf('# Diagnosing Bugs\n');
       if (start < 0) throw Error('Review changed diagnosing-bugs heading');
-      return text.slice(start).replaceAll('scripts/hitl-loop.template.sh', 'agents/skill-packs/matt/skills/engineering/diagnosing-bugs/scripts/hitl-loop.template.sh');
+      return text.slice(start).replaceAll('scripts/hitl-loop.template.sh', () => join(pack, 'matt', sources.matt.skillDir, name, 'scripts/hitl-loop.template.sh'));
     }
     case 'architect': {
       const rationale = read('references/rationale-template.md');
@@ -57,7 +56,7 @@ function method(name, read) {
         section(rationale, '## Usage', '## Synthesis decision'), section(rationale, '## Tradeoffs accepted', '## Next implementation step'),
         read('references/design-red-flags.md')].join('\n\n');
     }
-    case 'blast-radius': return [section(text, "## Don't trust your own writeup", '## Steps'), section(text, '2. Find the one fact', '6. For a big'), section(text, '## What to hand back', 'Write it through')].join('\n\n');
+    case 'blast-radius': return [section(text, "## Don't trust your own writeup", '## Steps'), section(text, '2. Find the one fact', '6. For a big').replace(' Same rules as `why`.',''), section(text, '## What to hand back', 'Write it through')].join('\n\n');
     default: throw Error('Unknown skill');
   }
 }
@@ -66,7 +65,7 @@ export function brief(role, task) {
   if (!match) return ''; // Normal work has zero extra brief content.
   const [, , source, name] = match, pin = locks()[source];
   verify(source, pin);
-  const dir = source === 'matt' ? 'skills/engineering/' + name : 'skills/' + name;
+  const dir = join(sources[source].skillDir, name);
   const body = method(name, p => readFileSync(join(pack, source, dir, p), 'utf8'));
   return render(role, task, source, name, pin.commit, body);
 }
@@ -86,7 +85,7 @@ function fetchFiles(name, ref, checkout) {
     if (temp) {
       git(cwd, 'init', '-q', '--bare');
       git(cwd, 'fetch', '-q', '--depth=1', '--no-tags', src.repo, ref);
-    } else if (git(cwd, 'remote', 'get-url', 'origin').toString().trim().replace(/\.git$/, '') !== src.repo.replace(/\.git$/, '')) {
+    } else if (!approvedOrigin(src.repo, git(cwd, 'config', '--get', 'remote.origin.url').toString().trim())) {
       throw Error('Checkout origin does not match the approved source');
     }
     const commit = git(cwd, 'rev-parse', '--verify', (temp ? 'FETCH_HEAD' : ref) + '^{commit}').toString().trim();
@@ -99,19 +98,21 @@ function fetchFiles(name, ref, checkout) {
       hashes[path] = sha(files[path]);
     }
     // Changed headings must be reviewed rather than silently rendering an empty method.
-    for (const [, , source, skill] of routes) if (source === name) {
-      const base = (name === 'matt' ? 'skills/engineering/' : 'skills/') + skill + '/';
-      method(skill, path => files[base + path].toString('utf8'));
-    }
-    return { files, pin: { commit, files: hashes } };
+    const bodies = Object.fromEntries(routes.filter(route => route[2] === name).map(([, , , skill]) =>
+      [skill, method(skill, path => files[posix.join(src.skillDir, skill, path)].toString('utf8'))]));
+    return { files, bodies, pin: { commit, files: hashes } };
   } finally { if (temp) rmSync(temp, { recursive: true, force: true }); }
 }
-function install(name, {files, pin}, state) {
+function approvedOrigin(canonical, url) {
+  const slug = canonical.slice('https://github.com/'.length, -4);
+  return ['https://github.com/', 'git@github.com:', 'ssh://git@github.com/', 'ssh://git@github.com:22/']
+    .some(prefix => url === prefix + slug || url === prefix + slug + '.git');
+}
+function install(name, files) {
   for (const [path, bytes] of Object.entries(files)) {
     const dest = join(pack, name, path);
     mkdirSync(dirname(dest), { recursive: true }); writeFileSync(dest, bytes);
   }
-  state[name] = pin;
 }
 const save = state => writeFileSync(lockfile, JSON.stringify(state, null, 2) + '\n');
 
@@ -141,14 +142,13 @@ function prepare(report) {
     if (paths.length) changes.push({source, result, paths});
   }
   if (!changes.length) { console.log('Selected files unchanged; no proposal.'); return; }
-  const sections = ['## Pinned skill updates', 'Review before merging. No active brief or deployment has been updated.'];
+  const sections = ['## Pinned skill updates', 'For PM review. No change has been committed or published.'];
   for (const {source,result,paths} of changes) {
     const old = state[source].commit, next = result.pin.commit;
     sections.push('### ' + source, '[' + old.slice(0,8) + ' → ' + next.slice(0,8) + '](' + sources[source].repo.replace(/\.git$/, '') + '/compare/' + old + '...' + next + ')',
       'Changed source files: ' + paths.map(p => '`' + p + '`').join(', '));
     for (const [roles, task, src, name] of routes.filter(route => route[2] === source)) {
-      const base = (src === 'matt' ? 'skills/engineering/' : 'skills/') + name + '/';
-      const content = method(name, path => result.files[base + path].toString('utf8'));
+      const content = result.bodies[name];
       const role = roles[0], before = bodyOf(brief(role, task));
       const after = bodyOf(render(role, task, src, name, next, content));
       sections.push('**' + roles.join(' / ') + ' · ' + task + '** — ' +
@@ -157,8 +157,8 @@ function prepare(report) {
   }
   // No writes until both sources and every candidate render have been checked.
   writeFileSync(report, sections.join('\n\n') + '\n', {flag:'wx'});
-  for (const {source,result} of changes) install(source,result,state);
-  save(state);
+  for (const {source,result} of changes) install(source,result.files);
+  save({...state, ...Object.fromEntries(changes.map(({source,result}) => [source,result.pin]))});
 }
 function main([cmd, ...args]) {
   if (cmd === 'prepare-update' && args.length === 1) { prepare(args[0]); return; }
@@ -184,8 +184,9 @@ function main([cmd, ...args]) {
     const [name, ref, checkout] = args;
     const state = existsSync(lockfile) ? locks() : {};
     if (state[name]) verify(name, state[name]); // Do not clobber locally edited snapshots.
-    install(name, fetchFiles(name, ref, checkout), state);
-    save(state);
+    const {files, pin} = fetchFiles(name, ref, checkout);
+    install(name, files);
+    save({...state, [name]:pin});
     console.log('Review the vendor and rendered-method diff before committing:', name, ref); return;
   }
   throw Error('Usage: role-skills.mjs brief ROLE TASK | verify | check-upstream | prepare-update NEW_REPORT_PATH | refresh {matt|pstack} FULL_SHA [LOCAL_UPSTREAM_CHECKOUT]');
