@@ -1,0 +1,5 @@
+{
+  "tableVersion": "unfilled-2026-11-05",
+  "note": "USD per million tokens per model, four classes: input, cacheCreate, cacheRead, output. Fill from the provider's current price list and bump tableVersion to that list's date. Models absent here stay UNPRICED (null), never $0. Used by scripts/measure-spawn.mjs --pricing.",
+  "usdPerMTok": {}
+}

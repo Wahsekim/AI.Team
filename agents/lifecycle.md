@@ -18,6 +18,7 @@ Rotation: slim-active + archive — the standing rule in
 - Status: spawned | running | completed | failed | aborted
 - Completed: {{UTC_TIMESTAMP}}
 - Tokens: {{INTEGER}}                     # harness-measured; dual-record self-report >30% divergence (M4)
+- Lessons: {{LNN, ... | none}}            # optional; lessons applied in this dispatch (scripts/lessons-stats.sh counts them)
 - Variance: {{+/-N%}}
 - PM overhead: ~{{INTEGER}} tok (est)
 - Outcome: {{ONE_LINE_RESULT}}
@@ -72,6 +73,20 @@ Compressed one-line entries are valid closes in this mode.
 7. Progress must be observable.
 8. Any halt of a count-directed loop outside the charter halt list triggers a
    chaos-role halt-investigation BEFORE the halt.
+9. `Tokens:` comes from a harness meter, never the worker. When the Agent-tool
+   result gives no figure, measure the transcript:
+   `node scripts/measure-spawn.mjs <session-dir> --agent <agentId>` (the
+   `agentId` is in the Agent-tool result) and write its `harness_eq` column
+   (input + cache-creation tokens — the same scale as the Agent-tool
+   `subagent_tokens` figure every band and estimate is calibrated on). Never
+   write `total`: it adds cache reads and runs 10-50x higher. `Tokens:` is an
+   effort scale, not spend: it omits output tokens (the priciest class), so
+   writing workers are under-counted relative to reading ones. Cost questions
+   use the script's four-class view with a filled `scripts/lib/model-pricing.json`.
+   Measure only after the agent has finished (the script warns otherwise).
+   When an engine delta AND a transcript measurement both exist and diverge
+   past the M4 threshold, dual-record both in Notes exactly as M4 does for
+   self-report (extends M4, does not replace it).
 
 ## Rotation
 

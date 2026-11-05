@@ -20,6 +20,8 @@ Statuses: `active` (rule lives in an overlay/_shared file) · `folded-M<N>`
 
 Every line must be concrete enough to change the next brief, template, or
 rule. Lessons are evidence, not vibes — cite lifecycle entries when codifying.
+Citations are counted mechanically from lifecycle `- Lessons:` lines by
+`scripts/lessons-stats.sh` (thresholds: `agents/coach.md` Lessons Regime).
 
 ## Index
 
