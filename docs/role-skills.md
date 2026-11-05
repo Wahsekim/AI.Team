@@ -50,9 +50,7 @@ is offline and verifies the selected source before emitting any text.
 2. `node scripts/role-skills.mjs check-upstream` fetches each official Git
    HEAD into temporary storage and compares **only the selected files**.
    Exit 0 = unchanged; 1 = drift; 2 = error/incompatible input. It never
-   adopts upstream changes. The read-only Actions workflow runs on pushes to
-   this feature branch and weekly **once present on the default branch**.
-   Before merge, run this command manually between pushes. No local daemon.
+   adopts upstream changes. For an update PR see below.
 3. Review upstream changes including licenses, subordinate references,
    side effects, and renderer boundaries. In a clean worktree run
    `node scripts/role-skills.mjs refresh matt FULL_UPSTREAM_COMMIT_SHA` or
@@ -64,3 +62,39 @@ is offline and verifies the selected source before emitting any text.
    committing. Missing/renamed files, incompatible headings or capability
    changes require a human decision, not automatic fallback to another skill.
    Roll back the update commit as a unit (snapshots + lock + renderer).
+
+### Automatic proposals (never automatic activation)
+
+The Actions workflow `Propose role skill updates` checks on pushes to
+`codex/role-skill-packs`; its Monday 07:17 UTC schedule works **only after
+the workflow and its scripts are on the default branch**. A feature branch
+alone does not run a weekly timer. Actions must be enabled and repository/org
+policy must permit the workflow token to write proposal branches and create
+PRs (Settings → Actions → General → Workflow permissions → Allow GitHub Actions
+to create and approve pull requests). The job requests only contents and PR
+write permissions; it neither approves nor merges. No PAT is required.
+
+In a disposable checkout it verifies the old pins and fetches only approved
+blobs. If those bytes did not change, it does not create a branch or PR.
+Otherwise it prepares a candidate, verifies pins and runs the role-skill
+tests **before** publishing. The PR targets the checked branch and reports
+old/new revisions, changed paths and the actual rendered differences by role
+and task. Revision stamps alone do not count as a method-body change. Long
+diffs have an explicitly bounded preview; inspect the PR files and render
+locally for the complete text. The PR links the validation run; this is not
+a claim that downstream PR-triggered CI has run.
+
+Only one open proposal per base is allowed. An open PR is left untouched;
+newer upstream changes are reconsidered on the next check after it closes.
+A closed proposal for the same old/new lock pair is not recreated. The
+publisher never force-pushes. A failed API call after pushing may leave an
+unmerged bot branch; a retry reuses it only if its parent and entire tree
+match. Permission, network, layout, or test failures fail the Actions run;
+inspect the logs and enable Actions/PR notifications if desired.
+
+For a local rehearsal in a **clean disposable checkout**, run
+`node scripts/role-skills.mjs prepare-update /tmp/new-proposal.md` with a
+previously absent report path. This command edits that checkout's snapshots
+and lock only when updates exist; it never pushes or opens a PR.
+After a human reviews and merges the candidate, each deployed kit must pull or
+be updated separately. Only newly generated briefs use the adopted version.

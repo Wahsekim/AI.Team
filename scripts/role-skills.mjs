@@ -1,5 +1,5 @@
 // Opt-in, role-scoped brief rendering. Only the maintainer commands access Git.
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -68,8 +68,11 @@ export function brief(role, task) {
   verify(source, pin);
   const dir = source === 'matt' ? 'skills/engineering/' + name : 'skills/' + name;
   const body = method(name, p => readFileSync(join(pack, source, dir, p), 'utf8'));
+  return render(role, task, source, name, pin.commit, body);
+}
+function render(role, task, source, name, commit, body) {
   return [
-    'Selected method: ' + source + '/' + name + '@' + pin.commit + ' (' + role + '/' + task + ').',
+    'Selected method: ' + source + '/' + name + '@' + commit + ' (' + role + '/' + task + ').',
     'Method only. Original brief scope, budget, stop rules and team verification gates take precedence. No new permissions.',
     'Do not spawn agents, choose additional models, invoke another skill, install tools, publish issues, push, or deploy from this method. Workers escalate to PM; PM needs separate owner authority for external actions.',
     body,
@@ -103,7 +106,62 @@ function fetchFiles(name, ref, checkout) {
     return { files, pin: { commit, files: hashes } };
   } finally { if (temp) rmSync(temp, { recursive: true, force: true }); }
 }
+function install(name, {files, pin}, state) {
+  for (const [path, bytes] of Object.entries(files)) {
+    const dest = join(pack, name, path);
+    mkdirSync(dirname(dest), { recursive: true }); writeFileSync(dest, bytes);
+  }
+  state[name] = pin;
+}
+const save = state => writeFileSync(lockfile, JSON.stringify(state, null, 2) + '\n');
+
+// Indent all upstream-controlled text as inert Markdown code. Exclude the
+// pin-only first line from method diffs; list revision changes separately.
+function excerptDiff(before, after) {
+  const temp = mkdtempSync(join(tmpdir(), 'role-brief-diff-'));
+  try {
+    writeFileSync(join(temp, 'before'), before);
+    writeFileSync(join(temp, 'after'), after);
+    const diff = spawnSync('git', ['diff','--no-index','--no-ext-diff','--no-color','--text','--','before','after'],
+      {cwd:temp,encoding:'utf8',maxBuffer:4*1024*1024});
+    if (diff.status !== 1) throw Error('Expected a render diff: ' + (diff.error ?? diff.stderr));
+    const lines = diff.stdout.slice(diff.stdout.indexOf('@@')).split('\n');
+    const preview = lines.slice(0, 60).map(line => '    ' + line.slice(0,160)).join('\n');
+    return preview + (lines.length > 60 || lines.some(l => l.length > 160) ? '\n\nPreview truncated; inspect the full pack diff.' : '');
+  } finally { rmSync(temp, {recursive:true, force:true}); }
+}
+function prepare(report) {
+  if (existsSync(report)) throw Error('Proposal report path already exists');
+  const state = locks(), changes = [];
+  const bodyOf = rendered => rendered.slice(rendered.indexOf('\n') + 1);
+  for (const source of Object.keys(sources)) {
+    verify(source, state[source]);
+    const result = fetchFiles(source, 'HEAD');
+    const paths = sources[source].paths.filter(p => state[source].files[p] !== result.pin.files[p]);
+    if (paths.length) changes.push({source, result, paths});
+  }
+  if (!changes.length) { console.log('Selected files unchanged; no proposal.'); return; }
+  const sections = ['## Pinned skill updates', 'Review before merging. No active brief or deployment has been updated.'];
+  for (const {source,result,paths} of changes) {
+    const old = state[source].commit, next = result.pin.commit;
+    sections.push('### ' + source, '[' + old.slice(0,8) + ' → ' + next.slice(0,8) + '](' + sources[source].repo.replace(/\.git$/, '') + '/compare/' + old + '...' + next + ')',
+      'Changed source files: ' + paths.map(p => '`' + p + '`').join(', '));
+    for (const [roles, task, src, name] of routes.filter(route => route[2] === source)) {
+      const base = (src === 'matt' ? 'skills/engineering/' : 'skills/') + name + '/';
+      const content = method(name, path => result.files[base + path].toString('utf8'));
+      const role = roles[0], before = bodyOf(brief(role, task));
+      const after = bodyOf(render(role, task, src, name, next, content));
+      sections.push('**' + roles.join(' / ') + ' · ' + task + '** — ' +
+        (before === after ? 'method text unchanged (pin only).' : 'rendered method changed:\n\n' + excerptDiff(before, after)));
+    }
+  }
+  // No writes until both sources and every candidate render have been checked.
+  writeFileSync(report, sections.join('\n\n') + '\n', {flag:'wx'});
+  for (const {source,result} of changes) install(source,result,state);
+  save(state);
+}
 function main([cmd, ...args]) {
+  if (cmd === 'prepare-update' && args.length === 1) { prepare(args[0]); return; }
   if (cmd === 'brief' && args.length === 2) { process.stdout.write(brief(...args)); return; }
   if (cmd === 'verify' && !args.length) {
     const state = locks();
@@ -126,16 +184,11 @@ function main([cmd, ...args]) {
     const [name, ref, checkout] = args;
     const state = existsSync(lockfile) ? locks() : {};
     if (state[name]) verify(name, state[name]); // Do not clobber locally edited snapshots.
-    const { files, pin } = fetchFiles(name, ref, checkout);
-    for (const [path, bytes] of Object.entries(files)) {
-      const dest = join(pack, name, path);
-      mkdirSync(dirname(dest), { recursive: true }); writeFileSync(dest, bytes);
-    }
-    state[name] = pin;
-    writeFileSync(lockfile, JSON.stringify(state, null, 2) + '\n');
+    install(name, fetchFiles(name, ref, checkout), state);
+    save(state);
     console.log('Review the vendor and rendered-method diff before committing:', name, ref); return;
   }
-  throw Error('Usage: role-skills.mjs brief ROLE TASK | verify | check-upstream | refresh {matt|pstack} FULL_SHA [LOCAL_UPSTREAM_CHECKOUT]');
+  throw Error('Usage: role-skills.mjs brief ROLE TASK | verify | check-upstream | prepare-update NEW_REPORT_PATH | refresh {matt|pstack} FULL_SHA [LOCAL_UPSTREAM_CHECKOUT]');
 }
 if (process.argv[1] && resolve(process.argv[1]) === script) {
   try { main(process.argv.slice(2)); } catch (error) { console.error(error.message); process.exitCode = 2; }

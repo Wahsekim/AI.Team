@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { appendFileSync, cpSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { appendFileSync, cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -66,11 +66,24 @@ test('upstream changes are detected without adoption; explicit refresh imports o
   const cli = (...args) => spawnSync(process.execPath, ['scripts/role-skills.mjs', ...args], {cwd:join(dir,'kit'),env,encoding:'utf8'});
   assert.equal(cli('check-upstream').status, 0, 'unrelated upstream commits must not count as drift');
   const lock = join(dir,'kit/agents/skill-packs/lock.json'), before = readFileSync(lock);
+  const report = join(dir,'proposal.md');
+  assert.equal(cli('prepare-update',report).status,0); assert.equal(existsSync(report),false);
   const matt = join(dir,'matt'), skill = 'skills/engineering/diagnosing-bugs/SKILL.md';
   appendFileSync(join(matt,skill), '\nEXAMPLE_UPSTREAM_REVISION\n'); commit(matt,'new method');
   const drift = cli('check-upstream'); assert.equal(drift.status,1); assert.ok(drift.stdout.includes(skill));
   assert.deepEqual(readFileSync(lock),before); assert.doesNotMatch(cli('brief','backend','debug').stdout,/EXAMPLE_UPSTREAM_REVISION/);
   assert.equal(cli('refresh','matt','HEAD').status,2);
+  const proposal = cli('prepare-update',report);
+  assert.equal(proposal.status,0,proposal.stderr);
+  const body = readFileSync(report,'utf8');
+  assert.match(body,/backend \/ frontend · debug/);
+  assert.match(body,/    \+EXAMPLE_UPSTREAM_REVISION/);
+  assert.match(body,/pm · spec\*\* — method text unchanged/);
+  assert.doesNotMatch(body,/### pstack/);
+  assert.match(cli('brief','frontend','debug').stdout,/EXAMPLE_UPSTREAM_REVISION/);
+  assert.equal(cli('prepare-update',report).status,2,'do not overwrite an existing report');
+  // Independently verify explicit manual refresh from the original pinned state.
+  cpSync(join(root,'agents/skill-packs'),join(dir,'kit/agents/skill-packs'),{recursive:true});
   const updated = cli('refresh','matt',git(matt,'rev-parse','HEAD'));
   assert.equal(updated.status,0,updated.stderr); assert.equal(cli('verify').status,0);
   assert.match(cli('brief','frontend','debug').stdout,/EXAMPLE_UPSTREAM_REVISION/);
