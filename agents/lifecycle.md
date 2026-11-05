@@ -76,7 +76,10 @@ Compressed one-line entries are valid closes in this mode.
 9. `Tokens:` comes from a harness meter, never the worker. When the Agent-tool
    result gives no figure, measure the transcript:
    `node scripts/measure-spawn.mjs <session-dir> --agent <agentId>` (the
-   `agentId` is in the Agent-tool result; four token classes, deduplicated).
+   `agentId` is in the Agent-tool result) and write its `harness_eq` column
+   (input + cache-creation tokens — the same scale as the Agent-tool
+   `subagent_tokens` figure every band and estimate is calibrated on). Never
+   write `total`: it adds cache reads and runs 10-50x higher.
    Measure only after the agent has finished (the script warns otherwise).
    When an engine delta AND a transcript measurement both exist and diverge
    past the M4 threshold, dual-record both in Notes exactly as M4 does for

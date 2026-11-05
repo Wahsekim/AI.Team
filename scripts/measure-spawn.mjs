@@ -14,6 +14,12 @@
 //   <sessionId>/subagents/agent-<id>.meta.json      agentType, description, toolUseId
 //   <sessionId>/subagents/workflows/wf_*/agent-*.jsonl   engine-run agents
 //
+// Which column goes into lifecycle `Tokens:`: harness_eq = input +
+// cache_creation. Calibrated 2026-11-05 against 140 Agent-tool completion
+// notices (<subagent_tokens>): single-run agents match at median ratio 1.008;
+// cache reads and output are NOT in the harness figure, so `total` (all four
+// classes) is a cost view only and must never be written into `Tokens:`.
+//
 // Rules: assistant entries are summed over the four token classes and
 // deduplicated by message.id (fallback requestId), keeping the max of each
 // field per id — streamed entries repeat the id and early chunks can
@@ -102,6 +108,7 @@ function sumAssistant(file, entries) {
     entries: entryCount,
     duplicates,
     uniqueMessages: byKey.size,
+    harnessEq: t.input + t.cacheCreate,
     total: t.input + t.cacheCreate + t.cacheRead + t.output,
     models: [...models],
   }
@@ -212,6 +219,7 @@ const COLS = [
   ['cache_create', r => r.cacheCreate, 12],
   ['cache_read', r => r.cacheRead, 10],
   ['output', r => r.output, 8],
+  ['harness_eq', r => r.harnessEq, 10],
   ['total', r => r.total, 9],
   ['usd', r => (r.microUsd == null ? '-' : (r.microUsd / 1e6).toFixed(4)), 9],
   ['done', r => (r.finished === true ? 'yes' : (r.finished === false ? 'no' : '?')), 4],
@@ -224,10 +232,11 @@ function printText(out) {
   for (const r of out.subagents) console.log(line(COLS.map(([, f, w]) => [f(r), w])))
   if (out.session) {
     const s = out.session
-    console.log(`session (main file): msgs=${s.uniqueMessages} dup=${s.duplicates} input=${s.input} cache_create=${s.cacheCreate} cache_read=${s.cacheRead} output=${s.output} total=${s.total}${s.microUsd == null ? '' : ` usd=${(s.microUsd / 1e6).toFixed(4)}`}`)
+    console.log(`session (main file): msgs=${s.uniqueMessages} dup=${s.duplicates} input=${s.input} cache_create=${s.cacheCreate} cache_read=${s.cacheRead} output=${s.output} harness_eq=${s.harnessEq} total=${s.total}${s.microUsd == null ? '' : ` usd=${(s.microUsd / 1e6).toFixed(4)}`}`)
   }
   const sub = out.subagents.reduce((a, r) => a + r.total, 0)
-  console.log(`subagents: ${out.subagents.length} file(s), total=${sub}${out.pricingTableVersion ? ` (pricing ${out.pricingTableVersion})` : ' (unpriced: no --pricing table)'}`)
+  const subEq = out.subagents.reduce((a, r) => a + r.harnessEq, 0)
+  console.log(`subagents: ${out.subagents.length} file(s), harness_eq=${subEq} (-> lifecycle Tokens:), total=${sub}${out.pricingTableVersion ? ` (pricing ${out.pricingTableVersion})` : ' (unpriced: no --pricing table)'}`)
 }
 
 const opts = parseArgs(process.argv.slice(2))

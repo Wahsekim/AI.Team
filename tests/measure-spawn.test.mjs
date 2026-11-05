@@ -99,6 +99,7 @@ test('sums the four token classes per subagent, max per field across a duplicate
     { input: a1.input, cacheCreate: a1.cacheCreate, cacheRead: a1.cacheRead, output: a1.output },
     { input: 5, cacheCreate: 20000, cacheRead: 30000, output: 520 },
   )
+  assert.equal(a1.harnessEq, 20005) // input + cache_creation: the lifecycle Tokens: column
   assert.equal(a1.total, 50525)
   assert.equal(a1.entries, 5)
   assert.equal(a1.uniqueMessages, 2)
@@ -167,6 +168,8 @@ test('text output has one row per subagent and the four classes', async () => {
   const s = baseSession()
   const { stdout } = await exec('node', [SCRIPT, s.sessionDir])
   assert.match(stdout, /agentId\s+type\s+model/)
+  assert.match(stdout, /harness_eq\s+total/)
+  assert.match(stdout, /subagents: 3 file\(s\), harness_eq=20550 \(-> lifecycle Tokens:\)/)
   assert.match(stdout, /\ba1\b.*\bExplore\b.*\b50525\b/)
   assert.match(stdout, /\bw1\b.*wf_abc123/)
   assert.match(stdout, /session \(main file\).*3142/)
