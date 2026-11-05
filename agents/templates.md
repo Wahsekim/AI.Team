@@ -5,6 +5,20 @@ Keep stack commands in `profiles/stack.md`, not hardcoded here. Token budgets
 come from the tier bands in `agents/pm.md` Rules (single source); models and
 reasoning from `agents/roster.md`.
 
+### Role/task method selection (PM, before dispatch)
+
+Classify the actual work: PM drafting a spec → `pm spec`; splitting approved
+scope into tickets → `pm tickets`; backend/frontend diagnosing an unexplained
+failure → `<role> debug`; architect designing a cross-module interface →
+`architect interface-design`; QA/verifier reviewing downstream risk →
+`<role> impact-review`. Otherwise select nothing. PM planning methods are for
+explicitly requested planning work, not automatic tracker actions.
+For a match run `node scripts/role-skills.mjs brief ROLE TASK` from the kit
+root. Use stdout in the PM's planning context or append it verbatim to **only**
+the matching worker/verifier brief. Count its size against the brief budget;
+do not read entire packs at wake. On verification/render error stop that
+selection and report it. See [update and distribution policy](../docs/role-skills.md).
+
 ## Global Worker Rules
 
 - Report to PM only.

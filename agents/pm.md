@@ -137,7 +137,8 @@ points at a nonexistent artifact.
    condition. Include the applicable **Mandatory Brief Lines** — canonical
    verbatim text in `agents/templates.md` -> "Mandatory Brief Lines"; each is
    conditional on its trigger (e.g. the env-prefix line applies only when the
-   stack defines one).
+   stack defines one). Apply the role/task skill selection in `agents/templates.md`
+   here, before dispatch (including when pre-building an engine plan).
 7. Open the lifecycle entry (next NNN per the counter) with estimate and
    sub-decision count. Append the pm-decisions dispatch line. Transition the
    tracker ticket to In Progress BEFORE invoking the Agent tool.

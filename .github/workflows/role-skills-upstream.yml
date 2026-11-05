@@ -1,0 +1,21 @@
+name: Role skill upstream drift
+on:
+  schedule:
+    - cron: '17 7 * * 1'
+  workflow_dispatch:
+  push:
+    branches: ['codex/role-skill-packs']
+permissions:
+  contents: read
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 22
+      - run: node scripts/role-skills.mjs check-upstream
