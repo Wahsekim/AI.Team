@@ -63,7 +63,7 @@ constraints:
   security_baseline: "{{SECURITY_BASELINE | ask:first_start | default:auth-if-user-data}}"
   git_policy: "{{GIT_POLICY | default:no commit or push unless owner asks}}"
   billing_mode: "{{BILLING_MODE | ask:first_start | options:subscription,api | note:subscription = plan-bounded, no per-run USD cap; api = metered key, COST_CAP_USD required}}"
-  cost_cap_usd: "{{COST_CAP_USD | ask:first_start if BILLING_MODE=api | n/a for subscription | note:paid stages are BLOCKED while unset on api billing (ADR 0006)}}"
+  cost_cap_usd: "see charter -> Canonical Budget/Halt Table, Spend cap row (single source; never restate the value here — ADR 0006)"
 ```
 
 ## Documentation Completeness

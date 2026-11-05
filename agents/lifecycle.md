@@ -33,7 +33,7 @@ Rotation: slim-active + archive — the standing rule in
 
 ## Counter
 
-Next NNN to assign: **026**
+Next NNN to assign: **027**
 
 ## Counter and header rules
 
@@ -702,3 +702,27 @@ at rotation time.
 - Diverged-from: none
 - Round-trip: 1 (resumed to confirm 294f31c; F1/F2 closed; P3 F10; recommends OK locally)
 - Notes: INLINE FALLBACK (see [001]). Push of a5434a2 held until review closes. Last G0 card.
+
+## [026] Reviewer (loop-rollout-reviewer) - 2026-11-05T13:06:18Z
+- Ticket: R06
+- Spawned by: PM (Claude Fable 5.1 main session, owner-directed)
+- Brief: independent review of ADR 0006 draft + billing placeholder rows (branch codex/r06-operating-contract, diff ce6d390..HEAD) against plan card R06 OK/KO and the single-source rules; read-only.
+- Model: fable (runtime default; kit pre-bootstrap, no roster)
+- Reasoning: default
+- Estimated tokens: 120000
+- Sub-decision count: 0
+- Status: completed
+- Completed: 2026-11-05T13:13:04Z
+- Tokens: 93683 (Agent-tool subagent_tokens; measure-spawn harness_eq 88370, +6%, no dual-record needed)
+- Variance: -22%
+- PM overhead: ~10000 tok (est)
+- Outcome: 2 P1 (time ceiling had no value/unknown; COST_CAP_USD restated in two files), 4 P2, 2 P3; all addressed in the ADR revision (enforcement column, permission-mode row, time ceiling = blocking unknown, cap single-homed in charter, redaction overclaim removed)
+- Progress: yes
+- Handoffs:
+    - owner needs to ratify ADR 0006, set or waive a wall-clock ceiling, decide plan-window ceiling, write settings.json allowlist before any unattended loop
+- Retry-of: none
+- Diverged-from: none
+- Round-trip: none
+- Lessons: none
+- Notes: INLINE FALLBACK (pre-bootstrap, general-purpose agent). Tokens: to be taken from scripts/measure-spawn.mjs harness_eq (Harness Rule 9) at close.
+

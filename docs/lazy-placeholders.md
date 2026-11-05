@@ -37,7 +37,8 @@ long setup interview. The PM resolves only the values that block the next action
 | `{{<ROLE> status}}` (`active | dormant | not-hired`) | `agents/roster.md` Status column | hiring step at bootstrap (`docs/staffing.md` questionnaire) |
 | `{{OVERSIZE_BREACH_K}}` / `{{IDLE_CYCLES_N}}` / `{{DORMANT_CYCLES_M}}` | `docs/staffing.md` | defaults 3 / 15 / 30; recalibrate |
 | `{{OWNER_DECISION_SLA}}` / `{{OWNER_REVIEW_INTERVAL}}` | `docs/owner-contract.md` | ask first start; defaults 48h / loop close-or-weekly |
-| `{{BILLING_MODE}}` / `{{COST_CAP_USD}}` | `profiles/project.md` -> Product Constraints; cap row in charter -> Canonical Budget/Halt Table | ask first start: `subscription` (cap n/a) or `api` (cap REQUIRED, asked immediately; paid stages blocked while unset — ADR 0006) |
+| `{{BILLING_MODE}}` | `profiles/project.md` -> Product Constraints | ask first start: `subscription` or `api` (ADR 0006) |
+| `{{COST_CAP_USD}}` | charter -> Canonical Budget/Halt Table, Spend cap row (single source; `profiles/project.md` only points here) | ask first start: on `api` billing a USD value is REQUIRED (paid stages blocked while unset or unpriced); on `subscription` write `n/a` into the row during the interview — the validator fails any `ask:first_start` left in `charter.md` |
 
 ## First Start Behavior
 
