@@ -1,0 +1,7 @@
+{
+  "methodId": "pstack-blast-radius",
+  "adapterVersion": "blast-radius-check-v1",
+  "sourceCommit": "bb68f2365eceafa0cb2d253112f675acf5f144cc",
+  "renderedDigest": "sha256:6565b92829f334bd094e5a51947d6d044c869b31f2b81946276a3af0e3fcac41",
+  "licenseRefs": ["agents/skill-packs/pstack/LICENSE"]
+}
