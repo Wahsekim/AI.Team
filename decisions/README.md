@@ -11,6 +11,7 @@ ADRs are numbered and append-only. Use `0000-template.md` for new decisions.
 | 0004 | 2026-10-07 | Accepted for implementation (PM sign-off; owner ratification pending) | Durable stop record (R04a) |
 | 0005 | 2026-10-07 | Accepted for implementation (PM sign-off; owner ratification pending) | Conservative recovery commands (R05b) |
 | [0007](0007-pm-only-commits.md) | 2026-11-05 | Accepted (owner direction) | PM-only commits; read-only skill update reporting |
+| [0008](0008-router-worker-topology.md) | 2026-11-09 | Accepted (topology/retry mapping only; live activation gated) | Optional Router/Worker topology |
 
 ## When To Write An ADR
 
