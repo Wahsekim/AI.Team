@@ -133,6 +133,35 @@ final-candidate mock gate. Every response is labelled `simulation: true`;
 or verified**. No Claude calls, product writes, or legacy ledger writes occur.
 See [implementation status and next steps](docs/loop-graph.md).
 
+### Experimental Router/Worker foundation (offline only)
+
+An additive `src/router-worker/` foundation explores outcome-based exec/check/guard
+duties alongside the unchanged specialist team. It provides a deterministic
+compiler, one pinned check method, local source/context preflight, inert deployment
+drafts, candidate/check-record binding and persisted retry accounting.
+
+```sh
+node --test tests/router-worker-*.test.mjs
+node scripts/compile-router-worker.mjs INPUT.json
+node scripts/team-mode.mjs preview SPEC.json
+```
+
+Node 22 supports the non-SQLite tools; retry persistence and its registry require
+Node 24+. `INPUT.json` and `SPEC.json` must follow the documented contracts; test
+fixtures are synthetic, not project approval. Draft output is JSON, not installed
+wrappers. There is no activation or live model command. All successful artifacts
+remain non-launchable; **do not pass a preview plan to the live count engine**.
+No existing bootstrap, engine, roster or skill-pack behavior is replaced.
+
+Start with the [PR scope and reviewer guide](docs/design/router-worker/pr-handoff.md),
+[implementation status](docs/design/router-worker/implementation-status.md) and
+[design](docs/design/router-worker/README.md). Real deployment,
+permission/session enforcement and usage settlement remain follow-up work.
+
+Project-maintained documentation is written in English. Translated historical
+reviews retain their original dates and evidence limits; translation is not a new
+review or approval.
+
 ### Existing team model
 
 The important extraction from the source project is not the ASP.NET stack. The reusable system

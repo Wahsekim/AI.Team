@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "methods": [
+    {
+      "id": "pstack-blast-radius",
+      "allowedModes": ["router-worker"],
+      "allowedDuties": ["check"],
+      "description": "Review the impact of a host-bound candidate and prove concrete risks with approved checks.",
+      "triggers": ["Explicit PM selection for candidate impact review"],
+      "exclusions": ["Implementation", "Security-specific approval", "Unbound candidate", "Missing verification environment"],
+      "requiredInputs": ["baseline.candidateRef", "policy.verificationCommands"],
+      "source": "pstack",
+      "sourceRepo": "https://github.com/cursor/plugins.git",
+      "sourceCommit": "bb68f2365eceafa0cb2d253112f675acf5f144cc",
+      "sourceLockRef": {
+        "path": "agents/skill-packs/lock.json",
+        "key": "pstack",
+        "digest": "sha256:c3452d458f11aabb30622b4fcf8f08e292a7094dd0c425ccf42307db3096b80f"
+      },
+      "files": [
+        {"path": "agents/skill-packs/pstack/LICENSE", "sha256": "sha256:bc957ca6bee02792566a1a028d105e02e247c6e77cf057061674273da77b200e"},
+        {"path": "agents/skill-packs/pstack/skills/blast-radius/SKILL.md", "sha256": "sha256:2e10745b97f5862323dcda3b29ca60d56b5c3c98e37020085d26b48efbe0a436"}
+      ],
+      "adapterVersion": "blast-radius-check-v1",
+      "adapterPath": "src/router-worker/adapters/blast-radius.mjs",
+      "adapterDigest": "sha256:9794ad4f73691ecbdf543eeed8ee570a94145b2df8d930f9e87d4e1f2aede5d7",
+      "dependencyRefs": [],
+      "licenseRefs": ["agents/skill-packs/pstack/LICENSE"]
+    }
+  ]
+}
