@@ -64,6 +64,22 @@ The ADR clarification intentionally changes a file included in the retry-rule
 source digest. Existing offline journals tied to an earlier source snapshot do
 not silently adopt new bytes. No journal migration/reset was performed or added.
 
+## Post-push CI investigation
+
+Run [42794349514](https://github.com/Wahsekim/AI.Team/actions/runs/42794349514)
+on `780aa26` failed on Linux Node 24: the existing concurrent SessionStart test
+received exit code 1 from one start hook. The macOS Node 24 job was canceled by
+matrix fail-fast, not a second reported assertion failure. Both Node 22 jobs,
+ShellCheck and secret scan passed. The watchdog scripts and test were unchanged
+from the branch's main baseline at that head.
+
+The focused test and 40 isolated two-start races passed locally on macOS with
+Node 24. This does not establish the Linux failure's cause or prove it harmless.
+The follow-up adds captured hook stdout/stderr to the two existing exit-code
+assertions, without changing their expected values or adding automatic retries.
+This is diagnostic coverage, not a claimed watchdog fix. A later green run alone
+cannot establish that the original intermittent failure has been repaired.
+
 The feature remains an offline foundation. Real deployment, permissions/ownership,
 session continuation, usage settlement and live trials remain unresolved as
 documented in G-01–G-06/E-01.

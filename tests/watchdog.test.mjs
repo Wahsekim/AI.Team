@@ -166,8 +166,8 @@ test('R-10: concurrent SessionStart hooks spawn at most one loop (start lock)', 
       runHook('start-watchdog.sh', home, '{"session_id":"s11"}'),
     ])
     try {
-      assert.equal(a.code, 0)
-      assert.equal(b.code, 0)
+      assert.equal(a.code, 0, `first concurrent start failed: ${a.out}`)
+      assert.equal(b.code, 0, `second concurrent start failed: ${b.out}`)
       const { stdout } = await new Promise(res => {
         const c = spawn('sh', ['-c', 'ps ax -o command= | grep "watchdog-loop.sh s11" | grep -v grep | wc -l'])
         let out = ''
