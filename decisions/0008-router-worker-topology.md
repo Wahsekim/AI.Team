@@ -69,6 +69,19 @@ Owner ratification was received in this task on 2026-11-09 for the two checked
 items only. It does not authorize paid calls, live execution, deployment or
 publication. Project-specific coverage and staffing must still be demonstrated.
 
+Ratification record (English translation of the owner's explicit replies):
+
+- On mapping cross-layer implementation to worker-exec, independent QA to
+  worker-check and Chaos/Guardian to worker-guard, while retaining Architect,
+  Coach, Auditor and Security triggers and independence: "Approve the
+  responsibility mapping; retain all governance rules."
+- On stable ticket + duty accounting with an initial call plus at most two
+  retries, no reset by model/skill/instance, and all earlier stop gates retained:
+  "Approve this counting mapping."
+
+These are the owner's recorded decisions, not approval inferred from an author's
+test results. The unchecked deployment and spending gates above remain unchecked.
+
 Until the remaining gates are met, tooling must continue to report non-launchable
 status. This ADR defines optional topology equivalence; it does not waive charter,
 staffing, independent verification or governance requirements in either mode.

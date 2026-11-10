@@ -28,6 +28,15 @@ heartbeats/
 *.reconcile.json
 .team-loop/
 
+# Router/Worker offline artifacts and interrupted publication scratch
+*.rw-draft.json
+*.rw-retries.sqlite
+*.rw-retries.sqlite-journal
+*.rw-retries.sqlite-wal
+*.rw-retries.sqlite-shm
+.rw-draft-*/
+.rw-retries-*/
+
 # Internal working docs (kept local, not published)
 ai-team-quality-improvement-plan.md
 
