@@ -4,8 +4,10 @@ Suggested title: `feat(router-worker): add non-launchable offline foundations`
 
 Base: `main`. Head: `codex/router-worker-mode`.
 
-Prepared locally on 2026-11-09. Upstream was fetched and remains `8331e09`.
-No remote branch update or PR creation has been performed.
+Prepared locally on 2026-11-09 and published afterward as
+[PR #5](https://github.com/Wahsekim/AI.Team/pull/5). The original `e644c8f` checks
+passed on Nov 10; follow-up commits require their own CI results. See the
+[review response](review-response-2026-11-10.md).
 
 ## Review scope
 
@@ -34,7 +36,7 @@ Included:
 Excluded: install/activate, actual Claude sessions, real session continuation,
 product locks or OS sandbox, runtime source adapters, complete deployed governance
 staffing, real usage/lifecycle settlement, migration, concurrency and paid trials.
-See [remaining rollout gates](self-review-2026-11-09.zh-CN.md) G-01–G-06/E-01.
+See [remaining rollout gates](self-review-2026-11-09.md) G-01–G-06/E-01.
 These remain real implementation/evidence work, not merely permission to spend.
 
 ## Reviewer map
@@ -52,9 +54,10 @@ Review in this order; each layer has focused tests and a contract:
 
 Implementation names above are relative to `src/router-worker/`; tests are
 `tests/router-worker-*.test.mjs`. The CLI entry points live under `scripts/`.
-The historical [external design review](review-2026-11-06.zh-CN.md) is preserved
-as received, not rewritten into a current approval. The author's
-[self-review](self-review-2026-11-09.zh-CN.md) is explicitly not independent review.
+The historical [external design review](review-2026-11-06.md) is an English
+translation with its original date and conclusions, not a current approval; the
+original-language text remains in Git history. The author's
+[self-review](self-review-2026-11-09.md) is explicitly not independent review.
 
 Important review boundaries:
 
@@ -113,8 +116,9 @@ there is intentionally no one-command live deployment example.
 | ShellCheck | Warning-level check passed |
 | Legacy skill pins and mock engine probe | Passed; no upstream pack or original engine changes |
 
-No paid/live model test was run. No new source or test changed between the Node
-22/24 checks and the implementation commits; subsequent changes are documentation.
+No paid/live model test was run. The table records the original implementation
+snapshot. The Nov 10 editor-environment fix has separate regression results in
+the review response; do not transfer old CI status to a changed head.
 
 Implementation review slices:
 

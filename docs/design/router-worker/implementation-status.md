@@ -2,6 +2,12 @@
 
 Updated: 2026-11-09. Branch: `codex/router-worker-mode`.
 
+2026-11-10 follow-up: [PR #5 review response](review-response-2026-11-10.md)
+records the editor-environment fix, explicit ADR provenance, artifact ignore
+rules and English-only documentation. Full Node 24 regression with
+`GIT_EDITOR=true`: 742 tests, 740 passed, 2 skipped, 0 failed. Earlier counts and
+publication status below remain historical checkpoints.
+
 ## Current scope: offline compilation, drafts, evidence binding and retry storage
 
 This includes three bounded RW-02 slices, the RW-01 source inventory, RW-03a inert
@@ -15,7 +21,7 @@ It does not complete these milestones or authorize deployment. No existing engin
 bootstrap, role renderer, roster or runtime registry has been changed.
 
 Latest verification: 740 tests, 738 passed, 0 failed, 2 environment-dependent
-skips on Node 25.6.1. See the [author self-review](self-review-2026-11-09.zh-CN.md)
+skips on Node 25.6.1. See the [author self-review](self-review-2026-11-09.md)
 for fixed defects, release blockers and the exact scope of these results.
 
 PR preparation update: the implementation is now committed in bounded slices;
@@ -329,7 +335,8 @@ source/context preflight only; it does not switch `launchable` to true.
 Working directory: the root of the `codex/router-worker-mode` worktree.
 Branch: `codex/router-worker-mode`; original baseline: `8331e0921b8d8546c1ca3691a3dfa5e709b75971`.
 Changes are currently uncommitted and unpushed. Do not discard the supplied
-`review-2026-11-06.zh-CN.md` or other existing design material.
+`review-2026-11-06.md` or other existing design material without preserving its
+historical provenance. The Nov 10 English translation retains that provenance.
 
 Next bounded implementation work:
 

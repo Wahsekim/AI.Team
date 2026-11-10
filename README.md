@@ -155,8 +155,12 @@ No existing bootstrap, engine, roster or skill-pack behavior is replaced.
 
 Start with the [PR scope and reviewer guide](docs/design/router-worker/pr-handoff.md),
 [implementation status](docs/design/router-worker/implementation-status.md) and
-[Chinese design](docs/design/router-worker/README.zh-CN.md). Real deployment,
+[design](docs/design/router-worker/README.md). Real deployment,
 permission/session enforcement and usage settlement remain follow-up work.
+
+Project-maintained documentation is written in English. Translated historical
+reviews retain their original dates and evidence limits; translation is not a new
+review or approval.
 
 ### Existing team model
 
