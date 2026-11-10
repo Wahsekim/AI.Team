@@ -133,17 +133,41 @@ final-candidate mock gate. Every response is labelled `simulation: true`;
 or verified**. No Claude calls, product writes, or legacy ledger writes occur.
 See [implementation status and next steps](docs/loop-graph.md).
 
-### Experimental Router/Worker foundation (offline only)
+### Experimental Router/Worker mode (offline only, not launchable)
 
-An additive `src/router-worker/` foundation explores outcome-based exec/check/guard
-duties alongside the unchanged specialist team. It provides a deterministic
-compiler, one pinned check method, local source/context preflight, inert deployment
-drafts, candidate/check-record binding and persisted retry accounting.
+Router/Worker is a second, optional team topology. The specialist team described
+under "Existing team model" stays the default and is unchanged. The mode changes
+how work is allocated and keeps the same control plane (charter, budgets, ledgers,
+independent verification, PM-only commits).
+
+| Concept | Meaning in this mode |
+|---|---|
+| Router | A responsibility of the existing PM session, not an extra agent: establish authority and budget, select methods, compile briefs, dispatch, gather evidence |
+| Worker | One common protocol instantiated per task by duty, replacing permanent frontend/backend/QA roles |
+| `exec` duty | Implementation of one outcome across layers (UI, domain logic, tests) |
+| `check` duty | Independent acceptance, in a separate session from the one that wrote the change |
+| `guard` duty | The Chaos/Guardian audit |
+| Skill | A pinned task method the PM selects explicitly per duty from `config/router-worker/catalog.json`; today only `pstack-blast-radius`, for `check` |
+
+Work is routed by the smallest verifiable outcome, not by file type or
+profession. Architect, Coach, Auditor and Security triggers are retained.
+Retries are counted per stable ticket and duty: one initial call plus at most
+two retries, with no reset when the model, skill or worker instance changes.
+[ADR 0008](decisions/0008-router-worker-topology.md) records the owner's approval
+of these two mappings only.
+
+What exists today is offline tooling in `src/router-worker/`: a deterministic
+compiler (first-attempt `exec` and `check` previews only), local source/context
+preflight, inert deployment drafts, candidate/check-record binding and persisted
+retry accounting. No command activates a Router/Worker team or calls a model.
 
 ```sh
 node --test tests/router-worker-*.test.mjs
 node scripts/compile-router-worker.mjs INPUT.json
+node scripts/preflight-router-worker.mjs INPUT.json TEAM_ROOT APPROVAL_PATH APPROVAL_SHA256
 node scripts/team-mode.mjs preview SPEC.json
+node scripts/team-mode.mjs draft SPEC.json NEW.rw-draft.json
+node scripts/team-mode.mjs verify SPEC.json DRAFT.json
 ```
 
 Node 22 supports the non-SQLite tools; retry persistence and its registry require
@@ -181,6 +205,45 @@ is the operating model:
   (`.claude/workflows/run-n-rounds.js`, contract in `docs/engine.md`);
 - Claude cold-start indexes and project-scoped agent wrappers.
 
+### Role-specific method injection (skill packs)
+
+The kit vendors a few reviewed methods from
+[Matt Pocock's skills](https://github.com/mattpocock/skills) and
+[Pstack](https://github.com/cursor/plugins/tree/main/pstack) under
+`agents/skill-packs/`, pinned by upstream commit and file SHA-256 in
+`agents/skill-packs/lock.json`. Nothing is installed as a plugin, and workers
+receive no slash command or new permission.
+
+When the PM builds a brief and has explicitly classified the task as one of the
+allowlisted role/task pairs, it runs the renderer and adds the printed excerpt to
+that worker's brief:
+
+```sh
+node scripts/role-skills.mjs brief backend debug
+node scripts/role-skills.mjs brief qa impact-review
+```
+
+| Role | Task | Method injected |
+|---|---|---|
+| PM | `spec` | to-spec |
+| PM | `tickets` | to-tickets |
+| Backend or Frontend | `debug` | diagnosing-bugs |
+| Architect | `interface-design` | architect rationale and design red flags |
+| QA, Verifier or Reviewer | `impact-review` | blast-radius |
+
+Any other role/task pair prints nothing, so ordinary work gets no extra prompt.
+The renderer verifies the pinned source offline before emitting text. Each
+excerpt opens with a notice that the brief's scope, budget, stop rules and
+verification gates take precedence and that the method grants no permission to
+spawn agents, choose models, invoke other skills, publish issues, push or deploy.
+Injection does not prove the worker followed the method; the brief
+still requires observable evidence. `verify` checks the pins, `check-upstream`
+reports drift without adopting it, and `refresh` is a reviewed PM action
+([ADR 0007](decisions/0007-pm-only-commits.md)). Details: `docs/role-skills.md`.
+
+Router/Worker mode reads the same pinned snapshots through its own catalog and
+leaves this role/task interface unchanged.
+
 ## Start Here
 
 | Goal | Read |
@@ -202,6 +265,8 @@ is the operating model:
 | See what the runtime must provide + deployment hooks | `docs/harness-assumptions.md` |
 | Know the human owner's duties and SAFE-MODE | `docs/owner-contract.md` |
 | Port an instance lesson back into this template | `docs/backport-ritual.md` |
+| Inject a reviewed method into a worker brief, or update the skill packs | `docs/role-skills.md` |
+| Understand the experimental Router/Worker mode and its rollout gates | `docs/design/router-worker/README.md` |
 
 ## Directory Shape
 
@@ -213,6 +278,10 @@ AI.Team/
   agents/                      # PM, roster, templates, lifecycle, lessons index
     <role_id>.md               # one file per active role, with base agent source
     _shared/                   # meta-rules M1-M6 + verify/browser discipline templates
+    skill-packs/               # pinned upstream method snapshots + lock.json
+  scripts/role-skills.mjs      # renders a reviewed method excerpt for a role/task brief
+  src/router-worker/           # experimental Router/Worker offline tooling (non-launchable)
+  config/router-worker/        # Router/Worker method catalog and coverage map
   docs/workflow-catalog.md     # portable workflows preserved from the source team workspace
   docs/engine.md               # count-directed loop engine contract
   methodologies/               # Kanban default + lazy methodology packs
