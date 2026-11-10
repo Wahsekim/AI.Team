@@ -20,9 +20,9 @@ function identity(root) {
 }
 
 function observe(root) {
-  // The shared snapshot reader inherits Git's environment. Refuse redirection rather than changing process-global environment.
-  requireThat(!Object.keys(process.env).some(key => key.startsWith('GIT_') && key !== 'GIT_PAGER'),
-    'UNSUPPORTED_ENVIRONMENT', 'Unset ambient GIT_* variables except GIT_PAGER before candidate observation');
+  // These piped inspection commands invoke neither a pager nor an editor. Keep discovery/config overrides denied.
+  requireThat(!Object.keys(process.env).some(key => key.startsWith('GIT_') && !['GIT_PAGER', 'GIT_EDITOR'].includes(key)),
+    'UNSUPPORTED_ENVIRONMENT', 'Unset ambient GIT_* variables except GIT_PAGER and GIT_EDITOR before candidate observation');
   const target = identity(root);
   const snapshot = snapshotRepository({ root, repoId: 'product' });
   requireThat(canonical(target) === canonical(identity(root))

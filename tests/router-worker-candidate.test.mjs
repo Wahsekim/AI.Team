@@ -138,6 +138,28 @@ test('noninteractive observation never executes an inherited pager', t => {
   assert.equal(run.status, 0, run.stderr); assert.equal(existsSync(marker), false);
 });
 
+test('noninteractive observation accepts the host editor setting without invoking it', t => {
+  const f = fixture(t), module = fileURLToPath(new URL('../src/router-worker/candidate.mjs', import.meta.url));
+  const marker = join(f.root, 'editor-ran');
+  for (const editor of ['true', `touch '${marker}'`]) {
+    const run = spawnSync(process.execPath, ['--input-type=module', '-e',
+      `import { observeCandidate } from ${JSON.stringify(module)}; observeCandidate({root:${JSON.stringify(f.root)}});`],
+    { encoding: 'utf8', env: { ...process.env, GIT_EDITOR: editor } });
+    assert.equal(run.status, 0, run.stderr); assert.equal(existsSync(marker), false);
+  }
+});
+
+test('editor compatibility does not admit Git discovery, index, object or config overrides', t => {
+  const f = fixture(t), module = fileURLToPath(new URL('../src/router-worker/candidate.mjs', import.meta.url));
+  for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', 'GIT_COMMON_DIR',
+    'GIT_CEILING_DIRECTORIES', 'GIT_CONFIG', 'GIT_CONFIG_COUNT', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM']) {
+    const run = spawnSync(process.execPath, ['--input-type=module', '-e',
+      `import { observeCandidate } from ${JSON.stringify(module)}; try { observeCandidate({root:${JSON.stringify(f.root)}}); process.exit(1); } catch(e) { console.log(e.code); }`],
+    { encoding: 'utf8', env: { ...process.env, GIT_EDITOR: 'true', [key]: '/does-not-exist' } });
+    assert.equal(run.status, 0, key); assert.match(run.stdout, /UNSUPPORTED_ENVIRONMENT/, key);
+  }
+});
+
 test('actual changes must satisfy both policy and mandate, regardless of staging', t => {
   for (const wider of ['policy', 'mandate']) {
     const f = fixture(t); f.input[wider].allowedWritePaths.push('extra/**');

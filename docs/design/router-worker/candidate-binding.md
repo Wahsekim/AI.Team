@@ -73,8 +73,10 @@ cannot be used to authorize delivery. The repeated snapshots detect observed
 drift but do not provide exclusive ownership or an atomic filesystem snapshot.
 
 Ambient `GIT_*` variables are refused because the reused snapshot reader inherits
-its environment. `GIT_PAGER` is the sole exception: these commands have piped
-output and do not invoke a pager, covered by a negative execution test. The
+its environment, except `GIT_PAGER` and `GIT_EDITOR`: these read-only commands have
+piped output and invoke neither program. Regression tests cover the host's
+`GIT_EDITOR=true`, non-execution of editor/pager command values, and continued
+refusal of repository, index, object-store and configuration overrides. The
 library does not mutate process-global environment or silently redirect a repo.
 
 Before RW-04 can dispatch, still needed: owner/runtime authorization, exclusive
