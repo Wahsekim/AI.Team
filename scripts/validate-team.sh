@@ -214,7 +214,9 @@ else
     fail "engine-copy" "$ENGINE_REL is missing or differs from kit/$ENGINE_REL — re-copy it from the pinned kit"
   fi
   REVIEW_OPEN=$(grep -E '^- \[ \] ' "$ROOT/kit-upgrade-review.md" 2>/dev/null | cut -c7- | cut -d' ' -f1)
-  if [ -n "$REVIEW_OPEN" ]; then
+  if [ -e "$ROOT/kit-upgrade-review.md" ] && { [ ! -f "$ROOT/kit-upgrade-review.md" ] || [ ! -r "$ROOT/kit-upgrade-review.md" ]; }; then
+    fail "kit-review" "kit-upgrade-review.md is not a readable file — open review items cannot be ruled out"
+  elif [ -n "$REVIEW_OPEN" ]; then
     fail "kit-review" "$(printf '%s\n' "$REVIEW_OPEN" | wc -l | tr -d ' ') open kit-upgrade review item(s) in kit-upgrade-review.md — port or decline each and tick it (docs/upgrade.md): $(printf '%s\n' "$REVIEW_OPEN" | head -8 | tr '\n' ' ')"
   else
     pass "kit-review" "no open kit-upgrade review items"
