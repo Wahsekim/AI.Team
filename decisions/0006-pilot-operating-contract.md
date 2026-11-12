@@ -1,7 +1,7 @@
 # ADR 0006: Pilot operating contract (R06)
 
 Date: 2026-11-05
-Status: Accepted (owner, 2026-11-13, in session: "批准ADR 0006"; PM draft from owner answers 2026-11-05, ceilings per Revision 2026-11-13). One blocking unknown remains: evidence retention beyond this machine.
+Status: Accepted (owner, 2026-11-13, in session: "批准ADR 0006"; PM draft from owner answers 2026-11-05, ceilings and evidence retention per Revision 2026-11-13). No blocking unknown remains.
 
 ## Context
 
@@ -89,7 +89,7 @@ refused by code or runtime; `policy` = PM/owner discipline, checked at close.
 - [x] Owner sets a wall-clock ceiling per run (and the kill step that enforces it) or waives it explicitly. — set 2026-11-13, see Revision 2026-11-13.
 - [x] Owner decides the subscription plan-window ceiling (5-hour / weekly utilization halt) — decided 2026-11-13, see Revision 2026-11-13.
 - [ ] Owner writes the `settings.json` allowlist/deny rules before any unattended loop.
-- [ ] Owner decides evidence retention beyond this machine (blocking unknown).
+- [x] Owner decides evidence retention beyond this machine (blocking unknown). — decided 2026-11-13: this machine only, see Revision 2026-11-13.
 - [ ] Fill `scripts/lib/model-pricing.json` before any `billing_mode: api` pilot.
 - [ ] R07: version the execution and storage contracts.
 
@@ -108,3 +108,9 @@ behind them and are to be revisited after the first live run.
 Later the same day the owner ratified the ADR as a whole (Status: Accepted).
 Still open and still blocking a paid stage: evidence retention beyond this
 machine.
+
+Evidence retention (owner, 2026-11-13, accepting the PM proposal): run evidence
+and runtime transcripts stay on this machine only. Nothing is copied or
+published elsewhere; sharing an excerpt still needs the manual redaction pass
+of the Transcript policy row. This supersedes the "blocking unknown" in that
+row. Enforcement: policy.
