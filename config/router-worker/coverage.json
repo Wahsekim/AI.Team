@@ -1,0 +1,448 @@
+{
+  "schemaVersion": 1,
+  "status": "ratified-topology-deployment-pending",
+  "duties": {
+    "pm": "pm",
+    "exec": "worker-exec",
+    "check": "worker-check",
+    "guard": "worker-guard",
+    "design": "architect",
+    "coach": "coach",
+    "audit": "auditor",
+    "security": "security"
+  },
+  "workflows": [
+    {
+      "id": "WF-00",
+      "duties": [
+        "pm",
+        "design",
+        "check"
+      ],
+      "requirement": "Bootstrap sources, staffing and role-file integrity.",
+      "source": "docs/workflow-catalog.md",
+      "firstRelease": "mapping-required"
+    },
+    {
+      "id": "WF-01",
+      "duties": [
+        "pm"
+      ],
+      "requirement": "Cold start, stop, resume and one bounded cycle.",
+      "source": "docs/workflow-catalog.md",
+      "firstRelease": "mapping-required"
+    },
+    {
+      "id": "WF-02",
+      "duties": [
+        "pm",
+        "design",
+        "check"
+      ],
+      "requirement": "Backlog readiness and outcome-based slicing.",
+      "source": "docs/workflow-catalog.md",
+      "firstRelease": "mapping-required"
+    },
+    {
+      "id": "WF-03",
+      "duties": [
+        "pm"
+      ],
+      "requirement": "Freeze brief, estimates, scope and stop conditions.",
+      "source": "docs/workflow-catalog.md",
+      "firstRelease": "mapping-required"
+    },
+    {
+      "id": "WF-04",
+      "duties": [
+        "pm"
+      ],
+      "requirement": "Assemble synthetic role, overlay and named wrapper.",
+      "source": "docs/workflow-catalog.md",
+      "firstRelease": "mapping-required"
+    },
+    {
+      "id": "WF-05",
+      "duties": [
+        "pm"
+      ],
+      "requirement": "Append-only lifecycle, ledger and memory ownership.",
+      "source": "docs/workflow-catalog.md",
+      "firstRelease": "mapping-required"
+    },
+    {
+      "id": "WF-06",
+      "duties": [
+        "pm",
+        "coach"
+      ],
+      "requirement": "Estimate before dispatch; measured variance at close.",
+      "source": "docs/workflow-catalog.md",
+      "firstRelease": "mapping-required"
+    },
+    {
+      "id": "WF-07",
+      "duties": [
+        "pm"
+      ],
+      "requirement": "Observable progress and empty-loop escalation.",
+      "source": "docs/workflow-catalog.md",
+      "firstRelease": "mapping-required"
+    },
+    {
+      "id": "WF-08",
+      "duties": [
+        "pm"
+      ],
+      "requirement": "Bounded retries with substantive divergence.",
+      "source": "docs/workflow-catalog.md",
+      "firstRelease": "mapping-required"
+    },
+    {
+      "id": "WF-09",
+      "duties": [
+        "check",
+        "pm"
+      ],
+      "requirement": "Independent code-shipping verification.",
+      "source": "docs/workflow-catalog.md",
+      "firstRelease": "mapping-required"
+    },
+    {
+      "id": "WF-10",
+      "duties": [
+        "pm",
+        "exec",
+        "check"
+      ],
+      "requirement": "Same-author and same-check session repair/retest.",
+      "source": "docs/workflow-catalog.md",
+      "firstRelease": "mapping-required"
+    },
+    {
+      "id": "WF-11",
+      "duties": [
+        "pm"
+      ],
+      "requirement": "Round-trip ceiling and owner escalation.",
+      "source": "docs/workflow-catalog.md",
+      "firstRelease": "mapping-required"
+    },
+    {
+      "id": "WF-12",
+      "duties": [
+        "pm"
+      ],
+      "requirement": "Narrow exceptional read-only direct verification.",
+      "source": "docs/workflow-catalog.md",
+      "firstRelease": "mapping-required"
+    },
+    {
+      "id": "WF-13",
+      "duties": [
+        "exec",
+        "design",
+        "check"
+      ],
+      "requirement": "Verify external API claims from actual sources.",
+      "source": "docs/workflow-catalog.md",
+      "firstRelease": "mapping-required"
+    },
+    {
+      "id": "WF-14",
+      "duties": [
+        "pm"
+      ],
+      "requirement": "External-service and autonomous-loop MCP boundaries.",
+      "source": "docs/workflow-catalog.md",
+      "firstRelease": "mapping-required"
+    },
+    {
+      "id": "WF-15",
+      "duties": [
+        "pm"
+      ],
+      "requirement": "Heartbeat, watchdog and hang visibility.",
+      "source": "docs/workflow-catalog.md",
+      "firstRelease": "mapping-required"
+    },
+    {
+      "id": "WF-16",
+      "duties": [
+        "pm"
+      ],
+      "requirement": "Parallel work isolation; unsupported in the first serial mode.",
+      "source": "docs/workflow-catalog.md",
+      "firstRelease": "unsupported-parallel"
+    },
+    {
+      "id": "WF-17",
+      "duties": [
+        "pm",
+        "coach",
+        "check"
+      ],
+      "requirement": "Cleanup cadence and counters.",
+      "source": "docs/workflow-catalog.md",
+      "firstRelease": "mapping-required"
+    },
+    {
+      "id": "WF-18",
+      "duties": [
+        "pm",
+        "security",
+        "check",
+        "audit",
+        "guard"
+      ],
+      "requirement": "Hardening trigger, coverage and counter conservation.",
+      "source": "docs/workflow-catalog.md",
+      "firstRelease": "mapping-required"
+    },
+    {
+      "id": "WF-19",
+      "duties": [
+        "coach",
+        "pm"
+      ],
+      "requirement": "Batched coaching; PM owns application and staffing changes.",
+      "source": "docs/workflow-catalog.md",
+      "firstRelease": "mapping-required"
+    },
+    {
+      "id": "WF-20",
+      "duties": [
+        "audit"
+      ],
+      "requirement": "Independent periodic process audit, not per-PR replacement.",
+      "source": "docs/workflow-catalog.md",
+      "firstRelease": "mapping-required"
+    },
+    {
+      "id": "WF-21",
+      "duties": [
+        "pm",
+        "coach",
+        "audit"
+      ],
+      "requirement": "Owner-ratified staffing; no arbitrary churn.",
+      "source": "docs/workflow-catalog.md",
+      "firstRelease": "mapping-required"
+    },
+    {
+      "id": "WF-22",
+      "duties": [
+        "security"
+      ],
+      "requirement": "Standing and one-shot security review.",
+      "source": "docs/workflow-catalog.md",
+      "firstRelease": "mapping-required"
+    },
+    {
+      "id": "WF-23",
+      "duties": [
+        "guard"
+      ],
+      "requirement": "Guardian, non-listed halt investigation and chaos gate.",
+      "source": "docs/workflow-catalog.md",
+      "firstRelease": "mapping-required"
+    },
+    {
+      "id": "WF-24",
+      "duties": [
+        "pm",
+        "design"
+      ],
+      "requirement": "ADR/profile locking and owner ratification.",
+      "source": "docs/workflow-catalog.md",
+      "firstRelease": "mapping-required"
+    },
+    {
+      "id": "WF-25",
+      "duties": [
+        "pm",
+        "exec"
+      ],
+      "requirement": "Documentation completeness within task scope.",
+      "source": "docs/workflow-catalog.md",
+      "firstRelease": "mapping-required"
+    },
+    {
+      "id": "WF-26",
+      "duties": [
+        "exec",
+        "check"
+      ],
+      "requirement": "Real rendered/UI evidence; preserve domain knowledge.",
+      "source": "docs/workflow-catalog.md",
+      "firstRelease": "mapping-required"
+    },
+    {
+      "id": "WF-27",
+      "duties": [
+        "exec",
+        "check",
+        "pm"
+      ],
+      "requirement": "Evidence-bearing handoff and hypothesis check.",
+      "source": "docs/workflow-catalog.md",
+      "firstRelease": "mapping-required"
+    },
+    {
+      "id": "WF-28",
+      "duties": [
+        "pm"
+      ],
+      "requirement": "Decision/security/irreversibility escalation.",
+      "source": "docs/workflow-catalog.md",
+      "firstRelease": "mapping-required"
+    },
+    {
+      "id": "WF-29",
+      "duties": [
+        "pm",
+        "coach"
+      ],
+      "requirement": "Roster-owned model/effort and calibrated budgets.",
+      "source": "docs/workflow-catalog.md",
+      "firstRelease": "mapping-required"
+    },
+    {
+      "id": "WF-30",
+      "duties": [
+        "pm",
+        "design"
+      ],
+      "requirement": "Resolve and lock stack/methodology choices.",
+      "source": "docs/workflow-catalog.md",
+      "firstRelease": "mapping-required"
+    },
+    {
+      "id": "WF-31",
+      "duties": [
+        "pm",
+        "check",
+        "guard"
+      ],
+      "requirement": "Original count engine, verifier, guardian and verbatim reconciliation.",
+      "source": "docs/workflow-catalog.md",
+      "firstRelease": "mapping-required"
+    }
+  ],
+  "invariants": [
+    {
+      "id": "H1",
+      "source": "charter.template.md",
+      "runtimeOwner": "pm",
+      "scope": "always"
+    },
+    {
+      "id": "H2",
+      "source": "charter.template.md",
+      "runtimeOwner": "pm",
+      "scope": "always"
+    },
+    {
+      "id": "H3",
+      "source": "charter.template.md",
+      "runtimeOwner": "pm",
+      "scope": "always"
+    },
+    {
+      "id": "H4",
+      "source": "charter.template.md",
+      "runtimeOwner": "pm",
+      "scope": "always"
+    },
+    {
+      "id": "H5",
+      "source": "charter.template.md",
+      "runtimeOwner": "pm",
+      "scope": "always"
+    },
+    {
+      "id": "H6",
+      "source": "charter.template.md",
+      "runtimeOwner": "pm",
+      "scope": "always"
+    },
+    {
+      "id": "H7",
+      "source": "charter.template.md",
+      "runtimeOwner": "check+pm",
+      "scope": "always"
+    },
+    {
+      "id": "H8",
+      "source": "charter.template.md",
+      "runtimeOwner": "guard+pm",
+      "scope": "always"
+    },
+    {
+      "id": "M1",
+      "source": "agents/_shared/meta-rules.md",
+      "runtimeOwner": "pm+applicable-worker",
+      "scope": "trigger-preserved"
+    },
+    {
+      "id": "M2",
+      "source": "agents/_shared/meta-rules.md",
+      "runtimeOwner": "pm+applicable-worker",
+      "scope": "trigger-preserved"
+    },
+    {
+      "id": "M3",
+      "source": "agents/_shared/meta-rules.md",
+      "runtimeOwner": "pm+applicable-worker",
+      "scope": "trigger-preserved"
+    },
+    {
+      "id": "M4",
+      "source": "agents/_shared/meta-rules.md",
+      "runtimeOwner": "pm+applicable-worker",
+      "scope": "trigger-preserved"
+    },
+    {
+      "id": "M5",
+      "source": "agents/_shared/meta-rules.md",
+      "runtimeOwner": "pm+applicable-worker",
+      "scope": "trigger-preserved"
+    },
+    {
+      "id": "M6",
+      "source": "agents/_shared/meta-rules.md",
+      "runtimeOwner": "pm+applicable-worker",
+      "scope": "trigger-preserved"
+    },
+    {
+      "id": "Q1",
+      "source": "charter.template.md",
+      "runtimeOwner": "pm",
+      "scope": "count-directed"
+    },
+    {
+      "id": "Q2",
+      "source": "charter.template.md",
+      "runtimeOwner": "pm",
+      "scope": "count-directed"
+    },
+    {
+      "id": "Q3",
+      "source": "charter.template.md",
+      "runtimeOwner": "pm",
+      "scope": "count-directed"
+    },
+    {
+      "id": "Q4",
+      "source": "charter.template.md",
+      "runtimeOwner": "pm",
+      "scope": "count-directed"
+    },
+    {
+      "id": "Q5",
+      "source": "charter.template.md",
+      "runtimeOwner": "original-engine+pm",
+      "scope": "count-directed"
+    }
+  ]
+}

@@ -28,6 +28,15 @@ heartbeats/
 *.reconcile.json
 .team-loop/
 
+# Router/Worker offline artifacts and interrupted publication scratch
+*.rw-draft.json
+*.rw-retries.sqlite
+*.rw-retries.sqlite-journal
+*.rw-retries.sqlite-wal
+*.rw-retries.sqlite-shm
+.rw-draft-*/
+.rw-retries-*/
+
 # Internal working docs (kept local, not published)
 ai-team-quality-improvement-plan.md
 
@@ -41,3 +50,16 @@ docs/rollout-evidence/
 # Rollout planning docs (owner decision 2026-10-06: local only)
 docs/loop-graph-rollout-plan.md
 docs/loop-graph-rollout-handoff.md
+
+# The kit's own development ledgers (ADR 0009 decision 5): local to the
+# maintainer's checkout, never committed. The kit ships only their seeds
+# (*.template.md), which bootstrap copies into each project instance.
+/agents/lifecycle.md
+/agents/lessons.md
+/agents/archive/
+/memory/pm.md
+/memory/pm-archive-*.md
+/pm-decisions.md
+/pm-decisions-archive-*.md
+/messages/*.md
+!/messages/README.md

@@ -74,7 +74,9 @@ Every staffing change, both directions:
 3. **One-line ADR** in `decisions/` (e.g. `NNNN-hire-data-role.md`: trigger,
    evidence, status change) + index in `decisions/README.md`.
 4. PM updates `agents/roster.md` status column; creates the wrapper (hire) or
-   archives it (retire → not-hired); creates `agents/<role_id>.md` if absent.
+   archives it (retire → not-hired); creates `agents/<role_id>.md` if absent
+   (two-root instance: `kit/scripts/bootstrap-team.sh --roles <role_id> .`
+   copies the kit role file into the instance for the PM to fill).
 5. Run `scripts/validate-team.sh` — it must exit 0 after the change.
 
 ## Anti-patterns

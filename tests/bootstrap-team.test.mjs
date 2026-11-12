@@ -310,3 +310,178 @@ test('R-09: no render-tmp litter is left behind after a successful run', async (
     assert.ok(all.every(f => !f.includes('.render-tmp.')), `tmp litter: ${all.filter(f => f.includes('.render-tmp.'))}`)
   })
 })
+
+// ADR 0009: two-root bootstrap. The kit lives at <instance>/kit and is never written.
+const KIT_ONLY = {
+  'CLAUDE.instance.template.md': 'Instance primer. Say `start {{PROJECT_NAME | localized at bootstrap}}`.\n',
+  '.claude/workflows/run-n-rounds.js': '// engine {{PROJECT_NAME}}\n',
+  'agents/lifecycle.template.md': '# Lifecycle\n## [NNN] {{ROLE_DISPLAY_NAME}}\nNext NNN to assign: **001**\n',
+  'agents/lessons.template.md': '# Lessons Index\n',
+  'memory/pm.template.md': '# PM Memory\n',
+  'pm-decisions.template.md': '# PM Decisions for {{PROJECT_NAME}}\n',
+  'agents/backend.md': '# Backend - backend\n\n## Base Agent\n\nsynthetic\n\n## Project Overlay\n\n{{PROJECT_NAME}} rules.\n',
+  'agents/qa.md': '# QA - qa\n\n## Base Agent\n\nsynthetic\n',
+  'agents/templates.md': '# Brief templates\n',
+}
+
+async function withInstance(fn) {
+  const root = await mkdtemp(join(tmpdir(), 'ai-team-instance-'))
+  try {
+    for (const [rel, content] of Object.entries({ ...SEEDS, ...KIT_ONLY })) {
+      const abs = join(root, 'kit', rel)
+      await mkdir(dirname(abs), { recursive: true })
+      await writeFile(abs, content)
+    }
+    return await fn(root)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+}
+
+async function snapshot(dir) {
+  const { stdout } = await exec('bash', ['-c', 'cd "$1" && find . -type f -exec shasum -a 256 {} + | sort', 'sh', dir])
+  return stdout
+}
+
+test('ADR 0009: two-root bootstrap writes the instance and leaves kit/ byte-identical', async () => {
+  await withInstance(async root => {
+    const before = await snapshot(join(root, 'kit'))
+    const out = await run(root, '--project-name', 'StockUp', '--product-repo', '/abs/product', '--ui')
+    assert.match(out, /RESULT: INSTANTIATED-PENDING-INTERVIEW/)
+    assert.doesNotMatch(out, /legacy single-root/)
+    assert.equal(await snapshot(join(root, 'kit')), before, 'bootstrap must not write under kit/')
+    for (const target of ['charter.md', 'profiles/project.md', 'profiles/stack.md', 'agents/roster.md',
+      'agents/_shared/verify-discipline.md', 'agents/_shared/browser-access.md']) {
+      assert.ok(await exists(join(root, target)), `${target} missing in the instance root`)
+    }
+    assert.match(await readFile(join(root, 'charter.md'), 'utf8'), /# StockUp - AI Team Charter/)
+    assert.match(await readFile(join(root, 'CLAUDE.md'), 'utf8'), /`start StockUp`/)
+    assert.equal(await readFile(join(root, '.claude/workflows/run-n-rounds.js'), 'utf8'), KIT_ONLY['.claude/workflows/run-n-rounds.js'],
+      'the engine is copied verbatim, never substituted')
+    assert.equal(await readFile(join(root, 'kit.lock'), 'utf8'), 'instance_schema=1\nkit_commit=unversioned\n')
+  })
+})
+
+test('ADR 0009: kit.lock records the kit commit when kit/ is its own Git repository', async () => {
+  await withInstance(async root => {
+    const git = (...args) => exec('git', ['-C', join(root, 'kit'), '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', ...args])
+    await git('init', '-q'); await git('add', '-A'); await git('commit', '-q', '-m', 'kit')
+    const { stdout } = await git('rev-parse', 'HEAD')
+    await run(root)
+    assert.equal(await readFile(join(root, 'kit.lock'), 'utf8'), `instance_schema=1\nkit_commit=${stdout.trim()}\n`)
+    const { stdout: status } = await git('status', '--porcelain')
+    assert.equal(status, '', 'kit work tree must stay clean')
+  })
+})
+
+test('ADR 0009: two-root bootstrap is idempotent and never overwrites instance edits', async () => {
+  await withInstance(async root => {
+    await run(root, '--project-name', 'X')
+    await writeFile(join(root, 'CLAUDE.md'), 'OWNER EDIT\n')
+    await writeFile(join(root, 'kit.lock'), 'instance_schema=1\nkit_commit=pinned-by-owner\n')
+    const out = await run(root, '--project-name', 'Y')
+    assert.match(out, /SKIP - CLAUDE\.md: already instantiated/)
+    assert.equal(await readFile(join(root, 'CLAUDE.md'), 'utf8'), 'OWNER EDIT\n')
+    assert.equal(await readFile(join(root, 'kit.lock'), 'utf8'), 'instance_schema=1\nkit_commit=pinned-by-owner\n')
+    assert.match(await readFile(join(root, 'charter.md'), 'utf8'), /# X - AI Team Charter/)
+  })
+})
+
+test('ADR 0009: --kit must be <instance>/kit; any other location fails before writing', async () => {
+  await withInstance(async root => {
+    const elsewhere = await mkdtemp(join(tmpdir(), 'ai-team-elsewhere-'))
+    try {
+      await assert.rejects(exec('bash', [SCRIPT, '--kit', join(root, 'kit'), elsewhere]), e => {
+        assert.equal(e.code, 1); assert.match(e.stdout, /RESULT: BOOTSTRAP-FAILED/); return true
+      })
+      assert.ok(!(await exists(join(elsewhere, 'charter.md'))))
+      await assert.rejects(exec('bash', [SCRIPT, '--kit', join(root, 'missing'), root]), e => {
+        assert.match(e.stdout, /RESULT: BOOTSTRAP-FAILED/); return true
+      })
+    } finally { await rm(elsewhere, { recursive: true, force: true }) }
+  })
+})
+
+test('ADR 0009: --dry-run in two-root mode writes nothing', async () => {
+  await withInstance(async root => {
+    const out = await run(root, '--dry-run')
+    assert.match(out, /PLAN - CLAUDE\.md: would instantiate from kit\/CLAUDE\.instance\.template\.md/)
+    assert.match(out, /RESULT: DRY-RUN/)
+    for (const target of ['charter.md', 'CLAUDE.md', 'kit.lock', '.claude']) assert.ok(!(await exists(join(root, target))))
+  })
+})
+
+test('ADR 0009: single-root bootstrap still works and is reported as legacy', async () => {
+  await withKit(async root => {
+    const out = await run(root, '--project-name', 'StockUp')
+    assert.match(out, /WARN - layout: legacy single-root/)
+    assert.match(out, /RESULT: INSTANTIATED-PENDING-INTERVIEW/)
+    assert.ok(!(await exists(join(root, 'kit.lock'))))
+  })
+})
+
+test('ADR 0009: two-root bootstrap seeds the ledgers verbatim', async () => {
+  await withInstance(async root => {
+    await run(root, '--project-name', 'StockUp')
+    for (const [seed, target] of [['agents/lifecycle.template.md', 'agents/lifecycle.md'], ['agents/lessons.template.md', 'agents/lessons.md'],
+      ['memory/pm.template.md', 'memory/pm.md'], ['pm-decisions.template.md', 'pm-decisions.md']]) {
+      assert.equal(await readFile(join(root, target), 'utf8'), KIT_ONLY[seed], `${target} must be a verbatim copy of kit/${seed}`)
+    }
+  })
+})
+
+test('ADR 0009: a missing ledger seed is a broken kit, not a silent skip', async () => {
+  await withInstance(async root => {
+    await rm(join(root, 'kit/pm-decisions.template.md'))
+    await assert.rejects(exec('bash', [SCRIPT, root]), e => {
+      assert.equal(e.code, 1); assert.match(e.stdout, /FAIL - seed: kit\/pm-decisions\.template\.md missing/); return true
+    })
+  })
+})
+
+test('ADR 0009: --roles instantiates role files into the instance, verbatim and once', async () => {
+  await withInstance(async root => {
+    const before = await snapshot(join(root, 'kit'))
+    const out = await run(root, '--project-name', 'X', '--roles', 'backend,qa')
+    assert.match(out, /DONE - agents\/backend\.md: copied from kit\/agents\/backend\.md/)
+    assert.equal(await readFile(join(root, 'agents/backend.md'), 'utf8'), KIT_ONLY['agents/backend.md'])
+    assert.ok(await exists(join(root, 'agents/qa.md')))
+    await writeFile(join(root, 'agents/qa.md'), 'PROJECT QA\n')
+    assert.match(await run(root, '--roles', 'qa'), /SKIP - agents\/qa\.md: already present/)
+    assert.equal(await readFile(join(root, 'agents/qa.md'), 'utf8'), 'PROJECT QA\n')
+    assert.equal(await snapshot(join(root, 'kit')), before)
+  })
+})
+
+test('ADR 0009: --roles rejects non-role files, unknown roles, unsafe names and legacy roots', async () => {
+  await withInstance(async root => {
+    for (const roles of ['templates', 'nobody', '../charter', 'backend,,qa', 'Backend']) {
+      await assert.rejects(exec('bash', [SCRIPT, '--roles', roles, root]), e => {
+        assert.equal(e.code, 1, roles); assert.match(e.stdout, /RESULT: BOOTSTRAP-FAILED/, roles); return true
+      })
+    }
+    assert.ok(!(await exists(join(root, 'agents/templates.md'))))
+  })
+  await withKit(async root => {
+    await assert.rejects(exec('bash', [SCRIPT, '--roles', 'backend', root]), e => {
+      assert.match(e.stdout, /FAIL - args: --roles needs a two-root instance/); return true
+    })
+  })
+})
+
+test('ADR 0009: a single-root bootstrap seeds missing ledgers from their templates; absent seeds are skipped', async () => {
+  await withKit(async root => {
+    await writeFile(join(root, 'agents/lifecycle.template.md'), '# Lifecycle seed {{ROLE_ID}}\n')
+    await mkdir(join(root, 'memory'), { recursive: true })
+    await writeFile(join(root, 'memory/pm.template.md'), '# PM Memory seed\n')
+    await writeFile(join(root, 'pm-decisions.md'), 'EXISTING\n')
+    await writeFile(join(root, 'pm-decisions.template.md'), '# seed\n')
+    const out = await run(root, '--project-name', 'X')
+    assert.equal(await readFile(join(root, 'agents/lifecycle.md'), 'utf8'), '# Lifecycle seed {{ROLE_ID}}\n')
+    assert.equal(await readFile(join(root, 'memory/pm.md'), 'utf8'), '# PM Memory seed\n')
+    assert.equal(await readFile(join(root, 'pm-decisions.md'), 'utf8'), 'EXISTING\n', 'an existing ledger is never overwritten')
+    assert.ok(!(await exists(join(root, 'agents/lessons.md'))), 'no seed, no ledger, no failure')
+    assert.ok(!(await exists(join(root, '.claude/workflows/run-n-rounds.js'))), 'the engine copy is two-root only')
+    assert.match(out, /RESULT: INSTANTIATED-PENDING-INTERVIEW/)
+  })
+})

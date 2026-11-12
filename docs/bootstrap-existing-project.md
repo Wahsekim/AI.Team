@@ -18,7 +18,10 @@ deployed instance").
 Mechanical instantiation shortcut first: `scripts/bootstrap-team.sh
 --project-name <name> --product-repo <path> [--ui] .` copies every seed to
 its operational name (idempotent, never overwrites); the interview below then
-only fills the remaining `ask:first_start` placeholders.
+only fills the remaining `ask:first_start` placeholders. In a two-root
+instance (README "How to Deploy") run it as `kit/scripts/bootstrap-team.sh`
+from the instance root; it then also seeds the ledgers and never writes under
+`kit/`.
 
 The PM or Architect scans:
 

@@ -27,6 +27,7 @@ operational name and fills placeholders:
 | `profiles/stack.template.md` | `profiles/stack.md` |
 | `agents/roster.template.md` | `agents/roster.md` |
 | `agents/_shared/verify-discipline.template.md` | `agents/_shared/verify-discipline.md` |
+| `agents/lifecycle.template.md`, `agents/lessons.template.md`, `memory/pm.template.md`, `pm-decisions.template.md` | the same names without `.template` (ledgers; never tracked in the kit) |
 | `agents/_shared/browser-access.template.md` | `agents/_shared/browser-access.md` (UI projects) |
 | `agents/_seeds/role-wrapper.template.md` | `.claude/agents/<slug>-<role>.md` (one per spawnable role) — or `.claude/agents/INLINE_BASE_AGENT_MODE.md` from `agents/_seeds/INLINE_BASE_AGENT_MODE.template.md` (seeds live OUTSIDE the runtime agent registry: the runtime registers every frontmatter file under `.claude/agents/` as a live agent type) |
 
@@ -59,7 +60,9 @@ Instantiated names; pre-bootstrap, the `.template.md` seed stands in.
 | `docs/failure-classes.md` | canonical failure-class catalog + mechanical controls | Coach + Auditor |
 | `scripts/validate-team.sh` | mechanical integrity checker (PM wake step 0, bootstrap gate; `--mode deployment` on deployed instances) | PM |
 | `scripts/check-claude-compat.sh` | runtime version + wrapper-frontmatter gate (pre-bootstrap) | PM |
-| `scripts/bootstrap-team.sh` | idempotent template instantiation (mechanical half of bootstrap) | PM |
+| `scripts/bootstrap-team.sh` | idempotent template instantiation (mechanical half of bootstrap); in a two-root instance writes only the instance root, never `kit/` (ADR 0009) | PM |
+| `scripts/pin-kit.sh` + `docs/upgrade.md` | record a reviewed kit upgrade in a two-root instance (`kit.lock`, engine copy, seeds to port) | PM |
+| `scripts/migrate-to-instance.sh` | one-time move of a single-root deployment into an instance root | PM + owner |
 | `scripts/preflight-run.mjs` | static launch preflight (engine dry-validation, live-wrapper registry, session freshness, product candidate) + frozen launch-bundle digest | PM |
 | `scripts/reconcile-run.mjs` | atomic engine-run reconciliation (ledgers + counter, per-target idempotent; `--monitoring` Q3/Q4 attestation) | PM |
 | `scripts/now-utc.sh` | the only sanctioned ledger timestamp source (host UTC) | PM |
@@ -136,7 +139,7 @@ When the owner says `start {{PROJECT_NAME | localized at bootstrap}}` or
   fires the chaos role for halt-investigation first.
 - Engine-mode loops: paste the engine's emitted log blocks VERBATIM
   (`docs/engine.md`); manual re-derivation is banned.
-- Agents may commit in this repository (owner decision 2026-10-06): one commit per slice/card, conventional message, never on `main` directly. Agents may push the working branch only (`codex/loop-graph-mvp`; never `main`, never `--force`). Do not deploy or publish unless the owner explicitly asks.
+- **Only the PM session may commit in this repository.** Workers return uncommitted changes and verification results; bots and CI do not commit, push branches, or open PRs. The PM uses one conventional commit per slice/card on a working branch, never directly on `main`. Push authorization is per task: the PM may push only the working branch the owner named or approved for that task; a branch created for owner-directed work counts as approved for that work. Never push `main` or force-push. Do not deploy or publish unless the owner explicitly asks. See [ADR 0007](decisions/0007-pm-only-commits.md).
 - Preserve append-only logs; rotate per the rotation regime
   (`docs/process-index.md`); supersede with dated entries instead of rewriting
   history.
