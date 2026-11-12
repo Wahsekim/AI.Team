@@ -47,7 +47,7 @@ The separate entry requires explicit `mode: router-worker`. The original
 `scripts/bootstrap-team.sh` remains the specialist/default path unchanged.
 There is no `activate` subcommand and no hot switch.
 
-The spec contains exactly:
+The spec contains:
 
 - `schemaVersion: 1`, `mode: router-worker`.
 - `project: {name, slug, productRoot, ui}`. Product root is a normalized absolute
@@ -57,6 +57,14 @@ The spec contains exactly:
   Only local tools are accepted. Delegation tools are excluded, check/guard
   cannot have Write/Edit, and this draft's guardian cannot have Bash. Check Bash
   still requires a future isolated runner; declaring it is not a sandbox.
+- optional `governance`: any of `architect`, `coach`, `auditor`, `security`, each
+  with the same four profile fields. A listed role gets an active roster row and
+  a wrapper `<slug>-<role>.md`; in an instance draft its kit role file is added
+  when the instance does not already own `agents/<role>.md`. Auditor and security
+  cannot have Write/Edit; no role can delegate. Roles left out stay dormant. When
+  every governance role required by an enabled workflow is listed, the draft no
+  longer carries `enabled-governance-staffing` under `unresolved`. Staffing gives
+  the role a wrapper; it does not wire its triggers into a running mode (G-05).
 - `workflowStates`: all WF-00 through WF-31, each with `status`, `reason`,
   `decisionRef`. The test fixture is an example, never an owner-approved plan.
 
@@ -130,7 +138,7 @@ removes its directory. Existing staging directories are never overwritten.
 `unstaffed` lists each enabled workflow duty whose role has no active row with an
 existing wrapper in the staged roster. The draft roster keeps architect, coach,
 auditor and security dormant, so every enabled workflow that needs them appears
-here until governance staffing is part of the spec.
+here until the spec lists them under `governance`.
 
 The instance tree and the kit state are compared before and after; a difference
 fails the stage. A validated staging copy remains `launchable: false`: the
