@@ -225,6 +225,7 @@ node kit/scripts/isolation-router-worker.mjs --team-root TEAM_ROOT --product-roo
 node kit/scripts/lease-router-worker.mjs release --product-root PRODUCT_ROOT --lease DIGEST
 node kit/scripts/freeze-run-router-worker.mjs RUN.json --team-root TEAM_ROOT
 node kit/scripts/continue-router-worker.mjs REQUEST.json --instance .
+node kit/scripts/settle-router-worker.mjs REQUEST.json --instance .
 ```
 
 `stage` copies a two-root instance into a new directory outside it, applies the
@@ -264,6 +265,12 @@ session and the candidate are read from the retry journal, so renaming a
 wrapper, model or method does not reset the count; stopped, unknown, pending or
 stale work is refused. A continuation is a main-session resume, never an engine
 plan item ([details](docs/design/router-worker/continuation.md)).
+
+`settle-router-worker.mjs` reports the `budget` admission gate from a per-ticket
+ledger of measured usage instead of a declared value. Each real call is settled
+once from a `measure-spawn.mjs` row, later reads add only their difference,
+unmeasured or unfinished calls keep the gate `unknown`, and an overrun blocks it
+([details](docs/design/router-worker/settlement.md)).
 
 Node 22 supports the non-SQLite tools; retry persistence and its registry require
 Node 24+. `INPUT.json` and `SPEC.json` must follow the documented contracts; test
