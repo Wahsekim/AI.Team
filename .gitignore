@@ -37,6 +37,7 @@ heartbeats/
 .rw-draft-*/
 *.rw-staging/
 .rw-retries-*/
+*.rw-settlement.json
 
 # Internal working docs (kept local, not published)
 ai-team-quality-improvement-plan.md

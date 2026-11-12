@@ -89,6 +89,8 @@ a stop or any other gate.
   that the row passed in belongs to the call named. Binding a runtime agent ID
   to a journal call needs the live host.
 - `durable-ledger`: the library is pure; storage and locking are the host's.
+  Name a stored ledger `<ticket>.rw-settlement.json`; that pattern is
+  gitignored. Custody follows the [storage policy](storage-policy.md).
 - `guardian-and-governance-usage`: Guardian and governance calls are not ticket
   calls and are not in this ledger.
 - `lifecycle-token-lines`: lifecycle entries are still written by
