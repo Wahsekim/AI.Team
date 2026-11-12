@@ -3,6 +3,7 @@ import { resolve, join } from 'node:path';
 import { canonical, digest, bytesDigest, parseJSON } from '../loop/contracts.mjs';
 import { compile } from './compile.mjs';
 import { loadMethods, MethodError } from './methods.mjs';
+import { instanceOf, existsIn } from './roots.mjs';
 
 const HASH = /^sha256:[a-f0-9]{64}$/;
 const DUTIES = ['exec', 'check', 'guard'];
@@ -111,18 +112,21 @@ function measureContext(input, preview, graph, read) {
   return measured;
 }
 
-export function preflight({ input: suppliedInput, teamRoot, approvalPath, expectedApprovalDigest }) {
+export function preflight({ input: suppliedInput, teamRoot, instanceRoot, approvalPath, expectedApprovalDigest }) {
   try {
     const input = parseJSON(canonical(suppliedInput));
     requireValue(typeof expectedApprovalDigest === 'string' && HASH.test(expectedApprovalDigest),
       'expectedApprovalDigest', 'Caller must supply a separately reviewed approval-file digest', 'APPROVAL_ANCHOR_REQUIRED');
     const root = resolve(teamRoot);
     requireValue(realpathSync(root) === root, 'teamRoot', 'Canonical non-symlink root required', 'UNSAFE_SOURCE_PATH');
-    const snapshots = new Map(); let totalBytes = 0;
+    const instance = instanceOf(root, instanceRoot);
+    const snapshots = new Map(), origins = new Map(); let totalBytes = 0;
     const read = path => {
       relative(path);
       if (!snapshots.has(path)) {
-        const bytes = readFile(root, path); totalBytes += bytes.length;
+        // Path rule: the instance file when it exists, otherwise the kit file.
+        origins.set(path, instance && existsIn(instance, path) ? instance : root);
+        const bytes = readFile(origins.get(path), path); totalBytes += bytes.length;
         requireValue(totalBytes <= 4 * 1024 * 1024, 'sources', 'Read bundle exceeds 4 MiB');
         snapshots.set(path, bytes);
       }
@@ -141,7 +145,7 @@ export function preflight({ input: suppliedInput, teamRoot, approvalPath, expect
     verifySources(input, approval, read);
     const context = measureContext(input, preview, approval.context, read);
     // Re-read the whole bundle before publishing evidence; caching is only for consistent measurement.
-    for (const [path, bytes] of snapshots) requireValue(bytesDigest(readFile(root, path)) === bytesDigest(bytes),
+    for (const [path, bytes] of snapshots) requireValue(bytesDigest(readFile(origins.get(path), path)) === bytesDigest(bytes),
       path, 'Source changed during preflight', 'SOURCE_CHANGED_DURING_PREFLIGHT');
     if (needsMethods) {
       const refreshed = compile(input, { methodBundle: loadMethods({ teamRoot: root }) });
@@ -151,7 +155,8 @@ export function preflight({ input: suppliedInput, teamRoot, approvalPath, expect
     const body = {
       schemaVersion: 1, stage: 'offline-preflight', launchable: false,
       approvalFileDigest: expectedApprovalDigest, inputDigest: digest(input), previewDigest: preview.manifest.digest,
-      files: [...snapshots].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([path, bytes]) => ({ path, bytes: bytes.length, sha256: bytesDigest(bytes) })),
+      files: [...snapshots].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([path, bytes]) => ({ path,
+        ...(instance ? { root: origins.get(path) === instance ? 'instance' : 'kit' } : {}), bytes: bytes.length, sha256: bytesDigest(bytes) })),
       context, metric: approval.context.metric,
       unresolved: ['human-approval-authenticity-and-revocation', 'semantic-read-closure-completeness',
         'runtime-injected-context', 'guardian-runtime-prompt', 'runtime-permissions-and-registry',

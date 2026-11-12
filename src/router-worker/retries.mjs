@@ -2,6 +2,7 @@ import { readFileSync, realpathSync, lstatSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { canonical, digest, bytesDigest, parseJSON, fields, id, ref, requireThat } from '../loop/contracts.mjs';
+import { instanceOf } from './roots.mjs';
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const DUTIES = ['exec', 'check'];
@@ -14,19 +15,20 @@ const reference = value => { ref(value); return value; };
 const nonempty = value => expect(typeof value === 'string' && value.trim() && value.length <= 1000
   && !/[\x00-\x1f\x7f]/.test(value), 'Expected bounded single-line explanation');
 
-export function loadRetryRules({ teamRoot = ROOT } = {}) {
+export function loadRetryRules({ teamRoot = ROOT, instanceRoot } = {}) {
   const root = resolve(teamRoot);
   expect(realpathSync(root) === root, 'Canonical team root required');
-  const read = path => {
-    let full = root;
+  const instance = instanceOf(root, instanceRoot);
+  const read = (path, base = root) => {
+    let full = base;
     for (const component of path.split('/')) {
       full = join(full, component); expect(!lstatSync(full).isSymbolicLink(), 'Symlink in retry rule source');
     }
     const stat = lstatSync(full); expect(stat.isFile() && stat.size <= 1024 * 1024, 'Invalid retry rule source');
     return readFileSync(full);
   };
-  const paths = ['charter.template.md', 'agents/pm.md', 'decisions/0008-router-worker-topology.md'];
-  const sources = Object.fromEntries(paths.map(path => [path, read(path)]));
+  const paths = [instance ? 'charter.md' : 'charter.template.md', 'agents/pm.md', 'decisions/0008-router-worker-topology.md'];
+  const sources = Object.fromEntries(paths.map((path, i) => [path, read(path, i === 0 && instance ? instance : root)]));
   const charter = sources[paths[0]].toString('utf8'), pm = sources[paths[1]].toString('utf8'), adr = sources[paths[2]].toString('utf8');
   expect(/Same role may retry the same ticket at most twice unless the owner\s+approves\./.test(charter)
     && /If the last two closes made no progress or repeated the same\s+outcome/.test(charter)
@@ -41,7 +43,8 @@ function validateRules(rules) {
   fields(rules, ['schemaVersion', 'maxRetries', 'localEmptyCloseLimit', 'maxFixVerifyRoundTrips', 'sourceDigests'], 'Retry rules');
   expect(rules.schemaVersion === 1 && rules.maxRetries === 2 && rules.localEmptyCloseLimit === 2
     && rules.maxFixVerifyRoundTrips === 3, 'Unsupported retry rules', 'RETRY_RULE_REVIEW_REQUIRED');
-  fields(rules.sourceDigests, ['charter.template.md', 'agents/pm.md', 'decisions/0008-router-worker-topology.md'], 'Rule sources');
+  const charter = rules.sourceDigests && Object.hasOwn(rules.sourceDigests, 'charter.md') ? 'charter.md' : 'charter.template.md';
+  fields(rules.sourceDigests, [charter, 'agents/pm.md', 'decisions/0008-router-worker-topology.md'], 'Rule sources');
   Object.values(rules.sourceDigests).forEach(value => expect(/^sha256:[a-f0-9]{64}$/.test(value), 'Invalid rule source digest'));
 }
 

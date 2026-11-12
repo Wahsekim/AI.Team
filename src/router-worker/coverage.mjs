@@ -2,16 +2,18 @@ import { readFileSync, lstatSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { canonical, parseJSON, digest, bytesDigest } from '../loop/contracts.mjs';
+import { instanceOf } from './roots.mjs';
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const WORKFLOWS = Array.from({ length: 32 }, (_, i) => `WF-${String(i).padStart(2, '0')}`);
 const INVARIANTS = [...Array.from({ length: 8 }, (_, i) => `H${i + 1}`),
   ...Array.from({ length: 6 }, (_, i) => `M${i + 1}`), ...Array.from({ length: 5 }, (_, i) => `Q${i + 1}`)];
 
-export function loadCoverage(root = ROOT) {
+export function loadCoverage(root = ROOT, { instanceRoot } = {}) {
   if (realpathSync(root) !== root.replace(/\/$/, '')) throw Error('Canonical coverage root required');
-  const read = path => {
-    let full = root;
+  const instance = instanceOf(root, instanceRoot);
+  const read = (path, base = root) => {
+    let full = base;
     for (const part of path.split('/')) {
       full = join(full, part);
       if (lstatSync(full).isSymbolicLink()) throw Error('Symlink in coverage source');
@@ -28,7 +30,7 @@ export function loadCoverage(root = ROOT) {
   const catalog = read('docs/workflow-catalog.md');
   const sourceIds = [...catalog.toString('utf8').matchAll(/^### (WF-\d\d) /gm)].map(m => m[1]);
   if (canonical(sourceIds) !== canonical(WORKFLOWS)) throw Error('Workflow source inventory changed; review the coverage map');
-  const charter = read('charter.template.md'), meta = read('agents/_shared/meta-rules.md');
+  const charter = instance ? read('charter.md', instance) : read('charter.template.md'), meta = read('agents/_shared/meta-rules.md');
   const harness = charter.toString('utf8').split('## Harness Rules\n')[1]?.split('\n## ')[0] ?? '';
   const actualInvariants = [...harness.matchAll(/^(\d+)\. /gm)].map(m => `H${m[1]}`)
     .concat([...meta.toString('utf8').matchAll(/^## (M\d+) - /gm)].map(m => m[1]))

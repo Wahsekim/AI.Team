@@ -5,6 +5,7 @@ import { resolve, join, dirname, basename, isAbsolute, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { canonical, parseJSON, digest, bytesDigest } from '../loop/contracts.mjs';
 import { loadCoverage, coverageReport } from './coverage.mjs';
+import { instanceOf, existsIn } from './roots.mjs';
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const DUTIES = ['exec', 'check', 'guard'];
@@ -17,6 +18,7 @@ const AUTHORITY = ['CLAUDE.md', 'agents/pm.md', 'agents/_shared/meta-rules.md', 
   'docs/workflow-catalog.md', 'docs/owner-contract.md', 'agents/coach.md', 'agents/auditor.md',
   'agents/security.md', 'agents/chaos.md', 'agents/architect.md', 'agents/lessons.md',
   'decisions/0007-pm-only-commits.md', 'decisions/0008-router-worker-topology.md'];
+const INSTANCE_AUTHORITY = ['charter.md', 'kit.lock', 'profiles/project.md', 'profiles/stack.md'];
 const LOCAL_TOOLS = ['Read', 'Grep', 'Glob', 'Bash', 'Write', 'Edit'];
 
 function requireValue(condition, message) { if (!condition) throw Error(message); }
@@ -87,23 +89,27 @@ function workerRole(duty) {
   return `# Worker ${duty}\n\n## Base Agent\n\nsynthetic\n\n## Project Overlay\n\n${job}\n\nThis is an inactive deployment draft. Do not dispatch until owner mappings and runtime gates pass.\n\n## Dispatch Contract\n\nRead agents/router-worker-contract.md and the frozen assignment. Preserve charter, M1-M6 and original PM-only commits. No delegation, commits, external-service MCP, new permissions or self-accepted delivery. Missing prerequisites or authority return to PM.\n`;
 }
 
-function wrapper(spec, duty) {
+function wrapper(spec, duty, twoRoot) {
   const p = spec.profiles[duty], name = `${spec.project.slug}-worker-${duty}`;
   const denied = ['Agent', 'Task', ...(duty === 'exec' ? [] : ['Write', 'Edit', 'NotebookEdit'])];
   const extra = duty === 'guard' ? '\nRead agents/chaos.md for the original guardian and halt-investigation obligations.\n'
     : spec.project.ui ? '\nRead agents/_shared/browser-access.md for real UI verification. Missing browser/runtime evidence remains unverified; a simulated result does not satisfy M5.\n' : '';
-  return `---\nname: "${name}"\ndescription: "Inactive Router/Worker ${duty} draft; requires approved activation"\nmodel: "${p.model}"\neffort: "${p.effort}"\nmaxTurns: ${p.maxTurns}\ntools: ${p.tools.join(', ')}\ndisallowedTools: ${denied.join(', ')}\npermissionMode: "default"\n---\n\n# Specific Agent Contract\n\nDo not run from this draft. Runtime activation is not implemented.\n\nAll read paths below are relative to the team root, where the runtime must start; the product root is separate. Read agents/worker-${duty}.md, agents/router-worker-contract.md, charter.md, profiles/project.md, profiles/stack.md, agents/_shared/meta-rules.md, agents/_shared/verify-discipline.md and the relevant agents/lessons.md index lines.\n${extra}\nModel and effort are copied from agents/roster.md. Bash, when listed, is not a read-only sandbox. Tools do not authorize product, ledger, commit or external-service access beyond the frozen assignment and host boundary.\n`;
+  return `---\nname: "${name}"\ndescription: "Inactive Router/Worker ${duty} draft; requires approved activation"\nmodel: "${p.model}"\neffort: "${p.effort}"\nmaxTurns: ${p.maxTurns}\ntools: ${p.tools.join(', ')}\ndisallowedTools: ${denied.join(', ')}\npermissionMode: "default"\n---\n\n# Specific Agent Contract\n\nDo not run from this draft. Runtime activation is not implemented.\n\nAll read paths below are relative to the team root, where the runtime must start; the product root is separate.${twoRoot ? ' A path that does not exist there is read under kit/, which is never edited.' : ''} Read agents/worker-${duty}.md, agents/router-worker-contract.md, charter.md, profiles/project.md, profiles/stack.md, agents/_shared/meta-rules.md, agents/_shared/verify-discipline.md and the relevant agents/lessons.md index lines.\n${extra}\nModel and effort are copied from agents/roster.md. Bash, when listed, is not a read-only sandbox. Tools do not authorize product, ledger, commit or external-service access beyond the frozen assignment and host boundary.\n`;
 }
 
-export function draftTeam(input, { teamRoot = ROOT } = {}) {
+export function draftTeam(input, { teamRoot = ROOT, instanceRoot } = {}) {
   try {
     const spec = parseJSON(canonical(input)); validateSpec(spec);
     const root = resolve(teamRoot); requireValue(realpathSync(root) === root, 'Canonical source root required');
-    const loaded = loadCoverage(root), coverage = coverageReport(spec.workflowStates, loaded);
-    const paths = [...new Set([...AUTHORITY, 'scripts/bootstrap-team.sh', ...SEEDS.map(([seed]) => seed),
-      ...(spec.project.ui ? ['agents/_shared/browser-access.template.md'] : [])])];
-    const source = Object.fromEntries(paths.map(path => [path, readSource(root, path)]));
-    const base = instantiate(spec, source);
+    const instance = instanceOf(root, instanceRoot), coverageOptions = instance ? { instanceRoot: instance } : {};
+    const loaded = loadCoverage(root, coverageOptions), coverage = coverageReport(spec.workflowStates, loaded);
+    // An existing instance keeps its own charter and profiles; only a fresh-kit draft instantiates seeds.
+    const paths = [...new Set([...AUTHORITY, 'scripts/bootstrap-team.sh', ...(instance ? [] : [...SEEDS.map(([seed]) => seed),
+      ...(spec.project.ui ? ['agents/_shared/browser-access.template.md'] : [])])])];
+    const read = path => readSource(instance && existsIn(instance, path) ? instance : root, path);
+    const source = Object.fromEntries(paths.map(path => [path, read(path)]));
+    const authority = instance ? Object.fromEntries(INSTANCE_AUTHORITY.map(path => [path, readSource(instance, path)])) : {};
+    const base = instance ? { files: {}, verdict: 'existing-instance', gateStatus: 'not-run-in-draft' } : instantiate(spec, source);
     const files = { ...base.files };
     files['agents/router-worker-contract.md'] = '# Router/Worker common protocol\n\nINACTIVE DRAFT. Retain the original charter and M1-M6; only the PM commits. Skills are methods, never permissions. Exec and check are independent calls; guardian retains the original chaos obligations. Budgets, counters, stops and governance triggers are not reset by topology changes. Runtime isolation, full read closure and owner-ratified responsibility mappings are mandatory before use.\n';
     files['agents/router-worker-router.md'] = '# PM routing supplement\n\nINACTIVE DRAFT. Keep agents/pm.md as the persistent PM protocol. Route by bounded outcome, not FE/BE identity. Compile and preflight frozen assignments; preserve all original lifecycle, retry, verification, count, budget and governance gates. Unknown coverage or owner decisions block activation. This supplement does not authorize direct implementation or change the narrow direct-verify exception.\n';
@@ -112,7 +118,7 @@ export function draftTeam(input, { teamRoot = ROOT } = {}) {
       '| pm | agents/pm.md | main session | inherits main session | owner-selected | active |'];
     for (const duty of DUTIES) {
       const role = `worker-${duty}`, path = `.claude/agents/${spec.project.slug}-${role}.md`;
-      files[`agents/${role}.md`] = workerRole(duty); files[path] = wrapper(spec, duty);
+      files[`agents/${role}.md`] = workerRole(duty); files[path] = wrapper(spec, duty, Boolean(instance));
       rows.push(`| ${role} | agents/${role}.md | ${path} | ${spec.profiles[duty].model} | ${spec.profiles[duty].effort} | active |`);
     }
     for (const role of ['architect', 'coach', 'auditor', 'security']) rows.push(`| ${role} | agents/${role}.md | — (pending governance staffing) | owner-selected | owner-selected | dormant |`);
@@ -121,12 +127,13 @@ export function draftTeam(input, { teamRoot = ROOT } = {}) {
       topologyOnly: true, executionMode: 'wrappers', maxConcurrentExec: 1, coverageDigest: digest(coverage) };
     files['profiles/team-mode.json'] = JSON.stringify(mode, null, 2) + '\n';
     const body = { schemaVersion: 1, kind: 'inert-overlay-draft', launchable: false, inputDigest: digest(spec),
-      requiresFreshBaseKit: true, bootstrap: { sourceDigest: bytesDigest(source['scripts/bootstrap-team.sh']), verdict: base.verdict, gateStatus: base.gateStatus },
+      requiresFreshBaseKit: !instance, ...(instance ? { instance: { authority: INSTANCE_AUTHORITY.map(path => ({ path, sha256: bytesDigest(authority[path]) })) } } : {}), bootstrap: { sourceDigest: bytesDigest(source['scripts/bootstrap-team.sh']), verdict: base.verdict, gateStatus: base.gateStatus },
       sourceFiles: paths.sort().map(path => ({ path, sha256: bytesDigest(source[path]) })),
       coverage, files, unresolved: ['deployment-responsibility-coverage', 'enabled-governance-staffing', 'retry-state-enforcement',
         'profile-interview', 'generated-source-adapters', 'complete-context-closure', 'runtime-and-deployment-validation', 'live-activation'] };
-    requireValue(paths.every(path => bytesDigest(readSource(root, path)) === bytesDigest(source[path]))
-      && canonical(loadCoverage(root)) === canonical(loaded), 'Draft sources changed during generation; retry from a reviewed snapshot');
+    requireValue(paths.every(path => bytesDigest(read(path)) === bytesDigest(source[path]))
+      && Object.keys(authority).every(path => bytesDigest(readSource(instance, path)) === bytesDigest(authority[path]))
+      && canonical(loadCoverage(root, coverageOptions)) === canonical(loaded), 'Draft sources changed during generation; retry from a reviewed snapshot');
     return { draft: { ...body, digest: digest(body) } };
   } catch (error) { return { errors: [{ code: 'INVALID_TEAM_DRAFT', field: 'draft', reason: error.message }] }; }
 }
@@ -188,11 +195,12 @@ export function verifyDraft(input, artifact, options = {}) {
   try {
     const spec = parseJSON(canonical(input)); validateSpec(spec);
     const draft = parseJSON(canonical(artifact), 4 * 1024 * 1024);
-    fields(draft, ['schemaVersion', 'kind', 'launchable', 'inputDigest', 'requiresFreshBaseKit', 'bootstrap',
+    const forInstance = options.instanceRoot !== undefined && options.instanceRoot !== null;
+    fields(draft, ['schemaVersion', 'kind', 'launchable', 'inputDigest', 'requiresFreshBaseKit', ...(forInstance ? ['instance'] : []), 'bootstrap',
       'sourceFiles', 'coverage', 'files', 'unresolved', 'digest']);
     const { digest: expected, ...body } = draft;
     requireValue(draft.schemaVersion === 1 && draft.kind === 'inert-overlay-draft' && draft.launchable === false
-      && draft.requiresFreshBaseKit === true && draft.inputDigest === digest(spec) && expected === digest(body), 'Draft identity/digest mismatch');
+      && draft.requiresFreshBaseKit === !forInstance && draft.inputDigest === digest(spec) && expected === digest(body), 'Draft identity/digest mismatch');
     requireValue(draft.bootstrap.gateStatus === 'not-run-in-draft' && draft.coverage.activationAllowed === false,
       'Draft cannot claim completed deployment gates');
     for (const duty of DUTIES) inspectWrapper(draft.files[`.claude/agents/${spec.project.slug}-worker-${duty}.md`], spec, duty);

@@ -33,6 +33,16 @@ node scripts/team-mode.mjs draft SPEC.json /absolute/new-artifact.rw-draft.json
 node scripts/team-mode.mjs verify SPEC.json /absolute/new-artifact.rw-draft.json
 ```
 
+In a two-root instance (ADR 0009) run the same commands from the instance root
+as `node kit/scripts/team-mode.mjs ... --instance .`. The instance root must be
+the canonical path whose `kit/` is the kit running the command. Coverage and
+retry rules then read the instance `charter.md` instead of the kit seed, and the
+draft is an overlay on the existing instance: it contains only the Router/Worker
+files (roster, worker roles, wrappers, contract, `profiles/team-mode.json`),
+records digests of `charter.md`, `kit.lock` and both profiles, and sets
+`requiresFreshBaseKit: false`. Nothing is written to the instance or the kit.
+An instance draft and a fresh-kit draft do not verify as each other.
+
 The separate entry requires explicit `mode: router-worker`. The original
 `scripts/bootstrap-team.sh` remains the specialist/default path unchanged.
 There is no `activate` subcommand and no hot switch.

@@ -183,6 +183,7 @@ node scripts/preflight-router-worker.mjs INPUT.json TEAM_ROOT APPROVAL_PATH APPR
 node scripts/team-mode.mjs preview SPEC.json
 node scripts/team-mode.mjs draft SPEC.json NEW.rw-draft.json
 node scripts/team-mode.mjs verify SPEC.json DRAFT.json
+node kit/scripts/team-mode.mjs preview SPEC.json --instance .   # from a two-root instance root
 ```
 
 Node 22 supports the non-SQLite tools; retry persistence and its registry require
