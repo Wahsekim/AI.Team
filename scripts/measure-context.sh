@@ -62,7 +62,7 @@ $(first_existing charter.md charter.template.md)
 agents/pm.md
 agents/_shared/meta-rules.md
 docs/workflow-catalog.md
-agents/lessons.md
+$(first_existing agents/lessons.md agents/lessons.template.md)
 "
 
 # Worker read sets: EVERY live wrapper in .claude/agents/ (deployment) with the
@@ -88,7 +88,7 @@ $(first_existing profiles/stack.md profiles/stack.template.md)
 agents/templates.md
 agents/_shared/meta-rules.md
 $(first_existing agents/_shared/verify-discipline.md agents/_shared/verify-discipline.template.md)
-agents/lessons.md
+$(first_existing agents/lessons.md agents/lessons.template.md)
 "
 
 # shellcheck disable=SC2086
