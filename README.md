@@ -101,7 +101,12 @@ It works against either:
    - then follows `docs/bootstrap-empty-project.md` or
      `docs/bootstrap-existing-project.md` depending on your answer.
 
-   To update the kit later, see `docs/upgrade.md`. A deployment made by
+   To update the kit later, see `docs/upgrade.md`: `kit/scripts/pin-kit.sh .`
+   records the new pin and writes each changed seed to
+   `kit-upgrade-review.md`; the validator fails the deployment until every
+   item is ported or declined and ticked, because instantiated files
+   (`charter.md`, role files, ledgers, `CLAUDE.md`) are not updated by a kit
+   upgrade. A deployment made by
    cloning this repo and bootstrapping inside it (single root) still works
    for now and is reported as legacy by the validator.
 
