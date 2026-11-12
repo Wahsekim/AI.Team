@@ -16,7 +16,7 @@ const SEEDS = [
 ];
 const AUTHORITY = ['CLAUDE.md', 'agents/pm.md', 'agents/_shared/meta-rules.md', 'docs/staffing.md',
   'docs/workflow-catalog.md', 'docs/owner-contract.md', 'agents/coach.md', 'agents/auditor.md',
-  'agents/security.md', 'agents/chaos.md', 'agents/architect.md', 'agents/lessons.md',
+  'agents/security.md', 'agents/chaos.md', 'agents/architect.md', 'agents/lessons.template.md',
   'decisions/0007-pm-only-commits.md', 'decisions/0008-router-worker-topology.md'];
 const INSTANCE_AUTHORITY = ['charter.md', 'kit.lock', 'profiles/project.md', 'profiles/stack.md'];
 const LOCAL_TOOLS = ['Read', 'Grep', 'Glob', 'Bash', 'Write', 'Edit'];

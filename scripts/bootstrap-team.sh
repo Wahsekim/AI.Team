@@ -80,17 +80,26 @@ else
   echo "WARN - layout: legacy single-root — bootstrap writes into the kit checkout; deploy into an instance root with kit/ instead (ADR 0009)"
 fi
 
-# Verbatim copies (two-root only): the runtime loads workflows from the session
-# directory; ledgers and role files hold format examples that must not be substituted.
-COPY_PAIRS=""
-if [ -n "$SEED_LABEL" ]; then
-  COPY_PAIRS="
-.claude/workflows/run-n-rounds.js:.claude/workflows/run-n-rounds.js
+# Verbatim copies: ledgers and role files hold format examples that must not be
+# substituted. The kit ships ledgers as seeds only, so both layouts create them.
+# Two-root adds the engine copy (the runtime loads workflows from the session
+# directory) and makes every seed mandatory; single-root skips absent seeds.
+LEDGER_PAIRS="
 agents/lifecycle.template.md:agents/lifecycle.md
 agents/lessons.template.md:agents/lessons.md
 memory/pm.template.md:memory/pm.md
 pm-decisions.template.md:pm-decisions.md
 "
+COPY_PAIRS=""
+if [ -z "$SEED_LABEL" ]; then
+  for pair in $LEDGER_PAIRS; do
+    [ -f "$SEEDS/${pair%%:*}" ] && COPY_PAIRS="$COPY_PAIRS
+$pair"
+  done
+else
+  COPY_PAIRS="
+.claude/workflows/run-n-rounds.js:.claude/workflows/run-n-rounds.js
+$LEDGER_PAIRS"
   case ",$ROLES," in *,,*) [ -z "$ROLES" ] || failboot "args: --roles has an empty role name" ;; esac
   for role in $(printf '%s' "$ROLES" | tr ',' ' '); do
     # LC_ALL=C: under other collations [a-z] also matches uppercase letters.
@@ -232,13 +241,13 @@ for pair in $COPY_PAIRS; do
   if [ -f "$ROOT/$target" ]; then
     echo "SKIP - $target: already present (never overwritten)"
   elif [ "$DRY" = 1 ]; then
-    echo "PLAN - $target: would copy from kit/$seed"
+    echo "PLAN - $target: would copy from ${SEED_LABEL}$seed"
   else
     mkdir -p "$(dirname "$ROOT/$target")" || failboot "mkdir: directory for $target failed"
     TMP="$ROOT/${target}.render-tmp.$$"
-    cp "$SEEDS/$seed" "$TMP" || { rm -f "$TMP"; failboot "copy: kit/$seed failed"; }
+    cp "$SEEDS/$seed" "$TMP" || { rm -f "$TMP"; failboot "copy: ${SEED_LABEL}$seed failed"; }
     mv "$TMP" "$ROOT/$target" || { rm -f "$TMP"; failboot "rename: $target failed"; }
-    echo "DONE - $target: copied from kit/$seed"
+    echo "DONE - $target: copied from ${SEED_LABEL}$seed"
   fi
 done
 

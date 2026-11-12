@@ -27,6 +27,7 @@ operational name and fills placeholders:
 | `profiles/stack.template.md` | `profiles/stack.md` |
 | `agents/roster.template.md` | `agents/roster.md` |
 | `agents/_shared/verify-discipline.template.md` | `agents/_shared/verify-discipline.md` |
+| `agents/lifecycle.template.md`, `agents/lessons.template.md`, `memory/pm.template.md`, `pm-decisions.template.md` | the same names without `.template` (ledgers; never tracked in the kit) |
 | `agents/_shared/browser-access.template.md` | `agents/_shared/browser-access.md` (UI projects) |
 | `agents/_seeds/role-wrapper.template.md` | `.claude/agents/<slug>-<role>.md` (one per spawnable role) — or `.claude/agents/INLINE_BASE_AGENT_MODE.md` from `agents/_seeds/INLINE_BASE_AGENT_MODE.template.md` (seeds live OUTSIDE the runtime agent registry: the runtime registers every frontmatter file under `.claude/agents/` as a live agent type) |
 

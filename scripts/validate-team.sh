@@ -213,15 +213,14 @@ else
   else
     fail "engine-copy" "$ENGINE_REL is missing or differs from kit/$ENGINE_REL — re-copy it from the pinned kit"
   fi
-  # Allowed in both roots: files bootstrap generates, READMEs, role files
-  # instantiated from kit role seeds, and the ledgers the kit still ships.
+  # Allowed in both roots: files bootstrap generates, READMEs, and role files
+  # instantiated from kit role seeds. The kit ships ledgers as seeds only.
   SHADOWS=""
   while IFS= read -r f; do
     f="${f#./}"
     [ -f "$KIT/$f" ] || continue
     case "$f" in
       CLAUDE.md|.gitignore|README.md|*/README.md|"$ENGINE_REL") continue ;;
-      agents/lifecycle.md|agents/lessons.md|memory/pm.md|pm-decisions.md) continue ;;
       agents/pm.md) ;;
       agents/*.md)
         case "${f#agents/}" in */*) ;; *) grep -qiE '^##[[:space:]]+base agent' "$KIT/$f" && continue ;; esac ;;
