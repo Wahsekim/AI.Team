@@ -101,9 +101,38 @@ It works against either:
    - then follows `docs/bootstrap-empty-project.md` or
      `docs/bootstrap-existing-project.md` depending on your answer.
 
-   To update the kit later, see `docs/upgrade.md`. A deployment made by
-   cloning this repo and bootstrapping inside it (single root) still works
-   for now and is reported as legacy by the validator.
+   **Updating the kit later** (`docs/upgrade.md`): fast-forward `kit/` to the
+   reviewed commit, then run `kit/scripts/pin-kit.sh .`. Scripts, docs, shared
+   rules and the PM protocol update with `kit/`. `charter.md`, hired role
+   files, ledgers and the instance `CLAUDE.md` were copied from seeds once and
+   are not updated; `pin-kit.sh` lists the seeds that changed so the PM ports
+   them by hand.
+
+   **Migrating an older deployment.** A deployment made by cloning this repo
+   and bootstrapping inside it (single root) keeps project state in tracked
+   kit files, so `git pull` conflicts. It still works for now and the
+   validator reports it as legacy. Migrate it once:
+
+   ```bash
+   mkdir MyWorkspace/MyProduct.team && cd MyWorkspace/MyProduct.team && git init
+   git submodule add https://github.com/Wahsekim/AI.Team.git kit
+   kit/scripts/migrate-to-instance.sh --dry-run ../AI.Team .      # plan only
+   kit/scripts/migrate-to-instance.sh --project-name MyProduct ../AI.Team .
+   kit/scripts/validate-team.sh --mode deployment .
+   ```
+
+   The script copies project state (charter, profiles, roster, wrappers,
+   ledgers, edited role files, messages, project ADRs and scripts) and never
+   writes to the old checkout or to `kit/`. Edits the old deployment made to
+   other kit files (for example `CLAUDE.md` or `docs/`) are not copied: their
+   diffs are saved under `migration-review/` and listed in
+   `kit-upgrade-review.md` for the PM to port by hand.
+
+   **Ledgers are never tracked in this repository.** The kit ships
+   `agents/lifecycle.template.md`, `agents/lessons.template.md`,
+   `memory/pm.template.md` and `pm-decisions.template.md`; bootstrap creates
+   the live files in the instance. The maintainers' own ledgers for developing
+   the kit live at the usual paths in their checkout and are gitignored.
 
 3. **Wire the recommended hooks** (optional but advised for unattended runs):
    merge the `settings.json` snippet from `docs/harness-assumptions.md` into
@@ -281,6 +310,7 @@ leaves this role/task interface unchanged.
 | See what the runtime must provide + deployment hooks | `docs/harness-assumptions.md` |
 | Know the human owner's duties and SAFE-MODE | `docs/owner-contract.md` |
 | Port an instance lesson back into this template | `docs/backport-ritual.md` |
+| Update the kit in a deployed instance, or migrate a single-root deployment | `docs/upgrade.md` |
 | Inject a reviewed method into a worker brief, or update the skill packs | `docs/role-skills.md` |
 | Understand the experimental Router/Worker mode and its rollout gates | `docs/design/router-worker/README.md` |
 
@@ -306,6 +336,9 @@ AI.Team/
   memory/                      # PM state and atomic counters
   messages/                    # inter-agent daily dialogue
   scripts/validate-team.sh     # mechanical integrity checker (kit + deployments)
+  scripts/bootstrap-team.sh    # instantiates seeds into a project instance root (never writes kit/)
+  scripts/pin-kit.sh           # records a reviewed kit upgrade in an instance (kit.lock, engine copy)
+  scripts/migrate-to-instance.sh # moves a single-root deployment into an instance root
   scripts/preflight-run.mjs    # static launch preflight + frozen launch-bundle digest
   scripts/now-utc.sh           # the only sanctioned ledger timestamp source
   agents/_seeds/               # wrapper + inline-mode SEEDS (never inside .claude/agents/)

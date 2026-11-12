@@ -50,7 +50,34 @@ repository pinned by `kit.lock`. Run everything from the instance root.
 
 A deployment bootstrapped inside a clone of this repository keeps project state
 in tracked kit files, so `git pull` conflicts. The validator reports it as
-`WARN - layout: legacy single-root`. Migrate it once: create an instance root,
-add `kit/`, bootstrap, then copy the instantiated files, ledgers, role files and
-wrappers across, and validate. ADR 0009 lists the steps used for the first
-migration.
+`WARN - layout: legacy single-root`. Migrate it once:
+
+```bash
+mkdir ../MyProduct.team && cd ../MyProduct.team && git init
+git submodule add https://github.com/Wahsekim/AI.Team.git kit
+kit/scripts/migrate-to-instance.sh --dry-run <old-checkout> .
+kit/scripts/migrate-to-instance.sh --project-name <name> <old-checkout> .
+kit/scripts/validate-team.sh --mode deployment .
+```
+
+`migrate-to-instance.sh` copies the files Git ignores or does not track in the
+old checkout (minus environment artifacts such as `.venv/`) and the tracked
+ledgers and role files the deployment modified, then runs the two-root
+bootstrap. It never writes to the old checkout or to `kit/` and never
+overwrites a file in the new instance. Other tracked kit files the deployment
+edited (`CLAUDE.md`, `.gitignore`, `docs/`, `scripts/`) are not copied, because
+they would shadow the kit: each diff is saved under `migration-review/` and
+added to `kit-upgrade-review.md` as an open item. Port the project-specific
+part of each into an instance file (the instance `CLAUDE.md`, a new document
+under `docs/`, or a script flag) and tick the item. Keep the old checkout until
+one attended cycle has closed in the new instance.
+
+## Maintainers: the kit's own ledgers
+
+The kit's development ledgers (`agents/lifecycle.md`, `agents/lessons.md`,
+`memory/pm.md`, `pm-decisions.md`) are gitignored and local to each
+maintainer checkout. The change that stopped tracking them is a deletion in
+Git, so the first pull or merge that brings it into another checkout removes
+those four working files there (or conflicts if they were edited). Copy them
+aside before pulling and put them back afterwards; earlier committed entries
+remain available with `git show <commit>:agents/lifecycle.md`.

@@ -187,4 +187,5 @@ per-project seeds, so they are instantiated like the charter.
       still assumes one root.
 - [ ] Ledger headers carry normative rules that are frozen at bootstrap; move
       them to a kit document so upgrades reach them.
-- [ ] Migrate the UHF demo instance.
+- [x] `scripts/migrate-to-instance.sh` for single-root deployments; the UHF demo
+      instance was migrated on 2026-11-12.
