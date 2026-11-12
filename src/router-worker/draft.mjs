@@ -9,6 +9,9 @@ import { instanceOf, existsIn } from './roots.mjs';
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const DUTIES = ['exec', 'check', 'guard'];
+const GOVERNANCE = ['architect', 'coach', 'auditor', 'security'];
+const READ_ONLY_GOVERNANCE = ['auditor', 'security'];
+const WRITE_TOOLS = ['Write', 'Edit'];
 const SEEDS = [
   ['charter.template.md', 'charter.md'], ['profiles/project.template.md', 'profiles/project.md'],
   ['profiles/stack.template.md', 'profiles/stack.md'], ['agents/roster.template.md', 'agents/roster.md'],
@@ -29,7 +32,7 @@ function fields(value, keys) {
 function token(value) { return typeof value === 'string' && /^[a-z][a-z0-9-]{0,47}$/.test(value); }
 
 function validateSpec(spec) {
-  fields(spec, ['schemaVersion', 'mode', 'project', 'profiles', 'workflowStates']);
+  fields(spec, ['schemaVersion', 'mode', 'project', 'profiles', 'workflowStates', ...(Object.hasOwn(spec ?? {}, 'governance') ? ['governance'] : [])]);
   requireValue(spec.schemaVersion === 1 && spec.mode === 'router-worker', 'This draft entry accepts only explicit router-worker mode; use original bootstrap for specialist');
   fields(spec.project, ['name', 'slug', 'productRoot', 'ui']);
   requireValue(typeof spec.project.name === 'string' && spec.project.name.trim() && spec.project.name.length <= 120
@@ -40,15 +43,26 @@ function validateSpec(spec) {
     && !/[\x00-\x1f\x7f]/.test(spec.project.productRoot), 'Product root must be an explicit normalized absolute path');
   fields(spec.profiles, DUTIES);
   for (const duty of DUTIES) {
-    const p = spec.profiles[duty]; fields(p, ['model', 'effort', 'maxTurns', 'tools']);
-    requireValue(typeof p.model === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(p.model), 'Invalid roster model identifier');
-    requireValue(['low', 'medium', 'high', 'max'].includes(p.effort) && Number.isSafeInteger(p.maxTurns)
-      && p.maxTurns >= 1 && p.maxTurns <= 300, 'Invalid effort or turn cap');
-    requireValue(Array.isArray(p.tools) && p.tools.length > 0 && p.tools.every(t => LOCAL_TOOLS.includes(t))
-      && new Set(p.tools).size === p.tools.length, 'Only explicit local tools are permitted');
-    requireValue(duty === 'exec' || !p.tools.some(t => ['Write', 'Edit'].includes(t)), 'Check/guard cannot have direct product-edit tools');
+    const p = spec.profiles[duty]; validateProfile(p);
+    requireValue(duty === 'exec' || !p.tools.some(t => WRITE_TOOLS.includes(t)), 'Check/guard cannot have direct product-edit tools');
     requireValue(duty !== 'guard' || !p.tools.includes('Bash'), 'This guardian draft supports read-only local inspection only');
   }
+  const governance = spec.governance ?? {};
+  requireValue(Object.getPrototypeOf(governance) === Object.prototype && Object.keys(governance).every(role => GOVERNANCE.includes(role)),
+    'Governance staffing accepts only architect, coach, auditor and security');
+  for (const [role, p] of Object.entries(governance)) {
+    validateProfile(p);
+    requireValue(!READ_ONLY_GOVERNANCE.includes(role) || !p.tools.some(t => WRITE_TOOLS.includes(t)), 'Auditor and security are read-only roles');
+  }
+}
+
+function validateProfile(p) {
+  fields(p, ['model', 'effort', 'maxTurns', 'tools']);
+  requireValue(typeof p.model === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(p.model), 'Invalid roster model identifier');
+  requireValue(['low', 'medium', 'high', 'max'].includes(p.effort) && Number.isSafeInteger(p.maxTurns)
+    && p.maxTurns >= 1 && p.maxTurns <= 300, 'Invalid effort or turn cap');
+  requireValue(Array.isArray(p.tools) && p.tools.length > 0 && p.tools.every(t => LOCAL_TOOLS.includes(t))
+    && new Set(p.tools).size === p.tools.length, 'Only explicit local tools are permitted');
 }
 
 function readSource(root, path) {
@@ -89,12 +103,16 @@ function workerRole(duty) {
   return `# Worker ${duty}\n\n## Base Agent\n\nsynthetic\n\n## Project Overlay\n\n${job}\n\nThis is an inactive deployment draft. Do not dispatch until owner mappings and runtime gates pass.\n\n## Dispatch Contract\n\nRead agents/router-worker-contract.md and the frozen assignment. Preserve charter, M1-M6 and original PM-only commits. No delegation, commits, external-service MCP, new permissions or self-accepted delivery. Missing prerequisites or authority return to PM.\n`;
 }
 
-function wrapper(spec, duty, twoRoot) {
-  const p = spec.profiles[duty], name = `${spec.project.slug}-worker-${duty}`;
-  const denied = ['Agent', 'Task', ...(duty === 'exec' ? [] : ['Write', 'Edit', 'NotebookEdit'])];
+const deniedTools = p => ['Agent', 'Task', ...(p.tools.some(t => WRITE_TOOLS.includes(t)) ? [] : ['Write', 'Edit', 'NotebookEdit'])];
+
+// role: a worker duty ('worker-exec') or a governance role id ('architect').
+function wrapper(spec, role, p, twoRoot) {
+  const name = `${spec.project.slug}-${role}`, duty = role.startsWith('worker-') ? role.slice('worker-'.length) : null;
+  const label = duty ?? `governance ${role}`;
   const extra = duty === 'guard' ? '\nRead agents/chaos.md for the original guardian and halt-investigation obligations.\n'
-    : spec.project.ui ? '\nRead agents/_shared/browser-access.md for real UI verification. Missing browser/runtime evidence remains unverified; a simulated result does not satisfy M5.\n' : '';
-  return `---\nname: "${name}"\ndescription: "Inactive Router/Worker ${duty} draft; requires approved activation"\nmodel: "${p.model}"\neffort: "${p.effort}"\nmaxTurns: ${p.maxTurns}\ntools: ${p.tools.join(', ')}\ndisallowedTools: ${denied.join(', ')}\npermissionMode: "default"\n---\n\n# Specific Agent Contract\n\nDo not run from this draft. Runtime activation is not implemented.\n\nAll read paths below are relative to the team root, where the runtime must start; the product root is separate.${twoRoot ? ' A path that does not exist there is read under kit/, which is never edited.' : ''} Read agents/worker-${duty}.md, agents/router-worker-contract.md, charter.md, profiles/project.md, profiles/stack.md, agents/_shared/meta-rules.md, agents/_shared/verify-discipline.md and the relevant agents/lessons.md index lines.\n${extra}\nModel and effort are copied from agents/roster.md. Bash, when listed, is not a read-only sandbox. Tools do not authorize product, ledger, commit or external-service access beyond the frozen assignment and host boundary.\n`;
+    : duty && spec.project.ui ? '\nRead agents/_shared/browser-access.md for real UI verification. Missing browser/runtime evidence remains unverified; a simulated result does not satisfy M5.\n'
+    : duty ? '' : '\nThis role keeps its original triggers and obligations from its role file; the topology change does not waive them.\n';
+  return `---\nname: "${name}"\ndescription: "Inactive Router/Worker ${label} draft; requires approved activation"\nmodel: "${p.model}"\neffort: "${p.effort}"\nmaxTurns: ${p.maxTurns}\ntools: ${p.tools.join(', ')}\ndisallowedTools: ${deniedTools(p).join(', ')}\npermissionMode: "default"\n---\n\n# Specific Agent Contract\n\nDo not run from this draft. Runtime activation is not implemented.\n\nAll read paths below are relative to the team root, where the runtime must start; the product root is separate.${twoRoot ? ' A path that does not exist there is read under kit/, which is never edited.' : ''} Read agents/${role}.md, agents/router-worker-contract.md, charter.md, profiles/project.md, profiles/stack.md, agents/_shared/meta-rules.md, agents/_shared/verify-discipline.md and the relevant agents/lessons.md index lines.\n${extra}\nModel and effort are copied from agents/roster.md. Bash, when listed, is not a read-only sandbox. Tools do not authorize product, ledger, commit or external-service access beyond the frozen assignment and host boundary.\n`;
 }
 
 export function draftTeam(input, { teamRoot = ROOT, instanceRoot } = {}) {
@@ -118,10 +136,19 @@ export function draftTeam(input, { teamRoot = ROOT, instanceRoot } = {}) {
       '| pm | agents/pm.md | main session | inherits main session | owner-selected | active |'];
     for (const duty of DUTIES) {
       const role = `worker-${duty}`, path = `.claude/agents/${spec.project.slug}-${role}.md`;
-      files[`agents/${role}.md`] = workerRole(duty); files[path] = wrapper(spec, duty, Boolean(instance));
+      files[`agents/${role}.md`] = workerRole(duty); files[path] = wrapper(spec, role, spec.profiles[duty], Boolean(instance));
       rows.push(`| ${role} | agents/${role}.md | ${path} | ${spec.profiles[duty].model} | ${spec.profiles[duty].effort} | active |`);
     }
-    for (const role of ['architect', 'coach', 'auditor', 'security']) rows.push(`| ${role} | agents/${role}.md | — (pending governance staffing) | owner-selected | owner-selected | dormant |`);
+    const governance = spec.governance ?? {};
+    for (const role of GOVERNANCE) {
+      const p = governance[role], path = `.claude/agents/${spec.project.slug}-${role}.md`;
+      if (!p) { rows.push(`| ${role} | agents/${role}.md | — (pending governance staffing) | owner-selected | owner-selected | dormant |`); continue; }
+      files[path] = wrapper(spec, role, p, Boolean(instance));
+      // A staffed role needs its role file in the instance; one the instance already owns is kept.
+      if (instance && !existsIn(instance, `agents/${role}.md`)) files[`agents/${role}.md`] = source[`agents/${role}.md`];
+      rows.push(`| ${role} | agents/${role}.md | ${path} | ${p.model} | ${p.effort} | active |`);
+    }
+    const dutyRole = loaded.coverage.duties, staffedAll = coverage.requiredDuties.every(duty => !GOVERNANCE.includes(dutyRole[duty]) || governance[dutyRole[duty]]);
     files['agents/roster.md'] = rows.join('\n') + '\n';
     const mode = { schemaVersion: 1, mode: 'router-worker', status: 'draft', launchable: false,
       topologyOnly: true, executionMode: 'wrappers', maxConcurrentExec: 1, coverageDigest: digest(coverage) };
@@ -129,7 +156,7 @@ export function draftTeam(input, { teamRoot = ROOT, instanceRoot } = {}) {
     const body = { schemaVersion: 1, kind: 'inert-overlay-draft', launchable: false, inputDigest: digest(spec),
       requiresFreshBaseKit: !instance, ...(instance ? { instance: { authority: INSTANCE_AUTHORITY.map(path => ({ path, sha256: bytesDigest(authority[path]) })) } } : {}), bootstrap: { sourceDigest: bytesDigest(source['scripts/bootstrap-team.sh']), verdict: base.verdict, gateStatus: base.gateStatus },
       sourceFiles: paths.sort().map(path => ({ path, sha256: bytesDigest(source[path]) })),
-      coverage, files, unresolved: ['deployment-responsibility-coverage', 'enabled-governance-staffing', 'retry-state-enforcement',
+      coverage, files, unresolved: ['deployment-responsibility-coverage', ...(staffedAll ? [] : ['enabled-governance-staffing']), 'retry-state-enforcement',
         'profile-interview', 'generated-source-adapters', 'complete-context-closure', 'runtime-and-deployment-validation', 'live-activation'] };
     requireValue(paths.every(path => bytesDigest(read(path)) === bytesDigest(source[path]))
       && Object.keys(authority).every(path => bytesDigest(readSource(instance, path)) === bytesDigest(authority[path]))
@@ -153,7 +180,8 @@ export function writeDraft(draft, outputPath) {
   } finally { rmSync(temp, { recursive: true, force: true }); }
 }
 
-function inspectWrapper(text, spec, duty) {
+function inspectWrapper(text, spec, role, p) {
+  const duty = role.startsWith('worker-') ? role.slice('worker-'.length) : null;
   const lines = text.split('\n'), end = lines.indexOf('---', 1);
   requireValue(lines[0] === '---' && end > 1, 'Wrapper frontmatter is missing');
   const entries = lines.slice(1, end).map(line => {
@@ -161,32 +189,38 @@ function inspectWrapper(text, spec, duty) {
     requireValue(match, 'Unrecognized wrapper frontmatter'); return [match[1], match[2]];
   });
   requireValue(new Set(entries.map(([key]) => key)).size === entries.length, 'Duplicate frontmatter keys');
-  const fm = Object.fromEntries(entries), p = spec.profiles[duty];
+  const fm = Object.fromEntries(entries);
   fields(fm, ['name', 'description', 'model', 'effort', 'maxTurns', 'tools', 'disallowedTools', 'permissionMode']);
-  requireValue(JSON.parse(fm.name) === `${spec.project.slug}-worker-${duty}` && JSON.parse(fm.model) === p.model
+  requireValue(JSON.parse(fm.name) === `${spec.project.slug}-${role}` && JSON.parse(fm.model) === p.model
     && JSON.parse(fm.effort) === p.effort && fm.maxTurns === String(p.maxTurns)
     && JSON.parse(fm.permissionMode) === 'default', 'Wrapper identity/model/permission mismatch');
   requireValue(canonical(fm.tools.split(', ')) === canonical(p.tools), 'Wrapper tool set differs from the spec');
   const denied = fm.disallowedTools.split(', ');
   requireValue(['Agent', 'Task'].every(tool => denied.includes(tool)), 'Wrapper permits delegation');
-  requireValue(duty === 'exec' || ['Write', 'Edit', 'NotebookEdit'].every(tool => denied.includes(tool)), 'Read-only duty is missing write denials');
-  requireValue(text.includes(`agents/worker-${duty}.md`) && text.includes('agents/router-worker-contract.md')
+  requireValue(p.tools.some(t => WRITE_TOOLS.includes(t)) || ['Write', 'Edit', 'NotebookEdit'].every(tool => denied.includes(tool)), 'Read-only duty is missing write denials');
+  requireValue(text.includes(`agents/${role}.md`) && text.includes('agents/router-worker-contract.md')
     && text.includes('Do not run from this draft.'), 'Wrapper is missing its role/contract or inactive status');
   requireValue(text.includes('relative to the team root') && text.includes('agents/lessons.md'), 'Wrapper read root or lessons source is missing');
   if (duty === 'guard') requireValue(text.includes('agents/chaos.md'), 'Guardian source is missing');
-  else if (spec.project.ui) requireValue(text.includes('agents/_shared/browser-access.md'), 'UI verification source is missing');
+  else if (duty && spec.project.ui) requireValue(text.includes('agents/_shared/browser-access.md'), 'UI verification source is missing');
 }
 
 function inspectRoster(text, spec) {
   const rows = text.split('\n').filter(line => /^\| [a-z]/.test(line)).map(line => line.split('|').slice(1, -1).map(cell => cell.trim()));
   const ids = rows.map(row => row[0]);
-  requireValue(canonical([...ids].sort()) === canonical(['pm', ...DUTIES.map(d => `worker-${d}`), 'architect', 'coach', 'auditor', 'security'].sort()),
+  requireValue(canonical([...ids].sort()) === canonical(['pm', ...DUTIES.map(d => `worker-${d}`), ...GOVERNANCE].sort()),
     'Roster omitted or duplicated a required duty/governance role');
   for (const duty of DUTIES) {
     const row = rows.find(row => row[0] === `worker-${duty}`);
     requireValue(row.length === 6 && row[1] === `agents/worker-${duty}.md`
       && row[2] === `.claude/agents/${spec.project.slug}-worker-${duty}.md`
       && row[3] === spec.profiles[duty].model && row[4] === spec.profiles[duty].effort && row[5] === 'active', 'Roster-to-wrapper binding mismatch');
+  }
+  for (const role of GOVERNANCE) {
+    const row = rows.find(row => row[0] === role), p = spec.governance?.[role];
+    requireValue(row.length === 6 && row[1] === `agents/${role}.md` && (p
+      ? row[2] === `.claude/agents/${spec.project.slug}-${role}.md` && row[3] === p.model && row[4] === p.effort && row[5] === 'active'
+      : row[5] === 'dormant'), 'Governance roster row differs from the spec staffing');
   }
   requireValue(rows.find(row => row[0] === 'pm')[2] === 'main session', 'Router must remain the PM main session');
 }
@@ -203,7 +237,8 @@ export function verifyDraft(input, artifact, options = {}) {
       && draft.requiresFreshBaseKit === !forInstance && draft.inputDigest === digest(spec) && expected === digest(body), 'Draft identity/digest mismatch');
     requireValue(draft.bootstrap.gateStatus === 'not-run-in-draft' && draft.coverage.activationAllowed === false,
       'Draft cannot claim completed deployment gates');
-    for (const duty of DUTIES) inspectWrapper(draft.files[`.claude/agents/${spec.project.slug}-worker-${duty}.md`], spec, duty);
+    for (const duty of DUTIES) inspectWrapper(draft.files[`.claude/agents/${spec.project.slug}-worker-${duty}.md`], spec, `worker-${duty}`, spec.profiles[duty]);
+    for (const [role, p] of Object.entries(spec.governance ?? {})) inspectWrapper(draft.files[`.claude/agents/${spec.project.slug}-${role}.md`], spec, role, p);
     inspectRoster(draft.files['agents/roster.md'], spec);
     const mode = parseJSON(draft.files['profiles/team-mode.json']);
     requireValue(mode.mode === 'router-worker' && mode.launchable === false && mode.status === 'draft'

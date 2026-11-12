@@ -8,7 +8,8 @@ import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { draftTeam } from '../src/router-worker/draft.mjs';
+import { draftTeam, verifyDraft } from '../src/router-worker/draft.mjs';
+import { digest } from '../src/loop/contracts.mjs';
 import { stageTeam } from '../src/router-worker/stage.mjs';
 import { draftSpecFixture } from './fixtures/router-worker/draft-spec.mjs';
 
@@ -133,4 +134,74 @@ test('team-mode CLI: stage writes the staging copy and exits by validator verdic
   assert.equal(JSON.parse(pending.stdout).stage, 'staged-validation-failed');
   assert.equal(cli('stage', specPath, draftPath, f.staging, '--instance', '.').status, 2, 'an existing staging copy is never overwritten');
   assert.equal(cli('stage', specPath, draftPath, join(f.base, 'other.rw-staging')).status, 1, 'stage requires --instance');
+});
+
+// Rollout gate G-01: governance duties are staffed from the spec, not left dormant.
+const GOVERNANCE = ['architect', 'coach', 'auditor', 'security'];
+const readOnly = { model: 'fixture-governance-model', effort: 'medium', maxTurns: 12, tools: ['Read', 'Grep', 'Glob'] };
+const writer = { ...readOnly, tools: ['Read', 'Grep', 'Glob', 'Write', 'Edit'] };
+const staffed = (roles = GOVERNANCE) => ({ ...draftSpecFixture(),
+  governance: Object.fromEntries(roles.map(role => [role, ['architect', 'coach'].includes(role) ? writer : readOnly])) });
+const rosterRow = (draft, role) => draft.files['agents/roster.md'].split('\n').find(line => line.startsWith(`| ${role} |`)).split('|').slice(1, -1).map(cell => cell.trim());
+
+test('a spec that staffs governance yields active roster rows, wrappers and role files that verify', t => {
+  const f = instance(t), spec = staffed(), { draft, errors } = draftTeam(spec, f.roots);
+  assert.equal(errors, undefined, JSON.stringify(errors));
+  for (const role of GOVERNANCE) {
+    const path = `.claude/agents/tag-list-fixture-${role}.md`, wrapper = draft.files[path], profile = spec.governance[role];
+    assert.deepEqual(rosterRow(draft, role), [role, `agents/${role}.md`, path, profile.model, profile.effort, 'active']);
+    assert.match(wrapper, new RegExp(`^---\\nname: "tag-list-fixture-${role}"\\n`));
+    assert.match(wrapper, new RegExp(`\\nmodel: "${profile.model}"\\neffort: "medium"\\nmaxTurns: 12\\ntools: ${profile.tools.join(', ')}\\n`));
+    const denied = /\ndisallowedTools: (.+)\n/.exec(wrapper)[1].split(', ');
+    assert.ok(['Agent', 'Task'].every(tool => denied.includes(tool)), `${role} cannot delegate`);
+    assert.equal(['Write', 'Edit', 'NotebookEdit'].every(tool => denied.includes(tool)), !profile.tools.includes('Write'), `${role} write denials`);
+    assert.ok(wrapper.includes(`agents/${role}.md`) && wrapper.includes('Do not run from this draft.'));
+    assert.equal(draft.files[`agents/${role}.md`], readFileSync(join(f.kit, `agents/${role}.md`), 'utf8'), 'the kit role seed is instantiated for the instance');
+  }
+  assert.equal(draft.launchable, false);
+  assert.ok(!draft.unresolved.includes('enabled-governance-staffing'));
+  assert.equal(verifyDraft(spec, draft, f.roots).errors, undefined);
+  assert.ok(verifyDraft(draftSpecFixture(), draft, f.roots).errors, 'a staffed draft does not verify against an unstaffed spec');
+  const forged = structuredClone(draft), path = '.claude/agents/tag-list-fixture-auditor.md';
+  forged.files[path] = forged.files[path].replace('tools: Read, Grep, Glob', 'tools: Read, Grep, Glob, Write').replace('disallowedTools: Agent, Task, Write, Edit, NotebookEdit', 'disallowedTools: Agent, Task');
+  const { digest: _old, ...body } = forged;
+  assert.ok(verifyDraft(spec, { ...body, digest: digest(body) }, f.roots).errors, 'rehashing a widened governance wrapper does not verify');
+});
+
+test('staging a fully staffed draft leaves no unstaffed duty and passes the deployment validator', t => {
+  const f = instance(t); answerInterview(f.root);
+  const spec = staffed(), { draft } = draftTeam(spec, f.roots), result = stageTeam(spec, draft, f.staging, f.roots);
+  assert.equal(result.errors, undefined, JSON.stringify(result.errors));
+  assert.deepEqual(result.unstaffed, []);
+  assert.equal(result.stage, 'staged-structurally-validated', JSON.stringify(result.validator));
+  assert.equal(readdirSync(join(f.staging, '.claude/agents')).length, 7);
+  assert.equal(result.launchable, false);
+});
+
+test('partially staffed governance stays reported; an instantiated role file is not replaced', t => {
+  const f = instance(t), own = '# Architect\n\n## Base Agent\n\nsynthetic\n\n## Project Overlay\n\nInstance-specific architect notes.\n';
+  writeFileSync(join(f.root, 'agents/architect.md'), own);
+  const spec = staffed(['architect']), { draft, errors } = draftTeam(spec, f.roots);
+  assert.equal(errors, undefined, JSON.stringify(errors));
+  assert.equal(draft.files['agents/architect.md'], undefined, 'the instance already owns its architect role file');
+  assert.equal(rosterRow(draft, 'architect')[5], 'active');
+  for (const role of ['coach', 'auditor', 'security']) {
+    assert.equal(rosterRow(draft, role)[5], 'dormant');
+    assert.equal(draft.files[`.claude/agents/tag-list-fixture-${role}.md`], undefined);
+  }
+  assert.ok(draft.unresolved.includes('enabled-governance-staffing'));
+  const result = stageTeam(spec, draft, f.staging, f.roots);
+  assert.equal(readFileSync(join(f.staging, 'agents/architect.md'), 'utf8'), own);
+  assert.deepEqual([...new Set(result.unstaffed.map(u => u.role))].sort(), ['auditor', 'coach', 'security']);
+});
+
+test('governance staffing rejects unknown roles, delegation tools and writable audit or security roles', t => {
+  const f = instance(t), bad = governance => draftTeam({ ...draftSpecFixture(), governance }, f.roots).errors;
+  assert.ok(bad({ reviewer: readOnly }), 'unknown role');
+  assert.ok(bad({ architect: { ...readOnly, tools: ['Read', 'Agent'] } }), 'delegation tool');
+  assert.ok(bad({ auditor: writer }), 'auditor must be read-only');
+  assert.ok(bad({ security: writer }), 'security must be read-only');
+  assert.ok(bad({ coach: { ...readOnly, extra: 1 } }), 'unknown profile field');
+  assert.ok(bad([]), 'governance must be an object');
+  assert.equal(bad({}), undefined, 'an empty governance block staffs nothing');
 });

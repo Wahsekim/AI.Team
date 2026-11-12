@@ -225,7 +225,9 @@ node kit/scripts/team-mode.mjs stage SPEC.json DRAFT.json /abs/NEW.rw-staging --
 `stage` copies a two-root instance into a new directory outside it, applies the
 verified draft there and runs the unmodified `validate-team.sh --mode deployment`
 on the copy. It reports the validator verdict, the specialist wrappers it left
-out and every enabled workflow duty the staged roster does not staff. The
+out and every enabled workflow duty the staged roster does not staff
+(architect, coach, auditor and security are staffed through the optional
+`governance` block of the spec). The
 instance and its `kit/` are never written, and the staging copy is not
 launchable.
 
