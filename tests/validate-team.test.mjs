@@ -856,7 +856,15 @@ test('ADR 0009: an engine copy that differs from the kit engine fails', async ()
 })
 
 test('ADR 0009: an instance copy of a kit file is a shadow FAIL; generated files and role files are allowed', async () => {
-  for (const rel of ['agents/pm.md', 'agents/templates.md', 'scripts/validate-team.sh', 'charter.template.md']) {
+  for (const rel of ['agents/pm.md', 'agents/templates.md', 'scripts/validate-team.sh', 'charter.template.md', 'kit/agents/lifecycle.md']) {
+    if (rel.startsWith('kit/')) {
+      // The kit ships ledger seeds only; a live ledger inside kit/ makes the instance ledger a shadow.
+      await withFixture({ ...TWO_ROOT, [rel]: '# ledger tracked in the kit\n' }, async root => {
+        const { code, out } = await runValidator(root, '--mode', 'deployment')
+        assert.equal(code, 1, out); assert.match(out, /FAIL - kit-shadow: .*agents\/lifecycle\.md/)
+      })
+      continue
+    }
     await withFixture({ ...TWO_ROOT, [rel]: '# local copy\n\n## Base Agent\n\nsynthetic\n' }, async root => {
       const { code, out } = await runValidator(root, '--mode', 'deployment')
       assert.equal(code, 1, out); assert.match(out, new RegExp(`FAIL - kit-shadow: .*${rel.replace(/\./g, '\\.')}`))

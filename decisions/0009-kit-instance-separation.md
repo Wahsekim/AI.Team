@@ -158,10 +158,10 @@ recommendation each; the owner's reply was "all follow your recommendations."
 - `kit/` mechanism: Git submodule.
 - Legacy single-root support: one release with a validator WARN, then FAIL
   (decision 9).
-- Home of the kit's own development ledgers: an instance directory inside this
-  repository that uses the same layout. The question as put to the owner listed
-  this option first without marking it as the recommendation, so it is recorded
-  here as the author's choice pending the owner's confirmation.
+- Home of the kit's own development ledgers: they stay in this project at their
+  usual paths, untracked and gitignored (owner, 2026-11-12, replacing the
+  author's earlier in-repo instance directory proposal). The kit ships only the
+  ledger seeds. The entries committed before this change remain in Git history.
 
 Decision 4 was refined twice after the proposal. The path rule was added during
 acceptance to avoid rewriting every kit path. A separate `agents/overlays/`
@@ -176,9 +176,8 @@ per-project seeds, so they are instantiated like the charter.
       legacy WARN; tests for a run-shaped bootstrap and for a kit upgrade.
 - [x] `scripts/pin-kit.sh` and `docs/upgrade.md`.
 - [x] README "How to Deploy", bootstrap and staffing docs, wrapper seed path rule.
-- [ ] Owner confirmation of the home of the kit's own ledgers, then move them
-      out of the kit root (decision 5). Until then the validator allows the four
-      ledger paths to exist in both roots.
+- [x] Kit ledgers untracked and gitignored; bootstrap seeds them in both layouts;
+      the validator no longer allows a ledger path in both roots (decision 5).
 - [x] Router/Worker root split (decision 8): `--instance` on `team-mode.mjs` and
       `preflight-router-worker.mjs`; retry rules and coverage read the instance
       `charter.md`; instance drafts are overlays; preflight applies the path rule.
@@ -188,4 +187,5 @@ per-project seeds, so they are instantiated like the charter.
       still assumes one root.
 - [ ] Ledger headers carry normative rules that are frozen at bootstrap; move
       them to a kit document so upgrades reach them.
-- [ ] Migrate the UHF demo instance.
+- [x] `scripts/migrate-to-instance.sh` for single-root deployments; the UHF demo
+      instance was migrated on 2026-11-12.
