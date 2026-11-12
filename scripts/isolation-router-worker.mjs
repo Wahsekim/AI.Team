@@ -6,14 +6,14 @@ import { observeIsolation } from '../src/router-worker/isolation.mjs';
 
 const argv = process.argv.slice(2), options = {};
 for (let i = 0; i < argv.length; i += 2) {
-  if (!['--team-root', '--product-root'].includes(argv[i]) || !argv[i + 1]) { options.invalid = true; break; }
-  options[argv[i]] = resolve(argv[i + 1]);
+  if (!['--team-root', '--product-root', '--lease'].includes(argv[i]) || !argv[i + 1]) { options.invalid = true; break; }
+  options[argv[i]] = argv[i] === '--lease' ? argv[i + 1] : resolve(argv[i + 1]);
 }
 if (options.invalid || !options['--team-root'] || !options['--product-root']) {
-  console.error('usage: node scripts/isolation-router-worker.mjs --team-root <team-root> --product-root <product-root> (observes only; never dispatches)');
+  console.error('usage: node scripts/isolation-router-worker.mjs --team-root <team-root> --product-root <product-root> [--lease <digest>] (observes only; never dispatches)');
   process.exitCode = 1;
 } else {
-  const result = observeIsolation({ teamRoot: options['--team-root'], productRoot: options['--product-root'] });
+  const result = observeIsolation({ teamRoot: options['--team-root'], productRoot: options['--product-root'], lease: options['--lease'] });
   if (result.errors) { console.error(JSON.stringify(result)); process.exitCode = 2; }
   else { process.stdout.write(JSON.stringify(result, null, 2) + '\n'); if (result.status !== 'clear') process.exitCode = 2; }
 }

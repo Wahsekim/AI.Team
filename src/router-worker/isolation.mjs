@@ -1,7 +1,7 @@
-import { readFileSync, realpathSync, lstatSync, readlinkSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
-import { resolve, join, dirname, isAbsolute, sep } from 'node:path';
+import { readFileSync, lstatSync, readlinkSync } from 'node:fs';
+import { resolve, join, dirname } from 'node:path';
 import { digest } from '../loop/contracts.mjs';
+import { git, inside, canonicalDirectory, isRepositoryRoot, readLease } from './lease.mjs';
 
 // Rollout gate G-02. Observes what a host can check without a live runtime and
 // reports the 'runtime-isolation' admission gate. Only 'clear' admits a call.
@@ -9,28 +9,12 @@ const DUTIES = ['exec', 'check', 'guard'];
 const WRITE_TOOLS = ['Write', 'Edit', 'NotebookEdit'];
 const IN_PROGRESS = ['index.lock', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'BISECT_LOG', 'rebase-merge', 'rebase-apply'];
 const SETTINGS = ['.claude/settings.json', '.claude/settings.local.json'];
-const NOT_OBSERVED = ['independent-sessions', 'runtime-tool-enforcement', 'canary-negatives', 'network-and-external-services',
-  'exclusive-ownership-lease'];
+const NOT_OBSERVED = ['independent-sessions', 'runtime-tool-enforcement', 'canary-negatives', 'network-and-external-services'];
 
-function requireValue(condition, message) { if (!condition) throw Error(message); }
-const inside = (path, root) => path === root || path.startsWith(root + sep);
 const exists = path => Boolean(lstatSync(path, { throwIfNoEntry: false }));
-// Ambient GIT_* variables could redirect discovery to another repository.
-const gitEnv = () => ({ ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_'))), LC_ALL: 'C' });
-function git(root, ...args) {
-  const result = spawnSync('git', ['-C', root, ...args], { encoding: 'utf8', timeout: 20000, maxBuffer: 16 * 1024 * 1024, env: gitEnv() });
-  return result.status === 0 && !result.error ? result.stdout : null;
-}
-
-function canonicalDirectory(path, label) {
-  requireValue(typeof path === 'string' && isAbsolute(path) && resolve(path) === path, `${label} must be a normalized absolute path`);
-  requireValue(lstatSync(path, { throwIfNoEntry: false })?.isDirectory() && realpathSync(path) === path, `${label} must be a canonical existing directory`);
-  return path;
-}
 
 function observeProduct(product, team, add) {
-  const top = git(product, 'rev-parse', '--show-toplevel')?.trim();
-  if (!top || realpathSync(top) !== product) { add('PRODUCT_NOT_REPOSITORY_ROOT', 'blocked', 'the product root is not the top of its own Git repository'); return null; }
+  if (!isRepositoryRoot(product)) { add('PRODUCT_NOT_REPOSITORY_ROOT', 'blocked', 'the product root is not the top of its own Git repository'); return null; }
   if (inside(team, product) || inside(product, team)) add('PRODUCT_NOT_SEPARATE', 'blocked', 'the team root and the product root contain one another');
   const head = git(product, 'rev-parse', 'HEAD')?.trim() ?? null;
   if (!head) add('PRODUCT_NO_CANDIDATE', 'blocked', 'the product has no HEAD commit to start from');
@@ -103,16 +87,28 @@ function observeSettings(roots, add) {
   }
 }
 
-export function observeIsolation({ teamRoot, productRoot }) {
+// The other holder's identity stays out of the record.
+function observeOwnership(product, team, presented, add) {
+  const current = readLease({ productRoot: product });
+  if (current.errors) return;
+  if (current.status === 'unknown') add('OWNERSHIP_UNREADABLE', 'unknown', 'the product carries an ownership lease that cannot be read');
+  else if (current.status === 'free') add('OWNERSHIP_NOT_HELD', 'blocked', 'no ownership lease is held on the product');
+  else if (presented === undefined) add('OWNERSHIP_NOT_PRESENTED', 'blocked', 'the product is leased and this host presented no lease');
+  else if (current.lease.digest !== presented || current.lease.teamRoot !== team)
+    add('OWNERSHIP_HELD_BY_OTHER', 'blocked', 'the product is leased to another host or team root');
+}
+
+export function observeIsolation({ teamRoot, productRoot, lease }) {
   try {
     const team = canonicalDirectory(teamRoot, 'Team root'), product = canonicalDirectory(productRoot, 'Product root');
     const findings = [], add = (code, severity, detail) => findings.push({ code, severity, detail });
     const head = observeProduct(product, team, add), wrappers = observeWrappers(team, add);
+    observeOwnership(product, team, lease, add);
     observeSettings([['team', team], ['product', product]], add);
     findings.sort((a, b) => a.code.localeCompare(b.code) || a.detail.localeCompare(b.detail));
     const status = findings.some(f => f.severity === 'blocked') ? 'blocked' : findings.length ? 'unknown' : 'clear';
     const body = { schemaVersion: 1, gate: 'runtime-isolation', status, product: { root: product, head }, teamRoot: team, wrappers,
-      findings, notObserved: NOT_OBSERVED };
+      lease: lease ?? null, findings, notObserved: NOT_OBSERVED };
     return { ...body, digest: digest(body) };
   } catch (error) { return { errors: [{ code: 'INVALID_ISOLATION_OBSERVATION', field: 'isolation', reason: error.message }] }; }
 }
