@@ -22,7 +22,9 @@
 //      the candidate the run starts from.
 // It then hashes the full policy/input bundle (wrappers, role files, charter,
 // profiles, shared rules, decisions, product primer, engine, args) so a
-// mid-run edit is detectable at reconciliation. Static only: it cannot see the
+// mid-run edit is detectable at reconciliation. In a two-root instance the bundle
+// also covers kit/ policy files, kit ADRs and kit.lock, and the kit must be at
+// its pin with an engine identical to the instance copy. Static only: it cannot see the
 // runtime's registry — record capability uncertainty rather than pretend.
 
 import { readFileSync, existsSync, statSync, readdirSync, writeFileSync } from 'node:fs'
@@ -155,17 +157,44 @@ if (opts.productRoot) {
 }
 
 // ---- 6. policy/input bundle hashes
+// Two-root instance (decisions/0009-kit-instance-separation.md): a policy path is
+// read in the instance if it exists there, otherwise under kit/, and is frozen
+// under the path it was read from.
+const twoRoot = existsSync(join(ROOT, 'kit.lock'))
+const locate = p => existsSync(join(ROOT, p)) || !twoRoot || !existsSync(join(ROOT, 'kit', p)) ? p : `kit/${p}`
 const POLICY = ['charter.md', 'profiles/project.md', 'profiles/stack.md', 'agents/pm.md', 'agents/roster.md', 'agents/templates.md',
   'agents/_shared/meta-rules.md', 'agents/_shared/verify-discipline.md', 'agents/_shared/browser-access.md', 'CLAUDE.md']
-const REQUIRED = wrappersMode ? ['charter.md', 'profiles/project.md', 'profiles/stack.md', 'agents/roster.md'] : []
+const KIT_POLICY = ['agents/pm.md', 'agents/templates.md', 'agents/_shared/meta-rules.md']
+const REQUIRED = [...(wrappersMode ? ['charter.md', 'profiles/project.md', 'profiles/stack.md', 'agents/roster.md'] : []), ...(twoRoot ? KIT_POLICY : [])]
 const policies = {}
-const decisionsDir = join(ROOT, 'decisions')
-const decisionFiles = existsSync(decisionsDir) ? readdirSync(decisionsDir).filter(f => f.endsWith('.md')).sort().map(f => `decisions/${f}`) : []
+const decisionsIn = dir => existsSync(join(ROOT, dir)) ? readdirSync(join(ROOT, dir)).filter(f => f.endsWith('.md')).sort().map(f => `${dir}/${f}`) : []
 const roleFiles = [...new Set(Object.values(agents).flatMap(a => a.roleFiles))].sort()
-for (const p of [...POLICY, ...decisionFiles, ...roleFiles]) {
-  const abs = join(ROOT, p)
-  if (existsSync(abs)) policies[p] = sha256(readFileSync(abs))
+for (const p of [...POLICY, ...roleFiles]) {
+  const at = locate(p)
+  if (existsSync(join(ROOT, at))) policies[at] = sha256(readFileSync(join(ROOT, at)))
   else if (REQUIRED.includes(p) || roleFiles.includes(p)) fail('policy-bundle', `${p} is missing but a dispatched wrapper or the deployment contract requires it`)
+}
+for (const p of [...decisionsIn('decisions'), ...(twoRoot ? ['kit.lock', 'kit/CLAUDE.md', ...decisionsIn('kit/decisions')] : [])]) {
+  if (existsSync(join(ROOT, p))) policies[p] = sha256(readFileSync(join(ROOT, p)))
+  else fail('policy-bundle', `${p} is missing but a two-root instance requires it`)
+}
+let kit = null
+if (twoRoot) {
+  const kitRoot = join(ROOT, 'kit')
+  const pin = /^kit_commit=([0-9a-f]{40}|unversioned)$/m.exec(readFileSync(join(ROOT, 'kit.lock'), 'utf8'))?.[1] ?? null
+  kit = { root: 'kit', pin }
+  if (!pin) fail('kit-pin', 'kit.lock has no valid kit_commit line')
+  for (const p of KIT_POLICY) {
+    if (existsSync(join(ROOT, p)) && existsSync(join(kitRoot, p))) fail('kit-shadow', `${p} exists in the instance and in kit/ — the instance copy would replace kit policy; remove it`)
+  }
+  const kitEngine = join(kitRoot, '.claude', 'workflows', 'run-n-rounds.js')
+  if (!existsSync(kitEngine) || !readFileSync(kitEngine).equals(readFileSync(ENGINE))) fail('engine-copy', `${rel(ENGINE)} is missing in kit/ or differs from the pinned kit engine — run kit/scripts/pin-kit.sh`)
+  if (pin && pin !== 'unversioned') {
+    const kitGit = args => spawnSync('git', ['-C', kitRoot, ...args], { encoding: 'utf8', timeout: 10000 })
+    const head = kitGit(['rev-parse', 'HEAD']), status = kitGit(['status', '--porcelain'])
+    if (head.status !== 0 || head.stdout.trim() !== pin) fail('kit-pin', `kit/ is not at the commit recorded in kit.lock (${pin}) — run kit/scripts/pin-kit.sh after a reviewed upgrade`)
+    if (status.status !== 0 || status.stdout.trim()) fail('kit-pin', 'kit/ has local changes — the frozen bundle would not match the pinned kit')
+  }
 }
 
 // ---- 7. runtime identity (recorded, never a gate here — the compat gate owns the version rule)
@@ -187,6 +216,7 @@ const bundle = {
     planItems: plan.length, executionMode: A.executionMode ?? null, rounds: A.rounds ?? null, runId: A.runId ?? null,
     titledItems: plan.filter(p => typeof p.title === 'string').length, deliveryRequiredItems: plan.filter(p => p.deliveryRequired === true).length },
   agents, policies, product,
+  ...(kit ? { kit } : {}),
   runtime: { claudeVersion, node: process.version },
   session,
 }

@@ -181,12 +181,11 @@ per-project seeds, so they are instantiated like the charter.
 - [x] Router/Worker root split (decision 8): `--instance` on `team-mode.mjs` and
       `preflight-router-worker.mjs`; retry rules and coverage read the instance
       `charter.md`; instance drafts are overlays; preflight applies the path rule.
-- [ ] Legacy detection is by `kit.lock` or `kit/`; no shared resolver was needed
-      because `reconcile-run.mjs`, `preflight-run.mjs`, `lessons-stats.sh` and
-      `check-claude-compat.sh` only read instance paths. `measure-context.sh`
-      reads both roots since the 2026-11-12 review (R4) and fails on a missing
-      required file. `preflight-run.mjs` does not bind kit-root policy files
-      (same review, R3): open.
+- [x] Legacy detection is by `kit.lock` or `kit/`. `reconcile-run.mjs`,
+      `lessons-stats.sh` and `check-claude-compat.sh` only read instance paths.
+      Since the 2026-11-12 review, `preflight-run.mjs` binds kit-root policy,
+      the pin and the engine source (R3), and `measure-context.sh` reads both
+      roots and fails on a missing required file (R4).
 - [ ] Ledger headers carry normative rules that are frozen at bootstrap; move
       them to a kit document so upgrades reach them.
 - [x] `scripts/migrate-to-instance.sh` for single-root deployments; the UHF demo

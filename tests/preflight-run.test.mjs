@@ -170,3 +170,75 @@ test('unreadable or non-object args exit 1 with a FAIL line', async () => {
     assert.equal(r2.code, 1); assert.match(r2.err, /cannot read/)
   })
 })
+
+// Review 2026-11-12 R3: in a two-root instance the policy bundle spans the instance and kit/.
+import { readFileSync } from 'node:fs'
+const { 'agents/pm.md': _kitOwned, ...INSTANCE_FILES } = BASE_FILES
+const TWO_ROOT_FILES = {
+  ...INSTANCE_FILES, 'kit.lock': 'instance_schema=1\nkit_commit=unversioned\n',
+  'kit/charter.template.md': '# seed\n', 'kit/CLAUDE.md': '# Kit primer\n', 'kit/agents/pm.md': '# PM protocol\n',
+  'kit/agents/templates.md': '# Templates\n', 'kit/agents/_shared/meta-rules.md': '# M1-M6\n',
+  'kit/decisions/0008-topology.md': '# Kit ADR\n', 'kit/.claude/workflows/run-n-rounds.js': readFileSync(ENGINE, 'utf8'),
+}
+const gitIn = (dir, ...args) => exec('git', ['-C', dir, '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', ...args])
+
+test('two-root: kit policy files, the pin and kit ADRs are frozen, and the bundle is deterministic', async () => {
+  await withTeam(TWO_ROOT_FILES, async (root, argsPath) => {
+    const first = await preflight(argsPath, root), second = await preflight(argsPath, root)
+    assert.equal(first.code, 0, first.err)
+    const a = JSON.parse(first.out), b = JSON.parse(second.out)
+    assert.equal(a.launchManifestDigest, b.launchManifestDigest)
+    for (const key of ['charter.md', 'CLAUDE.md', 'agents/builder.md', 'decisions/0001-x.md', 'kit.lock', 'kit/CLAUDE.md', 'kit/agents/pm.md',
+      'kit/agents/templates.md', 'kit/agents/_shared/meta-rules.md', 'kit/decisions/0008-topology.md'])
+      assert.match(a.bundle.policies[key] ?? '', /^sha256:/, `${key} is frozen`)
+    assert.deepEqual(a.bundle.kit, { root: 'kit', pin: 'unversioned' })
+    await writeFile(join(root, 'kit/agents/pm.md'), '# PM protocol v2\n')
+    const changed = JSON.parse((await preflight(argsPath, root)).out)
+    assert.notEqual(changed.launchManifestDigest, a.launchManifestDigest, 'a kit policy change is content-bound')
+    assert.notEqual(changed.bundle.policies['kit/agents/pm.md'], a.bundle.policies['kit/agents/pm.md'])
+  })
+})
+
+test('two-root: a missing kit policy, a shadowed kit policy and a stale engine copy FAIL', async () => {
+  for (const [files, pattern] of [
+    [Object.fromEntries(Object.entries(TWO_ROOT_FILES).filter(([k]) => k !== 'kit/agents/pm.md')), /FAIL - policy-bundle: .*agents\/pm\.md/],
+    [Object.fromEntries(Object.entries(TWO_ROOT_FILES).filter(([k]) => k !== 'kit/agents/_shared/meta-rules.md')), /FAIL - policy-bundle: .*meta-rules\.md/],
+    [{ ...TWO_ROOT_FILES, 'agents/pm.md': '# local PM rules\n' }, /FAIL - kit-shadow: .*agents\/pm\.md/],
+    [{ ...TWO_ROOT_FILES, 'kit/.claude/workflows/run-n-rounds.js': '// another engine\n' }, /FAIL - engine-copy:/],
+  ]) {
+    await withTeam(files, async (root, argsPath) => {
+      const r = await preflight(argsPath, root)
+      assert.equal(r.code, 2, r.err); assert.match(r.err, pattern); assert.equal(r.out, '')
+    })
+  }
+})
+
+test('two-root: an instantiated role file wins over the kit seed; a kit-only role file is read from kit/', async () => {
+  await withTeam({ ...TWO_ROOT_FILES, 'kit/agents/builder.md': '# Builder seed\n' }, async (root, argsPath) => {
+    const own = JSON.parse((await preflight(argsPath, root)).out)
+    assert.match(own.bundle.policies['agents/builder.md'], /^sha256:/); assert.equal(own.bundle.policies['kit/agents/builder.md'], undefined)
+    await rm(join(root, 'agents/builder.md'))
+    const seed = JSON.parse((await preflight(argsPath, root)).out)
+    assert.match(seed.bundle.policies['kit/agents/builder.md'], /^sha256:/)
+    await rm(join(root, 'kit/agents/builder.md'))
+    const none = await preflight(argsPath, root)
+    assert.equal(none.code, 2); assert.match(none.err, /FAIL - policy-bundle: .*agents\/builder\.md/)
+  })
+})
+
+test('two-root: a versioned kit must be clean and at the commit in kit.lock', async () => {
+  await withTeam(TWO_ROOT_FILES, async (root, argsPath) => {
+    const kit = join(root, 'kit')
+    await gitIn(kit, 'init', '-q'); await gitIn(kit, 'add', '-A'); await gitIn(kit, 'commit', '-q', '-m', 'kit v1')
+    const pin = (await gitIn(kit, 'rev-parse', 'HEAD')).stdout.trim()
+    await writeFile(join(root, 'kit.lock'), `instance_schema=1\nkit_commit=${pin}\n`)
+    const ok = await preflight(argsPath, root)
+    assert.equal(ok.code, 0, ok.err); assert.deepEqual(JSON.parse(ok.out).bundle.kit, { root: 'kit', pin })
+    await writeFile(join(kit, 'agents/pm.md'), '# edited in place\n')
+    const dirty = await preflight(argsPath, root)
+    assert.equal(dirty.code, 2); assert.match(dirty.err, /FAIL - kit-pin: .*local changes/)
+    await gitIn(kit, 'commit', '-q', '-am', 'kit v2 without a re-pin')
+    const moved = await preflight(argsPath, root)
+    assert.equal(moved.code, 2); assert.match(moved.err, /FAIL - kit-pin: .*kit\.lock/)
+  })
+})
