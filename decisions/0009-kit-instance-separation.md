@@ -184,7 +184,9 @@ per-project seeds, so they are instantiated like the charter.
 - [ ] Legacy detection is by `kit.lock` or `kit/`; no shared resolver was needed
       because `reconcile-run.mjs`, `preflight-run.mjs`, `lessons-stats.sh` and
       `check-claude-compat.sh` only read instance paths. `measure-context.sh`
-      still assumes one root.
+      reads both roots since the 2026-11-12 review (R4) and fails on a missing
+      required file. `preflight-run.mjs` does not bind kit-root policy files
+      (same review, R3): open.
 - [ ] Ledger headers carry normative rules that are frozen at bootstrap; move
       them to a kit document so upgrades reach them.
 - [x] `scripts/migrate-to-instance.sh` for single-root deployments; the UHF demo
