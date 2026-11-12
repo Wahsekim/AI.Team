@@ -223,6 +223,7 @@ node kit/scripts/team-mode.mjs stage SPEC.json DRAFT.json /abs/NEW.rw-staging --
 node kit/scripts/lease-router-worker.mjs acquire --team-root TEAM_ROOT --product-root PRODUCT_ROOT
 node kit/scripts/isolation-router-worker.mjs --team-root TEAM_ROOT --product-root PRODUCT_ROOT --lease DIGEST
 node kit/scripts/lease-router-worker.mjs release --product-root PRODUCT_ROOT --lease DIGEST
+node kit/scripts/freeze-run-router-worker.mjs RUN.json --team-root TEAM_ROOT
 ```
 
 `stage` copies a two-root instance into a new directory outside it, applies the
@@ -246,6 +247,15 @@ and is never taken over automatically. Only `clear` (exit 0) admits a call; a
 draft wrapper always observes as `blocked`. Session independence and runtime
 enforcement are not observed
 ([details](docs/design/router-worker/isolation-observation.md)).
+
+`freeze-run-router-worker.mjs` builds the complete arguments of the count engine
+for a Router/Worker run: the plan comes from the compiled inputs, the Guardian
+from the policy and the allowed wrappers from the active roster rows, the
+failure policy is fixed to halt-on-failure, and the count and Q5 ceiling are
+checked against the frozen tickets and their authorizations (the estimates must
+stay below the 80% line at which the engine stops). The real engine
+validator judges the result with zero dispatch
+([details](docs/design/router-worker/run-args.md)).
 
 Node 22 supports the non-SQLite tools; retry persistence and its registry require
 Node 24+. `INPUT.json` and `SPEC.json` must follow the documented contracts; test
