@@ -12,6 +12,11 @@
 # validate-team.sh fails the deployment until every item is ticked ('- [x]',
 # ported or declined with a note), so a missed port cannot stay silent.
 #
+# Write order: review items, then the engine copy, then kit.lock. kit.lock is
+# the commit point, so a run that fails part-way leaves the old pin and a retry
+# repeats the remaining steps; items already recorded (open or ticked) are not
+# appended again.
+#
 # Verdicts (last line): PIN-FAILED (exit 1) | DRY-RUN | KIT-PIN-UNCHANGED | KIT-PINNED.
 
 set -uo pipefail
@@ -70,7 +75,7 @@ if [ "$OLD" != "unversioned" ] && git -C "$KIT" cat-file -e "$OLD^{commit}" 2>/d
     esac
     [ -f "$ROOT/$target" ] || continue
     echo "REVIEW - $target: kit/$seed changed since the old pin; port what applies by hand (git -C kit diff $OLD $NEW -- $seed)"
-    ITEMS="$ITEMS- [ ] $target <- kit/$seed ($(printf '%.7s' "$OLD")..$(printf '%.7s' "$NEW"))
+    ITEMS="$ITEMS$target <- kit/$seed ($(printf '%.7s' "$OLD")..$(printf '%.7s' "$NEW"))
 "
   done <<EOF_SEEDS
 $(git -C "$KIT" diff --name-only "$OLD" "$NEW")
@@ -84,20 +89,32 @@ if [ "$DRY" = 1 ]; then
   exit 0
 fi
 
-mkdir -p "$ROOT/.claude/workflows" || failpin "mkdir: .claude/workflows failed"
-TMP="$ROOT/$ENGINE.pin-tmp.$$"
-if ! { cp "$KIT/$ENGINE" "$TMP" && mv "$TMP" "$ROOT/$ENGINE"; }; then rm -f "$TMP"; failpin "copy: $ENGINE failed"; fi
-TMP="$ROOT/kit.lock.pin-tmp.$$"
-if ! { printf 'instance_schema=1\nkit_commit=%s\n' "$NEW" > "$TMP" && mv "$TMP" "$ROOT/kit.lock"; }; then
-  rm -f "$TMP"; failpin "write: kit.lock failed"
-fi
+PIN_LOCK="$ROOT/.pin-lock"
+mkdir "$PIN_LOCK" 2>/dev/null || failpin "lock: $PIN_LOCK exists — another pin-kit run is active (remove the directory if that run died)"
+trap 'rmdir "$PIN_LOCK" 2>/dev/null' EXIT
+
 if [ -n "$ITEMS" ]; then
   REVIEW_FILE="$ROOT/kit-upgrade-review.md"
-  if [ ! -f "$REVIEW_FILE" ]; then
+  if [ ! -e "$REVIEW_FILE" ]; then
     printf '# Kit upgrade review\n\nPort or decline each item, then tick it and add a short note. Open items fail validate-team.sh.\n\n' > "$REVIEW_FILE" \
       || failpin "write: kit-upgrade-review.md failed"
   fi
-  printf '%s' "$ITEMS" >> "$REVIEW_FILE" || failpin "write: kit-upgrade-review.md failed"
-  echo "DONE - kit-upgrade-review.md: open items appended"
+  { [ -f "$REVIEW_FILE" ] && [ -r "$REVIEW_FILE" ] && [ -w "$REVIEW_FILE" ]; } \
+    || failpin "write: kit-upgrade-review.md is not a writable file; the pin is unchanged"
+  while IFS= read -r item; do
+    [ -n "$item" ] || continue
+    if grep -qF -e "- [ ] $item" -e "- [x] $item" "$REVIEW_FILE"; then continue; fi
+    printf -- '- [ ] %s\n' "$item" >> "$REVIEW_FILE" || failpin "write: kit-upgrade-review.md failed; the pin is unchanged"
+  done <<EOF_ITEMS
+$ITEMS
+EOF_ITEMS
+  echo "DONE - kit-upgrade-review.md: review items recorded"
+fi
+mkdir -p "$ROOT/.claude/workflows" || failpin "mkdir: .claude/workflows failed"
+TMP="$ROOT/$ENGINE.pin-tmp.$$"
+if ! { cp "$KIT/$ENGINE" "$TMP" && mv "$TMP" "$ROOT/$ENGINE"; }; then rm -f "$TMP"; failpin "copy: $ENGINE failed; the pin is unchanged"; fi
+TMP="$ROOT/kit.lock.pin-tmp.$$"
+if ! { printf 'instance_schema=1\nkit_commit=%s\n' "$NEW" > "$TMP" && mv "$TMP" "$ROOT/kit.lock"; }; then
+  rm -f "$TMP"; failpin "write: kit.lock failed"
 fi
 echo "RESULT: KIT-PINNED — $OLD -> $NEW; run kit/scripts/validate-team.sh --mode deployment $ROOT"

@@ -906,5 +906,10 @@ test('ADR 0009: open kit-upgrade review items fail the deployment until each is 
   await withFixture(TWO_ROOT, async root => {
     const { code, out } = await runValidator(root, '--mode', 'deployment')
     assert.equal(code, 0, out); assert.match(out, /PASS - kit-review:/)
+  })  // A review record that cannot be read is not the same as no open items.
+  await withFixture(TWO_ROOT, async root => {
+    await mkdir(join(root, 'kit-upgrade-review.md'))
+    const { code, out } = await runValidator(root, '--mode', 'deployment')
+    assert.equal(code, 1, out); assert.match(out, /FAIL - kit-review: .*not a readable file/)
   })
 })

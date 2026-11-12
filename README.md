@@ -107,7 +107,8 @@ It works against either:
    files, ledgers and the instance `CLAUDE.md` were copied from seeds once and
    are not updated; `pin-kit.sh` writes each changed seed to
    `kit-upgrade-review.md`, and the validator fails the deployment until every
-   item is ported or declined and ticked.
+   item is ported or declined and ticked. A run that fails part-way leaves
+   the old pin; run it again.
 
    **Migrating an older deployment.** A deployment made by cloning this repo
    and bootstrapping inside it (single root) keeps project state in tracked
