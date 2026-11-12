@@ -220,7 +220,9 @@ node scripts/team-mode.mjs draft SPEC.json NEW.rw-draft.json
 node scripts/team-mode.mjs verify SPEC.json DRAFT.json
 node kit/scripts/team-mode.mjs preview SPEC.json --instance .   # from a two-root instance root
 node kit/scripts/team-mode.mjs stage SPEC.json DRAFT.json /abs/NEW.rw-staging --instance .
-node kit/scripts/isolation-router-worker.mjs --team-root TEAM_ROOT --product-root PRODUCT_ROOT
+node kit/scripts/lease-router-worker.mjs acquire --team-root TEAM_ROOT --product-root PRODUCT_ROOT
+node kit/scripts/isolation-router-worker.mjs --team-root TEAM_ROOT --product-root PRODUCT_ROOT --lease DIGEST
+node kit/scripts/lease-router-worker.mjs release --product-root PRODUCT_ROOT --lease DIGEST
 ```
 
 `stage` copies a two-root instance into a new directory outside it, applies the
@@ -236,7 +238,11 @@ launchable.
 `isolation-router-worker.mjs` observes the `runtime-isolation` admission gate
 without a live runtime: the product must be a separate, clean repository root
 with no operation in progress, and the three worker wrappers and the host
-settings must not widen permissions. Only `clear` (exit 0) admits a call; a
+settings must not widen permissions, and the host must present the ownership
+lease it holds on the product. `lease-router-worker.mjs` takes that lease: one
+file in the product's Git directory, outside the work tree, so a second host or
+team root is refused until it is released by its digest. A lease never expires
+and is never taken over automatically. Only `clear` (exit 0) admits a call; a
 draft wrapper always observes as `blocked`. Session independence and runtime
 enforcement are not observed
 ([details](docs/design/router-worker/isolation-observation.md)).

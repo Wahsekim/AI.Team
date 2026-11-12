@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { observeIsolation } from '../src/router-worker/isolation.mjs';
+import { acquireLease, releaseLease } from '../src/router-worker/lease.mjs';
 import { digest } from '../src/loop/contracts.mjs';
 
 const CLI = fileURLToPath(new URL('../scripts/isolation-router-worker.mjs', import.meta.url));
@@ -32,7 +33,8 @@ function fixture(t, overrides = {}) {
   for (const duty of DUTIES) write(team, `.claude/agents/demo-worker-${duty}.md`, overrides[duty] ?? wrapper(duty));
   write(product, 'src/app.js', 'export const x = 1;\n');
   git(product, 'init', '-q'); git(product, 'add', '-A'); git(product, 'commit', '-q', '-m', 'product');
-  return { base, team, product, observe: () => observeIsolation({ teamRoot: team, productRoot: product }) };
+  const lease = acquireLease({ teamRoot: team, productRoot: product }).lease.digest;
+  return { base, team, product, lease, observe: () => observeIsolation({ teamRoot: team, productRoot: product, lease }) };
 }
 const codes = result => result.findings.map(f => f.code).sort();
 
@@ -46,6 +48,7 @@ test('a separate clean product and three least-privilege wrappers observe as cle
   const { digest: recorded, ...body } = result;
   assert.equal(recorded, digest(body), 'the record is self-digested');
   assert.ok(result.notObserved.includes('independent-sessions') && result.notObserved.includes('canary-negatives'), 'static observation states its limits');
+  assert.ok(!result.notObserved.includes('exclusive-ownership-lease')); assert.equal(result.lease, f.lease);
   assert.deepEqual(f.observe(), result, 'deterministic for an unchanged host');
 });
 
@@ -68,7 +71,7 @@ test('the product must be a repository root that neither contains nor lies insid
   assert.ok(codes(observeIsolation({ teamRoot: f.team, productRoot: f.base })).includes('PRODUCT_NOT_REPOSITORY_ROOT'));
   const nested = fixture(t), inner = join(nested.product, 'team');
   write(inner, 'agents/roster.md', roster); for (const duty of DUTIES) write(inner, `.claude/agents/demo-worker-${duty}.md`, wrapper(duty));
-  assert.ok(codes(observeIsolation({ teamRoot: inner, productRoot: nested.product })).includes('PRODUCT_NOT_SEPARATE'));
+  assert.ok(codes(observeIsolation({ teamRoot: inner, productRoot: nested.product, lease: nested.lease })).includes('PRODUCT_NOT_SEPARATE'));
   const link = join(f.base, 'product-link'); symlinkSync(f.product, link);
   assert.ok(observeIsolation({ teamRoot: f.team, productRoot: link }).errors, 'a non-canonical product path is refused');
 });
@@ -114,12 +117,30 @@ test('host settings that bypass or widen permissions are findings, reported with
   assert.ok(codes(broken.observe()).includes('HOST_SETTINGS_UNREADABLE'));
 });
 
+test('zero calls without ownership: the gate needs the lease this host holds', t => {
+  const f = fixture(t), other = join(f.base, 'other.team');
+  const without = observeIsolation({ teamRoot: f.team, productRoot: f.product });
+  assert.deepEqual(codes(without), ['OWNERSHIP_NOT_PRESENTED']); assert.equal(without.status, 'blocked');
+  const wrong = observeIsolation({ teamRoot: f.team, productRoot: f.product, lease: 'sha256:' + '0'.repeat(64) });
+  assert.deepEqual(codes(wrong), ['OWNERSHIP_HELD_BY_OTHER']); assert.equal(wrong.status, 'blocked');
+  mkdirSync(other); write(other, 'agents/roster.md', roster); for (const duty of DUTIES) write(other, `.claude/agents/demo-worker-${duty}.md`, wrapper(duty));
+  const stolen = observeIsolation({ teamRoot: other, productRoot: f.product, lease: f.lease });
+  assert.deepEqual(codes(stolen), ['OWNERSHIP_HELD_BY_OTHER'], 'a lease digest does not transfer to another team root');
+  assert.ok(!JSON.stringify(stolen).includes(f.team), 'the other holder is not disclosed');
+  releaseLease({ productRoot: f.product, lease: f.lease });
+  assert.deepEqual(codes(f.observe()), ['OWNERSHIP_NOT_HELD']);
+  writeFileSync(join(f.product, '.git/rw-ownership-lease.json'), '{broken');
+  const unreadable = f.observe();
+  assert.deepEqual(codes(unreadable), ['OWNERSHIP_UNREADABLE']); assert.equal(unreadable.status, 'unknown');
+});
+
 test('CLI prints the record and exits 0 only when the gate is clear', t => {
   const f = fixture(t), run = (...args) => spawnSync(process.execPath, [CLI, ...args], { encoding: 'utf8' });
-  const clear = run('--team-root', f.team, '--product-root', f.product);
+  const clear = run('--team-root', f.team, '--product-root', f.product, '--lease', f.lease);
   assert.equal(clear.status, 0, clear.stderr); assert.equal(JSON.parse(clear.stdout).status, 'clear');
   write(f.product, 'untracked.txt', 'x\n');
-  const blocked = run('--team-root', f.team, '--product-root', f.product);
+  const blocked = run('--team-root', f.team, '--product-root', f.product, '--lease', f.lease);
+  assert.equal(JSON.parse(run('--team-root', f.team, '--product-root', f.product).stdout).findings.some(x => x.code === 'OWNERSHIP_NOT_PRESENTED'), true);
   assert.equal(blocked.status, 2); assert.equal(JSON.parse(blocked.stdout).status, 'blocked');
   assert.equal(run('--team-root', f.team).status, 1, 'usage error');
 });
