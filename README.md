@@ -252,7 +252,8 @@ enforcement are not observed
 for a Router/Worker run: the plan comes from the compiled inputs, the Guardian
 from the policy and the allowed wrappers from the active roster rows, the
 failure policy is fixed to halt-on-failure, and the count and Q5 ceiling are
-checked against the frozen tickets and their authorizations. The real engine
+checked against the frozen tickets and their authorizations (the estimates must
+stay below the 80% line at which the engine stops). The real engine
 validator judges the result with zero dispatch
 ([details](docs/design/router-worker/run-args.md)).
 
