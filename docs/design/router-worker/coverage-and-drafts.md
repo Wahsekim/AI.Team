@@ -140,6 +140,35 @@ existing wrapper in the staged roster. The draft roster keeps architect, coach,
 auditor and security dormant, so every enabled workflow that needs them appears
 here until the spec lists them under `governance`.
 
+### Read closure derived from the staged files
+
+`stage` also reports the read closure of every staged wrapper, computed from the
+files in the copy and not declared by hand:
+
+- `context`: `metric`, `roots` (one wrapper per `exec`, `check`, `guard`) and
+  `nodes` (`path`, `root`, `sha256`, `reads`), in the shape the offline preflight
+  approval expects for its declared context graph, without `limits`. Limits are
+  owner-approved ratchet values and are never inferred.
+- `governanceContext`: the same for each staffed governance wrapper.
+- `estimatedTokens`: per wrapper, the sum of `ceil(bytes/4)` over its closure.
+- `rosterRecord`: `{wrappers: {exec, check, guard}}` read from the draft, the
+  value the preflight's roster reference must carry.
+- `missingReads`: a file a wrapper names that exists in neither root. Any entry
+  makes the result `staged-read-closure-incomplete` (CLI exit 2) when the
+  validator itself passed.
+
+A wrapper's reads are every `.md` team path its text names. Its own role file is
+expanded one level, keeping only paths that exist; every other file is a leaf.
+This over-counts on purpose: a path mentioned for reference is counted as read.
+Each path resolves in the copy first, then under its `kit/`, and `root` records
+which. Running the offline preflight with `--instance <staging copy>` and an
+approval built from this graph re-reads and re-hashes every node, so an edit
+after derivation is detected.
+
+Not derived: the stack record (`verificationCommands`) and the permission
+records, which still need an owner-reviewed source; context injected by the
+runtime; and the Guardian's runtime prompt.
+
 The instance tree and the kit state are compared before and after; a difference
 fails the stage. A validated staging copy remains `launchable: false`: the
 validator checks structure only, the wrappers still say "Do not run from this

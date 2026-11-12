@@ -29,7 +29,7 @@ if (!['preview', 'draft', 'verify', 'stage'].includes(command) || !specPath || e
     if (result.errors) { console.error(JSON.stringify(result)); process.exitCode = 2; }
     else {
       process.stdout.write(JSON.stringify(command === 'draft' ? writeDraft(result.draft, outputPath) : result, null, 2) + '\n');
-      if (result.stage === 'staged-validation-failed') process.exitCode = 2;
+      if (command === 'stage' && result.stage !== 'staged-structurally-validated') process.exitCode = 2;
     }
   } catch {
     console.error(JSON.stringify({ errors: [{ code: 'TEAM_DRAFT_FAILED', field: 'draft', reason: 'Cannot read spec or publish a new inert draft; existing artifacts are never overwritten' }] }));

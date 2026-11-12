@@ -227,7 +227,8 @@ verified draft there and runs the unmodified `validate-team.sh --mode deployment
 on the copy. It reports the validator verdict, the specialist wrappers it left
 out and every enabled workflow duty the staged roster does not staff
 (architect, coach, auditor and security are staffed through the optional
-`governance` block of the spec). The
+`governance` block of the spec), and derives each wrapper's read closure and
+token estimate from the files in the copy. The
 instance and its `kit/` are never written, and the staging copy is not
 launchable.
 
