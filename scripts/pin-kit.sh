@@ -8,6 +8,9 @@
 # submodule update). It rewrites kit.lock, re-copies the engine, and lists the
 # seeds that changed since the old pin whose instantiated twins exist in the
 # instance — those are ported by hand; instance files are never overwritten.
+# Each listed seed is appended to kit-upgrade-review.md as an open '- [ ]' item;
+# validate-team.sh fails the deployment until every item is ticked ('- [x]',
+# ported or declined with a note), so a missed port cannot stay silent.
 #
 # Verdicts (last line): PIN-FAILED (exit 1) | DRY-RUN | KIT-PIN-UNCHANGED | KIT-PINNED.
 
@@ -55,6 +58,7 @@ if [ -f "$ROOT/$ENGINE" ] && ! cmp -s "$ROOT/$ENGINE" "$KIT/$ENGINE"; then
   fi
 fi
 
+ITEMS=""
 if [ "$OLD" != "unversioned" ] && git -C "$KIT" cat-file -e "$OLD^{commit}" 2>/dev/null; then
   while IFS= read -r seed; do
     [ -n "$seed" ] || continue
@@ -66,6 +70,8 @@ if [ "$OLD" != "unversioned" ] && git -C "$KIT" cat-file -e "$OLD^{commit}" 2>/d
     esac
     [ -f "$ROOT/$target" ] || continue
     echo "REVIEW - $target: kit/$seed changed since the old pin; port what applies by hand (git -C kit diff $OLD $NEW -- $seed)"
+    ITEMS="$ITEMS- [ ] $target <- kit/$seed ($(printf '%.7s' "$OLD")..$(printf '%.7s' "$NEW"))
+"
   done <<EOF_SEEDS
 $(git -C "$KIT" diff --name-only "$OLD" "$NEW")
 EOF_SEEDS
@@ -84,5 +90,14 @@ if ! { cp "$KIT/$ENGINE" "$TMP" && mv "$TMP" "$ROOT/$ENGINE"; }; then rm -f "$TM
 TMP="$ROOT/kit.lock.pin-tmp.$$"
 if ! { printf 'instance_schema=1\nkit_commit=%s\n' "$NEW" > "$TMP" && mv "$TMP" "$ROOT/kit.lock"; }; then
   rm -f "$TMP"; failpin "write: kit.lock failed"
+fi
+if [ -n "$ITEMS" ]; then
+  REVIEW_FILE="$ROOT/kit-upgrade-review.md"
+  if [ ! -f "$REVIEW_FILE" ]; then
+    printf '# Kit upgrade review\n\nPort or decline each item, then tick it and add a short note. Open items fail validate-team.sh.\n\n' > "$REVIEW_FILE" \
+      || failpin "write: kit-upgrade-review.md failed"
+  fi
+  printf '%s' "$ITEMS" >> "$REVIEW_FILE" || failpin "write: kit-upgrade-review.md failed"
+  echo "DONE - kit-upgrade-review.md: open items appended"
 fi
 echo "RESULT: KIT-PINNED — $OLD -> $NEW; run kit/scripts/validate-team.sh --mode deployment $ROOT"

@@ -884,3 +884,19 @@ test('ADR 0009: a single-root deployment still validates and is reported as lega
     assert.match(out, /WARN - layout: legacy single-root/)
   })
 })
+
+test('ADR 0009: open kit-upgrade review items fail the deployment until each is ported or declined', async () => {
+  const open = '# Kit upgrade review\n\n- [x] CLAUDE.md <- kit/CLAUDE.instance.template.md (aaaaaaa..bbbbbbb) ported\n- [ ] charter.md <- kit/charter.template.md (aaaaaaa..bbbbbbb)\n'
+  await withFixture({ ...TWO_ROOT, 'kit-upgrade-review.md': open }, async root => {
+    const { code, out } = await runValidator(root, '--mode', 'deployment')
+    assert.equal(code, 1, out); assert.match(out, /FAIL - kit-review: 1 open .*charter\.md/)
+  })
+  await withFixture({ ...TWO_ROOT, 'kit-upgrade-review.md': open.replace('- [ ]', '- [x]') }, async root => {
+    const { code, out } = await runValidator(root, '--mode', 'deployment')
+    assert.equal(code, 0, out); assert.match(out, /PASS - kit-review:/)
+  })
+  await withFixture(TWO_ROOT, async root => {
+    const { code, out } = await runValidator(root, '--mode', 'deployment')
+    assert.equal(code, 0, out); assert.match(out, /PASS - kit-review:/)
+  })
+})
