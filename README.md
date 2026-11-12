@@ -220,6 +220,7 @@ node scripts/team-mode.mjs draft SPEC.json NEW.rw-draft.json
 node scripts/team-mode.mjs verify SPEC.json DRAFT.json
 node kit/scripts/team-mode.mjs preview SPEC.json --instance .   # from a two-root instance root
 node kit/scripts/team-mode.mjs stage SPEC.json DRAFT.json /abs/NEW.rw-staging --instance .
+node kit/scripts/isolation-router-worker.mjs --team-root TEAM_ROOT --product-root PRODUCT_ROOT
 ```
 
 `stage` copies a two-root instance into a new directory outside it, applies the
@@ -231,6 +232,14 @@ out and every enabled workflow duty the staged roster does not staff
 token estimate from the files in the copy. The
 instance and its `kit/` are never written, and the staging copy is not
 launchable.
+
+`isolation-router-worker.mjs` observes the `runtime-isolation` admission gate
+without a live runtime: the product must be a separate, clean repository root
+with no operation in progress, and the three worker wrappers and the host
+settings must not widen permissions. Only `clear` (exit 0) admits a call; a
+draft wrapper always observes as `blocked`. Session independence and runtime
+enforcement are not observed
+([details](docs/design/router-worker/isolation-observation.md)).
 
 Node 22 supports the non-SQLite tools; retry persistence and its registry require
 Node 24+. `INPUT.json` and `SPEC.json` must follow the documented contracts; test
