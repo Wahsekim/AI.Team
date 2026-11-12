@@ -127,7 +127,10 @@ It works against either:
    writes to the old checkout or to `kit/`. Edits the old deployment made to
    other kit files (for example `CLAUDE.md` or `docs/`) are not copied: their
    diffs are saved under `migration-review/` and listed in
-   `kit-upgrade-review.md` for the PM to port by hand.
+   `kit-upgrade-review.md` for the PM to port by hand. If the old checkout has
+   local commits, the script stops and asks for `--baseline <kit commit>`, the
+   kit commit the deployment was made from; everything that differs from it
+   (committed, staged or unstaged) is then migrated or listed for porting.
 
    **Ledgers are never tracked in this repository.** The kit ships
    `agents/lifecycle.template.md`, `agents/lessons.template.md`,
