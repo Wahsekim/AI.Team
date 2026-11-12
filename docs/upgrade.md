@@ -28,12 +28,15 @@ repository pinned by `kit.lock`. Run everything from the instance root.
 
    `pin-kit.sh` rewrites `kit.lock`, re-copies `.claude/workflows/run-n-rounds.js`
    and prints one `REVIEW` line per changed seed whose instantiated file exists
-   in the instance.
+   in the instance. It appends the same items to `kit-upgrade-review.md` as
+   open `- [ ]` entries.
 5. Port each `REVIEW` item by hand. Instance files are never overwritten, so a
    change to `charter.template.md`, a ledger header, a role seed or the
    instance `CLAUDE.md` seed reaches the project only when the PM copies the
-   relevant part across. Read the diff the line names, apply what fits, and
-   note the decision in `pm-decisions.md`.
+   relevant part across. Read the diff the line names, apply what fits or
+   decline it, then tick the entry (`- [x]`) with a short note. The validator
+   fails the deployment while any entry is open, so the project cannot keep
+   running on old rules without a recorded decision.
 6. Validate: `kit/scripts/validate-team.sh --mode deployment .` must exit 0.
 7. Commit the instance root (new submodule pointer, `kit.lock`, engine copy and
    any ported changes) as one commit.

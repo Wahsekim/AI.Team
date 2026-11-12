@@ -213,6 +213,12 @@ else
   else
     fail "engine-copy" "$ENGINE_REL is missing or differs from kit/$ENGINE_REL — re-copy it from the pinned kit"
   fi
+  REVIEW_OPEN=$(grep -E '^- \[ \] ' "$ROOT/kit-upgrade-review.md" 2>/dev/null | cut -c7- | cut -d' ' -f1)
+  if [ -n "$REVIEW_OPEN" ]; then
+    fail "kit-review" "$(printf '%s\n' "$REVIEW_OPEN" | wc -l | tr -d ' ') open kit-upgrade review item(s) in kit-upgrade-review.md — port or decline each and tick it (docs/upgrade.md): $(printf '%s\n' "$REVIEW_OPEN" | head -8 | tr '\n' ' ')"
+  else
+    pass "kit-review" "no open kit-upgrade review items"
+  fi
   # Allowed in both roots: files bootstrap generates, READMEs, role files
   # instantiated from kit role seeds, and the ledgers the kit still ships.
   SHADOWS=""
