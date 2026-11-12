@@ -226,6 +226,7 @@ node kit/scripts/lease-router-worker.mjs release --product-root PRODUCT_ROOT --l
 node kit/scripts/freeze-run-router-worker.mjs RUN.json --team-root TEAM_ROOT
 node kit/scripts/continue-router-worker.mjs REQUEST.json --instance .
 node kit/scripts/settle-router-worker.mjs REQUEST.json --instance .
+node kit/scripts/stack-source-router-worker.mjs --root . INPUT.json
 ```
 
 `stage` copies a two-root instance into a new directory outside it, applies the
@@ -271,6 +272,11 @@ ledger of measured usage instead of a declared value. Each real call is settled
 once from a `measure-spawn.mjs` row, later reads add only their difference,
 unmeasured or unfinished calls keep the gate `unknown`, and an overrun blocks it
 ([details](docs/design/router-worker/settlement.md)).
+
+`stack-source-router-worker.mjs` reads a project's verification commands from
+its own `profiles/stack.md` (the required code-shipping gates) and checks that a
+compiler input carries exactly those; the kit holds no stack-specific command
+([details](docs/design/router-worker/coverage-and-drafts.md)).
 
 Node 22 supports the non-SQLite tools; retry persistence and its registry require
 Node 24+. `INPUT.json` and `SPEC.json` must follow the documented contracts; test

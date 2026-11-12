@@ -203,3 +203,30 @@ Before materialization into a real team, still required:
 
 Generating this artifact therefore does not complete RW-03 or establish
 `STATIC_VALIDATED` for a deployed team.
+
+## Stack source (rollout gate G-01)
+
+```sh
+node kit/scripts/stack-source-router-worker.mjs --root <instance-root> [INPUT.json]
+```
+
+The verification commands of a compiler input are not typed by hand and are not
+kit defaults: they are the `verification.code_shipping.required` list of the
+project's own `profiles/stack.md`, verbatim and in order. The kit carries no
+stack-specific command. The record holds the commands, the `conditional` gates
+as text, the file digest and a `stackRef` (`profiles-stack-code-shipping`,
+digest of the command list).
+
+With `INPUT.json`, the command also checks that `policy.verificationCommands`
+and `policy.stackRef` of that input are exactly those values
+(`STACK_SOURCE_MISMATCH` otherwise): a gate cannot be dropped, reordered or
+taken from an older profile. Refusals without an input: `STACK_SOURCE_MISSING`,
+`STACK_SOURCE_UNREADABLE` (no single verification block, empty or duplicate
+list) and `STACK_UNRESOLVED` (a required gate is still a `{{...}}` seed
+placeholder).
+
+Not covered: which conditional gates apply to a ticket, the "N/A with a reason"
+review of gates whose surface does not exist, whether a command actually runs,
+and the owner's review of the profile itself. The permission record (write
+paths, tools, sensitive paths) still has no file source; it is owner-supplied
+per project.
