@@ -1,7 +1,7 @@
 # ADR 0009: Separate the kit root from the project instance root
 
 Date: 2026-11-12
-Status: Proposed (owner ratification pending; no code changed by this ADR)
+Status: Accepted (owner ratification 2026-11-12, see Owner decisions)
 
 ## Context
 
@@ -50,16 +50,21 @@ that deployed authority must come from the instantiated `charter.md`.
        kit.lock                 # kit commit + instance schema version
        CLAUDE.md                # generated from a kit seed, localized here
        charter.md  profiles/  agents/roster.md  agents/_shared/*.md
-       agents/<role>.md         # optional project overlay only
+       agents/overlays/<role>.md  # optional project overlay only
        agents/lifecycle.md  agents/lessons.md  pm-decisions.md  memory/  messages/
        decisions/               # project ADRs
        .claude/agents/          # wrappers
        .claude/workflows/       # engine copy, digest-checked against kit/
    ```
 
-4. **Instance-to-kit references are relative paths under `kit/`.** A wrapper
-   reads `kit/agents/<role>.md`, then the overlay `agents/<role>.md` when it
-   exists. Overlays hold project adaptations only and never copy kit text.
+4. **One path rule, no shadowing.** A team-relative path named in any kit
+   document or script resolves in the instance root when it exists there,
+   otherwise under `kit/`. A path present in both roots is a validator FAIL,
+   except the generated files bootstrap owns (`CLAUDE.md`, `.gitignore`, the
+   engine copy). Existing kit documents therefore keep their paths. A wrapper
+   reads `kit/agents/<role>.md`, then the overlay `agents/overlays/<role>.md`
+   when it exists. Overlays hold project adaptations only and never copy kit
+   text.
 5. **The kit ships no live state.** Ledgers, PM memory and `CLAUDE.md` are
    shipped as seeds. The kit's own development team becomes an ordinary instance
    with its own instance root, so kit commits stop appending to shipped ledgers.
@@ -142,19 +147,28 @@ that deployed authority must come from the instantiated `charter.md`.
 6. Run `validate-team.sh --mode deployment` in the instance root, then one
    attended cycle. Keep the old checkout until that cycle closes.
 
-## Open owner decisions
+## Owner decisions
 
-- Instance root location: separate directory beside the product (recommended,
-  decision 3) or inside the product repository (alternative 3).
-- `kit/` mechanism: Git submodule (recommended when the instance root is a Git
-  repository) or a plain pinned checkout.
+Recorded 2026-11-12. The four open points were put to the owner with a
+recommendation each; the owner's reply was "all follow your recommendations."
+
+- Instance root location: a separate directory beside the product, with its own
+  Git repository (decision 3).
+- `kit/` mechanism: Git submodule.
+- Legacy single-root support: one release with a validator WARN, then FAIL
+  (decision 9).
 - Home of the kit's own development ledgers: an instance directory inside this
-  repository that uses the same layout, or a separate repository.
-- Legacy single-root support window (decision 9).
+  repository that uses the same layout. The question as put to the owner listed
+  this option first without marking it as the recommendation, so it is recorded
+  here as the author's choice pending the owner's confirmation.
+
+The path rule in decision 4 and the `agents/overlays/` location were refined
+after the proposal, during acceptance, to avoid rewriting every kit path.
 
 ## Follow-ups
 
-- [ ] Owner ratification and the four decisions above.
+- [x] Owner ratification (2026-11-12).
+- [ ] Owner confirmation of the home of the kit's own ledgers.
 - [ ] Root resolver shared by the bash and Node scripts, with legacy detection.
 - [ ] Bootstrap, validator checks and the two new test cases (decisions 2 and 6).
 - [ ] Wrapper seed and role overlay split (decision 4).
