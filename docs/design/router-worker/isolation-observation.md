@@ -45,6 +45,14 @@ Every draft wrapper is marked inactive, so a staging copy produced by
 `team-mode.mjs stage` always observes as `blocked`. That is intended: there is
 no activation step yet.
 
+## Accepted findings
+
+A team root produced by [activation](activation.md) may carry
+`acceptedUnknowns` from the owner approval in `profiles/team-mode.json`. Such a
+finding is reported with severity `accepted` and does not keep the gate from
+`clear`. Only `BASH_NOT_SANDBOXED` can be accepted; a `blocked` finding never
+can, and a draft or a plain instance accepts nothing.
+
 ## What is not observed
 
 The record lists these under `notObserved`:
