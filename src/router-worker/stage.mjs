@@ -14,7 +14,7 @@ const REGISTRY = '.claude/agents';
 const SKIP_NAMES = new Set(['.git', '.venv', 'node_modules', '__pycache__', 'heartbeats', '.team-loop',
   '.playwright-mcp', '.DS_Store', 'settings.local.json']);
 const skipName = name => SKIP_NAMES.has(name) || name.startsWith('.env') || name.startsWith('.rw-')
-  || name.endsWith('.rw-staging') || name.endsWith('.rw-draft.json') || name.endsWith('.bak') || /\.sqlite(-journal|-wal|-shm)?$/.test(name);
+  || name.endsWith('.rw-staging') || name.endsWith('.rw-active') || name.endsWith('.rw-draft.json') || name.endsWith('.bak') || /\.sqlite(-journal|-wal|-shm)?$/.test(name);
 // Local profile data may hold hosts, device ids or tokens; only the mode file belongs to the team.
 const localProfile = path => /^profiles\/[^/]+\.json$/.test(path) && path !== 'profiles/team-mode.json';
 

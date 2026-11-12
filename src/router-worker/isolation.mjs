@@ -9,6 +9,9 @@ const DUTIES = ['exec', 'check', 'guard'];
 const WRITE_TOOLS = ['Write', 'Edit', 'NotebookEdit'];
 const IN_PROGRESS = ['index.lock', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'BISECT_LOG', 'rebase-merge', 'rebase-apply'];
 const SETTINGS = ['.claude/settings.json', '.claude/settings.local.json'];
+// Findings an owner activation approval may accept. ADR 0006: a same-UID checkout is not a sandbox;
+// the disposable clone is the boundary. A blocked finding can never be accepted.
+export const ACCEPTABLE_UNKNOWNS = ['BASH_NOT_SANDBOXED'];
 const NOT_OBSERVED = ['independent-sessions', 'runtime-tool-enforcement', 'canary-negatives', 'network-and-external-services'];
 
 const exists = path => Boolean(lstatSync(path, { throwIfNoEntry: false }));
@@ -98,6 +101,15 @@ function observeOwnership(product, team, presented, add) {
     add('OWNERSHIP_HELD_BY_OTHER', 'blocked', 'the product is leased to another host or team root');
 }
 
+// Only an activated copy carries accepted findings; they come from the owner approval.
+function acceptedUnknowns(team) {
+  try {
+    const mode = JSON.parse(readFileSync(join(team, 'profiles/team-mode.json'), 'utf8'));
+    return mode.status === 'activated-disposable-smoke' && Array.isArray(mode.activation?.acceptedUnknowns)
+      ? mode.activation.acceptedUnknowns.filter(code => ACCEPTABLE_UNKNOWNS.includes(code)) : [];
+  } catch { return []; }
+}
+
 export function observeIsolation({ teamRoot, productRoot, lease }) {
   try {
     const team = canonicalDirectory(teamRoot, 'Team root'), product = canonicalDirectory(productRoot, 'Product root');
@@ -105,8 +117,10 @@ export function observeIsolation({ teamRoot, productRoot, lease }) {
     const head = observeProduct(product, team, add), wrappers = observeWrappers(team, add);
     observeOwnership(product, team, lease, add);
     observeSettings([['team', team], ['product', product]], add);
+    const accepted = acceptedUnknowns(team);
+    for (const finding of findings) if (finding.severity === 'unknown' && accepted.includes(finding.code)) finding.severity = 'accepted';
     findings.sort((a, b) => a.code.localeCompare(b.code) || a.detail.localeCompare(b.detail));
-    const status = findings.some(f => f.severity === 'blocked') ? 'blocked' : findings.length ? 'unknown' : 'clear';
+    const status = findings.some(f => f.severity === 'blocked') ? 'blocked' : findings.some(f => f.severity === 'unknown') ? 'unknown' : 'clear';
     const body = { schemaVersion: 1, gate: 'runtime-isolation', status, product: { root: product, head }, teamRoot: team, wrappers,
       lease: lease ?? null, findings, notObserved: NOT_OBSERVED };
     return { ...body, digest: digest(body) };

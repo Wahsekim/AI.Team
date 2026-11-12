@@ -36,6 +36,7 @@ heartbeats/
 *.rw-retries.sqlite-shm
 .rw-draft-*/
 *.rw-staging/
+*.rw-active/
 .rw-retries-*/
 *.rw-settlement.json
 
