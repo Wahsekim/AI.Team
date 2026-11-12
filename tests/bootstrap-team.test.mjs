@@ -468,3 +468,20 @@ test('ADR 0009: --roles rejects non-role files, unknown roles, unsafe names and 
     })
   })
 })
+
+test('ADR 0009: a single-root bootstrap seeds missing ledgers from their templates; absent seeds are skipped', async () => {
+  await withKit(async root => {
+    await writeFile(join(root, 'agents/lifecycle.template.md'), '# Lifecycle seed {{ROLE_ID}}\n')
+    await mkdir(join(root, 'memory'), { recursive: true })
+    await writeFile(join(root, 'memory/pm.template.md'), '# PM Memory seed\n')
+    await writeFile(join(root, 'pm-decisions.md'), 'EXISTING\n')
+    await writeFile(join(root, 'pm-decisions.template.md'), '# seed\n')
+    const out = await run(root, '--project-name', 'X')
+    assert.equal(await readFile(join(root, 'agents/lifecycle.md'), 'utf8'), '# Lifecycle seed {{ROLE_ID}}\n')
+    assert.equal(await readFile(join(root, 'memory/pm.md'), 'utf8'), '# PM Memory seed\n')
+    assert.equal(await readFile(join(root, 'pm-decisions.md'), 'utf8'), 'EXISTING\n', 'an existing ledger is never overwritten')
+    assert.ok(!(await exists(join(root, 'agents/lessons.md'))), 'no seed, no ledger, no failure')
+    assert.ok(!(await exists(join(root, '.claude/workflows/run-n-rounds.js'))), 'the engine copy is two-root only')
+    assert.match(out, /RESULT: INSTANTIATED-PENDING-INTERVIEW/)
+  })
+})

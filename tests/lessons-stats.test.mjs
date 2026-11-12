@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, copyFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
@@ -115,10 +115,16 @@ test('empty index is reported without failing', async () => {
   assert.match(stdout, /LESSONS-STATS-OK/)
 })
 
-test('the kit itself runs clean', async () => {
-  const ROOT = fileURLToPath(new URL('..', import.meta.url))
-  const { stdout } = await exec('bash', [SCRIPT, ROOT])
-  assert.match(stdout, /LESSONS-STATS-OK/)
+// The kit ships ledgers as seeds only (ADR 0009); a root seeded from them must run clean.
+test('ledgers freshly seeded from the kit templates run clean', async () => {
+  const KIT = fileURLToPath(new URL('..', import.meta.url))
+  const root = mkdtempSync(join(tmpdir(), 'lessons-stats-seeded-'))
+  try {
+    mkdirSync(join(root, 'agents'))
+    for (const name of ['lessons', 'lifecycle']) copyFileSync(join(KIT, `agents/${name}.template.md`), join(root, `agents/${name}.md`))
+    const { stdout } = await exec('bash', [SCRIPT, root])
+    assert.match(stdout, /LESSONS-STATS-OK/)
+  } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
 test('missing files and unknown flags fail fast', async () => {

@@ -27,6 +27,7 @@ operational name and fills placeholders:
 | `profiles/stack.template.md` | `profiles/stack.md` |
 | `agents/roster.template.md` | `agents/roster.md` |
 | `agents/_shared/verify-discipline.template.md` | `agents/_shared/verify-discipline.md` |
+| `agents/lifecycle.template.md`, `agents/lessons.template.md`, `memory/pm.template.md`, `pm-decisions.template.md` | the same names without `.template` (ledgers; never tracked in the kit) |
 | `agents/_shared/browser-access.template.md` | `agents/_shared/browser-access.md` (UI projects) |
 | `agents/_seeds/role-wrapper.template.md` | `.claude/agents/<slug>-<role>.md` (one per spawnable role) — or `.claude/agents/INLINE_BASE_AGENT_MODE.md` from `agents/_seeds/INLINE_BASE_AGENT_MODE.template.md` (seeds live OUTSIDE the runtime agent registry: the runtime registers every frontmatter file under `.claude/agents/` as a live agent type) |
 
@@ -61,6 +62,7 @@ Instantiated names; pre-bootstrap, the `.template.md` seed stands in.
 | `scripts/check-claude-compat.sh` | runtime version + wrapper-frontmatter gate (pre-bootstrap) | PM |
 | `scripts/bootstrap-team.sh` | idempotent template instantiation (mechanical half of bootstrap); in a two-root instance writes only the instance root, never `kit/` (ADR 0009) | PM |
 | `scripts/pin-kit.sh` + `docs/upgrade.md` | record a reviewed kit upgrade in a two-root instance (`kit.lock`, engine copy, seeds to port) | PM |
+| `scripts/migrate-to-instance.sh` | one-time move of a single-root deployment into an instance root | PM + owner |
 | `scripts/preflight-run.mjs` | static launch preflight (engine dry-validation, live-wrapper registry, session freshness, product candidate) + frozen launch-bundle digest | PM |
 | `scripts/reconcile-run.mjs` | atomic engine-run reconciliation (ledgers + counter, per-target idempotent; `--monitoring` Q3/Q4 attestation) | PM |
 | `scripts/now-utc.sh` | the only sanctioned ledger timestamp source (host UTC) | PM |
