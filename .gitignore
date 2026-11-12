@@ -35,6 +35,7 @@ heartbeats/
 *.rw-retries.sqlite-wal
 *.rw-retries.sqlite-shm
 .rw-draft-*/
+*.rw-staging/
 .rw-retries-*/
 
 # Internal working docs (kept local, not published)

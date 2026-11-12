@@ -214,12 +214,20 @@ node scripts/team-mode.mjs preview SPEC.json
 node scripts/team-mode.mjs draft SPEC.json NEW.rw-draft.json
 node scripts/team-mode.mjs verify SPEC.json DRAFT.json
 node kit/scripts/team-mode.mjs preview SPEC.json --instance .   # from a two-root instance root
+node kit/scripts/team-mode.mjs stage SPEC.json DRAFT.json /abs/NEW.rw-staging --instance .
 ```
+
+`stage` copies a two-root instance into a new directory outside it, applies the
+verified draft there and runs the unmodified `validate-team.sh --mode deployment`
+on the copy. It reports the validator verdict, the specialist wrappers it left
+out and every enabled workflow duty the staged roster does not staff. The
+instance and its `kit/` are never written, and the staging copy is not
+launchable.
 
 Node 22 supports the non-SQLite tools; retry persistence and its registry require
 Node 24+. `INPUT.json` and `SPEC.json` must follow the documented contracts; test
 fixtures are synthetic, not project approval. Draft output is JSON, not installed
-wrappers. There is no activation or live model command. All successful artifacts
+wrappers; a staging copy holds wrapper files but is a validation target only. There is no activation or live model command. All successful artifacts
 remain non-launchable; **do not pass a preview plan to the live count engine**.
 No existing bootstrap, engine, roster or skill-pack behavior is replaced.
 
