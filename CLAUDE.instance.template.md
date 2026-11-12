@@ -11,8 +11,8 @@ read-only checkout in `kit/`, pinned by `kit.lock`.
 
 | Root | Holds | Written by this team |
 |---|---|---|
-| `.` (instance) | `charter.md`, `profiles/`, `agents/roster.md`, `agents/overlays/`, ledgers, `memory/`, `messages/`, `decisions/`, `.claude/` | yes |
-| `kit/` | role files, shared rules, templates, docs, scripts, engine source, methodologies | never |
+| `.` (instance) | `charter.md`, `profiles/`, `agents/roster.md`, hired role files `agents/<role_id>.md`, ledgers, `memory/`, `messages/`, `decisions/`, `.claude/` | yes |
+| `kit/` | role seeds, `agents/pm.md`, shared rules, templates, docs, scripts, engine source, methodologies | never |
 
 ## Path Rule
 
@@ -28,8 +28,10 @@ Run kit scripts from this folder and pass it as the root:
 
 - Never create, edit or delete anything under `kit/`. A kit change is made in
   the kit's own repository and arrives here as a pin update.
-- Never copy a kit file into this folder to edit it. Project adaptations of a
-  role go in `agents/overlays/<role_id>.md`, read after `kit/agents/<role_id>.md`.
+- Never copy a kit file into this folder to edit it. The one exception is a
+  hired role's file: `kit/scripts/bootstrap-team.sh --roles <role_id> .` copies
+  it here once, and from then on the instance copy is this project's.
+- After a kit upgrade, run `kit/scripts/pin-kit.sh .` (`docs/upgrade.md`).
 - New project ADRs, ledger entries, lessons and memory are written here.
 
 ## Start

@@ -50,7 +50,7 @@ that deployed authority must come from the instantiated `charter.md`.
        kit.lock                 # kit commit + instance schema version
        CLAUDE.md                # generated from a kit seed, localized here
        charter.md  profiles/  agents/roster.md  agents/_shared/*.md
-       agents/overlays/<role>.md  # optional project overlay only
+       agents/<role>.md         # hired role files, copied once from kit/
        agents/lifecycle.md  agents/lessons.md  pm-decisions.md  memory/  messages/
        decisions/               # project ADRs
        .claude/agents/          # wrappers
@@ -59,12 +59,13 @@ that deployed authority must come from the instantiated `charter.md`.
 
 4. **One path rule, no shadowing.** A team-relative path named in any kit
    document or script resolves in the instance root when it exists there,
-   otherwise under `kit/`. A path present in both roots is a validator FAIL,
-   except the generated files bootstrap owns (`CLAUDE.md`, `.gitignore`, the
-   engine copy). Existing kit documents therefore keep their paths. A wrapper
-   reads `kit/agents/<role>.md`, then the overlay `agents/overlays/<role>.md`
-   when it exists. Overlays hold project adaptations only and never copy kit
-   text.
+   otherwise under `kit/`. Existing kit documents therefore keep their paths.
+   A path present in both roots is a validator FAIL, except files bootstrap
+   generates (`CLAUDE.md`, `.gitignore`, the engine copy), READMEs and hired
+   role files. A kit role file (`agents/<role>.md`) is a seed: it carries
+   placeholders, a project overlay and Coach rules, so
+   `bootstrap-team.sh --roles` copies it into the instance once and the copy
+   belongs to the project. `agents/pm.md` stays kit-only.
 5. **The kit ships no live state.** Ledgers, PM memory and `CLAUDE.md` are
    shipped as seeds. The kit's own development team becomes an ordinary instance
    with its own instance root, so kit commits stop appending to shipped ledgers.
@@ -162,17 +163,27 @@ recommendation each; the owner's reply was "all follow your recommendations."
   this option first without marking it as the recommendation, so it is recorded
   here as the author's choice pending the owner's confirmation.
 
-The path rule in decision 4 and the `agents/overlays/` location were refined
-after the proposal, during acceptance, to avoid rewriting every kit path.
+Decision 4 was refined twice after the proposal. The path rule was added during
+acceptance to avoid rewriting every kit path. A separate `agents/overlays/`
+directory was then dropped during implementation: kit role files already are
+per-project seeds, so they are instantiated like the charter.
 
 ## Follow-ups
 
 - [x] Owner ratification (2026-11-12).
-- [ ] Owner confirmation of the home of the kit's own ledgers.
-- [ ] Root resolver shared by the bash and Node scripts, with legacy detection.
-- [ ] Bootstrap, validator checks and the two new test cases (decisions 2 and 6).
-- [ ] Wrapper seed and role overlay split (decision 4).
-- [ ] Move kit ledgers out and ship seeds (decision 5).
+- [x] Bootstrap two-root mode: seeds, ledgers, role files, engine copy, `kit.lock`.
+- [x] Validator: `kit-lock`, `kit-pin`, `kit-clean`, `engine-copy`, `kit-shadow`,
+      legacy WARN; tests for a run-shaped bootstrap and for a kit upgrade.
+- [x] `scripts/pin-kit.sh` and `docs/upgrade.md`.
+- [x] README "How to Deploy", bootstrap and staffing docs, wrapper seed path rule.
+- [ ] Owner confirmation of the home of the kit's own ledgers, then move them
+      out of the kit root (decision 5). Until then the validator allows the four
+      ledger paths to exist in both roots.
 - [ ] Router/Worker root split (decision 8).
-- [ ] Docs rewrite and `docs/upgrade.md`.
+- [ ] Legacy detection is by `kit.lock` or `kit/`; no shared resolver was needed
+      because `reconcile-run.mjs`, `preflight-run.mjs`, `lessons-stats.sh` and
+      `check-claude-compat.sh` only read instance paths. `measure-context.sh`
+      still assumes one root.
+- [ ] Ledger headers carry normative rules that are frozen at bootstrap; move
+      them to a kit document so upgrades reach them.
 - [ ] Migrate the UHF demo instance.

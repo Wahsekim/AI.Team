@@ -19,7 +19,8 @@ This wrapper is the dispatch target. Do not dispatch this role as an all-purpose
 or general-purpose worker when a wrapper exists.
 
 Read before work (paths are relative to the team root — the directory Claude
-Code was started in, per README "How to Deploy"):
+Code was started in, per README "How to Deploy"; a path that does not exist
+there is read under `kit/`, which is never edited):
 
 - `{{BASE_AGENT_ABSOLUTE_PATH | or:synthetic}}`
 - `agents/{{ROLE_ID}}.md`

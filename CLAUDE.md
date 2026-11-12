@@ -59,7 +59,8 @@ Instantiated names; pre-bootstrap, the `.template.md` seed stands in.
 | `docs/failure-classes.md` | canonical failure-class catalog + mechanical controls | Coach + Auditor |
 | `scripts/validate-team.sh` | mechanical integrity checker (PM wake step 0, bootstrap gate; `--mode deployment` on deployed instances) | PM |
 | `scripts/check-claude-compat.sh` | runtime version + wrapper-frontmatter gate (pre-bootstrap) | PM |
-| `scripts/bootstrap-team.sh` | idempotent template instantiation (mechanical half of bootstrap) | PM |
+| `scripts/bootstrap-team.sh` | idempotent template instantiation (mechanical half of bootstrap); in a two-root instance writes only the instance root, never `kit/` (ADR 0009) | PM |
+| `scripts/pin-kit.sh` + `docs/upgrade.md` | record a reviewed kit upgrade in a two-root instance (`kit.lock`, engine copy, seeds to port) | PM |
 | `scripts/preflight-run.mjs` | static launch preflight (engine dry-validation, live-wrapper registry, session freshness, product candidate) + frozen launch-bundle digest | PM |
 | `scripts/reconcile-run.mjs` | atomic engine-run reconciliation (ledgers + counter, per-target idempotent; `--monitoring` Q3/Q4 attestation) | PM |
 | `scripts/now-utc.sh` | the only sanctioned ledger timestamp source (host UTC) | PM |

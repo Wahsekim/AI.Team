@@ -57,37 +57,53 @@ It works against either:
 
 ## How to Deploy
 
-1. **Clone this repo next to (or as the future home of) your product code.**
-   The intended layout is a workspace folder holding the team and the product
-   side by side:
+1. **Create an instance root for the project and add this repo as `kit/`.**
+   The kit stays a clean, read-only checkout; everything the team writes
+   (charter, profiles, roster, role files, ledgers, wrappers) lives in the
+   instance root, so a kit update never conflicts with project state
+   ([ADR 0009](decisions/0009-kit-instance-separation.md)).
 
    ```text
    MyWorkspace/
-     AI.Team/        <- this repo (team: charter, agents, ledgers, docs)
-     MyProduct/      <- your product code (created at bootstrap if absent)
+     MyProduct/          <- your product code (created at bootstrap if absent)
+     MyProduct.team/     <- instance root: this project's team state, its own Git repo
+       kit/              <- this repo as a Git submodule, never edited here
    ```
 
-2. **Open Claude Code in `AI.Team/` — with the product repo added — and say
-   `start team`.** The product repo is a sibling directory, so the session
-   needs explicit access to it:
+   ```bash
+   mkdir MyWorkspace/MyProduct.team && cd MyWorkspace/MyProduct.team && git init
+   git submodule add https://github.com/Wahsekim/AI.Team.git kit
+   kit/scripts/bootstrap-team.sh --project-name MyProduct --product-repo ../MyProduct .
+   ```
+
+   Bootstrap instantiates the seeds from `kit/` into the instance root, copies
+   the loop engine, and records the kit commit in `kit.lock`.
+
+2. **Open Claude Code in the instance root — with the product repo added —
+   and say `start team`.** The product repo is a sibling directory, so the
+   session needs explicit access to it:
 
    ```bash
-   cd MyWorkspace/AI.Team
+   cd MyWorkspace/MyProduct.team
    claude --add-dir /absolute/path/to/MyWorkspace/MyProduct
    ```
 
-   Team files (`agents/...`, `profiles/...`) are read relative to this cwd —
-   the team root. The PM wakes, reads `CLAUDE.md`, and runs the bootstrap
-   interview:
-   - instantiates `charter.md` and `profiles/project.md` / `profiles/stack.md`
-     from their `.template.md` seeds (templates stay untouched as reference);
+   The instance root is the team root. A team-relative path (`agents/...`,
+   `docs/...`, `scripts/...`) resolves there when it exists, otherwise under
+   `kit/`. The PM wakes, reads `CLAUDE.md`, and runs the bootstrap interview:
+   - fills `charter.md` and `profiles/project.md` / `profiles/stack.md`;
    - asks only the first-start placeholders (project name, repo path, token
      caps, tracker...) — see `docs/lazy-placeholders.md`;
    - runs the staffing questionnaire (`docs/staffing.md`) — default is a
      Minimum Viable Team of PM + 1 builder + 1 verifier, other roles stay
-     dormant until a trigger promotes them;
+     dormant until a trigger promotes them; hired roles get their role file
+     with `kit/scripts/bootstrap-team.sh --roles <role_id>,... .`;
    - then follows `docs/bootstrap-empty-project.md` or
      `docs/bootstrap-existing-project.md` depending on your answer.
+
+   To update the kit later, see `docs/upgrade.md`. A deployment made by
+   cloning this repo and bootstrapping inside it (single root) still works
+   for now and is reported as legacy by the validator.
 
 3. **Wire the recommended hooks** (optional but advised for unattended runs):
    merge the `settings.json` snippet from `docs/harness-assumptions.md` into
@@ -97,11 +113,10 @@ It works against either:
 4. **Verify the deployment** at any time:
 
    ```bash
-   scripts/check-claude-compat.sh .            # runtime version + wrapper frontmatter + no seeds in the registry
-   node scripts/preflight-run.mjs args.json --team-root . --product-root ../<product>   # before EVERY engine launch
-   scripts/validate-team.sh --mode deployment . # deployed instance: full artifact matrix
-   scripts/validate-team.sh .                   # fresh kit / auto-detect
-   node --test tests/*.test.mjs  # engine + validator + watchdog fault-injection suite
+   kit/scripts/check-claude-compat.sh .            # runtime version + wrapper frontmatter + no seeds in the registry
+   node kit/scripts/preflight-run.mjs args.json --team-root . --product-root ../<product>   # before EVERY engine launch
+   kit/scripts/validate-team.sh --mode deployment . # deployed instance: full artifact matrix + kit pin/clean checks
+   (cd kit && scripts/validate-team.sh . && node --test tests/*.test.mjs)   # the kit itself: validator + fault-injection suite
    ```
 
    Pure bash (validator) + node (tests); exit 0 = no FAIL **in the checked
