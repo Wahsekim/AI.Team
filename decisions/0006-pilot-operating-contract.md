@@ -1,7 +1,7 @@
 # ADR 0006: Pilot operating contract (R06)
 
 Date: 2026-11-05
-Status: Proposed (PM draft from owner answers 2026-11-05; owner ratification pending — paid stages stay blocked until ratified)
+Status: Accepted (owner, 2026-11-13, in session: "批准ADR 0006"; PM draft from owner answers 2026-11-05, ceilings per Revision 2026-11-13). One blocking unknown remains: evidence retention beyond this machine.
 
 ## Context
 
@@ -85,7 +85,7 @@ refused by code or runtime; `policy` = PM/owner discipline, checked at close.
 
 ## Follow-ups
 
-- [ ] Owner ratifies (Status → Accepted) or overrides proposed rows.
+- [x] Owner ratifies (Status → Accepted) or overrides proposed rows. — ratified 2026-11-13, no row overridden.
 - [x] Owner sets a wall-clock ceiling per run (and the kill step that enforces it) or waives it explicitly. — set 2026-11-13, see Revision 2026-11-13.
 - [x] Owner decides the subscription plan-window ceiling (5-hour / weekly utilization halt) — decided 2026-11-13, see Revision 2026-11-13.
 - [ ] Owner writes the `settings.json` allowlist/deny rules before any unattended loop.
@@ -93,7 +93,7 @@ refused by code or runtime; `policy` = PM/owner discipline, checked at close.
 - [ ] Fill `scripts/lib/model-pricing.json` before any `billing_mode: api` pilot.
 - [ ] R07: version the execution and storage contracts.
 
-## Revision 2026-11-13 (owner decisions; Status unchanged)
+## Revision 2026-11-13 (owner decisions)
 
 The owner accepted the PM's proposed values for the two ceilings. They
 supersede the "blocking unknown" in the Time ceiling row and the "pending" note
@@ -105,5 +105,6 @@ behind them and are to be revisited after the first live run.
 | Time ceiling | **60 minutes of wall clock per run.** Live runs are owner-attended; the owner stops the run by hand when the ceiling is reached. No unattended live run is allowed under this ceiling. | policy (owner-attended manual stop; no code stops a run on a clock) |
 | Plan-window ceiling (`billing_mode: subscription`) | **Stop at 50% utilization of the 5-hour plan window.** The owner reads the plan usage before the run and during it; a run does not start above the line and is stopped when it reaches it. | policy (owner-observed; the kit has no meter for plan utilization) |
 
+Later the same day the owner ratified the ADR as a whole (Status: Accepted).
 Still open and still blocking a paid stage: evidence retention beyond this
-machine, and ratification of this ADR (Status stays Proposed).
+machine.
