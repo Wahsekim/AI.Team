@@ -5,12 +5,13 @@
 # docs/bootstrap-*.md afterwards.
 #
 # Usage: scripts/bootstrap-team.sh [--project-name NAME] [--product-repo PATH]
-#                                  [--kit DIR] [--ui] [--dry-run] [ROOT]   (default ROOT: .)
+#                                  [--kit DIR] [--roles a,b] [--ui] [--dry-run] [ROOT]   (default ROOT: .)
 #
 # Layouts (decisions/0009-kit-instance-separation.md):
 #  - two-root: ROOT is a project instance root and ROOT/kit is the kit checkout
 #    (auto-detected, or --kit ROOT/kit). Seeds are read from kit/ and every
-#    write lands in ROOT; nothing under kit/ is written.
+#    write lands in ROOT; nothing under kit/ is written. --roles copies the
+#    named kit role files into ROOT/agents/ for the PM to fill (staffing step).
 #  - legacy single-root: ROOT is the kit checkout itself (WARN).
 #
 # Guarantees (reassessment N-07 — machine-readable failure semantics):
@@ -40,17 +41,19 @@ trap 'rm -f "${TMP:-}" 2>/dev/null' EXIT
 PROJECT_NAME=""
 PRODUCT_REPO=""
 KIT_ARG=""
+ROLES=""
 UI=0
 DRY=0
 ROOT="."
 while [ $# -gt 0 ]; do
   case "$1" in
-    --project-name|--product-repo|--kit)
+    --project-name|--product-repo|--kit|--roles)
       [ $# -ge 2 ] || failboot "args: $1 requires a value"
       case "$1" in
         --project-name) PROJECT_NAME="$2" ;;
         --product-repo) PRODUCT_REPO="$2" ;;
         --kit) KIT_ARG="$2" ;;
+        --roles) ROLES="$2" ;;
       esac
       shift 2 ;;
     --ui) UI=1; shift ;;
@@ -73,7 +76,34 @@ if [ -n "$KIT_ARG" ]; then
 else
   SEEDS="$ROOT"
   SEED_LABEL=""
+  [ -z "$ROLES" ] || failboot "args: --roles needs a two-root instance (role files already live in a single-root checkout)"
   echo "WARN - layout: legacy single-root — bootstrap writes into the kit checkout; deploy into an instance root with kit/ instead (ADR 0009)"
+fi
+
+# Verbatim copies (two-root only): the runtime loads workflows from the session
+# directory; ledgers and role files hold format examples that must not be substituted.
+COPY_PAIRS=""
+if [ -n "$SEED_LABEL" ]; then
+  COPY_PAIRS="
+.claude/workflows/run-n-rounds.js:.claude/workflows/run-n-rounds.js
+agents/lifecycle.template.md:agents/lifecycle.md
+agents/lessons.template.md:agents/lessons.md
+memory/pm.template.md:memory/pm.md
+pm-decisions.template.md:pm-decisions.md
+"
+  case ",$ROLES," in *,,*) [ -z "$ROLES" ] || failboot "args: --roles has an empty role name" ;; esac
+  for role in $(printf '%s' "$ROLES" | tr ',' ' '); do
+    # LC_ALL=C: under other collations [a-z] also matches uppercase letters.
+    printf '%s' "$role" | LC_ALL=C grep -qE '^[a-z0-9][a-z0-9-]*$' \
+      || failboot "args: --roles name '$role' must match [a-z0-9][a-z0-9-]*"
+    grep -qiE '^##[[:space:]]+base agent' "$SEEDS/agents/$role.md" 2>/dev/null \
+      || failboot "args: --roles '$role' is not a kit role file (kit/agents/$role.md with a '## Base Agent' section)"
+    COPY_PAIRS="$COPY_PAIRS
+agents/$role.md:agents/$role.md"
+  done
+  for pair in $COPY_PAIRS; do
+    [ -f "$SEEDS/${pair%%:*}" ] || [ -f "$ROOT/${pair##*:}" ] || failboot "seed: kit/${pair%%:*} missing — broken kit checkout"
+  done
 fi
 if [ -n "$PROJECT_NAME$PRODUCT_REPO" ] && ! command -v perl >/dev/null 2>&1; then
   failboot "deps: perl is required for --project-name/--product-repo substitutions"
@@ -196,21 +226,24 @@ for pair in $MANDATORY_PAIRS $OPTIONAL_PAIRS; do
   echo "DONE - $target: instantiated from ${SEED_LABEL}$seed"
 done
 
-# Two-root only: verbatim engine copy (the runtime loads workflows from the
-# session directory) and the kit pin. Both are created once, never overwritten.
-if [ -n "$SEED_LABEL" ]; then
-  ENGINE=".claude/workflows/run-n-rounds.js"
-  if [ -f "$ROOT/$ENGINE" ]; then
-    echo "SKIP - $ENGINE: already present (never overwritten)"
-  elif [ ! -f "$SEEDS/$ENGINE" ]; then
-    failboot "seed: kit/$ENGINE missing — broken kit checkout"
+for pair in $COPY_PAIRS; do
+  seed="${pair%%:*}"
+  target="${pair##*:}"
+  if [ -f "$ROOT/$target" ]; then
+    echo "SKIP - $target: already present (never overwritten)"
   elif [ "$DRY" = 1 ]; then
-    echo "PLAN - $ENGINE: would copy from kit/$ENGINE"
+    echo "PLAN - $target: would copy from kit/$seed"
   else
-    mkdir -p "$ROOT/.claude/workflows" || failboot "mkdir: .claude/workflows failed"
-    cp "$SEEDS/$ENGINE" "$ROOT/$ENGINE" || failboot "copy: kit/$ENGINE failed"
-    echo "DONE - $ENGINE: copied from kit/$ENGINE"
+    mkdir -p "$(dirname "$ROOT/$target")" || failboot "mkdir: directory for $target failed"
+    TMP="$ROOT/${target}.render-tmp.$$"
+    cp "$SEEDS/$seed" "$TMP" || { rm -f "$TMP"; failboot "copy: kit/$seed failed"; }
+    mv "$TMP" "$ROOT/$target" || { rm -f "$TMP"; failboot "rename: $target failed"; }
+    echo "DONE - $target: copied from kit/$seed"
   fi
+done
+
+# The kit pin is written once; an upgrade changes it deliberately.
+if [ -n "$SEED_LABEL" ]; then
   if [ -f "$ROOT/kit.lock" ]; then
     echo "SKIP - kit.lock: already present (never overwritten)"
   elif [ "$DRY" = 1 ]; then
