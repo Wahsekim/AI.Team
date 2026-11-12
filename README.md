@@ -279,6 +279,11 @@ wrappers; a staging copy holds wrapper files but is a validation target only. Th
 remain non-launchable; **do not pass a preview plan to the live count engine**.
 No existing bootstrap, engine, roster or skill-pack behavior is replaced.
 
+Router/Worker state (retry stores, registry anchor, settlement ledgers) is local
+and uncommitted; its custody is a trusted-operator policy with no automatic
+continuation after a whole-state rollback
+([storage policy](docs/design/router-worker/storage-policy.md)).
+
 Start with the [PR scope and reviewer guide](docs/design/router-worker/pr-handoff.md),
 [implementation status](docs/design/router-worker/implementation-status.md) and
 [design](docs/design/router-worker/README.md). Real deployment,
