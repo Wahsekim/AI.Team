@@ -96,6 +96,46 @@ temporary payload. Existing files/symlinks are not overwritten. The output paren
 must exist and be canonical; runtime registry paths are refused. The operation
 is a local artifact publish, not deployment, git publication or a paid call.
 
+## Isolated staging (rollout gate G-01, first part)
+
+From a two-root instance root:
+
+```sh
+node kit/scripts/team-mode.mjs stage SPEC.json DRAFT.rw-draft.json /absolute/new-dir.rw-staging --instance .
+```
+
+`stage` first runs `verify`, so a draft older than the instance charter, profiles
+or `kit.lock` is refused. It then builds a new directory, which must not exist,
+must end in `.rw-staging` and must lie outside the instance, its kit and any
+`.claude` path:
+
+- the instance's regular files, without `kit/`, `.git`, environment directories,
+  local settings, dotenv files, retry stores and symlinks (each reported under
+  `skipped`);
+- `kit/` as a Git clone checked out at the commit in `kit.lock` (a kit with local
+  changes or at another commit is refused), or a plain copy when the lock says
+  `unversioned`;
+- the draft files, written over the copy;
+- no wrapper that the draft does not define: other `.claude/agents/*.md` files
+  are left out and listed under `removedWrappers`.
+
+The unmodified `kit/scripts/validate-team.sh --mode deployment` of the staged kit
+then judges the copy. The result is `staged-structurally-validated` or
+`staged-validation-failed` (CLI exit 2) with the validator verdict and `FAIL`
+lines. A failed copy is kept for inspection; a refused or interrupted stage
+removes its directory. Existing staging directories are never overwritten.
+
+`unstaffed` lists each enabled workflow duty whose role has no active row with an
+existing wrapper in the staged roster. The draft roster keeps architect, coach,
+auditor and security dormant, so every enabled workflow that needs them appears
+here until governance staffing is part of the spec.
+
+The instance tree and the kit state are compared before and after; a difference
+fails the stage. A validated staging copy remains `launchable: false`: the
+validator checks structure only, the wrappers still say "Do not run from this
+draft", and isolation, retry continuation, settlement, governance execution and
+live evidence (G-02 to G-05, E-01) are not addressed by staging.
+
 ## Independent checks and remaining gates
 
 Tests compare mechanical instantiated files with a separately invoked original
