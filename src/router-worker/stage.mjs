@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { resolve, join, dirname, basename, isAbsolute, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseJSON, canonical } from '../loop/contracts.mjs';
+import { parseJSON, canonical, bytesDigest } from '../loop/contracts.mjs';
 import { verifyDraft } from './draft.mjs';
 import { loadCoverage } from './coverage.mjs';
 import { instanceOf } from './roots.mjs';
@@ -76,6 +76,37 @@ function stagedRoles(staging) {
     && (row[2] === 'main session' || lstatSync(join(staging, row[2]), { throwIfNoEntry: false })?.isFile())).map(row => row[0]));
 }
 
+const MENTION = /(?<![A-Za-z0-9_./-])((?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.md)(?![A-Za-z0-9_/-])/g;
+const mentions = text => [...new Set([...text.matchAll(MENTION)].map(m => m[1]).filter(path => !path.startsWith('kit/') && !path.includes('..')))].sort();
+
+// The read closure of each staged wrapper: the team files the wrapper names, plus
+// the files its own role file names. Paths resolve in the staging copy first,
+// then under its kit/. Other files are leaves.
+function readClosures(staging, wrappers) {
+  const nodes = new Map(), missing = [], estimatedTokens = {};
+  const locate = path => [path, `kit/${path}`].find(at => lstatSync(join(staging, at), { throwIfNoEntry: false })?.isFile());
+  const add = (path, reads) => {
+    const at = locate(path), bytes = readFileSync(join(staging, at));
+    nodes.set(path, { path, root: at === path ? 'instance' : 'kit', sha256: bytesDigest(bytes), bytes: bytes.length, reads });
+  };
+  for (const [wrapper, role] of wrappers) {
+    const roleFile = `agents/${role}.md`, closure = new Set([wrapper]);
+    const named = mentions(readFileSync(join(staging, wrapper), 'utf8')).filter(path => path !== wrapper);
+    for (const path of named) if (!locate(path)) missing.push({ from: wrapper, path });
+    const reads = named.filter(locate);
+    add(wrapper, reads);
+    for (const path of reads) {
+      // A role file may name examples; only files that exist are part of the closure.
+      const nested = path === roleFile ? mentions(readFileSync(join(staging, locate(path)), 'utf8')).filter(p => p !== path && locate(p)) : [];
+      if (!nodes.has(path) || nested.length) add(path, nested);
+      closure.add(path);
+      for (const leaf of nested) { if (!nodes.has(leaf)) add(leaf, []); closure.add(leaf); }
+    }
+    estimatedTokens[wrapper] = [...closure].reduce((sum, path) => sum + Math.ceil(nodes.get(path).bytes / 4), 0);
+  }
+  return { nodes: [...nodes.values()].sort((a, b) => a.path.localeCompare(b.path)).map(({ bytes, ...node }) => node), missing, estimatedTokens };
+}
+
 function destination(stagingPath, instance, kit) {
   requireValue(typeof stagingPath === 'string' && isAbsolute(stagingPath) && resolve(stagingPath) === stagingPath,
     'Staging path must be a normalized absolute path');
@@ -126,14 +157,26 @@ export function stageTeam(input, artifact, stagingPath, { teamRoot = ROOT, insta
     const unstaffed = draft.coverage.rows.filter(row => row.status === 'enabled')
       .flatMap(row => row.duties.filter(duty => !roles.has(duties[duty])).map(duty => ({ workflow: row.id, duty, role: duties[duty] })));
 
+    const wrapperOf = role => `${REGISTRY}/${basename(Object.keys(draft.files).find(path => path.startsWith(`${REGISTRY}/`) && path.endsWith(`-${role}.md`)))}`;
+    const workers = ['exec', 'check', 'guard'].map(duty => [duty, wrapperOf(`worker-${duty}`), `worker-${duty}`]);
+    const governance = ['architect', 'coach', 'auditor', 'security'].filter(role => roles.has(role)).map(role => [role, wrapperOf(role), role]);
+    const closureOf = entries => {
+      const { nodes, missing, estimatedTokens } = readClosures(stagingPath, entries.map(([, wrapper, role]) => [wrapper, role]));
+      return { context: { metric: 'ceil-utf8-bytes/4', roots: Object.fromEntries(entries.map(([key, wrapper]) => [key, [wrapper]])), nodes, estimatedTokens }, missing };
+    };
+    const worker = closureOf(workers), governed = closureOf(governance), missingReads = [...worker.missing, ...governed.missing];
+
     const kitAfter = kitState(kit, readFileSync(join(instance, 'kit.lock'), 'utf8'));
     requireValue(treeDigest(instance, { skipKit: true }) === instanceBefore && kitAfter.state === kitBefore.state,
       'The instance or its kit changed during staging; discard the staging copy and retry');
     created = null;
-    return { stage: passed ? 'staged-structurally-validated' : 'staged-validation-failed', launchable: false, path: stagingPath,
+    return { stage: !passed ? 'staged-validation-failed' : missingReads.length ? 'staged-read-closure-incomplete' : 'staged-structurally-validated',
+      launchable: false, path: stagingPath,
       draftDigest: draft.digest, kit: { source: kitBefore.source, commit: kitBefore.commit }, instanceUnchanged: true,
       validator: { verdict: verdict.slice('RESULT: '.length), failures: lines.filter(line => line.startsWith('FAIL - ')) },
-      removedWrappers, skipped, unstaffed, unresolved: draft.unresolved };
+      removedWrappers, skipped, unstaffed, context: worker.context, governanceContext: governed.context, missingReads,
+      rosterRecord: { wrappers: Object.fromEntries(workers.map(([duty, wrapper]) => [duty, basename(wrapper, '.md')])) },
+      unresolved: draft.unresolved };
   } catch (error) {
     if (created) rmSync(created, { recursive: true, force: true });
     return { errors: [{ code: 'INVALID_TEAM_STAGING', field: 'staging', reason: error.message }] };
