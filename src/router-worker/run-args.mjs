@@ -60,7 +60,9 @@ export async function freezeRun({ inputs, run, teamRoot }) {
 
     const estimated = sum(frozen.map(input => input.proposal.estimate.execTokens + input.proposal.estimate.checkTokens));
     const authorized = sum(frozen.map(input => input.mandate.budgetTokens));
-    need(run.budgetCeilingTokens >= estimated, 'BUDGET_BELOW_ESTIMATE', 'The ceiling is below the summed execution and check estimates');
+    // The engine stops dispatching once spend reaches 80% of the ceiling.
+    need(5 * estimated < 4 * run.budgetCeilingTokens, 'BUDGET_BELOW_ESTIMATE',
+      'The summed execution and check estimates reach the 80% line at which the engine stops; the run could not finish on estimate');
     need(run.budgetCeilingTokens <= authorized, 'BUDGET_EXCEEDED', 'The ceiling exceeds the summed ticket authorizations');
 
     const args = { rounds: run.rounds, date: run.date, nextLifecycleNumber: run.nextLifecycleNumber, runId: run.runId,
@@ -78,7 +80,7 @@ export async function freezeRun({ inputs, run, teamRoot }) {
     const body = { schemaVersion: 1, stage: 'run-args-frozen-offline', launchable: false, argsDigest: digest(args),
       engineDigest: bytesDigest(engine), rosterDigest: bytesDigest(roster), policyDigest,
       items: frozen.map((input, i) => ({ ticket: tickets[i], inputDigest: digest(input), previewDigest: previews[i].manifest.digest })),
-      budget: { ceiling: run.budgetCeilingTokens, estimated, authorized }, unresolved: UNRESOLVED };
+      budget: { ceiling: run.budgetCeilingTokens, stopLine: Math.floor(run.budgetCeilingTokens * 4 / 5), estimated, authorized }, unresolved: UNRESOLVED };
     return { args, record: { ...body, digest: digest(body) } };
   } catch (error) {
     if (error instanceof Refusal) return { errors: [{ code: error.code, field: 'run', reason: error.message }] };

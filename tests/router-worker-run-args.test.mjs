@@ -56,7 +56,7 @@ test('freezes the complete engine arguments from previews and the roster; the re
   assert.equal(record.launchable, false); assert.equal(record.stage, 'run-args-frozen-offline');
   assert.equal(record.argsDigest, digest(args));
   assert.deepEqual(record.items.map(item => item.ticket), ['US-08', 'US-09']);
-  assert.deepEqual(record.budget, { ceiling: 46800, estimated: 36000, authorized: 48000 });
+  assert.deepEqual(record.budget, { ceiling: 46800, stopLine: 37440, estimated: 36000, authorized: 48000 });
   assert.ok(record.unresolved.includes('in-run-owner-stop-observation'), 'the engine cannot observe an owner stop mid-run');
   const { digest: recorded, ...body } = record;
   assert.equal(recorded, digest(body));
@@ -76,7 +76,8 @@ test('an incomplete or inconsistent run is refused before any argument is produc
   assert.equal(await code(freeze(team, {}, [inputFixture(), inputFixture()])), 'DUPLICATE_TICKET');
   const other = second(); other.policy.maxBriefChars = 9000; other.mandate.policyDigest = digest(other.policy);
   assert.equal(await code(freeze(team, {}, [inputFixture(), other])), 'POLICY_MISMATCH', 'one run has one policy and one Guardian');
-  assert.equal(await code(freeze(team, { budgetCeilingTokens: 35999 })), 'BUDGET_BELOW_ESTIMATE');
+  assert.equal(await code(freeze(team, { budgetCeilingTokens: 45000 })), 'BUDGET_BELOW_ESTIMATE', 'the engine stops at 80% of the ceiling, so the estimates must stay below that line');
+  assert.equal((await freeze(team, { budgetCeilingTokens: 45001 })).errors, undefined);
   assert.equal(await code(freeze(team, { budgetCeilingTokens: 48001 })), 'BUDGET_EXCEEDED', 'the ceiling cannot exceed the summed ticket authorizations');
   assert.equal(await code(freeze(team, { date: '2026-02-30' })), 'ENGINE_REJECTED', 'the real engine validator judges the frozen arguments');
   assert.equal(await code(freeze(team, { failurePolicy: 'continue' })), 'INVALID_RUN', 'only the fields of the owner directive are accepted');
@@ -88,6 +89,15 @@ test('an incomplete or inconsistent run is refused before any argument is produc
   assert.equal(await code(freeze(renamed)), 'DUTY_NOT_STAFFED', 'the policy wrapper must be the one the roster staffs for the duty');
   const noEngine = fixture(t); rmSync(join(noEngine, '.claude/workflows/run-n-rounds.js'));
   assert.equal(await code(freeze(noEngine)), 'INVALID_RUN');
+});
+
+test('a run that spends exactly its estimates finishes under the smallest accepted ceiling', async t => {
+  const team = fixture(t), { args, record } = await freeze(team, { budgetCeilingTokens: 45001 }), budget = makeBudget({ total: 100_000_000 }), impl = makeAgentImpl({});
+  const spend = (p, o, i) => { budget.bump({ 'sample-worker-exec': 12000, 'sample-worker-check': 6000 }[o.agentType] ?? 0); return impl(p, o, i); };
+  const { result, calls } = await engine(team, args, { budgetImpl: budget, agentImpl: spend });
+  assert.equal(calls.length, 5); assert.equal(result.budgetGateTripped, false); assert.equal(result.safeToContinue, true);
+  assert.deepEqual(accountRun({ args, record, result }).blockers, []);
+  assert.equal(record.budget.stopLine, 36000, 'the record states the 80% line the engine stops at');
 });
 
 test('Q5 budget stop before the verifier: no check call, no later ticket, Guardian still audits, continuation blocked', async t => {

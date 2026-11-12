@@ -47,12 +47,21 @@ Exit 0 prints `{args, record}`; exit 2 is a refusal; exit 1 is usage.
 | `DUPLICATE_TICKET` | one ticket twice in a run |
 | `POLICY_MISMATCH` | inputs carry different policies (one run has one policy and one Guardian) |
 | `DUTY_NOT_STAFFED` | the roster has no `active` `worker-exec`, `worker-check` or `worker-guard` row staffed by the policy wrapper; a dormant Guardian is a missing Guardian |
-| `BUDGET_BELOW_ESTIMATE` | ceiling below the summed execution and check estimates |
+| `BUDGET_BELOW_ESTIMATE` | the summed execution and check estimates reach 80% of the ceiling, the line at which the engine stops dispatching; such a run could not finish even on estimate |
 | `BUDGET_EXCEEDED` | ceiling above the summed ticket authorizations |
 | `ENGINE_REJECTED` | the real engine validator (dry run, aborting agent, zero dispatch) rejects the arguments |
 
 The record binds the arguments (`argsDigest`), the engine copy, the roster, the
 policy and each input and preview digest, and states the budget figures.
+
+Budget figures in the record: `ceiling`, `stopLine` (80% of the ceiling,
+rounded down), `estimated` and `authorized`. The accepted range is
+`estimated < 0.8 x ceiling` and `ceiling <= authorized`, so the ticket
+authorizations must leave at least 25% above the execution and check estimates.
+The Guardian call has no estimate and is not in `estimated`: it runs after the
+last ticket, so it cannot stop a ticket, but its spend can still take the final
+total over the stop line and block the next invocation. The rework estimate is
+not counted either; a retry is a new run (G-03).
 
 ## Call accounting
 
