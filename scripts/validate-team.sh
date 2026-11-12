@@ -157,6 +157,86 @@ else
   skip "mandatory-artifacts" "kit mode — deployment artifact matrix not applicable"
 fi
 
+# --------------------- check -1b: kit/instance layout (deployment mode, ADR 0009)
+# Two-root: ROOT is the project instance and ROOT/kit the read-only kit checkout.
+# A kit update must be a fast-forward, so nothing under kit/ may be written and
+# no kit file may be copied into the instance to be edited there.
+TWO_ROOT=0
+KIT="$ROOT/kit"
+if [ -f "$ROOT/kit.lock" ] || [ -f "$KIT/charter.template.md" ]; then TWO_ROOT=1; fi
+if [ "$DEPLOYED" = 0 ]; then
+  skip "layout" "kit mode — instance layout applies to deployments only"
+elif [ "$TWO_ROOT" = 0 ]; then
+  warn "layout" "legacy single-root deployment — project state is written into the kit checkout, so kit updates conflict; migrate to an instance root with kit/ (ADR 0009)"
+elif [ ! -f "$KIT/charter.template.md" ]; then
+  fail "kit-layout" "kit.lock present but kit/ is not a kit checkout (kit/charter.template.md missing)"
+else
+  LOCK_COMMIT=""
+  if [ "$(sed -n 1p "$ROOT/kit.lock" 2>/dev/null)" = "instance_schema=1" ] \
+     && [ "$(wc -l < "$ROOT/kit.lock" | tr -d ' ')" = 2 ]; then
+    LOCK_COMMIT=$(sed -n 2p "$ROOT/kit.lock" | LC_ALL=C grep -E '^kit_commit=([0-9a-f]{40}|unversioned)$' | cut -d= -f2)
+  fi
+  if [ -z "$LOCK_COMMIT" ]; then
+    fail "kit-lock" "kit.lock must be exactly 'instance_schema=1' then 'kit_commit=<40-hex sha|unversioned>' (missing, malformed, or an instance schema this validator does not support)"
+  else
+    pass "kit-lock" "instance_schema=1, kit_commit=$LOCK_COMMIT"
+    KIT_REAL="$(cd "$KIT" && pwd -P)"
+    KIT_HEAD=""
+    # Only a repository rooted AT kit/ is the kit's; an enclosing repository is not.
+    if KIT_TOP=$(git -C "$KIT" rev-parse --show-toplevel 2>/dev/null) \
+       && [ "$(cd "$KIT_TOP" && pwd -P)" = "$KIT_REAL" ]; then
+      KIT_HEAD=$(git -C "$KIT" rev-parse HEAD 2>/dev/null)
+    fi
+    if [ -z "$KIT_HEAD" ]; then
+      if [ "$LOCK_COMMIT" = "unversioned" ]; then
+        warn "kit-pin" "kit/ is not a Git checkout — its version is not pinned and writes under it cannot be detected"
+      else
+        fail "kit-pin" "kit.lock pins $LOCK_COMMIT but kit/ is not a Git checkout"
+      fi
+    else
+      if [ "$KIT_HEAD" = "$LOCK_COMMIT" ]; then
+        pass "kit-pin" "kit/ HEAD matches kit.lock"
+      else
+        fail "kit-pin" "kit/ HEAD $KIT_HEAD differs from kit.lock ($LOCK_COMMIT) — after a reviewed kit upgrade, update kit.lock and the engine copy"
+      fi
+      KIT_DIRTY=$(git -C "$KIT" status --porcelain 2>/dev/null | cut -c4- | head -5 | tr '\n' ' ')
+      if [ -n "$KIT_DIRTY" ]; then
+        fail "kit-clean" "kit/ has local changes — the kit is read-only for deployments; move project content to the instance root: $KIT_DIRTY"
+      else
+        pass "kit-clean" "kit/ work tree is clean"
+      fi
+    fi
+  fi
+  ENGINE_REL=".claude/workflows/run-n-rounds.js"
+  if [ -f "$KIT/$ENGINE_REL" ] && cmp -s "$ROOT/$ENGINE_REL" "$KIT/$ENGINE_REL"; then
+    pass "engine-copy" "$ENGINE_REL is identical to the kit engine"
+  else
+    fail "engine-copy" "$ENGINE_REL is missing or differs from kit/$ENGINE_REL — re-copy it from the pinned kit"
+  fi
+  # Allowed in both roots: files bootstrap generates, READMEs, role files
+  # instantiated from kit role seeds, and the ledgers the kit still ships.
+  SHADOWS=""
+  while IFS= read -r f; do
+    f="${f#./}"
+    [ -f "$KIT/$f" ] || continue
+    case "$f" in
+      CLAUDE.md|.gitignore|README.md|*/README.md|"$ENGINE_REL") continue ;;
+      agents/lifecycle.md|agents/lessons.md|memory/pm.md|pm-decisions.md) continue ;;
+      agents/pm.md) ;;
+      agents/*.md)
+        case "${f#agents/}" in */*) ;; *) grep -qiE '^##[[:space:]]+base agent' "$KIT/$f" && continue ;; esac ;;
+    esac
+    SHADOWS="$SHADOWS $f"
+  done <<EOF_SHADOW
+$(cd "$ROOT" && find . \( -path ./kit -o -path ./.git \) -prune -o -type f -print 2>/dev/null)
+EOF_SHADOW
+  if [ -n "$SHADOWS" ]; then
+    fail "kit-shadow" "instance file(s) shadow a kit file of the same path — delete the copy and change the kit in its own repository:$SHADOWS"
+  else
+    pass "kit-shadow" "no instance file shadows a kit file"
+  fi
+fi
+
 # ---------------------------------------------------------------- check 0: charter
 if [ "$DEPLOYED" = 1 ]; then
   if [ -f "$ROOT/charter.md" ]; then
@@ -330,7 +410,7 @@ else
   if [ -z "$CAPS" ]; then
     warn "drift-caps" "could not extract cap values from charter.md budget table"
   else
-    CAP_EXCL='^(charter\.md|charter\.template\.md|docs/lazy-placeholders\.md|agents/lifecycle\.md|pm-decisions\.md|memory/|messages/|agents/archive/|decisions/)'
+    CAP_EXCL='^(kit/|charter\.md|charter\.template\.md|docs/lazy-placeholders\.md|agents/lifecycle\.md|pm-decisions\.md|memory/|messages/|agents/archive/|decisions/)'
     CAP_HITS=""
     for n in $CAPS; do
       HITS=$(grep -rl --include='*.md' -e "$n" "$ROOT" 2>/dev/null \
@@ -346,7 +426,7 @@ else
 fi
 
 # 4b tier-band table rows outside agents/pm.md (band cell shape: '| 45-75K |')
-BAND_EXCL='^(agents/pm\.md|agents/archive/|messages/|memory/)'
+BAND_EXCL='^(kit/|agents/pm\.md|agents/archive/|messages/|memory/)'
 BAND_HITS=$(grep -rlE --include='*.md' '\|\s*[0-9]{1,3}-[0-9]{1,3}K\s*\|' "$ROOT" 2>/dev/null \
   | sed "s|^$ROOT/||" | grep -vE "$BAND_EXCL")
 if [ -n "$BAND_HITS" ]; then
@@ -357,7 +437,7 @@ fi
 
 # 4c model assignments outside roster + wrappers (heuristic on common model-name shapes)
 MODEL_RE='^[-*]?\s*([Mm]odel|[Mm]odel name)\s*[:=]\s*"?(opus|sonnet|haiku|fable|gpt-[a-z0-9]|o[0-9])'
-MODEL_EXCL='^(agents/roster\.md|agents/roster\.template\.md|\.claude/agents/|agents/lifecycle\.md|pm-decisions\.md|memory/|messages/|agents/archive/|decisions/)'
+MODEL_EXCL='^(kit/|agents/roster\.md|agents/roster\.template\.md|\.claude/agents/|agents/lifecycle\.md|pm-decisions\.md|memory/|messages/|agents/archive/|decisions/)'
 MODEL_HITS=$(grep -rlE --include='*.md' "$MODEL_RE" "$ROOT" 2>/dev/null \
   | sed "s|^$ROOT/||" | grep -vE "$MODEL_EXCL")
 if [ -n "$MODEL_HITS" ]; then
@@ -473,7 +553,15 @@ else
     [ -n "$RID" ] || continue
     case "$RID" in *'{{'*) continue ;; esac   # unfilled slug caught by check 2
     RC_ACTIVE=$((RC_ACTIVE+1))
-    if [ ! -s "$ROOT/agents/$RID.md" ]; then
+    RF="$ROOT/agents/$RID.md"
+    if [ "$TWO_ROOT" = 1 ] && [ ! -s "$RF" ]; then
+      # The kit-authored main-session file is read in place; every other role
+      # file is project content and must be instantiated into the instance.
+      case "$line" in *'main session'*) RF="$KIT/agents/$RID.md" ;; esac
+    fi
+    if [ "$TWO_ROOT" = 1 ] && [ ! -s "$RF" ] && [ -s "$KIT/agents/$RID.md" ]; then
+      RC_FAILS="$RC_FAILS $RID(agents/$RID.md not-instantiated:run-bootstrap---roles)"
+    elif [ ! -s "$RF" ]; then
       RC_FAILS="$RC_FAILS $RID(agents/$RID.md missing-or-empty)"
     else
       # R6-07(c)/R7-04(b): a role file must carry the seed STRUCTURE, not just
@@ -482,7 +570,6 @@ else
       # overlay/dispatch/assembly (the shape agents/agent-file.template.md
       # mandates). Main-session rows (pm) keep the kit-authored pm.md shape
       # and are exempt from the overlay/dispatch/assembly heading only.
-      RF="$ROOT/agents/$RID.md"
       if ! grep -qiE '^##[[:space:]]+base agent' "$RF"; then
         RC_FAILS="$RC_FAILS $RID(agents/$RID.md hollow:no-base-agent-heading)"
       else
