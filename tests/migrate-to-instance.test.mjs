@@ -110,3 +110,95 @@ test('migration refuses unsafe or wrong roots before writing', async () => {
     assert.equal(await readFile(join(next, 'charter.md'), 'utf8'), '# already an instance\n')
   })
 })
+
+// The documented sequence commits the deployment as a local snapshot before migrating.
+async function commitDeployment(old) {
+  const baseline = (await git(old, 'rev-parse', 'HEAD')).stdout.trim()
+  await write(old, { 'docs/project-owned.md': '# Project document\n' })
+  await git(old, 'add', '-f', 'agents/lifecycle.md', 'agents/backend.md', 'CLAUDE.md', 'docs/process-index.md', 'docs/project-owned.md')
+  await git(old, 'commit', '-q', '-m', 'local deployment snapshot')
+  return baseline
+}
+
+test('committed project state needs an explicit kit baseline and is then migrated in full', async () => {
+  await withLegacy(async ({ old, next }) => {
+    const baseline = await commitDeployment(old), before = await snapshot(old)
+    const refused = await migrate('--project-name', 'Demo', old, next)
+    assert.equal(refused.code, 1, refused.out)
+    assert.match(refused.out, /1 local commit\(s\)/); assert.match(refused.out, /--baseline/)
+    assert.match(refused.out, new RegExp(`candidate: ${baseline}`), 'the parent of the oldest local commit is offered for review')
+    assert.ok(!(await exists(join(next, 'charter.md'))) && !(await exists(join(next, 'kit.lock'))), 'a refused migration writes nothing')
+
+    const { code, out } = await migrate('--project-name', 'Demo', '--baseline', baseline, old, next)
+    assert.equal(code, 0, out); assert.match(out, /RESULT: MIGRATED/)
+    assert.equal(await snapshot(old), before, 'the old checkout must be untouched')
+    assert.equal(await readFile(join(next, 'agents/lifecycle.md'), 'utf8'), '# Lifecycle\n\n## [001] project entry\n')
+    assert.equal(await readFile(join(next, 'agents/backend.md'), 'utf8'), '# Basile (Backend)\n\n## Base Agent\n\nsynthetic\n')
+    assert.equal(await readFile(join(next, 'docs/project-owned.md'), 'utf8'), '# Project document\n', 'a tracked project addition is copied')
+    assert.equal(await readFile(join(next, 'agents/lessons.md'), 'utf8'), '# Lessons\n', 'a ledger equal to the baseline holds no project history and is seeded fresh')
+    assert.match(await readFile(join(next, 'migration-review/CLAUDE.md.diff'), 'utf8'), /\+Project rule: never push ledgers\./)
+    assert.match(await readFile(join(next, 'kit-upgrade-review.md'), 'utf8'), /^- \[ \] docs\/process-index\.md <- /m)
+  })
+})
+
+test('committed, staged and unstaged project changes are all retained against the baseline', async () => {
+  await withLegacy(async ({ old, next }) => {
+    const baseline = await commitDeployment(old)
+    await appendFile(join(old, 'agents/lifecycle.md'), '\n## [002] unstaged entry\n')
+    await appendFile(join(old, 'pm-decisions.md'), 'staged decision\n'); await git(old, 'add', 'pm-decisions.md')
+    await write(old, { 'docs/staged-project.md': '# Staged\n' }); await git(old, 'add', 'docs/staged-project.md')
+    await appendFile(join(old, 'agents/pm.md'), '\nUnstaged PM edit.\n')
+    const { code, out } = await migrate('--baseline', baseline, old, next)
+    assert.equal(code, 0, out)
+    assert.equal(await readFile(join(next, 'agents/lifecycle.md'), 'utf8'), '# Lifecycle\n\n## [001] project entry\n\n## [002] unstaged entry\n')
+    assert.equal(await readFile(join(next, 'pm-decisions.md'), 'utf8'), '# PM Decisions\nstaged decision\n')
+    assert.equal(await readFile(join(next, 'docs/staged-project.md'), 'utf8'), '# Staged\n')
+    assert.match(await readFile(join(next, 'migration-review/agents/pm.md.diff'), 'utf8'), /\+Unstaged PM edit\./)
+  })
+})
+
+test('a baseline must be a kit commit that the old checkout descends from', async () => {
+  await withLegacy(async ({ old, next }) => {
+    await commitDeployment(old)
+    const head = (await git(old, 'rev-parse', 'HEAD')).stdout.trim()
+    await git(old, 'checkout', '-q', '--orphan', 'unrelated'); await git(old, 'commit', '-q', '--allow-empty', '-m', 'unrelated')
+    const unrelated = (await git(old, 'rev-parse', 'HEAD')).stdout.trim()
+    await git(old, 'checkout', '-q', '-f', head)
+    for (const baseline of ['not-a-commit', unrelated]) {
+      const { code, out } = await migrate('--baseline', baseline, old, next)
+      assert.equal(code, 1, out); assert.match(out, /baseline/)
+    }
+    assert.ok(!(await exists(join(next, 'kit.lock'))))
+  })
+})
+
+test('a project file whose path the new kit also ships is routed to review, not copied over the kit path', async () => {
+  await withLegacy(async ({ old, next }) => {
+    await write(join(next, 'kit'), { 'docs/shared-name.md': '# Kit version\n' })
+    await git(join(next, 'kit'), 'add', '-A'); await git(join(next, 'kit'), 'commit', '-q', '-m', 'kit adds a doc')
+    await write(old, { 'docs/shared-name.md': '# Project version\n' })
+    const { code, out } = await migrate(old, next)
+    assert.equal(code, 0, out); assert.match(out, /PORT - docs\/shared-name\.md/)
+    assert.ok(!(await exists(join(next, 'docs/shared-name.md'))), 'it would shadow the kit file')
+    assert.equal(await readFile(join(next, 'migration-review/docs/shared-name.md'), 'utf8'), '# Project version\n')
+    assert.match(await readFile(join(next, 'kit-upgrade-review.md'), 'utf8'), /^- \[ \] docs\/shared-name\.md <- project file at a path the kit also ships \(migration-review\/docs\/shared-name\.md\)$/m)
+  })
+})
+
+test('a deployment snapshot pushed to another remote is still not a kit baseline', async () => {
+  await withLegacy(async ({ old, next }) => {
+    const baseline = await commitDeployment(old), snapshotCommit = (await git(old, 'rev-parse', 'HEAD')).stdout.trim()
+    const backup = join(dirname(old), 'backup.git')
+    await exec('git', ['init', '-q', '--bare', backup]); await git(old, 'remote', 'add', 'backup', backup)
+    await git(old, 'push', '-q', 'backup', 'HEAD:refs/heads/snapshot'); await git(old, 'fetch', '-q', 'backup')
+    assert.equal((await git(old, 'rev-list', 'HEAD', '--not', '--remotes')).stdout, '', 'every commit of the old checkout is on a remote')
+    const refused = await migrate(old, next)
+    assert.equal(refused.code, 1, refused.out); assert.match(refused.out, new RegExp(`candidate: ${baseline}`))
+    const own = await migrate('--baseline', snapshotCommit, old, next)
+    assert.equal(own.code, 1, own.out); assert.match(own.out, /not in the history of NEW\/kit/)
+    assert.ok(!(await exists(join(next, 'kit.lock'))))
+    const { code, out } = await migrate('--baseline', baseline, old, next)
+    assert.equal(code, 0, out)
+    assert.equal(await readFile(join(next, 'docs/project-owned.md'), 'utf8'), '# Project document\n')
+  })
+})

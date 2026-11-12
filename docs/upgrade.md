@@ -75,6 +75,21 @@ part of each into an instance file (the instance `CLAUDE.md`, a new document
 under `docs/`, or a script flag) and tick the item. Keep the old checkout until
 one attended cycle has closed in the new instance.
 
+Project state is found by comparing the old checkout with its kit baseline, the
+kit commit the deployment was made from. A kit commit is one found in the
+history of the new instance's `kit/`; a remote of the old checkout is not
+evidence, because a deployment snapshot may have been pushed to a backup or a
+fork. When the old checkout's `HEAD` is a kit commit, it is the baseline. When
+the deployment was committed on top of the kit, the script stops, prints the
+number of local commits and a candidate, and needs `--baseline <kit commit>`;
+the named commit must also be in the history of `kit/`. If the deployment came
+from an unmerged kit branch, fetch that branch in `kit/` first. Committed, staged and unstaged differences from the baseline are
+all migrated: added files are copied, changed ledgers and role files are copied,
+other changed kit files become review items. A ledger identical to the baseline
+holds no project history and is seeded fresh. A project file at a path the new
+kit also ships is saved under `migration-review/` as a review item, not copied
+over that path.
+
 ## Maintainers: the kit's own ledgers
 
 The kit's development ledgers (`agents/lifecycle.md`, `agents/lessons.md`,
