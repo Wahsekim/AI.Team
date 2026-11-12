@@ -30,6 +30,13 @@ repository pinned by `kit.lock`. Run everything from the instance root.
    and prints one `REVIEW` line per changed seed whose instantiated file exists
    in the instance. It appends the same items to `kit-upgrade-review.md` as
    open `- [ ]` entries.
+   It writes the review entries first, then the engine copy, then `kit.lock`.
+   If it fails part-way (`RESULT: PIN-FAILED`), `kit.lock` still names the old
+   commit: fix the cause and run it again. Entries already recorded, open or
+   ticked, are not added twice. A `.pin-lock` directory serializes runs; remove
+   it only if the run that created it died. Do not delete
+   `kit-upgrade-review.md`: the validator cannot tell a deleted record from an
+   upgrade with nothing to port.
 5. Port each `REVIEW` item by hand. Instance files are never overwritten, so a
    change to `charter.template.md`, a ledger header, a role seed or the
    instance `CLAUDE.md` seed reaches the project only when the PM copies the
