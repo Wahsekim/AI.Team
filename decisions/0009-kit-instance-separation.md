@@ -179,7 +179,9 @@ per-project seeds, so they are instantiated like the charter.
 - [ ] Owner confirmation of the home of the kit's own ledgers, then move them
       out of the kit root (decision 5). Until then the validator allows the four
       ledger paths to exist in both roots.
-- [ ] Router/Worker root split (decision 8).
+- [x] Router/Worker root split (decision 8): `--instance` on `team-mode.mjs` and
+      `preflight-router-worker.mjs`; retry rules and coverage read the instance
+      `charter.md`; instance drafts are overlays; preflight applies the path rule.
 - [ ] Legacy detection is by `kit.lock` or `kit/`; no shared resolver was needed
       because `reconcile-run.mjs`, `preflight-run.mjs`, `lessons-stats.sh` and
       `check-claude-compat.sh` only read instance paths. `measure-context.sh`
