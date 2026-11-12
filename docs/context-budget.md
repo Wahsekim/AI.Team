@@ -13,6 +13,14 @@ scripts/measure-context.sh .
 
 Tokens are estimated as bytes/4 — an order-of-magnitude gauge, not billing.
 
+In a two-root instance run `kit/scripts/measure-context.sh .` from the instance
+root. Each file is read from the instance if it exists there, otherwise from
+`kit/`, and is printed with the root it came from; the PM set counts both the
+instance `CLAUDE.md` and `kit/CLAUDE.md`. A required file found in neither root
+ends the run with `CONTEXT-MEASUREMENT-INCOMPLETE` (exit 1). The default budgets
+are the kit's own; an instance with larger role files or profiles passes its
+recorded budgets with `--budget-pm` and `--budget-worker`.
+
 ## Measured baseline (2026-07-16, fresh kit)
 
 | Set | Files | Estimated tokens | Budget (ratchet) |

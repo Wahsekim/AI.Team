@@ -130,3 +130,63 @@ test('pin-kit refuses a root that is not a two-root instance, an unversioned kit
     assert.equal(await readFile(join(root, '.claude/workflows/run-n-rounds.js'), 'utf8'), '// engine patched in the instance\n')
   })
 })
+
+// Review 2026-11-12 R2: the pin is the commit point; review items are recorded before it.
+const lockOf = root => readFile(join(root, 'kit.lock'), 'utf8')
+const openItems = async root => ((await readFile(join(root, 'kit-upgrade-review.md'), 'utf8')).match(/^- \[ \] charter\.md <- /gm) || []).length
+async function upgradeCharter(upstream, kit) {
+  await release(upstream, { 'charter.template.md': '# charter v2\n', '.claude/workflows/run-n-rounds.js': '// engine v2\n' }, 'v2')
+  await git(kit, 'pull', '-q', '--ff-only')
+}
+
+test('a failed review publication leaves the old pin, and the retry records the items before pinning', async () => {
+  await withUpgradeableInstance(async ({ upstream, root, kit }) => {
+    const oldLock = await lockOf(root)
+    await upgradeCharter(upstream, kit)
+    await mkdir(join(root, 'kit-upgrade-review.md'))
+    const failed = await pin(root)
+    assert.equal(failed.code, 1, failed.out); assert.match(failed.out, /RESULT: PIN-FAILED/)
+    assert.equal(await lockOf(root), oldLock, 'the pin must not advance without its review items')
+    assert.equal(await readFile(join(root, '.claude/workflows/run-n-rounds.js'), 'utf8'), '// engine v1\n')
+    await rm(join(root, 'kit-upgrade-review.md'), { recursive: true })
+    const retry = await pin(root)
+    assert.equal(retry.code, 0, retry.out); assert.match(retry.out, /RESULT: KIT-PINNED/)
+    assert.equal(await openItems(root), 1)
+    assert.equal(await lockOf(root), `instance_schema=1\nkit_commit=${await head(upstream)}\n`)
+  })
+})
+
+test('a failure after the review items are written is retried without duplicating or reopening them', async () => {
+  await withUpgradeableInstance(async ({ upstream, root, kit }) => {
+    const oldLock = await lockOf(root), workflows = join(root, '.claude/workflows')
+    await upgradeCharter(upstream, kit)
+    await exec('chmod', ['555', workflows])
+    const failed = await pin(root)
+    await exec('chmod', ['755', workflows])
+    assert.equal(failed.code, 1, failed.out)
+    assert.equal(await lockOf(root), oldLock)
+    assert.equal(await openItems(root), 1, 'the obligation is already visible while the upgrade is incomplete')
+    const reviewPath = join(root, 'kit-upgrade-review.md')
+    await writeFile(reviewPath, (await readFile(reviewPath, 'utf8')).replace(/^- \[ \] (charter\.md <- .*)$/m, '- [x] $1 — ported by the PM'))
+    const retry = await pin(root)
+    assert.equal(retry.code, 0, retry.out); assert.match(retry.out, /RESULT: KIT-PINNED/)
+    const review = await readFile(reviewPath, 'utf8')
+    assert.equal((review.match(/charter\.md <- kit\/charter\.template\.md/g) || []).length, 1, 'the item is not appended twice')
+    assert.match(review, /^- \[x\] charter\.md <- .* — ported by the PM$/m, 'a decision made in between is kept')
+    assert.equal((await pin(root)).out.includes('KIT-PIN-UNCHANGED'), true)
+  })
+})
+
+test('pin-kit refuses to run while another pin-kit holds the instance lock', async () => {
+  await withUpgradeableInstance(async ({ upstream, root, kit }) => {
+    const oldLock = await lockOf(root)
+    await upgradeCharter(upstream, kit)
+    await mkdir(join(root, '.pin-lock'))
+    const { code, out } = await pin(root)
+    assert.equal(code, 1, out); assert.match(out, /pin-lock/)
+    assert.equal(await lockOf(root), oldLock)
+    await rm(join(root, '.pin-lock'), { recursive: true })
+    assert.equal((await pin(root)).code, 0)
+    await assert.rejects(readFile(join(root, '.pin-lock')), 'the lock is released after a run')
+  })
+})

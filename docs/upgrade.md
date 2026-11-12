@@ -30,6 +30,13 @@ repository pinned by `kit.lock`. Run everything from the instance root.
    and prints one `REVIEW` line per changed seed whose instantiated file exists
    in the instance. It appends the same items to `kit-upgrade-review.md` as
    open `- [ ]` entries.
+   It writes the review entries first, then the engine copy, then `kit.lock`.
+   If it fails part-way (`RESULT: PIN-FAILED`), `kit.lock` still names the old
+   commit: fix the cause and run it again. Entries already recorded, open or
+   ticked, are not added twice. A `.pin-lock` directory serializes runs; remove
+   it only if the run that created it died. Do not delete
+   `kit-upgrade-review.md`: the validator cannot tell a deleted record from an
+   upgrade with nothing to port.
 5. Port each `REVIEW` item by hand. Instance files are never overwritten, so a
    change to `charter.template.md`, a ledger header, a role seed or the
    instance `CLAUDE.md` seed reaches the project only when the PM copies the
@@ -74,6 +81,21 @@ added to `kit-upgrade-review.md` as an open item. Port the project-specific
 part of each into an instance file (the instance `CLAUDE.md`, a new document
 under `docs/`, or a script flag) and tick the item. Keep the old checkout until
 one attended cycle has closed in the new instance.
+
+Project state is found by comparing the old checkout with its kit baseline, the
+kit commit the deployment was made from. A kit commit is one found in the
+history of the new instance's `kit/`; a remote of the old checkout is not
+evidence, because a deployment snapshot may have been pushed to a backup or a
+fork. When the old checkout's `HEAD` is a kit commit, it is the baseline. When
+the deployment was committed on top of the kit, the script stops, prints the
+number of local commits and a candidate, and needs `--baseline <kit commit>`;
+the named commit must also be in the history of `kit/`. If the deployment came
+from an unmerged kit branch, fetch that branch in `kit/` first. Committed, staged and unstaged differences from the baseline are
+all migrated: added files are copied, changed ledgers and role files are copied,
+other changed kit files become review items. A ledger identical to the baseline
+holds no project history and is seeded fresh. A project file at a path the new
+kit also ships is saved under `migration-review/` as a review item, not copied
+over that path.
 
 ## Maintainers: the kit's own ledgers
 
