@@ -118,7 +118,14 @@ seeds/placeholders inside `.claude/agents/`, flags wrappers modified after the
 session started (the runtime's hot reload has documented exceptions), checks the
 product root is a clean git tree, and freezes the whole policy/input bundle
 (wrappers, role files, charter, profiles, shared rules, ADRs, product primer,
-engine, args) behind ONE `launchManifestDigest`. Pass that digest as
+engine, args) behind ONE `launchManifestDigest`. In a two-root instance (run it
+as `node kit/scripts/preflight-run.mjs ... --team-root .`) each policy file is
+read from the instance if it exists there, otherwise from `kit/`, and frozen
+under that path; `kit.lock`, `kit/CLAUDE.md` and the kit ADRs are frozen too.
+It fails when `agents/pm.md`, `agents/templates.md` or the meta-rules are
+missing, when the instance holds its own copy of one of those three, when the
+engine copy differs from the kit engine, or when a versioned `kit/` has local
+changes or is not at the commit in `kit.lock`. Pass that digest as
 `args.launchManifestDigest`: the engine echoes it in `results` and the `### BATCH`
 header, so a mid-run policy edit is detectable at reconciliation by re-running
 the preflight and comparing digests. The preflight is static: it cannot see the

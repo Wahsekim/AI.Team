@@ -144,7 +144,7 @@ It works against either:
 
    ```bash
    kit/scripts/check-claude-compat.sh .            # runtime version + wrapper frontmatter + no seeds in the registry
-   node kit/scripts/preflight-run.mjs args.json --team-root . --product-root ../<product>   # before EVERY engine launch
+   node kit/scripts/preflight-run.mjs args.json --team-root . --product-root ../<product>   # before EVERY engine launch; freezes instance + kit/ policy and the pin
    kit/scripts/validate-team.sh --mode deployment . # deployed instance: full artifact matrix + kit pin/clean checks
    (cd kit && scripts/validate-team.sh . && node --test tests/*.test.mjs)   # the kit itself: validator + fault-injection suite
    ```
