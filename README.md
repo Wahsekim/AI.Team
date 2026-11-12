@@ -227,6 +227,7 @@ node kit/scripts/freeze-run-router-worker.mjs RUN.json --team-root TEAM_ROOT
 node kit/scripts/continue-router-worker.mjs REQUEST.json --instance .
 node kit/scripts/settle-router-worker.mjs REQUEST.json --instance .
 node kit/scripts/stack-source-router-worker.mjs --root . INPUT.json
+node kit/scripts/activate-router-worker.mjs SPEC.json DRAFT.json /abs/NEW.rw-active --instance . --approval APPROVAL.json --approval-digest DIGEST
 ```
 
 `stage` copies a two-root instance into a new directory outside it, applies the
@@ -281,7 +282,11 @@ compiler input carries exactly those; the kit holds no stack-specific command
 Node 22 supports the non-SQLite tools; retry persistence and its registry require
 Node 24+. `INPUT.json` and `SPEC.json` must follow the documented contracts; test
 fixtures are synthetic, not project approval. Draft output is JSON, not installed
-wrappers; a staging copy holds wrapper files but is a validation target only. There is no activation or live model command. All successful artifacts
+wrappers; a staging copy holds wrapper files but is a validation target only. There is no live model command.
+`activate-router-worker.mjs` is the only step that makes wrappers runnable: with an
+owner approval bound to the exact spec and draft it builds a new `.rw-active` copy
+for one disposable smoke run and never writes the instance
+([details](docs/design/router-worker/activation.md)). All other artifacts
 remain non-launchable; **do not pass a preview plan to the live count engine**.
 No existing bootstrap, engine, roster or skill-pack behavior is replaced.
 
