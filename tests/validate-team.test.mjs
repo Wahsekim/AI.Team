@@ -756,3 +756,131 @@ test('F-02: kit mode also FAILS on a seed in the registry; a clean registry PASS
     assert.match(out, /PASS - registry-seeds/)
   })
 })
+
+// ADR 0009: two-root deployments — instance root with a read-only kit at kit/.
+const TWO_ROOT = {
+  ...COMPLETE_DEPLOYMENT,
+  'agents/roster.md': '# Roster\n\n| role | wrapper | status |\n|---|---|---|\n| pm | main session | active |\n| builder | .claude/agents/proj-builder.md | active |\n',
+  'kit.lock': 'instance_schema=1\nkit_commit=unversioned\n',
+  '.claude/workflows/run-n-rounds.js': '// engine\n',
+  'kit/.claude/workflows/run-n-rounds.js': '// engine\n',
+  'kit/charter.template.md': '# Charter template {{PROJECT_NAME}}\n\n| Per-spawn worker cap | 200000 |\n',
+  'kit/CLAUDE.md': '# Kit primer\n',
+  'kit/README.md': '# Kit\n',
+  'kit/agents/pm.md': '# PM\n\n## Base Agent\n\nsynthetic\n\n| T1 | 45-75K |\n',
+  'kit/agents/builder.md': '# Builder seed\n\n## Base Agent\n\nsynthetic\n',
+  'kit/agents/templates.md': '# Brief templates\n\n- model: opus\n',
+  'kit/scripts/validate-team.sh': '#!/bin/bash\n',
+}
+
+const gitIn = (dir, ...args) => exec('git', ['-C', dir, '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', ...args])
+async function commitKit(root) {
+  const kit = join(root, 'kit')
+  await gitIn(kit, 'init', '-q'); await gitIn(kit, 'add', '-A'); await gitIn(kit, 'commit', '-q', '-m', 'kit')
+  const head = (await gitIn(kit, 'rev-parse', 'HEAD')).stdout.trim()
+  await writeFile(join(root, 'kit.lock'), `instance_schema=1\nkit_commit=${head}\n`)
+  return kit
+}
+
+test('ADR 0009: complete two-root deployment passes; kit content is not scanned as instance drift', async () => {
+  await withFixture(TWO_ROOT, async root => {
+    await commitKit(root)
+    const { code, out } = await runValidator(root, '--mode', 'deployment')
+    assert.equal(code, 0, out)
+    assert.match(out, /PASS - kit-pin:/)
+    assert.match(out, /PASS - kit-clean:/)
+    assert.match(out, /PASS - kit-shadow:/)
+    assert.match(out, /PASS - engine-copy:/)
+    assert.match(out, /PASS - roster-contract: 2 active row/)
+    assert.doesNotMatch(out, /legacy single-root/)
+  })
+})
+
+test('ADR 0009: an unversioned kit validates with a WARN, never a silent pass', async () => {
+  await withFixture(TWO_ROOT, async root => {
+    const { code, out } = await runValidator(root, '--mode', 'deployment')
+    assert.equal(code, 0, out)
+    assert.match(out, /WARN - kit-pin: .*not a Git checkout/)
+  })
+})
+
+test('ADR 0009: any write under kit/ fails the deployment (tracked edit or untracked file)', async () => {
+  for (const [rel, content] of [['agents/pm.md', '# edited in place\n'], ['agents/lifecycle.md', '# project ledger in the kit\n']]) {
+    await withFixture(TWO_ROOT, async root => {
+      const kit = await commitKit(root)
+      await writeFile(join(kit, rel), content)
+      const { code, out } = await runValidator(root, '--mode', 'deployment')
+      assert.equal(code, 1, out)
+      assert.match(out, new RegExp(`FAIL - kit-clean: .*${rel.replace('.', '\\.')}`))
+    })
+  }
+})
+
+test('ADR 0009: kit HEAD different from kit.lock fails; so does a versioned kit locked as unversioned', async () => {
+  await withFixture(TWO_ROOT, async root => {
+    const kit = await commitKit(root)
+    await writeFile(join(kit, 'NEW.md'), 'upstream change\n')
+    await gitIn(kit, 'add', '-A'); await gitIn(kit, 'commit', '-q', '-m', 'upgrade')
+    let r = await runValidator(root, '--mode', 'deployment')
+    assert.equal(r.code, 1, r.out); assert.match(r.out, /FAIL - kit-pin: /)
+    await writeFile(join(root, 'kit.lock'), 'instance_schema=1\nkit_commit=unversioned\n')
+    r = await runValidator(root, '--mode', 'deployment')
+    assert.equal(r.code, 1, r.out); assert.match(r.out, /FAIL - kit-pin: /)
+  })
+})
+
+test('ADR 0009: malformed kit.lock, unsupported schema, or missing kit/ fails', async () => {
+  for (const lock of ['', 'instance_schema=2\nkit_commit=unversioned\n', 'instance_schema=1\nkit_commit=zzz\n', 'instance_schema=1\n']) {
+    await withFixture({ ...TWO_ROOT, 'kit.lock': lock }, async root => {
+      const { code, out } = await runValidator(root, '--mode', 'deployment')
+      assert.equal(code, 1, out); assert.match(out, /FAIL - kit-lock: /, JSON.stringify(lock))
+    })
+  }
+  const noKit = Object.fromEntries(Object.entries(TWO_ROOT).filter(([k]) => !k.startsWith('kit/')))
+  await withFixture(noKit, async root => {
+    const { code, out } = await runValidator(root, '--mode', 'deployment')
+    assert.equal(code, 1, out); assert.match(out, /FAIL - kit-layout: /)
+  })
+})
+
+test('ADR 0009: an engine copy that differs from the kit engine fails', async () => {
+  await withFixture({ ...TWO_ROOT, '.claude/workflows/run-n-rounds.js': '// stale engine\n' }, async root => {
+    const { code, out } = await runValidator(root, '--mode', 'deployment')
+    assert.equal(code, 1, out); assert.match(out, /FAIL - engine-copy: /)
+  })
+  const noEngine = Object.fromEntries(Object.entries(TWO_ROOT).filter(([k]) => k !== '.claude/workflows/run-n-rounds.js'))
+  await withFixture(noEngine, async root => {
+    const { code, out } = await runValidator(root, '--mode', 'deployment')
+    assert.equal(code, 1, out); assert.match(out, /FAIL - engine-copy: /)
+  })
+})
+
+test('ADR 0009: an instance copy of a kit file is a shadow FAIL; generated files and role files are allowed', async () => {
+  for (const rel of ['agents/pm.md', 'agents/templates.md', 'scripts/validate-team.sh', 'charter.template.md']) {
+    await withFixture({ ...TWO_ROOT, [rel]: '# local copy\n\n## Base Agent\n\nsynthetic\n' }, async root => {
+      const { code, out } = await runValidator(root, '--mode', 'deployment')
+      assert.equal(code, 1, out); assert.match(out, new RegExp(`FAIL - kit-shadow: .*${rel.replace(/\./g, '\\.')}`))
+    })
+  }
+  await withFixture({ ...TWO_ROOT, 'README.md': '# Instance\n', '.gitignore': 'x\n', 'kit/.gitignore': 'y\n' }, async root => {
+    const { code, out } = await runValidator(root, '--mode', 'deployment')
+    assert.equal(code, 0, out); assert.match(out, /PASS - kit-shadow:/)
+  })
+})
+
+test('ADR 0009: a wrapper-dispatched role needs its role file in the instance, not only in kit/', async () => {
+  const noRole = Object.fromEntries(Object.entries(TWO_ROOT).filter(([k]) => k !== 'agents/builder.md'))
+  await withFixture(noRole, async root => {
+    const { code, out } = await runValidator(root, '--mode', 'deployment')
+    assert.equal(code, 1, out)
+    assert.match(out, /FAIL - roster-contract: .*builder\(agents\/builder\.md not-instantiated:run-bootstrap---roles\)/)
+  })
+})
+
+test('ADR 0009: a single-root deployment still validates and is reported as legacy', async () => {
+  await withFixture(COMPLETE_DEPLOYMENT, async root => {
+    const { code, out } = await runValidator(root, '--mode', 'deployment')
+    assert.equal(code, 0, out)
+    assert.match(out, /WARN - layout: legacy single-root/)
+  })
+})
