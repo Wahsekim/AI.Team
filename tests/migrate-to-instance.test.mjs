@@ -184,3 +184,21 @@ test('a project file whose path the new kit also ships is routed to review, not 
     assert.match(await readFile(join(next, 'kit-upgrade-review.md'), 'utf8'), /^- \[ \] docs\/shared-name\.md <- project file at a path the kit also ships \(migration-review\/docs\/shared-name\.md\)$/m)
   })
 })
+
+test('a deployment snapshot pushed to another remote is still not a kit baseline', async () => {
+  await withLegacy(async ({ old, next }) => {
+    const baseline = await commitDeployment(old), snapshotCommit = (await git(old, 'rev-parse', 'HEAD')).stdout.trim()
+    const backup = join(dirname(old), 'backup.git')
+    await exec('git', ['init', '-q', '--bare', backup]); await git(old, 'remote', 'add', 'backup', backup)
+    await git(old, 'push', '-q', 'backup', 'HEAD:refs/heads/snapshot'); await git(old, 'fetch', '-q', 'backup')
+    assert.equal((await git(old, 'rev-list', 'HEAD', '--not', '--remotes')).stdout, '', 'every commit of the old checkout is on a remote')
+    const refused = await migrate(old, next)
+    assert.equal(refused.code, 1, refused.out); assert.match(refused.out, new RegExp(`candidate: ${baseline}`))
+    const own = await migrate('--baseline', snapshotCommit, old, next)
+    assert.equal(own.code, 1, own.out); assert.match(own.out, /not in the history of NEW\/kit/)
+    assert.ok(!(await exists(join(next, 'kit.lock'))))
+    const { code, out } = await migrate('--baseline', baseline, old, next)
+    assert.equal(code, 0, out)
+    assert.equal(await readFile(join(next, 'docs/project-owned.md'), 'utf8'), '# Project document\n')
+  })
+})

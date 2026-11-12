@@ -17,8 +17,9 @@
 # holds for a project file at a path the new kit also ships.
 #
 # The baseline is the kit commit the deployment was made from. It defaults to
-# HEAD when HEAD is on a remote branch. A checkout with local commits must name
-# it with --baseline: project state committed locally is otherwise invisible.
+# OLD's HEAD when that commit is in the history of NEW/kit. A checkout whose
+# HEAD is not a kit commit must name the baseline with --baseline: project state
+# committed locally (pushed anywhere or not) is otherwise invisible.
 # OLD and NEW/kit are never written. Existing files in NEW are never overwritten.
 #
 # Verdicts (last line): MIGRATION-FAILED (exit 1) | DRY-RUN | MIGRATED.
@@ -59,16 +60,40 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 [ "$(git -C "$OLD" rev-parse --show-toplevel 2>/dev/null)" = "$OLD" ] || failmig "root: OLD is not the top of a Git checkout"
 { [ ! -e "$NEW/charter.md" ] && [ ! -e "$NEW/kit.lock" ]; } || failmig "root: NEW already holds an instance (charter.md or kit.lock present)"
 
-LOCAL_COMMITS=$(git -C "$OLD" rev-list HEAD --not --remotes 2>/dev/null)
+# A kit commit is one the new instance's kit/ history contains. A remote of OLD
+# proves nothing: a deployment snapshot may have been pushed to a backup or fork.
+KIT_IS_GIT=0
+git -C "$NEW/kit" rev-parse --git-dir >/dev/null 2>&1 && KIT_IS_GIT=1
+in_kit() {
+  git -C "$NEW/kit" cat-file -e "$1^{commit}" 2>/dev/null || return 1
+  [ -n "$(git -C "$NEW/kit" for-each-ref --count=1 --contains "$1" 2>/dev/null)" ] \
+    || git -C "$NEW/kit" merge-base --is-ancestor "$1" HEAD 2>/dev/null
+}
+HEAD_SHA=$(git -C "$OLD" rev-parse HEAD 2>/dev/null) || failmig "baseline: OLD has no HEAD commit"
 if [ -n "$BASELINE" ]; then
   BASE=$(git -C "$OLD" rev-parse --verify -q "$BASELINE^{commit}") || failmig "baseline: '$BASELINE' is not a commit in OLD"
   git -C "$OLD" merge-base --is-ancestor "$BASE" HEAD || failmig "baseline: $BASE is not an ancestor of OLD's HEAD"
   git -C "$OLD" cat-file -e "$BASE:charter.template.md" 2>/dev/null || failmig "baseline: $BASE is not a kit commit (no charter.template.md)"
-elif [ -n "$LOCAL_COMMITS" ]; then
-  CANDIDATE=$(git -C "$OLD" rev-parse --verify -q "$(printf '%s\n' "$LOCAL_COMMITS" | tail -1)^" || echo none)
-  failmig "baseline: OLD has $(printf '%s\n' "$LOCAL_COMMITS" | wc -l | tr -d ' ') local commit(s) on no remote branch, so the kit commit it was deployed from is unknown and committed project state could be missed — check it and pass --baseline <kit commit> (candidate: $CANDIDATE)"
+  if [ "$KIT_IS_GIT" = 1 ]; then
+    in_kit "$BASE" || failmig "baseline: $BASE is not in the history of NEW/kit, so it is not a kit commit (fetch all kit branches in NEW/kit if the deployment came from an unmerged kit branch)"
+  else
+    echo "WARN - baseline: NEW/kit is not a Git checkout; $BASE could not be verified as a kit commit"
+  fi
+elif [ "$KIT_IS_GIT" = 1 ] && in_kit "$HEAD_SHA"; then
+  BASE="$HEAD_SHA"
 else
-  BASE=$(git -C "$OLD" rev-parse HEAD) || failmig "baseline: OLD has no HEAD commit"
+  LOCAL_COUNT=0
+  CANDIDATE=none
+  if [ "$KIT_IS_GIT" = 1 ]; then
+    while IFS= read -r c; do
+      [ -n "$c" ] || continue
+      if in_kit "$c"; then CANDIDATE="$c"; break; fi
+      LOCAL_COUNT=$((LOCAL_COUNT+1))
+    done <<EOF_ANCESTORS
+$(git -C "$OLD" rev-list --first-parent --max-count=500 HEAD)
+EOF_ANCESTORS
+  fi
+  failmig "baseline: OLD's HEAD is not a kit commit ($LOCAL_COUNT local commit(s) ahead of the kit history in NEW/kit), so committed project state could be missed — check the kit commit the deployment was made from and pass --baseline <kit commit> (candidate: $CANDIDATE)"
 fi
 
 junk() { # environment and runtime artifacts that are rebuilt, not migrated
