@@ -110,8 +110,10 @@ must end in `.rw-staging` and must lie outside the instance, its kit and any
 `.claude` path:
 
 - the instance's regular files, without `kit/`, `.git`, environment directories,
-  local settings, dotenv files, retry stores and symlinks (each reported under
-  `skipped`);
+  local settings, dotenv files, `profiles/*.json` other than
+  `profiles/team-mode.json`, `*.bak`, retry stores and symlinks (each reported
+  under `skipped`). The skip list is fixed and does not read `.gitignore`: any
+  other sensitive local file in the instance root is copied;
 - `kit/` as a Git clone checked out at the commit in `kit.lock` (a kit with local
   changes or at another commit is refused), or a plain copy when the lock says
   `unversioned`;
