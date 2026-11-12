@@ -43,6 +43,9 @@ test('stage materializes the draft in a new isolated copy and never writes the i
   writeFileSync(join(f.root, '.claude/settings.local.json'), '{"fixture":"local"}\n');
   writeFileSync(join(f.root, '.e' + 'nv'), 'FIXTURE=1\n');
   symlinkSync(f.kit, join(f.root, 'link-out'));
+  writeFileSync(join(f.root, 'profiles/device-hosts.json'), '{"fixture":"local"}\n');
+  writeFileSync(join(f.root, 'profiles/project.md.bak'), 'fixture backup\n');
+  writeFileSync(join(f.root, 'profiles/team-mode.json'), '{"mode":"specialist"}\n');
   const during = snapshot(f.root), result = stageTeam(f.spec, f.draft, f.staging, f.roots);
   assert.equal(result.errors, undefined, JSON.stringify(result.errors));
   assert.equal(snapshot(f.root), during, 'the instance and its kit are byte-identical after staging');
@@ -54,7 +57,7 @@ test('stage materializes the draft in a new isolated copy and never writes the i
   assert.deepEqual(readdirSync(join(f.staging, '.claude/agents')).sort(),
     ['tag-list-fixture-worker-check.md', 'tag-list-fixture-worker-exec.md', 'tag-list-fixture-worker-guard.md']);
   assert.deepEqual(result.removedWrappers, ['.claude/agents/tag-list-fixture-frontend.md']);
-  for (const path of ['.claude/settings.local.json', '.e' + 'nv', 'link-out']) {
+  for (const path of ['.claude/settings.local.json', '.e' + 'nv', 'link-out', 'profiles/device-hosts.json', 'profiles/project.md.bak']) {
     assert.equal(existsSync(join(f.staging, path)), false, `${path} must not be copied`);
     assert.ok(result.skipped.includes(path), `${path} is reported as skipped`);
   }
