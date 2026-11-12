@@ -310,3 +310,105 @@ test('R-09: no render-tmp litter is left behind after a successful run', async (
     assert.ok(all.every(f => !f.includes('.render-tmp.')), `tmp litter: ${all.filter(f => f.includes('.render-tmp.'))}`)
   })
 })
+
+// ADR 0009: two-root bootstrap. The kit lives at <instance>/kit and is never written.
+const KIT_ONLY = {
+  'CLAUDE.instance.template.md': 'Instance primer. Say `start {{PROJECT_NAME | localized at bootstrap}}`.\n',
+  '.claude/workflows/run-n-rounds.js': '// engine {{PROJECT_NAME}}\n',
+}
+
+async function withInstance(fn) {
+  const root = await mkdtemp(join(tmpdir(), 'ai-team-instance-'))
+  try {
+    for (const [rel, content] of Object.entries({ ...SEEDS, ...KIT_ONLY })) {
+      const abs = join(root, 'kit', rel)
+      await mkdir(dirname(abs), { recursive: true })
+      await writeFile(abs, content)
+    }
+    return await fn(root)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+}
+
+async function snapshot(dir) {
+  const { stdout } = await exec('bash', ['-c', 'cd "$1" && find . -type f -exec shasum -a 256 {} + | sort', 'sh', dir])
+  return stdout
+}
+
+test('ADR 0009: two-root bootstrap writes the instance and leaves kit/ byte-identical', async () => {
+  await withInstance(async root => {
+    const before = await snapshot(join(root, 'kit'))
+    const out = await run(root, '--project-name', 'StockUp', '--product-repo', '/abs/product', '--ui')
+    assert.match(out, /RESULT: INSTANTIATED-PENDING-INTERVIEW/)
+    assert.doesNotMatch(out, /legacy single-root/)
+    assert.equal(await snapshot(join(root, 'kit')), before, 'bootstrap must not write under kit/')
+    for (const target of ['charter.md', 'profiles/project.md', 'profiles/stack.md', 'agents/roster.md',
+      'agents/_shared/verify-discipline.md', 'agents/_shared/browser-access.md']) {
+      assert.ok(await exists(join(root, target)), `${target} missing in the instance root`)
+    }
+    assert.match(await readFile(join(root, 'charter.md'), 'utf8'), /# StockUp - AI Team Charter/)
+    assert.match(await readFile(join(root, 'CLAUDE.md'), 'utf8'), /`start StockUp`/)
+    assert.equal(await readFile(join(root, '.claude/workflows/run-n-rounds.js'), 'utf8'), KIT_ONLY['.claude/workflows/run-n-rounds.js'],
+      'the engine is copied verbatim, never substituted')
+    assert.equal(await readFile(join(root, 'kit.lock'), 'utf8'), 'instance_schema=1\nkit_commit=unversioned\n')
+  })
+})
+
+test('ADR 0009: kit.lock records the kit commit when kit/ is its own Git repository', async () => {
+  await withInstance(async root => {
+    const git = (...args) => exec('git', ['-C', join(root, 'kit'), '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', ...args])
+    await git('init', '-q'); await git('add', '-A'); await git('commit', '-q', '-m', 'kit')
+    const { stdout } = await git('rev-parse', 'HEAD')
+    await run(root)
+    assert.equal(await readFile(join(root, 'kit.lock'), 'utf8'), `instance_schema=1\nkit_commit=${stdout.trim()}\n`)
+    const { stdout: status } = await git('status', '--porcelain')
+    assert.equal(status, '', 'kit work tree must stay clean')
+  })
+})
+
+test('ADR 0009: two-root bootstrap is idempotent and never overwrites instance edits', async () => {
+  await withInstance(async root => {
+    await run(root, '--project-name', 'X')
+    await writeFile(join(root, 'CLAUDE.md'), 'OWNER EDIT\n')
+    await writeFile(join(root, 'kit.lock'), 'instance_schema=1\nkit_commit=pinned-by-owner\n')
+    const out = await run(root, '--project-name', 'Y')
+    assert.match(out, /SKIP - CLAUDE\.md: already instantiated/)
+    assert.equal(await readFile(join(root, 'CLAUDE.md'), 'utf8'), 'OWNER EDIT\n')
+    assert.equal(await readFile(join(root, 'kit.lock'), 'utf8'), 'instance_schema=1\nkit_commit=pinned-by-owner\n')
+    assert.match(await readFile(join(root, 'charter.md'), 'utf8'), /# X - AI Team Charter/)
+  })
+})
+
+test('ADR 0009: --kit must be <instance>/kit; any other location fails before writing', async () => {
+  await withInstance(async root => {
+    const elsewhere = await mkdtemp(join(tmpdir(), 'ai-team-elsewhere-'))
+    try {
+      await assert.rejects(exec('bash', [SCRIPT, '--kit', join(root, 'kit'), elsewhere]), e => {
+        assert.equal(e.code, 1); assert.match(e.stdout, /RESULT: BOOTSTRAP-FAILED/); return true
+      })
+      assert.ok(!(await exists(join(elsewhere, 'charter.md'))))
+      await assert.rejects(exec('bash', [SCRIPT, '--kit', join(root, 'missing'), root]), e => {
+        assert.match(e.stdout, /RESULT: BOOTSTRAP-FAILED/); return true
+      })
+    } finally { await rm(elsewhere, { recursive: true, force: true }) }
+  })
+})
+
+test('ADR 0009: --dry-run in two-root mode writes nothing', async () => {
+  await withInstance(async root => {
+    const out = await run(root, '--dry-run')
+    assert.match(out, /PLAN - CLAUDE\.md: would instantiate from kit\/CLAUDE\.instance\.template\.md/)
+    assert.match(out, /RESULT: DRY-RUN/)
+    for (const target of ['charter.md', 'CLAUDE.md', 'kit.lock', '.claude']) assert.ok(!(await exists(join(root, target))))
+  })
+})
+
+test('ADR 0009: single-root bootstrap still works and is reported as legacy', async () => {
+  await withKit(async root => {
+    const out = await run(root, '--project-name', 'StockUp')
+    assert.match(out, /WARN - layout: legacy single-root/)
+    assert.match(out, /RESULT: INSTANTIATED-PENDING-INTERVIEW/)
+    assert.ok(!(await exists(join(root, 'kit.lock'))))
+  })
+})

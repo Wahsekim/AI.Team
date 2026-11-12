@@ -5,7 +5,13 @@
 # docs/bootstrap-*.md afterwards.
 #
 # Usage: scripts/bootstrap-team.sh [--project-name NAME] [--product-repo PATH]
-#                                  [--ui] [--dry-run] [ROOT]   (default ROOT: .)
+#                                  [--kit DIR] [--ui] [--dry-run] [ROOT]   (default ROOT: .)
+#
+# Layouts (decisions/0009-kit-instance-separation.md):
+#  - two-root: ROOT is a project instance root and ROOT/kit is the kit checkout
+#    (auto-detected, or --kit ROOT/kit). Seeds are read from kit/ and every
+#    write lands in ROOT; nothing under kit/ is written.
+#  - legacy single-root: ROOT is the kit checkout itself (WARN).
 #
 # Guarantees (reassessment N-07 — machine-readable failure semantics):
 #  - copies each .template.md seed to its operational name ONLY if missing —
@@ -33,16 +39,18 @@ trap 'rm -f "${TMP:-}" 2>/dev/null' EXIT
 
 PROJECT_NAME=""
 PRODUCT_REPO=""
+KIT_ARG=""
 UI=0
 DRY=0
 ROOT="."
 while [ $# -gt 0 ]; do
   case "$1" in
-    --project-name|--product-repo)
+    --project-name|--product-repo|--kit)
       [ $# -ge 2 ] || failboot "args: $1 requires a value"
       case "$1" in
         --project-name) PROJECT_NAME="$2" ;;
         --product-repo) PRODUCT_REPO="$2" ;;
+        --kit) KIT_ARG="$2" ;;
       esac
       shift 2 ;;
     --ui) UI=1; shift ;;
@@ -53,6 +61,20 @@ while [ $# -gt 0 ]; do
 done
 
 [ -d "$ROOT" ] || failboot "root: '$ROOT' is not a directory"
+ROOT_REAL="$(cd "$ROOT" && pwd -P)"
+[ -z "$KIT_ARG" ] && [ -f "$ROOT/kit/charter.template.md" ] && KIT_ARG="$ROOT/kit"
+if [ -n "$KIT_ARG" ]; then
+  [ -d "$KIT_ARG" ] || failboot "kit: '$KIT_ARG' is not a directory"
+  # A symlinked or external kit would break the relative kit/ paths wrappers read.
+  [ "$(cd "$KIT_ARG" && pwd -P)" = "$ROOT_REAL/kit" ] \
+    || failboot "kit: '$KIT_ARG' must be the real directory <instance root>/kit (ADR 0009)"
+  SEEDS="$ROOT/kit"
+  SEED_LABEL="kit/"
+else
+  SEEDS="$ROOT"
+  SEED_LABEL=""
+  echo "WARN - layout: legacy single-root — bootstrap writes into the kit checkout; deploy into an instance root with kit/ instead (ADR 0009)"
+fi
 if [ -n "$PROJECT_NAME$PRODUCT_REPO" ] && ! command -v perl >/dev/null 2>&1; then
   failboot "deps: perl is required for --project-name/--product-repo substitutions"
 fi
@@ -121,13 +143,16 @@ profiles/stack.template.md:profiles/stack.md
 agents/roster.template.md:agents/roster.md
 agents/_shared/verify-discipline.template.md:agents/_shared/verify-discipline.md
 "
+[ -n "$SEED_LABEL" ] && MANDATORY_PAIRS="$MANDATORY_PAIRS
+CLAUDE.instance.template.md:CLAUDE.md
+"
 OPTIONAL_PAIRS=""
 [ "$UI" = 1 ] && OPTIONAL_PAIRS="agents/_shared/browser-access.template.md:agents/_shared/browser-access.md"
 
 for pair in $MANDATORY_PAIRS; do
   seed="${pair%%:*}"
   target="${pair##*:}"
-  [ -f "$ROOT/$seed" ] || [ -f "$ROOT/$target" ] || failboot "seed: mandatory seed $seed missing and $target not instantiated — broken kit checkout"
+  [ -f "$SEEDS/$seed" ] || [ -f "$ROOT/$target" ] || failboot "seed: mandatory seed ${SEED_LABEL}$seed missing and $target not instantiated — broken kit checkout"
 done
 
 CREATED=""
@@ -146,9 +171,9 @@ substitute() { # substitute <file> — fill flag-provided placeholders in place
 for pair in $MANDATORY_PAIRS $OPTIONAL_PAIRS; do
   seed="${pair%%:*}"
   target="${pair##*:}"
-  if [ ! -f "$ROOT/$seed" ]; then
+  if [ ! -f "$SEEDS/$seed" ]; then
     # Mandatory seeds were pre-checked; only optional seeds can land here.
-    echo "SKIP - $target: seed $seed not found (optional)"
+    echo "SKIP - $target: seed ${SEED_LABEL}$seed not found (optional)"
     continue
   fi
   if [ -f "$ROOT/$target" ]; then
@@ -156,19 +181,52 @@ for pair in $MANDATORY_PAIRS $OPTIONAL_PAIRS; do
     continue
   fi
   if [ "$DRY" = 1 ]; then
-    echo "PLAN - $target: would instantiate from $seed"
+    echo "PLAN - $target: would instantiate from ${SEED_LABEL}$seed"
     continue
   fi
   # Atomic render (R-09): copy + substitute into a same-directory temp file,
   # then rename — an interrupt mid-substitution never leaves a half-rendered
   # target that a retry would then skip via never-overwrite.
+  mkdir -p "$(dirname "$ROOT/$target")" || failboot "mkdir: directory for $target failed"
   TMP="$ROOT/${target}.render-tmp.$$"
-  cp "$ROOT/$seed" "$TMP" || { rm -f "$TMP"; failboot "copy: $seed -> $target failed"; }
+  cp "$SEEDS/$seed" "$TMP" || { rm -f "$TMP"; failboot "copy: $seed -> $target failed"; }
   substitute "$TMP"
   mv "$TMP" "$ROOT/$target" || { rm -f "$TMP"; failboot "rename: $target failed"; }
   CREATED="$CREATED $target"
-  echo "DONE - $target: instantiated from $seed"
+  echo "DONE - $target: instantiated from ${SEED_LABEL}$seed"
 done
+
+# Two-root only: verbatim engine copy (the runtime loads workflows from the
+# session directory) and the kit pin. Both are created once, never overwritten.
+if [ -n "$SEED_LABEL" ]; then
+  ENGINE=".claude/workflows/run-n-rounds.js"
+  if [ -f "$ROOT/$ENGINE" ]; then
+    echo "SKIP - $ENGINE: already present (never overwritten)"
+  elif [ ! -f "$SEEDS/$ENGINE" ]; then
+    failboot "seed: kit/$ENGINE missing — broken kit checkout"
+  elif [ "$DRY" = 1 ]; then
+    echo "PLAN - $ENGINE: would copy from kit/$ENGINE"
+  else
+    mkdir -p "$ROOT/.claude/workflows" || failboot "mkdir: .claude/workflows failed"
+    cp "$SEEDS/$ENGINE" "$ROOT/$ENGINE" || failboot "copy: kit/$ENGINE failed"
+    echo "DONE - $ENGINE: copied from kit/$ENGINE"
+  fi
+  if [ -f "$ROOT/kit.lock" ]; then
+    echo "SKIP - kit.lock: already present (never overwritten)"
+  elif [ "$DRY" = 1 ]; then
+    echo "PLAN - kit.lock: would record the kit commit"
+  else
+    KIT_COMMIT="unversioned"
+    # Only a repository rooted AT kit/ counts; an enclosing repository is not the kit's.
+    if KIT_TOP=$(git -C "$SEEDS" rev-parse --show-toplevel 2>/dev/null) \
+      && [ "$(cd "$KIT_TOP" && pwd -P)" = "$ROOT_REAL/kit" ]; then
+      KIT_COMMIT=$(git -C "$SEEDS" rev-parse HEAD 2>/dev/null) || KIT_COMMIT="unversioned"
+    fi
+    printf 'instance_schema=1\nkit_commit=%s\n' "$KIT_COMMIT" > "$ROOT/kit.lock" \
+      || failboot "write: kit.lock failed"
+    echo "DONE - kit.lock: kit_commit=$KIT_COMMIT"
+  fi
+fi
 
 # Documented CLAUDE.md localization: replace the start-phrase PROJECT_NAME
 # token only (idempotent — second run finds no token to replace).
