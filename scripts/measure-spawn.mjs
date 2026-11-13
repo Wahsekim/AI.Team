@@ -29,6 +29,8 @@
 // unpriced (null), never $0. A subagent whose meta.json says finished:false
 // or that has no assistant entries gets a WARN on stderr (partial total);
 // a missing flag (older runtime, or still running) gets one summary WARN.
+// Workflow agents have no flag in meta.json: theirs is read from the run's
+// journal.jsonl (a `result` entry = finished, `started` only = not finished).
 
 import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
@@ -126,6 +128,24 @@ function launchIndex(mainEntries) {
   return byAgent
 }
 
+// A workflow agent's meta.json carries no `finished`; the run's journal.jsonl
+// records `started` and, once the agent has returned, `result` per agentId.
+const journals = new Map()
+function journalFinished(file, agentId) {
+  const path = join(dirname(file), 'journal.jsonl')
+  if (!journals.has(path)) {
+    const state = new Map()
+    if (existsSync(path)) for (const line of readFileSync(path, 'utf8').split('\n')) {
+      let entry
+      try { entry = JSON.parse(line) } catch { continue }
+      if (entry?.type === 'result' && typeof entry.agentId === 'string') state.set(entry.agentId, true)
+      else if (entry?.type === 'started' && typeof entry.agentId === 'string' && !state.has(entry.agentId)) state.set(entry.agentId, false)
+    }
+    journals.set(path, state)
+  }
+  return journals.get(path).get(agentId) ?? null
+}
+
 function* walkAgentFiles(dir, workflowRunId = null) {
   for (const name of readdirSync(dir).sort()) {
     const p = join(dir, name)
@@ -184,7 +204,7 @@ function measure(opts) {
       agentType: meta.agentType ?? null,
       description: meta.description ?? launch.description ?? null,
       toolUseId: meta.toolUseId ?? null,
-      finished: meta.finished === true ? true : (meta.finished === false ? false : null),
+      finished: meta.finished === true ? true : meta.finished === false ? false : workflowRunId ? journalFinished(file, agentId) : null,
       model: sums.models.length === 1 ? sums.models[0] : (launch.resolvedModel ?? (sums.models.join('+') || null)),
       launchStatus: launch.status ?? null,
       file,
