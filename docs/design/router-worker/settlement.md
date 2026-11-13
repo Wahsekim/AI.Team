@@ -47,11 +47,18 @@ E-01 smoke run (2026-11-13) this settles the execution and check calls
 `callRef` is the call reference the retry journal recorded at `start`.
 
 - **One call, one meter row.** A call is bound to the first `agentId` that pays
-  it; a second row for the same call, or one row for two calls, is
-  `IDEMPOTENCY_CONFLICT`.
+  it; a second row for the same call is `IDEMPOTENCY_CONFLICT`.
 - **Cumulative reads.** A transcript only grows, so a later read of the same
   call replaces the earlier one and only the difference is added. A read with
   fewer tokens or fewer messages is `USAGE_REGRESSION`.
+- **Several calls on one transcript.** A retry resumes its session, so its call
+  grows the transcript of the call before it. The later call is charged the
+  cumulative read minus what the earlier calls on that transcript used. This
+  needs a boundary: the earlier call must have a finished read, otherwise the
+  later call is refused (`IDEMPOTENCY_CONFLICT`). Once a later call exists, the
+  earlier call is closed and takes no further reads (`USAGE_REGRESSION`).
+  Calls of different duties on one transcript make the gate `unknown`
+  (`meter-shared-across-duties`): execution and check must not share a session.
 - **Duplicate delivery.** The same event ID with the same content is a no-op
   (`applied: false`); with different content it is `IDEMPOTENCY_CONFLICT`. The
   same measurement under another event ID adds nothing.
@@ -84,6 +91,7 @@ assignment, duty, attempt, tokens and status, and reports:
 | `partial-usage` | unknown | a call has only reads of an unfinished agent |
 | `unsettled-call` | unknown | the journal started a call the ledger has no entry for |
 | `unattributed-usage` | unknown | the ledger holds usage for a call the journal never started |
+| `meter-shared-across-duties` | unknown | one transcript paid calls of two duties |
 
 The `budget` gate is one of nine admission gates. A `clear` here does not clear
 a stop or any other gate.
@@ -122,6 +130,12 @@ In the E-01 smoke run the Guardian measured 17,488 and the two ticket calls
 are in neither figure.
 
 ## Not covered
+
+- `resume-transcript-identity`: whether the runtime keeps one transcript and one
+  agent ID when a session is resumed has not been observed; the E-01 smoke run
+  had no retry. If a resumed call gets a transcript of its own, it settles as an
+  ordinary separate call. What marks the first call as finished before the
+  resume is also unobserved.
 
 - `meter-read-authenticity` and `call-to-transcript-binding`: the ledger trusts
   that the row passed in belongs to the call named. Binding a runtime agent ID

@@ -44,14 +44,19 @@ function transition(calls, event) {
     if (!call) next.push({ callRef: event.callRef, agentId: null, tokens: null, uniqueMessages: null, status: 'unknown' });
     return next;
   }
-  expect(!next.some(other => other.agentId === event.agentId && !same(other.callRef, event.callRef)),
-    'This meter row already pays another call', 'IDEMPOTENCY_CONFLICT');
   expect(!call?.agentId || call.agentId === event.agentId, 'This call is already bound to another meter row', 'IDEMPOTENCY_CONFLICT');
-  // Meter reads are cumulative for one transcript: a later read replaces the earlier one.
-  expect(!call?.agentId || event.harnessTokens >= call.tokens && event.uniqueMessages >= call.uniqueMessages,
-    'A later read of one call cannot report fewer tokens or messages', 'USAGE_REGRESSION');
-  const settled = { callRef: event.callRef, agentId: event.agentId, tokens: event.harnessTokens, uniqueMessages: event.uniqueMessages,
-    status: event.finished === true || call?.status === 'settled' ? 'settled' : 'partial' };
+  // One transcript can carry several calls in sequence (a retry resumes its session). Reads are cumulative for the
+  // transcript, so a call owns the read minus what the calls before it on that transcript used.
+  const others = next.filter(other => other.agentId === event.agentId && other !== call), bound = Boolean(call?.agentId);
+  expect(!bound || others.every(other => other.order < call.order), 'A later call on the same transcript closed this call', 'USAGE_REGRESSION');
+  expect(bound || others.every(other => other.status === 'settled'),
+    'An earlier call on this transcript has no finished read, so the boundary between the calls is unknown', 'IDEMPOTENCY_CONFLICT');
+  const baseTokens = bound ? call.baseTokens : others.reduce((total, other) => total + other.tokens, 0);
+  const floorMessages = bound ? call.uniqueMessages : Math.max(0, ...others.map(other => other.uniqueMessages));
+  expect(event.harnessTokens >= baseTokens + (bound ? call.tokens : 0) && event.uniqueMessages >= floorMessages,
+    'A later read of one transcript cannot report fewer tokens or messages', 'USAGE_REGRESSION');
+  const settled = { callRef: event.callRef, agentId: event.agentId, tokens: event.harnessTokens - baseTokens, uniqueMessages: event.uniqueMessages,
+    status: event.finished === true || call?.status === 'settled' ? 'settled' : 'partial', baseTokens, order: bound ? call.order : others.length };
   if (call) next[index] = settled; else next.push(settled);
   return next;
 }
@@ -119,6 +124,10 @@ export function settleAgainstJournal({ ledger, retryJournal, rules, nextEstimate
   const unknown = [['unknown', 'unknown-usage'], ['partial', 'partial-usage'], ['unsettled', 'unsettled-call']]
     .filter(([status]) => calls.some(call => call.status === status) || state.calls.some(call => call.status === status)).map(([, reason]) => reason);
   if (unattributedCalls) unknown.push('unattributed-usage');
+  // Exec and check must run in separate sessions: one transcript paying calls of two duties is not independent verification.
+  const dutyOf = entry => started.find(assignment => same(assignment.callRef, entry.callRef))?.duty;
+  if (state.calls.some(entry => entry.agentId && state.calls.some(other => other.agentId === entry.agentId && dutyOf(other) && dutyOf(entry) && dutyOf(other) !== dutyOf(entry))))
+    unknown.push('meter-shared-across-duties');
   const body = { schemaVersion: 1, stage: 'offline-settlement', launchable: false, ticketId: state.ticketId, unit: UNIT,
     authorizedTokens: state.authorizedTokens, spentTokens: state.spentTokens, remainingTokens,
     overrunTokens: Math.max(0, state.spentTokens - state.authorizedTokens),
