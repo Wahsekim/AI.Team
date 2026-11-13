@@ -7,6 +7,9 @@
 set -e
 umask 077
 
+# Diagnostic only: WATCHDOG_TRACE=<prefix> writes this hook's command trace to <prefix>.<pid>.
+if [ -n "${WATCHDOG_TRACE:-}" ]; then exec 2>>"${WATCHDOG_TRACE}.$$"; PS4='+ $$ ${SECONDS} '; set -x; fi
+
 HB_DIR="$HOME/.claude/heartbeats"
 mkdir -p "$HB_DIR"
 
