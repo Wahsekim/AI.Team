@@ -7,10 +7,11 @@ import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { prepareLaunch, LAUNCH_FILE } from '../src/router-worker/launch.mjs';
+import { prepareLaunch, closeLaunch, LAUNCH_FILE, CLOSE_FILE } from '../src/router-worker/launch.mjs';
+import { runWorkflow, makeAgentImpl } from '../scripts/lib/workflow-harness.mjs';
 import { freezeRun } from '../src/router-worker/run-args.mjs';
 import { observeIsolation } from '../src/router-worker/isolation.mjs';
-import { acquireLease, readLease } from '../src/router-worker/lease.mjs';
+import { acquireLease, readLease, releaseLease } from '../src/router-worker/lease.mjs';
 import { digest } from '../src/loop/contracts.mjs';
 import { loadMethods, methodCatalog } from '../src/router-worker/methods.mjs';
 import { inputFixture } from './fixtures/router-worker/input.mjs';
@@ -41,6 +42,7 @@ function fixture(t, { status = 'activated-disposable-smoke' } = {}) {
   return { base, team, product, prepare, launchFile: join(team, LAUNCH_FILE), leased: () => readLease({ productRoot: product }).status };
 }
 const refusal = result => result.errors?.[0];
+const releaseLeaseOf = f => releaseLease({ productRoot: f.product, lease: f.launch.lease });
 
 test('prepare takes the lease, arms the boundary, observes the gate clear and writes one launch record', async t => {
   const f = fixture(t), result = await f.prepare();
@@ -117,4 +119,65 @@ test('CLI prepares from RUN.json, exits 2 on refusal and 1 on usage', t => {
   assert.match(JSON.parse(readFileSync(join(f.team, '.claude/settings.json'), 'utf8')).hooks.PreToolUse[0].hooks[0].command, /scripts\/hooks\/rw-write-boundary\.mjs"$/);
   assert.equal(run('prepare', file, '--team-root', f.team, '--product-root', f.product).status, 2);
   assert.equal(run('prepare', file).status, 1); assert.equal(run('launch', file, '--team-root', f.team, '--product-root', f.product).status, 1);
+});
+
+// A prepared copy and the return of the real engine for its arguments (mock agents, no model).
+async function ran(t) {
+  const f = fixture(t), launch = await f.prepare();
+  const { result } = await runWorkflow({ scriptPath: join(f.team, '.claude/workflows/run-n-rounds.js'), args: launch.args, agentImpl: makeAgentImpl({}) });
+  return { ...f, launch, result, close: (overrides = {}) => closeLaunch({ teamRoot: f.team, result, ...overrides }), closeFile: join(f.team, CLOSE_FILE) };
+}
+
+test('close accounts the engine return against the launch record, lists the product changes and releases the lease', async t => {
+  const f = await ran(t); write(f.product, 'src/tag-list/empty.ts', 'export const y = 2;\n'); writeFileSync(join(f.product, 'src/tag-list/view.ts'), 'changed\n');
+  const closed = f.close();
+  assert.equal(closed.errors, undefined, JSON.stringify(closed.errors));
+  assert.equal(closed.stage, 'launch-closed'); assert.equal(closed.status, 'clean', JSON.stringify(closed.findings));
+  assert.equal(closed.launchDigest, f.launch.digest); assert.equal(closed.account.status, 'accounted'); assert.deepEqual(closed.account.calls, { exec: 1, check: 1, guard: 1 });
+  assert.deepEqual(closed.changedPaths, ['src/tag-list/empty.ts', 'src/tag-list/view.ts']); assert.equal(closed.leaseReleased, true);
+  assert.equal(f.leased(), 'free');
+  const { digest: recorded, ...body } = closed;
+  assert.equal(recorded, digest(body)); assert.deepEqual(JSON.parse(readFileSync(f.closeFile, 'utf8')), closed);
+  assert.ok(closed.unresolved.includes('usage-settlement'));
+  assert.equal(refusal(f.close()).code, 'LAUNCH_REFUSED', 'a launch is closed once');
+});
+
+test('close reports what the run left that the gates do not allow, and still releases the lease', async t => {
+  const outside = await ran(t); write(outside.product, 'src/auth/session.ts', 'x\n'); write(outside.product, 'src/tag-list/ok.ts', 'x\n');
+  const closed = outside.close();
+  assert.equal(closed.status, 'review'); assert.deepEqual(closed.findings, [{ code: 'WRITE_OUTSIDE_BOUNDARY', paths: ['src/auth/session.ts'] }]);
+  assert.equal(outside.leased(), 'free');
+  const committed = await ran(t); write(committed.product, 'src/tag-list/ok.ts', 'x\n'); git(committed.product, 'add', '-A'); git(committed.product, 'commit', '-q', '-m', 'worker commit');
+  assert.ok(committed.close().findings.some(finding => finding.code === 'PRODUCT_HEAD_MOVED'));
+  const edited = await ran(t), file = join(edited.team, '.claude/rw-write-boundary.json');
+  writeFileSync(file, readFileSync(file, 'utf8').replace('src/tag-list/**', '**'));
+  assert.ok(edited.close().findings.some(finding => finding.code === 'BOUNDARY_CHANGED'));
+  const taken = await ran(t); releaseLeaseOf(taken); const other = join(taken.base, 'other.team'); mkdirSync(other);
+  const theirs = acquireLease({ teamRoot: other, productRoot: taken.product }).lease.digest, result = taken.close();
+  assert.ok(result.findings.some(finding => finding.code === 'LEASE_NOT_HELD_BY_THIS_LAUNCH')); assert.equal(result.leaseReleased, false);
+  assert.equal(readLease({ productRoot: taken.product }).lease.digest, theirs, 'another host\'s lease is left alone');
+});
+
+test('close refuses a return that is not the return of the prepared launch, and keeps the lease', async t => {
+  const f = await ran(t);
+  assert.equal(refusal(f.close({ result: { ...f.result, runId: 'another-run' } })).code, 'LAUNCH_REFUSED');
+  assert.equal(refusal(f.close({ result: null })).code, 'LAUNCH_REFUSED');
+  assert.equal(f.leased(), 'held'); assert.equal(existsSync(f.closeFile), false);
+  const record = JSON.parse(readFileSync(f.launchFile, 'utf8')); record.args.budgetCeilingTokens += 1;
+  writeFileSync(f.launchFile, JSON.stringify(record));
+  assert.match(refusal(f.close()).reason, /launch record/); assert.equal(f.leased(), 'held');
+  const never = fixture(t);
+  assert.equal(refusal(closeLaunch({ teamRoot: never.team, result: f.result })).code, 'LAUNCH_REFUSED');
+});
+
+test('CLI closes from RESULT.json; exit 0 clean, 2 review or refused, 1 usage', async t => {
+  const f = await ran(t), file = join(f.base, 'result.json'), run = (...argv) => spawnSync(process.execPath, [CLI, ...argv], { encoding: 'utf8' });
+  writeFileSync(file, JSON.stringify(f.result));
+  assert.equal(run('close', file).status, 1);
+  const ok = run('close', file, '--team-root', f.team);
+  assert.equal(ok.status, 0, ok.stderr); assert.equal(JSON.parse(ok.stdout).status, 'clean');
+  assert.equal(run('close', file, '--team-root', f.team).status, 2);
+  const review = await ran(t); write(review.product, 'stray.txt', 'x\n'); writeFileSync(file, JSON.stringify(review.result));
+  const flagged = run('close', file, '--team-root', review.team);
+  assert.equal(flagged.status, 2); assert.equal(JSON.parse(flagged.stdout).status, 'review');
 });
