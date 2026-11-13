@@ -275,6 +275,8 @@ plan item ([details](docs/design/router-worker/continuation.md)).
 ledger of measured usage instead of a declared value. Each real call is settled
 once from a `measure-spawn.mjs` row, later reads add only their difference,
 unmeasured or unfinished calls keep the gate `unknown`, and an overrun blocks it.
+A retry that resumes its session is charged the cumulative read minus what the
+earlier call on that transcript used.
 `settle-run-router-worker.mjs` adds the ticket settlements of one frozen run and
 the Guardian call, which belongs to no ticket, and compares the Guardian's usage
 with the estimate frozen in the run record

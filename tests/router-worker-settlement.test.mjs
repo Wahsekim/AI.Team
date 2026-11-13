@@ -67,7 +67,7 @@ test('duplicate close: a replayed event and a second read of the same call never
   throws(() => r.send(usage('exec', 12000), 'close-exec'), 'IDEMPOTENCY_CONFLICT');
   r.send(usage('exec', 11000), 'close-exec-again');
   assert.equal(r.state().spentTokens, 11000, 'the same measurement under another event id adds nothing');
-  throws(() => r.send(usage('check', 5000, { agentId: 'agent-exec' })), 'IDEMPOTENCY_CONFLICT');
+  throws(() => r.send(usage('check', 5000, { agentId: 'agent-exec' })), 'USAGE_REGRESSION', 'a second call on one transcript cannot read below what the first already used');
   throws(() => r.send(usage('exec', 11000, { agentId: 'agent-other' })), 'IDEMPOTENCY_CONFLICT');
   assert.equal(r.state().spentTokens, 11000, 'one meter row pays one call and one call has one meter row');
 });
@@ -158,4 +158,39 @@ test('a measure-spawn row becomes a usage event in harness units; the CLI settle
   writeFileSync(file, '{broken');
   assert.equal(run(file).status, 2);
   assert.equal(run().status, 1);
+});
+
+// exec-2 is a continuation of exec-1 on the same session: both calls grow one transcript.
+const repair = [
+  { type: 'prepare', assignmentId: 'exec-2', duty: 'exec', planRef: reference('exec-plan-2'), candidateRef: reference('candidate-1'), continuationOf: 'exec-1', resumeSessionRef: reference('exec-session'),
+    divergence: { previousPlanDigest: reference('exec-plan-1').digest, reason: 'Repair after the failed check', evidenceRef: reference('check-1-findings') }, admission: admission() },
+  { type: 'start', assignmentId: 'exec-2', sessionRef: reference('exec-session'), callRef: callRef('exec', 2), admission: admission() },
+];
+const second = (tokens, overrides = {}) => usage('exec', tokens, { callRef: callRef('exec', 2), uniqueMessages: 18, ...overrides });
+
+test('two calls on one transcript: the second call is charged the cumulative read minus what the first call used', () => {
+  const r = rig(40000).send(usage('exec', 11000)).send(usage('check', 5000)).send(second(19000, { finished: false })), partial = r.settle(journalAfterFirstRound(repair));
+  assert.deepEqual(partial.calls.map(c => [c.assignmentId, c.attempt, c.tokens, c.status]), [['exec-1', 1, 11000, 'settled'], ['check-1', 1, 5000, 'settled'], ['exec-2', 2, 8000, 'partial']]);
+  assert.equal(partial.spentTokens, 24000); assert.deepEqual(partial.reasons, ['partial-usage']);
+  const done = r.send(second(23000)).settle(journalAfterFirstRound(repair));
+  assert.deepEqual(done.calls.map(c => c.tokens), [11000, 5000, 12000], 'a later read of the second call replaces its earlier read');
+  assert.equal(done.spentTokens, 28000); assert.equal(done.budgetGate, 'clear');
+  r.send(second(23000), 'same-read-again');
+  assert.equal(r.state().spentTokens, 28000, 'the same cumulative read adds nothing');
+});
+
+test('one transcript cannot be split when the boundary is unknown or moves', () => {
+  const open = rig(40000).send(usage('exec', 11000, { finished: false }));
+  throws(() => open.send(second(19000)), 'IDEMPOTENCY_CONFLICT', 'the first call has no finished read, so no boundary exists');
+  const r = rig(40000).send(usage('exec', 11000)).send(second(19000));
+  throws(() => r.send(usage('exec', 12000)), 'USAGE_REGRESSION', 'a call that a later call on the same transcript follows is closed');
+  throws(() => r.send(second(18000)), 'USAGE_REGRESSION');
+  throws(() => rig(40000).send(usage('exec', 11000)).send(second(10999)), 'USAGE_REGRESSION', 'a cumulative read below the first call');
+  throws(() => rig(40000).send(usage('exec', 11000)).send(second(19000, { uniqueMessages: 9 })), 'USAGE_REGRESSION');
+});
+
+test('calls of different duties on one transcript make the gate unknown: check and exec sessions must be separate', () => {
+  const shared = rig(40000).send(usage('exec', 11000)).send(usage('check', 16000, { agentId: 'agent-exec' })).settle();
+  assert.equal(shared.budgetGate, 'unknown'); assert.deepEqual(shared.reasons, ['meter-shared-across-duties']);
+  assert.deepEqual(shared.calls.map(c => c.tokens), [11000, 5000]);
 });
