@@ -30,7 +30,7 @@ function armed(team, product) {
   const body = { schemaVersion: 1, productRoot: product, wrappers: Object.fromEntries(DUTIES.map(duty =>
     [`demo-worker-${duty}`, { duty, writePaths: duty === 'exec' ? ['src/**'] : [] }])) };
   write(team, '.claude/rw-write-boundary.json', JSON.stringify({ ...body, digest: digest(body) }));
-  write(team, '.claude/settings.json', JSON.stringify({ hooks: { PreToolUse: [{ matcher: 'Write|Edit|NotebookEdit|MultiEdit', hooks: [{ type: 'command', command: `node "${HOOK}"` }] }] } }));
+  write(team, '.claude/settings.json', JSON.stringify({ hooks: { PreToolUse: [{ matcher: 'Write|Edit|NotebookEdit|MultiEdit|Bash', hooks: [{ type: 'command', command: `node "${HOOK}"` }] }] } }));
 }
 
 // A team root with three clean wrappers and a separate, clean product repository.
@@ -166,7 +166,7 @@ test('a team root without an armed write boundary is blocked', t => {
   assert.ok(blocked(elsewhere), 'a boundary armed for another product root');
   const unhooked = fixture(t); writeFileSync(join(unhooked.team, '.claude/settings.json'), '{}');
   assert.ok(blocked(unhooked), 'the hook is not registered');
-  const gone = fixture(t); write(gone.team, '.claude/settings.json', JSON.stringify({ hooks: { PreToolUse: [{ matcher: 'Write|Edit|NotebookEdit|MultiEdit', hooks: [{ type: 'command', command: `node "${join(gone.base, 'missing.mjs')}"` }] }] } }));
+  const gone = fixture(t); write(gone.team, '.claude/settings.json', JSON.stringify({ hooks: { PreToolUse: [{ matcher: 'Write|Edit|NotebookEdit|MultiEdit|Bash', hooks: [{ type: 'command', command: `node "${join(gone.base, 'missing.mjs')}"` }] }] } }));
   assert.ok(blocked(gone), 'the registered hook file does not exist');
   const disabled = fixture(t); write(disabled.team, '.claude/settings.local.json', JSON.stringify({ disableAllHooks: true }));
   assert.ok(blocked(disabled), 'hooks are disabled in the team root');

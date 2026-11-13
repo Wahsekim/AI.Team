@@ -8,8 +8,10 @@ import { compile } from './compile.mjs';
 // call against that file. Bash writes are outside this boundary.
 export const BOUNDARY_FILE = '.claude/rw-write-boundary.json';
 const SETTINGS = '.claude/settings.json';
-const MATCHER = 'Write|Edit|NotebookEdit|MultiEdit';
-const WRITE_TOOLS = MATCHER.split('|');
+export const LOG_FILE = '.claude/rw-write-boundary.log.jsonl';
+const WRITE_TOOLS = ['Write', 'Edit', 'NotebookEdit', 'MultiEdit'];
+// Bash is matched so that its calls are logged; it is never judged.
+const MATCHER = [...WRITE_TOOLS, 'Bash'].join('|');
 const DUTIES = ['exec', 'check', 'guard'];
 const UNRESOLVED = ['hook-fires-inside-workflow-agents', 'bash-writes', 'deny-under-non-default-permission-modes'];
 
@@ -92,6 +94,12 @@ function realTarget(path) {
     pending.unshift(basename(current)); current = dirname(current);
   }
   return join(realpathSync(current), ...pending);
+}
+
+// One log line per hook call: who called which tool and what was decided. No path, no command.
+export function logEntry({ input, boundary, decision, at }) {
+  const tool = typeof input?.tool_name === 'string' ? input.tool_name : null, agentType = typeof input?.agent_type === 'string' ? input.agent_type : null;
+  return { at, tool, agentType, judged: WRITE_TOOLS.includes(tool) && agentType !== null && (!boundary || Object.hasOwn(boundary.wrappers, agentType)), decision };
 }
 
 // `boundary` is null when the file is missing, unreadable or edited.

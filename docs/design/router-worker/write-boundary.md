@@ -27,7 +27,7 @@ Only in an activated disposable copy (`profiles/team-mode.json` status
   the union of the tickets' `mandate.allowedWritePaths`; the check and Guardian
   wrappers get none. The file carries its own digest.
 - `.claude/settings.json`: one `PreToolUse` entry with matcher
-  `Write|Edit|NotebookEdit|MultiEdit` that runs
+  `Write|Edit|NotebookEdit|MultiEdit|Bash` that runs
   `kit/scripts/hooks/rw-write-boundary.mjs`. Existing settings are kept; arming
   twice adds one entry.
 
@@ -48,6 +48,25 @@ A target is resolved against the call's working directory. A path that does not
 exist yet is judged by its nearest existing ancestor after symlinks are
 resolved, so a link inside an allowed directory does not widen it. The reason
 names the wrapper and the product-relative path, never a host path.
+
+## The call log
+
+The hook appends one line per call to `.claude/rw-write-boundary.log.jsonl` in
+the activated copy: time, tool name, the agent name the runtime passed (or
+`null`), whether the call was judged against the boundary, and the decision. It
+holds no path and no command. Bash is matched only so that its calls are logged;
+a Bash call is never judged and never refused. A log that cannot be written does
+not change the decision.
+
+The log tells apart three ways a forbidden write can get through:
+
+| Log after the run | Reading |
+|---|---|
+| no lines at all | the hook did not load in that session |
+| lines for the write tools, all with agent name `null` | the hook ran but the runtime did not name the agent, so every call was treated as the main session |
+| a Bash line for the wrapper and no refused write | the write went through the shell, which the hook does not bound |
+
+`launch-router-worker.mjs close` puts the counts in the close record (`hookLog`).
 
 ## Limits
 

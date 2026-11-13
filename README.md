@@ -289,7 +289,9 @@ with the estimate frozen in the run record
 disposable copy: a `PreToolUse` hook refuses a file-tool write of a Router/Worker
 wrapper outside the product paths the run's tickets authorize, and any write of
 the check and Guardian wrappers. Writes through Bash are not covered, and the
-hook has not yet been observed in a live run
+hook has not yet been observed in a live run. Every hook call is logged (tool,
+agent name, decision; no path or command), so a write that got through can be
+explained afterwards
 ([details](docs/design/router-worker/write-boundary.md)).
 
 `launch-router-worker.mjs prepare` chains the steps that precede a run in one

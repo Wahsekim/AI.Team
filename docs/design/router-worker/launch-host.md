@@ -71,8 +71,11 @@ Otherwise close records what the run left and releases the lease:
 | `LEASE_NOT_HELD_BY_THIS_LAUNCH`, `LEASE_RELEASE_FAILED` | the lease was not released by this close; another host's lease is left alone |
 
 `<copy>/rw-close.json` carries `status` (`clean` or `review`), the `account`
-(calls and engine blockers), `productHead`, `changedPaths`, the findings and
-`leaseReleased`. `clean` says the run stayed inside its gates; it says nothing
+(calls and engine blockers), `productHead`, `changedPaths`, `hookLog` (counts
+from the [hook call log](write-boundary.md): calls, calls by the run's
+wrappers, their Bash calls, refusals, calls with no agent name), the findings
+and `leaseReleased`. `hookLog` is not a finding: a worker that only read files
+leaves no line. `clean` says the run stayed inside its gates; it says nothing
 about the quality of the work. Read `account.blockers` for the engine's verdict.
 
 `WRITE_OUTSIDE_BOUNDARY` is found after the fact and only inside the product
