@@ -12,6 +12,7 @@ import { freezeRun, accountRun } from '../src/router-worker/run-args.mjs';
 import { compile } from '../src/router-worker/compile.mjs';
 import { digest } from '../src/loop/contracts.mjs';
 import { runWorkflow, makeAgentImpl, makeBudget } from '../scripts/lib/workflow-harness.mjs';
+import { loadMethods, methodCatalog } from '../src/router-worker/methods.mjs';
 import { inputFixture } from './fixtures/router-worker/input.mjs';
 
 const ENGINE = fileURLToPath(new URL('../.claude/workflows/run-n-rounds.js', import.meta.url));
@@ -169,4 +170,44 @@ test('CLI writes nothing, prints arguments and record, exits 2 on refusal and 1 
   writeFileSync(file, JSON.stringify({ run: { ...RUN, rounds: 3 }, inputs: [inputFixture(), second()] }));
   assert.equal(run(file, '--team-root', team).status, 2);
   assert.equal(run(file).status, 1);
+});
+
+// Schema-v2 input selecting the pinned check method.
+function methodInput(bundle) {
+  const input = inputFixture();
+  input.schemaVersion = 2; input.catalog = methodCatalog(bundle);
+  input.policy = { ...input.policy, schemaVersion: 2, maxBriefChars: 20000, methodAllowlist: { exec: [], check: ['pstack-blast-radius'], guard: [] } };
+  input.proposal = { ...input.proposal, checkMethodIds: ['pstack-blast-radius'], checkSelectionReason: 'Review downstream effects' };
+  input.mandate.policyDigest = digest(input.policy);
+  return input;
+}
+const ONE = { ...RUN, rounds: 1, budgetCeilingTokens: 23400 };
+
+test('an input selecting an approved method freezes with the loader-verified bundle; only the check brief carries the method', async t => {
+  const team = fixture(t), bundle = loadMethods(), input = methodInput(bundle);
+  const frozen = await freezeRun({ inputs: [input], run: ONE, teamRoot: team, methodBundle: bundle });
+  assert.equal(frozen.errors, undefined, JSON.stringify(frozen.errors));
+  const preview = compile(input, { methodBundle: bundle });
+  assert.deepEqual(frozen.args.plan, [preview.enginePlanItem]);
+  assert.equal(frozen.record.items[0].previewDigest, preview.manifest.digest);
+  const withMethod = Object.entries(frozen.args.plan[0]).filter(([, value]) => typeof value === 'string' && value.includes('pstack-blast-radius')).map(([key]) => key);
+  assert.equal(withMethod.length, 1, `fields naming the method: ${withMethod}`);
+  assert.match(withMethod[0], /verif|check/i);
+});
+
+test('a method selection without a verified bundle, or with a serialized stand-in, emits no arguments', async t => {
+  const team = fixture(t), bundle = loadMethods(), input = methodInput(bundle);
+  for (const methodBundle of [undefined, {}, { catalog: methodCatalog(bundle) }]) {
+    const refused = await freezeRun({ inputs: [input], run: ONE, teamRoot: team, methodBundle });
+    assert.equal(refused.errors?.[0].code, 'METHOD_BUNDLE_REQUIRED', JSON.stringify(refused));
+    assert.equal(refused.args, undefined);
+  }
+});
+
+test('CLI loads the pinned bundle of its own kit for a method-bearing input', t => {
+  const team = fixture(t), file = join(team, 'run.json');
+  writeFileSync(file, JSON.stringify({ run: ONE, inputs: [methodInput(loadMethods())] }));
+  const out = spawnSync(process.execPath, [CLI, file, '--team-root', team], { encoding: 'utf8' });
+  assert.equal(out.status, 0, out.stderr);
+  assert.match(JSON.stringify(JSON.parse(out.stdout).args.plan[0]), /pstack-blast-radius/);
 });
