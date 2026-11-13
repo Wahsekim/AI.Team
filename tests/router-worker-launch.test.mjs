@@ -139,6 +139,7 @@ test('close accounts the engine return against the launch record, lists the prod
   const { digest: recorded, ...body } = closed;
   assert.equal(recorded, digest(body)); assert.deepEqual(JSON.parse(readFileSync(f.closeFile, 'utf8')), closed);
   assert.ok(closed.unresolved.includes('usage-settlement'));
+  assert.deepEqual(closed.hookLog, { calls: 0, wrapperCalls: 0, wrapperBashCalls: 0, denied: 0, callsWithoutAgentType: 0, unreadableLines: 0 }, 'no hook ran under the mock engine, and the record says so');
   assert.equal(refusal(f.close()).code, 'LAUNCH_REFUSED', 'a launch is closed once');
 });
 
@@ -156,6 +157,14 @@ test('close reports what the run left that the gates do not allow, and still rel
   const theirs = acquireLease({ teamRoot: other, productRoot: taken.product }).lease.digest, result = taken.close();
   assert.ok(result.findings.some(finding => finding.code === 'LEASE_NOT_HELD_BY_THIS_LAUNCH')); assert.equal(result.leaseReleased, false);
   assert.equal(readLease({ productRoot: taken.product }).lease.digest, theirs, 'another host\'s lease is left alone');
+});
+
+test('close summarizes the hook log of the run', async t => {
+  const f = await ran(t), line = entry => JSON.stringify({ at: '2026-11-13T10:00:00.000Z', judged: false, decision: 'allow', ...entry }) + '\n';
+  writeFileSync(join(f.team, '.claude/rw-write-boundary.log.jsonl'), line({ tool: 'Write', agentType: 'sample-worker-exec', judged: true })
+    + line({ tool: 'Write', agentType: 'sample-worker-exec', judged: true, decision: 'deny' }) + line({ tool: 'Bash', agentType: 'sample-worker-check' })
+    + line({ tool: 'Write', agentType: null }) + line({ tool: 'Write', agentType: 'sample-auditor' }) + '{torn');
+  assert.deepEqual(f.close().hookLog, { calls: 5, wrapperCalls: 3, wrapperBashCalls: 1, denied: 1, callsWithoutAgentType: 1, unreadableLines: 1 });
 });
 
 test('close refuses a return that is not the return of the prepared launch, and keeps the lease', async t => {

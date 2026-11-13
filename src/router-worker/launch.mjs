@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { digest } from '../loop/contracts.mjs';
 import { freezeRun, accountRun } from './run-args.mjs';
 import { acquireLease, releaseLease, readLease, git } from './lease.mjs';
-import { armBoundary, readBoundary, within } from './write-boundary.mjs';
+import { armBoundary, readBoundary, within, LOG_FILE } from './write-boundary.mjs';
 import { observeIsolation } from './isolation.mjs';
 
 // Launch host, before the run: the gates run in one fixed order and a launch
@@ -53,6 +53,18 @@ function changedPaths(product) {
   return paths.sort();
 }
 
+// What the write-boundary hook saw. Zero wrapper calls after a run that wrote means the hook
+// did not load or the runtime did not name the agent.
+function hookLog(teamRoot, wrappers) {
+  let text = '';
+  try { text = readFileSync(join(teamRoot, LOG_FILE), 'utf8'); } catch { /* the hook never ran */ }
+  const parsed = text.split('\n').filter(Boolean).map(line => { try { return JSON.parse(line); } catch { return null; } });
+  const calls = parsed.filter(Boolean), ofWrappers = calls.filter(call => wrappers.includes(call.agentType));
+  return { calls: calls.length, wrapperCalls: ofWrappers.length, wrapperBashCalls: ofWrappers.filter(call => call.tool === 'Bash').length,
+    denied: calls.filter(call => call.decision === 'deny').length, callsWithoutAgentType: calls.filter(call => call.agentType === null).length,
+    unreadableLines: parsed.length - calls.length };
+}
+
 // After the run. A return that is not the return of this launch is refused and the lease stays held;
 // otherwise the lease is released and what the run left is recorded, clean or not.
 export function closeLaunch({ teamRoot, result }) {
@@ -80,7 +92,7 @@ export function closeLaunch({ teamRoot, result }) {
   if (!leaseReleased) findings.push({ code: ours ? 'LEASE_RELEASE_FAILED' : 'LEASE_NOT_HELD_BY_THIS_LAUNCH' });
 
   const body = { schemaVersion: 1, stage: 'launch-closed', runId: launch.runId, launchDigest: launch.digest, status: findings.length ? 'review' : 'clean',
-    account, productHead: head, changedPaths: changed, findings, leaseReleased, unresolved: CLOSE_UNRESOLVED };
+    account, productHead: head, changedPaths: changed, hookLog: hookLog(teamRoot, launch.args.allowedAgentTypes), findings, leaseReleased, unresolved: CLOSE_UNRESOLVED };
   const record = { ...body, digest: digest(body) };
   try { writeFileSync(closePath, JSON.stringify(record, null, 2) + '\n', { flag: 'wx' }); }
   catch (error) { return refuse(`The close record could not be written: ${error.code ?? 'unknown error'}`); }

@@ -44,7 +44,7 @@ test('arming writes the boundary of the run and registers the hook in the activa
   const { digest: recorded, ...body } = boundary;
   assert.equal(recorded, digest(body)); assert.equal(result.boundaryDigest, recorded); assert.equal(result.launchable, false);
   const settings = JSON.parse(readFileSync(join(f.team, '.claude/settings.json'), 'utf8'));
-  assert.deepEqual(settings.hooks.PreToolUse, [{ matcher: 'Write|Edit|NotebookEdit|MultiEdit', hooks: [{ type: 'command', command: `node "${HOOK}"` }] }]);
+  assert.deepEqual(settings.hooks.PreToolUse, [{ matcher: 'Write|Edit|NotebookEdit|MultiEdit|Bash', hooks: [{ type: 'command', command: `node "${HOOK}"` }] }]);
   arm(f);
   assert.equal(JSON.parse(readFileSync(join(f.team, '.claude/settings.json'), 'utf8')).hooks.PreToolUse.length, 1, 'arming twice registers one hook');
   assert.ok(result.unresolved.includes('bash-writes'));
@@ -100,6 +100,27 @@ test('the hook process exits 0 to allow and 2 with a reason to deny; it fails cl
   assert.equal(runHook(f, call(f, undefined, 'Write', join(f.base, 'result.json'))).status, 0, 'the main session is still not blocked');
   rmSync(boundaryFile);
   assert.equal(runHook(f, call(f, 'sample-auditor', 'Write', join(f.team, 'audit.md'))).status, 2, 'no boundary: any subagent write is refused');
+});
+
+test('every hook call is logged without paths or commands, so a write that got through can be explained', t => {
+  const f = fixture(t); arm(f);
+  const secret = 'echo TOP-SECRET > /somewhere/else';
+  runHook(f, call(f, 'sample-worker-exec', 'Write', join(f.product, 'src/tag-list/view.ts')));
+  runHook(f, call(f, 'sample-worker-exec', 'Write', join(f.product, 'src/auth/session.ts')));
+  runHook(f, call(f, undefined, 'Write', join(f.base, 'result.json')));
+  assert.equal(runHook(f, { ...call(f, 'sample-worker-exec', 'Bash'), tool_input: { command: secret } }).status, 0, 'Bash is logged, never judged');
+  runHook(f, '{broken');
+  const text = readFileSync(join(f.team, '.claude/rw-write-boundary.log.jsonl'), 'utf8'), lines = text.trim().split('\n').map(line => JSON.parse(line));
+  assert.deepEqual(lines.map(({ at, ...rest }) => rest), [
+    { tool: 'Write', agentType: 'sample-worker-exec', judged: true, decision: 'allow' },
+    { tool: 'Write', agentType: 'sample-worker-exec', judged: true, decision: 'deny' },
+    { tool: 'Write', agentType: null, judged: false, decision: 'allow' },
+    { tool: 'Bash', agentType: 'sample-worker-exec', judged: false, decision: 'allow' },
+    { tool: null, agentType: null, judged: false, decision: 'deny' }]);
+  assert.ok(lines.every(line => !Number.isNaN(Date.parse(line.at))));
+  assert.ok(!text.includes('TOP-SECRET') && !text.includes(f.base), 'no command and no host path');
+  const nowhere = spawnSync(process.execPath, [HOOK], { input: JSON.stringify(call(f, undefined, 'Write', '/x')), encoding: 'utf8', env: { PATH: process.env.PATH, CLAUDE_PROJECT_DIR: join(f.base, 'missing') } });
+  assert.equal(nowhere.status, 0, 'a log that cannot be written does not change the verdict');
 });
 
 test('CLI arms from RUN.json, prints the record, exits 2 on refusal and 1 on usage', t => {
