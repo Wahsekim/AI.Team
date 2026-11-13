@@ -277,6 +277,14 @@ in lifecycle headers).
     `unknown` (it may have half-changed files). `progress:true` with zero
     `filesTouched` AND zero `decisionsCount` is evidence-free and demotes to
     `no_progress` (R7-02);
+    **Known limit:** the record's `progress` field is the worker's own
+    report, so a `blocked` worker that wrote a file returns `progress: true`
+    (E-02 smoke run, 2026-11-13: blocked, verification failed, `progress:
+    true`). Under `halt-on-failure` this has no effect: the iteration goes to
+    recovery and the loop stops. Under `continue`, repeated blocked iterations
+    would not look like no-progress iterations; read `workerStatus` and
+    `blocked`, not `progress`, when judging a pile-up. Owner decision
+    2026-11-13: the engine is not changed for this;
   - `ownershipViolation` (per record, EVERY ticket type): the worker reported
     writes to serial-PM/owner-only surfaces (charter, roster, lifecycle,
     pm-decisions, lessons, memory/, messages/, decisions/) — a verifier pass
