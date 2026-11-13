@@ -123,8 +123,8 @@ function transition(before, event, rules) {
       'Initial call cannot claim continuation or divergence');
     if (event.duty === 'check') {
       const author = state.assignments.filter(a => a.duty === 'exec' && a.status === 'closed').at(-1);
-      expect(author?.outcome === 'candidate' && same(author.candidateRef, event.candidateRef), 'Check must target the latest author candidate', 'CANDIDATE_MISMATCH');
-    } else if (previous?.outcome === 'candidate') {
+      expect((author?.outcome === 'candidate' || author?.returnedWork) && same(author.candidateRef, event.candidateRef), 'Check must target the latest author candidate', 'CANDIDATE_MISMATCH');
+    } else if (previous?.outcome === 'candidate' || previous?.returnedWork) {
       expect(lastCheck?.outcome === 'fail' && same(lastCheck.candidateRef, previous.candidateRef),
         'A completed author candidate requires independent check failure before automatic repair', 'CHECK_REQUIRED');
     }
@@ -161,12 +161,18 @@ function transition(before, event, rules) {
       'Close requires a bound started session; unresolved pre-start crashes need operator recovery');
     expect(assignment.duty === 'exec' ? event.outcome !== 'pass' : event.outcome !== 'candidate', 'Duty cannot self-accept');
     expect(assignment.duty === 'check' ? same(event.candidateRef, assignment.candidateRef)
-      : event.outcome === 'candidate' ? event.candidateRef !== null : event.candidateRef === null, 'Invalid close candidate', 'CANDIDATE_MISMATCH');
+      : event.outcome === 'candidate' ? event.candidateRef !== null : event.outcome === 'blocked' || event.candidateRef === null, 'Invalid close candidate', 'CANDIDATE_MISMATCH');
     assignment.status = 'closed'; assignment.outcome = event.outcome; assignment.receiptRef = event.receiptRef;
     if (assignment.duty === 'exec' && event.outcome === 'candidate') {
       assignment.candidateRef = event.candidateRef;
       if (state.assignments.some(a => a.duty === 'check' && a.outcome === 'fail')) state.pendingRepair = event.candidateRef;
     }
+    // An author may return work and report that the ticket cannot be completed inside its boundary.
+    // That work may be checked once; the same brief cannot converge, so the ticket then stops.
+    if (assignment.duty === 'exec' && event.outcome === 'blocked' && event.candidateRef !== null) {
+      assignment.candidateRef = event.candidateRef; assignment.returnedWork = true;
+    }
+    if (assignment.duty === 'check' && state.assignments.filter(a => a.duty === 'exec' && a.status === 'closed').at(-1)?.returnedWork) stop('scope-decision');
     if (assignment.duty === 'check' && same(state.pendingRepair, event.candidateRef)) {
       state.fixVerifyRoundTrips++; state.pendingRepair = null;
       if (state.fixVerifyRoundTrips >= rules.maxFixVerifyRoundTrips && event.outcome !== 'pass') stop('round-trip');

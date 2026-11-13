@@ -84,6 +84,15 @@ the previous plan digest, include an evidence ref and explanation, and use a new
 improvement; the host/PM must inspect the actual evidence and avoid cosmetic edits.
 
 Exec cannot close with `pass`; it produces a `candidate` or reports `fail`/`blocked`.
+A `blocked` author close may carry a candidate reference: the author returned
+work and reports that the ticket cannot be completed inside its boundary (E-02
+smoke run: the requested test was written, passing it needed a change outside
+the mandate). That work may be checked once, which matches the count engine,
+where the verifier still runs after a blocked worker. When that check closes,
+with any outcome, the ticket gets the sticky stop `scope-decision`: the same
+brief cannot converge, so there is no automatic repair and a passing check does
+not make it accepted work. Before the check, a further author call is refused
+(`CHECK_REQUIRED`). A `blocked` close without a candidate is unchanged.
 Check must identify the latest author's candidate in preparation and closure.
 A completed author candidate cannot be followed by an automatic repair until
 that candidate has an independent failed check. A blocked verifier requires

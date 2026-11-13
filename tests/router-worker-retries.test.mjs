@@ -250,3 +250,25 @@ test('rule source edits and symlinks require review instead of silently changing
   rmSync(path); symlinkSync(join(ROOT, 'charter.template.md'), path);
   assert.throws(() => loadRetryRules({ teamRoot: root }), /Symlink/);
 });
+
+test('an author that returns work and reports blocked: the work may be checked once, then the ticket stops for a scope decision', () => {
+  const r = rig();
+  run(r, 'exec', 1, 'blocked', { candidateRef: candidate(1) });
+  assert.equal(r.state().assignments.at(-1).outcome, 'blocked'); assert.deepEqual(r.state().stops, []);
+  throws(() => r.send(prepare('exec', 2)), 'CHECK_REQUIRED');
+  throws(() => r.send(prepare('check', 1, { candidateRef: candidate(0) })), 'CANDIDATE_MISMATCH');
+  run(r, 'check', 1, 'fail');
+  assert.deepEqual(r.state().stops, ['scope-decision'], 'the same brief cannot converge; no automatic repair');
+  throws(() => r.send(prepare('exec', 2)), 'RETRY_STOPPED');
+  const passed = rig(); run(passed, 'exec', 1, 'blocked', { candidateRef: candidate(1) }); run(passed, 'check', 1, 'pass');
+  assert.deepEqual(passed.state().stops, ['scope-decision'], 'a passing check does not turn a blocked author into accepted work');
+});
+
+test('blocked without returned work is unchanged: nothing to check, a repair may follow', () => {
+  const r = rig();
+  run(r, 'exec', 1, 'blocked');
+  throws(() => r.send(prepare('check', 1)), 'CANDIDATE_MISMATCH');
+  r.send(prepare('exec', 2)); assert.deepEqual(r.state().stops, []);
+  const checker = rig(); run(checker, 'exec', 1, 'candidate'); checker.send(prepare('check', 1)); checker.send(start('check', 1));
+  throws(() => checker.send(close('check', 1, 'blocked', { candidateRef: candidate(2) })), 'CANDIDATE_MISMATCH');
+});
