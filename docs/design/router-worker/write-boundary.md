@@ -69,4 +69,5 @@ names the wrapper and the product-relative path, never a host path.
   It reports `WRITE_BOUNDARY_NOT_ARMED` (blocked) when the boundary file is
   missing or changed, was armed for another product root, names other wrappers
   than the roster, when the hook is not registered or its file is missing, or
-  when `disableAllHooks` is set in the team root. Arm before observing the gate.
+  when `disableAllHooks` is set in the team root. Arm before observing the gate;
+  the [launch host](launch-host.md) does both in order.

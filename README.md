@@ -227,6 +227,7 @@ node kit/scripts/freeze-run-router-worker.mjs RUN.json --team-root TEAM_ROOT
 node kit/scripts/continue-router-worker.mjs REQUEST.json --instance .
 node kit/scripts/settle-router-worker.mjs REQUEST.json --instance .
 node kit/scripts/arm-boundary-router-worker.mjs RUN.json --team-root ACTIVE_COPY --product-root PRODUCT_ROOT
+node kit/scripts/launch-router-worker.mjs prepare RUN.json --team-root ACTIVE_COPY --product-root PRODUCT_ROOT
 node kit/scripts/settle-run-router-worker.mjs REQUEST.json
 node kit/scripts/stack-source-router-worker.mjs --root . INPUT.json
 node kit/scripts/activate-router-worker.mjs SPEC.json DRAFT.json /abs/NEW.rw-active --instance . --approval APPROVAL.json --approval-digest DIGEST
@@ -289,6 +290,13 @@ wrapper outside the product paths the run's tickets authorize, and any write of
 the check and Guardian wrappers. Writes through Bash are not covered, and the
 hook has not yet been observed in a live run
 ([details](docs/design/router-worker/write-boundary.md)).
+
+`launch-router-worker.mjs prepare` chains the steps that precede a run in one
+fixed order: freeze the run, take the product lease, arm the write boundary,
+observe the isolation gate, then write a single-use launch record with the engine
+arguments. Any refusal releases the lease it took. The steps after a run are not
+chained yet, and no call is admitted one by one during a run
+([details](docs/design/router-worker/launch-host.md)).
 
 `stack-source-router-worker.mjs` reads a project's verification commands from
 its own `profiles/stack.md` (the required code-shipping gates) and checks that a
