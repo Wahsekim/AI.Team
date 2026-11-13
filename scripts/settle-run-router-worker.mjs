@@ -6,12 +6,12 @@ import { settleRun } from '../src/router-worker/run-settlement.mjs';
 
 const argv = process.argv.slice(2);
 if (argv.length !== 1 || argv[0].startsWith('-')) {
-  console.error('usage: node scripts/settle-run-router-worker.mjs REQUEST.json   (REQUEST.json: {"record", "tickets", "guardian"})');
+  console.error('usage: node scripts/settle-run-router-worker.mjs REQUEST.json   (REQUEST.json: {"record", "account", "tickets", "guardian"})');
   process.exitCode = 1;
 } else {
   try {
     const request = JSON.parse(readFileSync(argv[0], 'utf8'));
-    const result = settleRun({ record: request.record, tickets: request.tickets, guardian: request.guardian });
+    const result = settleRun({ record: request.record, account: request.account, tickets: request.tickets, guardian: request.guardian });
     process.stdout.write(JSON.stringify(result, null, 2) + '\n');
     if (result.runGate !== 'clear') process.exitCode = 2;
   } catch (error) {

@@ -52,6 +52,7 @@ function ticket(id, { exec = 11000, check = 5000, checkFinished = true } = {}) {
   return settleAgainstJournal({ ledger, retryJournal: journal, rules });
 }
 const guardRow = (overrides = {}) => ({ agentId: 'g1', agentType: 'sample-worker-guard', finished: true, uniqueMessages: 3, harnessEq: 17000, ...overrides });
+const account = (exec = 2) => ({ status: 'accounted', findings: [], calls: { exec, check: exec, guard: 1 }, nextLifecycleNumberAfter: 5, blockers: [] });
 const code = fn => { try { fn(); } catch (error) { return error.code; } return null; };
 
 test('a frozen run records the Guardian estimate in the ledger unit; it is not an engine argument', async t => {
@@ -62,7 +63,7 @@ test('a frozen run records the Guardian estimate in the ledger unit; it is not a
 });
 
 test('ticket usage and the Guardian call add up to the run total; all settled and within estimate is clear', async t => {
-  const { record } = await frozenRecord(t), result = settleRun({ record, tickets: [ticket('US-08'), ticket('US-09', { exec: 12000 })], guardian: guardRow() });
+  const { record } = await frozenRecord(t), result = settleRun({ record, account: account(), tickets: [ticket('US-08'), ticket('US-09', { exec: 12000 })], guardian: guardRow() });
   assert.equal(result.runGate, 'clear'); assert.deepEqual(result.reasons, []);
   assert.deepEqual([result.ticketTokens, result.guardianTokens, result.totalTokens], [33000, 17000, 50000]);
   assert.equal(result.authorizedTokens, 48000); assert.equal(result.guardianEstimateTokens, 20000); assert.equal(result.unit, 'input+cache_creation');
@@ -74,7 +75,7 @@ test('ticket usage and the Guardian call add up to the run total; all settled an
 
 test('the run gate is unknown or blocked for the reason that applies, and names it', async t => {
   const { record } = await frozenRecord(t), both = () => [ticket('US-08'), ticket('US-09')];
-  const reasons = input => { const r = settleRun({ record, tickets: both(), guardian: guardRow(), ...input }); return [r.runGate, r.reasons]; };
+  const reasons = input => { const r = settleRun({ record, account: account(), tickets: both(), guardian: guardRow(), ...input }); return [r.runGate, r.reasons]; };
   assert.deepEqual(reasons({ guardian: null }), ['unknown', ['guardian-usage-missing']]);
   assert.deepEqual(reasons({ guardian: guardRow({ finished: null }) }), ['unknown', ['guardian-usage-partial']]);
   assert.deepEqual(reasons({ guardian: guardRow({ harnessEq: 20001 }) }), ['blocked', ['guardian-over-estimate']]);
@@ -85,20 +86,31 @@ test('the run gate is unknown or blocked for the reason that applies, and names 
 
 test('altered or foreign inputs are refused', async t => {
   const { record } = await frozenRecord(t), tickets = [ticket('US-08'), ticket('US-09')];
-  assert.equal(code(() => settleRun({ record: { ...record, guardian: { ...record.guardian, estimated: 90000 } }, tickets, guardian: guardRow() })), 'INVALID_RUN_SETTLEMENT');
-  assert.equal(code(() => settleRun({ record, tickets: [{ ...tickets[0], spentTokens: 1 }, tickets[1]], guardian: guardRow() })), 'INVALID_RUN_SETTLEMENT');
-  assert.equal(code(() => settleRun({ record, tickets: [...tickets, ticket('US-10')], guardian: guardRow() })), 'INVALID_RUN_SETTLEMENT', 'a ticket that is not in the run');
-  assert.equal(code(() => settleRun({ record, tickets: [tickets[0], tickets[0]], guardian: guardRow() })), 'INVALID_RUN_SETTLEMENT');
+  assert.equal(code(() => settleRun({ account: account(), record: { ...record, guardian: { ...record.guardian, estimated: 90000 } }, tickets, guardian: guardRow() })), 'INVALID_RUN_SETTLEMENT');
+  assert.equal(code(() => settleRun({ record, account: account(), tickets: [{ ...tickets[0], spentTokens: 1 }, tickets[1]], guardian: guardRow() })), 'INVALID_RUN_SETTLEMENT');
+  assert.equal(code(() => settleRun({ record, account: account(), tickets: [...tickets, ticket('US-10')], guardian: guardRow() })), 'INVALID_RUN_SETTLEMENT', 'a ticket that is not in the run');
+  assert.equal(code(() => settleRun({ record, account: account(), tickets: [tickets[0], tickets[0]], guardian: guardRow() })), 'INVALID_RUN_SETTLEMENT');
   assert.equal(code(() => settleRun({ record, tickets, guardian: { agentId: 'g1' } })), 'INVALID_RUN_SETTLEMENT');
 });
 
 test('CLI is read-only: exit 0 clear, 2 otherwise or invalid, 1 usage', async t => {
   const { record, team } = await frozenRecord(t), file = join(team, 'request.json'), run = (...argv) => spawnSync(process.execPath, [CLI, ...argv], { encoding: 'utf8' });
-  writeFileSync(file, JSON.stringify({ record, tickets: [ticket('US-08'), ticket('US-09')], guardian: guardRow() }));
+  writeFileSync(file, JSON.stringify({ record, account: account(), tickets: [ticket('US-08'), ticket('US-09')], guardian: guardRow() }));
   const ok = run(file);
   assert.equal(ok.status, 0, ok.stderr); assert.equal(JSON.parse(ok.stdout).totalTokens, 49000);
-  writeFileSync(file, JSON.stringify({ record, tickets: [ticket('US-08'), ticket('US-09')], guardian: null }));
+  writeFileSync(file, JSON.stringify({ record, account: account(), tickets: [ticket('US-08'), ticket('US-09')], guardian: null }));
   assert.equal(run(file).status, 2);
   writeFileSync(file, '{broken'); assert.equal(run(file).status, 2);
   assert.equal(run().status, 1);
+});
+
+test('a run that halted early settles only the tickets it dispatched', async t => {
+  const { record } = await frozenRecord(t), halted = settleRun({ record, account: account(1), tickets: [ticket('US-08')], guardian: guardRow() });
+  assert.equal(halted.runGate, 'clear', JSON.stringify(halted.reasons));
+  assert.deepEqual(halted.undispatchedTickets, ['US-09']); assert.equal(halted.totalTokens, 33000);
+  assert.deepEqual(settleRun({ record, account: account(1), tickets: [], guardian: guardRow() }).reasons, ['ticket-unsettled:US-08']);
+  assert.equal(code(() => settleRun({ record, account: account(1), tickets: [ticket('US-08'), ticket('US-09')], guardian: guardRow() })), 'INVALID_RUN_SETTLEMENT', 'usage for a ticket the run never dispatched');
+  assert.equal(code(() => settleRun({ record, account: { ...account(), status: 'unaccounted' }, tickets: [], guardian: guardRow() })), 'INVALID_RUN_SETTLEMENT', 'an unaccounted return cannot be settled');
+  assert.equal(code(() => settleRun({ record, account: account(3), tickets: [], guardian: guardRow() })), 'INVALID_RUN_SETTLEMENT');
+  assert.equal(code(() => settleRun({ record, tickets: [], guardian: guardRow() })), 'INVALID_RUN_SETTLEMENT', 'the call accounting is required');
 });
