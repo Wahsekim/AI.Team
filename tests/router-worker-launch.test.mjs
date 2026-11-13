@@ -162,6 +162,8 @@ test('close refuses a return that is not the return of the prepared launch, and 
   const f = await ran(t);
   assert.equal(refusal(f.close({ result: { ...f.result, runId: 'another-run' } })).code, 'LAUNCH_REFUSED');
   assert.equal(refusal(f.close({ result: null })).code, 'LAUNCH_REFUSED');
+  const loosened = f.close({ result: { ...f.result, budgetStatus: { ...f.result.budgetStatus, ceiling: f.result.budgetStatus.ceiling * 10 } } });
+  assert.match(refusal(loosened).reason, /RUN_IDENTITY_MISMATCH/, 'a launch with another ceiling than the frozen one');
   assert.equal(f.leased(), 'held'); assert.equal(existsSync(f.closeFile), false);
   const record = JSON.parse(readFileSync(f.launchFile, 'utf8')); record.args.budgetCeilingTokens += 1;
   writeFileSync(f.launchFile, JSON.stringify(record));

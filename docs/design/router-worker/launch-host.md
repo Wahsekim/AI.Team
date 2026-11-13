@@ -36,6 +36,16 @@ The record carries `runId`, both roots, `productHead`, the `lease` digest,
 engine `args` and a digest of itself. The main session starts the engine with
 exactly `args` from this record.
 
+## Order at launch
+
+Run `prepare` from a shell before the session that will launch the engine is
+started in the copy. The hook is registered by `prepare`, and Claude Code is
+documented to read hook configuration when a session starts; a session opened
+before `prepare` may run without the hook. This order has not been tested on
+this machine. Before launching, the owner checks in the new session that
+`/hooks` lists the `PreToolUse` write-boundary hook and that the arguments
+passed to the engine are the `args` of `rw-launch.json`.
+
 ## Close
 
 ```sh
@@ -48,7 +58,7 @@ node kit/scripts/launch-router-worker.mjs close RESULT.json --team-root <activat
 A return that does not match the launch record is refused (`LAUNCH_REFUSED`):
 nothing is written and the lease stays held, so the right file can be presented.
 The match is `accountRun` on the record's `args` and `runRecord`: same run id,
-count, mode and failure policy, every call in plan order. A changed launch
+count, mode, failure policy and ceiling, every call in plan order. A changed launch
 record, a copy with no record, and a second close are refused the same way.
 
 Otherwise close records what the run left and releases the lease:
@@ -90,6 +100,10 @@ The close record lists `usage-settlement` and `retry-journal`: metering,
 ticket settlement, run settlement and the retry journal are still run by hand
 after close.
 
-Nothing forces the main session to use the record's `args`. Close detects a
-different run id, count, plan order or agent type; the engine does not echo the
-briefs or the ceiling, so a change to those is not detected.
+Nothing forces the main session to use the record's `args`: the main session
+starts the engine, and the script cannot stand between them. Close detects a
+different run id, count, ceiling, plan order or agent type from what the engine
+echoes. The engine does not echo the briefs, so a launch with changed task
+text is not detected; that needs the agent transcripts, which the settlement
+step will read. Until then the owner compares the launched arguments with
+`rw-launch.json` at launch.
