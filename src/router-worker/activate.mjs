@@ -69,8 +69,9 @@ export function activateTeam(input, artifact, activePath, { teamRoot = ROOT, ins
     const approval = readApproval(approvalPath, expectedApprovalDigest, spec, draft);
 
     const staged = stageTeam(spec, draft, candidate, { teamRoot, instanceRoot });
-    if (lstatSync(candidate, { throwIfNoEntry: false })) staging = candidate;
+    // A failed stage removed whatever it created; a directory still at the path belongs to someone else.
     need(!staged.errors, 'ACTIVATION_REFUSED', `Staging failed: ${staged.errors?.[0].reason}`);
+    staging = candidate;
     need(staged.stage === 'staged-structurally-validated', 'ACTIVATION_REFUSED', `The staged copy is ${staged.stage}: ${staged.validator.failures.slice(0, 3).join(' | ')}`);
     need(staged.unstaffed.length === 0, 'ACTIVATION_REFUSED',
       `Enabled workflow duties are unstaffed: ${staged.unstaffed.map(entry => `${entry.workflow}/${entry.role}`).slice(0, 8).join(', ')}`);

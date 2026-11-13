@@ -51,6 +51,8 @@ copy carries accepted findings.
 
 1. Stages a fresh copy from the instance and the pinned kit (the same code as
    `team-mode.mjs stage`). An existing staging directory is not trusted or reused.
+   A refused activation removes only a staging copy it created itself; a
+   directory another attempt put at that path is left as it is.
 2. Refuses unless the copy passes the unmodified deployment validator, its read
    closure is complete and every enabled workflow duty is staffed.
 3. Replaces each inactive marker the draft wrote (wrappers, worker role files,
