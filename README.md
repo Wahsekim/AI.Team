@@ -289,7 +289,7 @@ with the estimate frozen in the run record
 disposable copy: a `PreToolUse` hook refuses a file-tool write of a Router/Worker
 wrapper outside the product paths the run's tickets authorize, and any write of
 the check and Guardian wrappers. Writes through Bash are not covered, and the
-hook has not yet been observed in a live run. Every hook call is logged (tool,
+hook was observed refusing such a write in one live smoke run. Every hook call is logged (tool,
 agent name, decision; no path or command), so a write that got through can be
 explained afterwards
 ([details](docs/design/router-worker/write-boundary.md)).
@@ -299,7 +299,8 @@ fixed order: freeze the run, take the product lease, arm the write boundary,
 observe the isolation gate, then write a single-use launch record with the engine
 arguments. Any refusal releases the lease it took. `close` matches the engine return to
 that record, reports product paths changed outside the write boundary (the only
-check that sees Bash writes, after the fact), and releases the lease. Usage
+check that sees Bash writes, after the fact; Git-ignored paths are counted,
+not judged), and releases the lease. Usage
 settlement is not chained yet, and no call is admitted one by one during a run
 ([details](docs/design/router-worker/launch-host.md)).
 

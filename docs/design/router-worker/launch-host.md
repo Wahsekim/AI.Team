@@ -65,7 +65,7 @@ Otherwise close records what the run left and releases the lease:
 
 | Finding | Meaning |
 |---|---|
-| `WRITE_OUTSIDE_BOUNDARY` (with the paths) | the work tree holds a changed, untracked or ignored path outside the armed write paths. This is the only check that sees writes made through Bash |
+| `WRITE_OUTSIDE_BOUNDARY` (with the paths) | the work tree holds a changed or untracked path outside the armed write paths. This is the only check that sees writes made through Bash |
 | `PRODUCT_HEAD_MOVED` | the product has a commit the run did not start from; workers do not commit |
 | `BOUNDARY_CHANGED` | the boundary file is missing or is not the one armed at prepare |
 | `LEASE_NOT_HELD_BY_THIS_LAUNCH`, `LEASE_RELEASE_FAILED` | the lease was not released by this close; another host's lease is left alone |
@@ -80,6 +80,14 @@ about the quality of the work. Read `account.blockers` for the engine's verdict.
 
 `WRITE_OUTSIDE_BOUNDARY` is found after the fact and only inside the product
 work tree. A write elsewhere on the machine is not seen.
+
+Git-ignored paths are not judged (owner decision 2026-11-13, after the third
+smoke run listed 65 build artifacts of the check wrapper's verification
+commands). The record carries `ignoredChanges`: their count and the count per
+top-level directory. They do not affect `status`. A write hidden in an ignored
+path therefore shows only as a count; the isolation gate refuses a product that
+already has ignored paths at prepare, so every counted path was created during
+the run.
 
 When the engine returns nothing (crash, interrupt), there is no return to
 close with. The operator releases the lease with `lease-router-worker.mjs
@@ -97,7 +105,7 @@ release` and deletes the copy.
   cap and input-side usage are only judged afterwards. Closing this needs an
   external process that drives the runtime, which the owner did not choose for
   owner-attended single-round runs.
-- `hook-fires-inside-workflow-agents`, `bash-writes`: see the write boundary.
+- `bash-writes`: see the write boundary.
 
 The close record lists `usage-settlement` and `retry-journal`: metering,
 ticket settlement, run settlement and the retry journal are still run by hand
