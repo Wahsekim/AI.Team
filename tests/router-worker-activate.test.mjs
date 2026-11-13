@@ -3,8 +3,9 @@
 // and draft; the instance and its kit are never written.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, realpathSync, cpSync, existsSync, readdirSync } from 'node:fs';
+import fs, { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, realpathSync, cpSync, existsSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -124,4 +125,21 @@ test('CLI activates, exits 2 on refusal and 1 on usage', t => {
   const ok = run(specFile, draftFile, f.active, '--instance', f.root, '--approval', f.approvalPath, '--approval-digest', f.expectedApprovalDigest);
   assert.equal(ok.status, 0, ok.stderr); assert.equal(JSON.parse(ok.stdout).stage, 'activated-disposable-smoke');
   assert.equal(spawnSync(process.execPath, [CLI, specFile], { encoding: 'utf8' }).status, 1);
+});
+
+test('a staging directory another attempt created after the precheck is left byte-identical', t => {
+  const f = fixture(t), staging = join(f.base, 'fixture.rw-staging'), mkdir = fs.mkdirSync;
+  let inserted = false;
+  fs.mkdirSync = function (path, options) {
+    if (!inserted && path === staging) { inserted = true; mkdir(path); writeFileSync(join(path, 'other-attempt.txt'), 'not ours\n'); }
+    return mkdir(path, options);
+  };
+  syncBuiltinESMExports();
+  let result;
+  try { result = f.activate(); } finally { fs.mkdirSync = mkdir; syncBuiltinESMExports(); }
+  assert.equal(inserted, true);
+  assert.equal(result.errors?.[0].code, 'ACTIVATION_REFUSED', JSON.stringify(result));
+  assert.deepEqual(readdirSync(staging), ['other-attempt.txt']);
+  assert.equal(readFileSync(join(staging, 'other-attempt.txt'), 'utf8'), 'not ours\n');
+  assert.equal(existsSync(f.active), false);
 });
