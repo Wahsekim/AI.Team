@@ -99,12 +99,17 @@ a stop or any other gate.
 ## Run settlement
 
 The Guardian call belongs to the run and to no ticket, so no ticket ledger holds
-it. `src/router-worker/run-settlement.mjs` `settleRun({record, tickets, guardian})`
-takes the frozen run record, the ticket settlements of that run and the
-Guardian's `measure-spawn` row (or `null`):
+it. `src/router-worker/run-settlement.mjs`
+`settleRun({record, account, tickets, guardian})` takes the frozen run record,
+the call accounting of the engine return (`accountRun`, status `accounted`), the
+ticket settlements and the Guardian's `measure-spawn` row (or `null`). The
+engine dispatches the plan in order and may halt early, so only the tickets the
+accounting shows as dispatched are expected to be settled; the rest are listed
+as `undispatchedTickets`. In the E-02 smoke run the first ticket failed, the
+second was never dispatched, and the run settles on the first alone:
 
 ```sh
-node kit/scripts/settle-run-router-worker.mjs REQUEST.json   # {"record", "tickets", "guardian"}
+node kit/scripts/settle-run-router-worker.mjs REQUEST.json   # {"record", "account", "tickets", "guardian"}
 ```
 
 Exit 0 means the run gate is `clear`; 2 means `blocked`, `unknown` or invalid; 1
@@ -115,13 +120,14 @@ ticket authorization and the Guardian estimate, all in `input+cache_creation`.
 |---|---|---|
 | `ticket-gate-blocked:<ticket>` | blocked | that ticket's budget gate is blocked |
 | `guardian-over-estimate` | blocked | the finished Guardian call measured above `record.guardian.estimated` |
-| `ticket-unsettled:<ticket>` | unknown | a ticket of the run has no settlement |
+| `ticket-unsettled:<ticket>` | unknown | a dispatched ticket has no settlement |
 | `ticket-gate-unknown:<ticket>` | unknown | that ticket's budget gate is unknown |
 | `guardian-usage-missing` | unknown | no Guardian row was supplied |
 | `guardian-usage-partial` | unknown | the Guardian row is not marked finished |
 
 A record or ticket settlement that does not match its own digest, a ticket that
-is not in the run, or a ticket given twice is refused
+was not dispatched, a ticket given twice, or a missing or unaccounted call
+accounting is refused
 (`INVALID_RUN_SETTLEMENT`). A blocked run gate is found after the run; it says
 the next run needs a new estimate or authorization, it stops nothing.
 
