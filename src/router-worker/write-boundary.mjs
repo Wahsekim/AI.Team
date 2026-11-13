@@ -13,7 +13,7 @@ const WRITE_TOOLS = ['Write', 'Edit', 'NotebookEdit', 'MultiEdit'];
 // Bash is matched so that its calls are logged; it is never judged.
 const MATCHER = [...WRITE_TOOLS, 'Bash'].join('|');
 const DUTIES = ['exec', 'check', 'guard'];
-const UNRESOLVED = ['hook-fires-inside-workflow-agents', 'bash-writes', 'deny-under-non-default-permission-modes'];
+const UNRESOLVED = ['bash-writes', 'deny-under-non-default-permission-modes'];
 
 class Refusal extends Error { constructor(code, reason) { super(reason); this.code = code; } }
 const need = (condition, reason) => { if (!condition) throw new Refusal('BOUNDARY_REFUSED', reason); };
