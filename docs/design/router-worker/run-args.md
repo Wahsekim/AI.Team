@@ -24,6 +24,7 @@ node kit/scripts/freeze-run-router-worker.mjs RUN.json --team-root <team-root>
 | `date`, `nextLifecycleNumber`, `runId` | ledger date, first lifecycle number, reconciliation key |
 | `budgetCeilingTokens` | the Q5 ceiling for this invocation, in **output tokens** (see Units) |
 | `estimatedOutputTokens` | expected output tokens of all execution and check calls of the run, same unit |
+| `guardianEstimateTokens` | expected usage of the Guardian call in `input+cache_creation`; recorded as `record.guardian`, not passed to the engine, compared by [run settlement](settlement.md#run-settlement) |
 | `launchManifestDigest` (optional) | digest from `preflight-run.mjs`, echoed by the engine |
 
 Exit 0 prints `{args, record}`; exit 2 is a refusal; exit 1 is usage.
@@ -72,7 +73,7 @@ Two units exist and are never compared or converted:
 | Figure | Unit | Meter |
 |---|---|---|
 | `record.budget` (ceiling, stop line, output estimate) | output tokens of the turn | the runtime's `budget.spent()`, which the engine's Q5 gate reads |
-| `record.tickets` (ticket estimates, authorizations) | `input+cache_creation` | `measure-spawn.mjs`, [settlement](settlement.md) |
+| `record.tickets` (ticket estimates, authorizations) and `record.guardian` (Guardian estimate) | `input+cache_creation` | `measure-spawn.mjs`, [settlement](settlement.md) |
 
 The E-01 smoke run (2026-11-13) froze a ceiling in the ticket unit. The engine
 counted 7,593 and 5,220 for calls that measured 59,717 and 29,511 in the ticket

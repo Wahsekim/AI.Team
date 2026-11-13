@@ -8,7 +8,7 @@ import { compile } from './compile.mjs';
 // from compiled previews and the roster, so count, Q5 ceiling, failure policy
 // and Guardian are frozen facts of the run and not values a caller may omit.
 const DUTIES = ['exec', 'check', 'guard'];
-const RUN_FIELDS = ['rounds', 'date', 'nextLifecycleNumber', 'runId', 'budgetCeilingTokens', 'estimatedOutputTokens'];
+const RUN_FIELDS = ['rounds', 'date', 'nextLifecycleNumber', 'runId', 'budgetCeilingTokens', 'estimatedOutputTokens', 'guardianEstimateTokens'];
 const ENGINE = '.claude/workflows/run-n-rounds.js';
 const ROSTER = 'agents/roster.md';
 const WRAPPER = /^\.claude\/agents\/([A-Za-z0-9._-]+)\.md$/;
@@ -35,7 +35,7 @@ function validateRun(run, count) {
     && Object.keys(run).every(key => RUN_FIELDS.includes(key) || key === 'launchManifestDigest')
     && RUN_FIELDS.every(key => key in run), 'INVALID_RUN',
   `run must carry exactly ${RUN_FIELDS.join(', ')} and optionally launchManifestDigest`);
-  need(positive(run.rounds) && positive(run.nextLifecycleNumber) && positive(run.budgetCeilingTokens) && positive(run.estimatedOutputTokens)
+  need(positive(run.rounds) && positive(run.nextLifecycleNumber) && positive(run.budgetCeilingTokens) && positive(run.estimatedOutputTokens) && positive(run.guardianEstimateTokens)
     && typeof run.date === 'string' && typeof run.runId === 'string', 'INVALID_RUN', 'run fields have the wrong type');
   need(run.rounds === count, 'COUNT_MISMATCH', `the owner count ${run.rounds} must equal the ${count} frozen ticket(s); re-freeze a shorter or longer board`);
 }
@@ -83,7 +83,9 @@ export async function freezeRun({ inputs, run, teamRoot, methodBundle }) {
       engineDigest: bytesDigest(engine), rosterDigest: bytesDigest(roster), policyDigest,
       items: frozen.map((input, i) => ({ ticket: tickets[i], inputDigest: digest(input), previewDigest: previews[i].manifest.digest })),
       budget: { unit: 'output', ceiling: run.budgetCeilingTokens, stopLine: Math.floor(run.budgetCeilingTokens * 4 / 5), estimatedOutput: run.estimatedOutputTokens },
-      tickets: { unit: 'input+cache_creation', estimated, authorized }, unresolved: UNRESOLVED };
+      tickets: { unit: 'input+cache_creation', estimated, authorized },
+      // The Guardian belongs to the run, not to a ticket; run settlement compares its measured usage with this.
+      guardian: { unit: 'input+cache_creation', estimated: run.guardianEstimateTokens }, unresolved: UNRESOLVED };
     return { args, record: { ...body, digest: digest(body) } };
   } catch (error) {
     if (error instanceof Refusal) return { errors: [{ code: error.code, field: 'run', reason: error.message }] };

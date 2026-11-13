@@ -226,6 +226,7 @@ node kit/scripts/lease-router-worker.mjs release --product-root PRODUCT_ROOT --l
 node kit/scripts/freeze-run-router-worker.mjs RUN.json --team-root TEAM_ROOT
 node kit/scripts/continue-router-worker.mjs REQUEST.json --instance .
 node kit/scripts/settle-router-worker.mjs REQUEST.json --instance .
+node kit/scripts/settle-run-router-worker.mjs REQUEST.json
 node kit/scripts/stack-source-router-worker.mjs --root . INPUT.json
 node kit/scripts/activate-router-worker.mjs SPEC.json DRAFT.json /abs/NEW.rw-active --instance . --approval APPROVAL.json --approval-digest DIGEST
 ```
@@ -273,7 +274,10 @@ plan item ([details](docs/design/router-worker/continuation.md)).
 `settle-router-worker.mjs` reports the `budget` admission gate from a per-ticket
 ledger of measured usage instead of a declared value. Each real call is settled
 once from a `measure-spawn.mjs` row, later reads add only their difference,
-unmeasured or unfinished calls keep the gate `unknown`, and an overrun blocks it
+unmeasured or unfinished calls keep the gate `unknown`, and an overrun blocks it.
+`settle-run-router-worker.mjs` adds the ticket settlements of one frozen run and
+the Guardian call, which belongs to no ticket, and compares the Guardian's usage
+with the estimate frozen in the run record
 ([details](docs/design/router-worker/settlement.md)).
 
 `stack-source-router-worker.mjs` reads a project's verification commands from
