@@ -226,6 +226,7 @@ node kit/scripts/lease-router-worker.mjs release --product-root PRODUCT_ROOT --l
 node kit/scripts/freeze-run-router-worker.mjs RUN.json --team-root TEAM_ROOT
 node kit/scripts/continue-router-worker.mjs REQUEST.json --instance .
 node kit/scripts/settle-router-worker.mjs REQUEST.json --instance .
+node kit/scripts/arm-boundary-router-worker.mjs RUN.json --team-root ACTIVE_COPY --product-root PRODUCT_ROOT
 node kit/scripts/settle-run-router-worker.mjs REQUEST.json
 node kit/scripts/stack-source-router-worker.mjs --root . INPUT.json
 node kit/scripts/activate-router-worker.mjs SPEC.json DRAFT.json /abs/NEW.rw-active --instance . --approval APPROVAL.json --approval-digest DIGEST
@@ -281,6 +282,13 @@ earlier call on that transcript used.
 the Guardian call, which belongs to no ticket, and compares the Guardian's usage
 with the estimate frozen in the run record
 ([details](docs/design/router-worker/settlement.md)).
+
+`arm-boundary-router-worker.mjs` arms a runtime write boundary in an activated
+disposable copy: a `PreToolUse` hook refuses a file-tool write of a Router/Worker
+wrapper outside the product paths the run's tickets authorize, and any write of
+the check and Guardian wrappers. Writes through Bash are not covered, and the
+hook has not yet been observed in a live run
+([details](docs/design/router-worker/write-boundary.md)).
 
 `stack-source-router-worker.mjs` reads a project's verification commands from
 its own `profiles/stack.md` (the required code-shipping gates) and checks that a
