@@ -19,7 +19,7 @@ const canonicalDirectory = path => typeof path === 'string' && isAbsolute(path) 
   && lstatSync(path, { throwIfNoEntry: false })?.isDirectory() && realpathSync(path) === path;
 const within = (path, grants) => grants.some(grant => grant.endsWith('/**') ? path.startsWith(grant.slice(0, -2)) : path === grant);
 
-export function armBoundary({ inputs, teamRoot, productRoot, hookPath }) {
+export function armBoundary({ inputs, teamRoot, productRoot, hookPath, methodBundle }) {
   try {
     need(canonicalDirectory(teamRoot) && canonicalDirectory(productRoot), 'Canonical existing team and product roots are required');
     let mode;
@@ -27,7 +27,7 @@ export function armBoundary({ inputs, teamRoot, productRoot, hookPath }) {
     // Only a disposable activated copy is written; a standing instance keeps its settings.
     need(mode?.status === 'activated-disposable-smoke', 'The team root is not an activated disposable copy');
     need(Array.isArray(inputs) && inputs.length >= 1 && inputs.length <= 300 && typeof hookPath === 'string' && isAbsolute(hookPath), 'inputs and an absolute hook path are required');
-    const frozen = inputs.map(input => parseJSON(canonical(input))), failed = frozen.map(input => compile(input)).find(preview => preview.errors);
+    const frozen = inputs.map(input => parseJSON(canonical(input))), failed = frozen.map(input => compile(input, methodBundle ? { methodBundle } : {})).find(preview => preview.errors);
     if (failed) return { errors: failed.errors };
     const policy = frozen[0].policy;
     need(frozen.every(input => digest(input.policy) === digest(policy)), 'Every ticket of one run must carry the same policy');
