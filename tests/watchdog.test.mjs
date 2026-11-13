@@ -13,9 +13,9 @@ import { fileURLToPath } from 'node:url'
 const exec = promisify(execFile)
 const DIR = fileURLToPath(new URL('../scripts/watchdog/', import.meta.url))
 
-async function runHook(script, home, stdinJson) {
+async function runHook(script, home, stdinJson, env = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn('bash', [join(DIR, script)], { env: { ...process.env, HOME: home } })
+    const child = spawn('bash', [join(DIR, script)], { env: { ...process.env, HOME: home, ...env } })
     let out = ''
     child.stdout.on('data', d => { out += d })
     child.stderr.on('data', d => { out += d })
@@ -173,14 +173,16 @@ test('N-08: stop must not kill a watchdog loop belonging to ANOTHER session', as
 test('R-10: concurrent SessionStart hooks spawn at most one loop (start lock)', async () => {
   await withHome(async home => {
     const [a, b] = await Promise.all([
-      runHook('start-watchdog.sh', home, '{"session_id":"s11"}'),
-      runHook('start-watchdog.sh', home, '{"session_id":"s11"}'),
+      runHook('start-watchdog.sh', home, '{"session_id":"s11"}', { WATCHDOG_TRACE: join(home, 'trace') }),
+      runHook('start-watchdog.sh', home, '{"session_id":"s11"}', { WATCHDOG_TRACE: join(home, 'trace') }),
     ])
     try {
       assert.equal(a.code, 0, `first concurrent start failed: ${a.out}`)
       assert.equal(b.code, 0, `second concurrent start failed: ${b.out}`)
       const { loops, table } = await loopProcesses('s11')
-      assert.ok(loops.length <= 1, `expected at most one loop, got ${loops.length}: ${table}`)
+      const traces = loops.length <= 1 ? [] : await Promise.all((await readdir(home)).filter(name => name.startsWith('trace.'))
+        .map(async name => `\n--- ${name}\n${await readFile(join(home, name), 'utf8')}`))
+      assert.ok(loops.length <= 1, `expected at most one loop, got ${loops.length}: ${table}${traces.join('')}`)
     } finally {
       await runHook('stop-watchdog.sh', home, '{"session_id":"s11"}')
     }
