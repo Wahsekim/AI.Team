@@ -49,6 +49,7 @@ function makeSession({ mainRows, agents, workflowAgents = [] }) {
     const wf = join(sub, 'workflows', a.runId)
     mkdirSync(wf, { recursive: true })
     writeFileSync(join(wf, `agent-${a.id}.jsonl`), jsonl(a.rows))
+    if (a.journal) writeFileSync(join(wf, 'journal.jsonl'), a.journal)
   }
   return { dir, sessionDir, mainFile: join(dir, `${sessionId}.jsonl`) }
 }
@@ -260,4 +261,18 @@ test('unknown flag and missing path fail fast', async () => {
       assert.match(String(e.stderr), /FAIL - args/)
     }
   }
+})
+
+test('workflow agents take finished from the run journal: result recorded = true, started only = false, no journal = unknown', async () => {
+  const row = id => [assistant(`${id}-m`, usage(1, 2, 3, 4), id)]
+  const journal = jsonl([{ type: 'launched' }, { type: 'started', agentId: 'done1' }, { type: 'result', agentId: 'done1', result: {} },
+    { type: 'started', agentId: 'open1' }]) + '{"type":"result","agentId":"torn1"'
+  const s = makeSession({ mainRows: [], agents: [], workflowAgents: [
+    { id: 'done1', runId: 'wf_j', rows: row('done1'), journal }, { id: 'open1', runId: 'wf_j', rows: row('open1') },
+    { id: 'torn1', runId: 'wf_j', rows: row('torn1') }, { id: 'nojournal', runId: 'wf_none', rows: row('nojournal') }] })
+  const { stdout, stderr } = await exec('node', [SCRIPT, s.sessionDir, '--json'])
+  const finished = Object.fromEntries(JSON.parse(stdout).subagents.map(a => [a.agentId, a.finished]))
+  assert.deepEqual(finished, { done1: true, open1: false, torn1: null, nojournal: null }, 'a torn journal line proves nothing')
+  assert.match(stderr, /WARN - partial: agent open1 finished=false/)
+  assert.match(stderr, /WARN - partial\?: 2 subagent\(s\)/)
 })

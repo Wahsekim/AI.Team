@@ -31,6 +31,11 @@ line and the compiler's `budgetUnit`. The meter is the existing
 `scripts/measure-spawn.mjs --json`: one row of `.subagents[]` becomes one usage
 event through `usageEventFromMeterRow`, taking `harnessEq` (never the four-class
 `total`), `uniqueMessages` and `finished`. No second meter is introduced.
+For an agent the count engine started, `finished` comes from the workflow run's
+`journal.jsonl`: a recorded `result` for that agent means finished, `started`
+alone means not finished, and no readable journal leaves it unknown. On the
+E-01 smoke run (2026-11-13) this settles the execution and check calls
+(59,717 and 29,511) and the gate is `clear`; before, both stayed `partial`.
 
 ## Events
 
