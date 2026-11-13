@@ -245,8 +245,8 @@ launchable.
 `isolation-router-worker.mjs` observes the `runtime-isolation` admission gate
 without a live runtime: the product must be a separate, clean repository root
 with no operation in progress, and the three worker wrappers and the host
-settings must not widen permissions, and the host must present the ownership
-lease it holds on the product. `lease-router-worker.mjs` takes that lease: one
+settings must not widen permissions, the write boundary must be armed for that
+product, and the host must present the ownership lease it holds on the product. `lease-router-worker.mjs` takes that lease: one
 file in the product's Git directory, outside the work tree, so a second host or
 team root is refused until it is released by its digest. A lease never expires
 and is never taken over automatically. Only `clear` (exit 0) admits a call; a

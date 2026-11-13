@@ -13,11 +13,14 @@ import { activateTeam } from '../src/router-worker/activate.mjs';
 import { draftTeam } from '../src/router-worker/draft.mjs';
 import { observeIsolation } from '../src/router-worker/isolation.mjs';
 import { acquireLease } from '../src/router-worker/lease.mjs';
+import { armBoundary } from '../src/router-worker/write-boundary.mjs';
 import { digest, bytesDigest } from '../src/loop/contracts.mjs';
 import { draftSpecFixture } from './fixtures/router-worker/draft-spec.mjs';
+import { inputFixture } from './fixtures/router-worker/input.mjs';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const CLI = fileURLToPath(new URL('../scripts/activate-router-worker.mjs', import.meta.url));
+const HOOK = fileURLToPath(new URL('../scripts/hooks/rw-write-boundary.mjs', import.meta.url));
 const snapshot = dir => execFileSync('bash', ['-c', 'cd "$1" && find . -type f -exec shasum -a 256 {} + | sort', 'sh', dir], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
 const git = (dir, ...args) => execFileSync('git', ['-C', dir, '-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid', ...args], { encoding: 'utf8' });
 const GOVERNANCE = ['architect', 'coach', 'auditor', 'security'];
@@ -85,6 +88,11 @@ test('the activated copy observes as clear against a clean leased product; the s
   git(product, 'init', '-q'); git(product, 'add', '-A'); git(product, 'commit', '-q', '-m', 'product');
   assert.equal(f.activate().errors, undefined);
   const lease = acquireLease({ teamRoot: f.active, productRoot: product }).lease.digest;
+  assert.ok(observeIsolation({ teamRoot: f.active, productRoot: product, lease }).findings.some(finding => finding.code === 'WRITE_BOUNDARY_NOT_ARMED'), 'activation alone does not arm the write boundary');
+  const input = inputFixture();
+  for (const duty of ['exec', 'check', 'guard']) input.policy.profiles[duty].wrapper = `tag-list-fixture-worker-${duty}`;
+  input.mandate.policyDigest = digest(input.policy);
+  assert.equal(armBoundary({ inputs: [input], teamRoot: f.active, productRoot: product, hookPath: HOOK }).errors, undefined);
   const observed = observeIsolation({ teamRoot: f.active, productRoot: product, lease });
   assert.equal(observed.status, 'clear', JSON.stringify(observed.findings));
   assert.ok(observed.findings.every(finding => finding.severity === 'accepted'), 'only owner-accepted findings remain, and they stay visible');

@@ -2,7 +2,7 @@
 // host, not declared. Any finding that is not clear means zero calls.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, realpathSync, symlinkSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -12,6 +12,7 @@ import { acquireLease, releaseLease } from '../src/router-worker/lease.mjs';
 import { digest } from '../src/loop/contracts.mjs';
 
 const CLI = fileURLToPath(new URL('../scripts/isolation-router-worker.mjs', import.meta.url));
+const HOOK = fileURLToPath(new URL('../scripts/hooks/rw-write-boundary.mjs', import.meta.url));
 const DUTIES = ['exec', 'check', 'guard'];
 const git = (dir, ...args) => execFileSync('git', ['-C', dir, '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', ...args], { encoding: 'utf8' });
 const write = (root, path, text) => { mkdirSync(dirname(join(root, path)), { recursive: true }); writeFileSync(join(root, path), text); };
@@ -24,6 +25,14 @@ const roster = ['| Role id | Role file | Wrapper file | Model | Reasoning | Stat
   '| pm | agents/pm.md | main session | inherits | owner | active |',
   ...DUTIES.map(d => `| worker-${d} | agents/worker-${d}.md | .claude/agents/demo-worker-${d}.md | m | high | active |`)].join('\n') + '\n';
 
+// What arming leaves in an activated copy: the boundary file and the registered hook.
+function armed(team, product) {
+  const body = { schemaVersion: 1, productRoot: product, wrappers: Object.fromEntries(DUTIES.map(duty =>
+    [`demo-worker-${duty}`, { duty, writePaths: duty === 'exec' ? ['src/**'] : [] }])) };
+  write(team, '.claude/rw-write-boundary.json', JSON.stringify({ ...body, digest: digest(body) }));
+  write(team, '.claude/settings.json', JSON.stringify({ hooks: { PreToolUse: [{ matcher: 'Write|Edit|NotebookEdit|MultiEdit', hooks: [{ type: 'command', command: `node "${HOOK}"` }] }] } }));
+}
+
 // A team root with three clean wrappers and a separate, clean product repository.
 function fixture(t, overrides = {}) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'rw-isolation-'))), team = join(base, 'demo.team'), product = join(base, 'product');
@@ -34,6 +43,7 @@ function fixture(t, overrides = {}) {
   write(product, 'src/app.js', 'export const x = 1;\n');
   git(product, 'init', '-q'); git(product, 'add', '-A'); git(product, 'commit', '-q', '-m', 'product');
   const lease = acquireLease({ teamRoot: team, productRoot: product }).lease.digest;
+  if (overrides.armed !== false) armed(team, product);
   return { base, team, product, lease, observe: () => observeIsolation({ teamRoot: team, productRoot: product, lease }) };
 }
 const codes = result => result.findings.map(f => f.code).sort();
@@ -124,6 +134,7 @@ test('zero calls without ownership: the gate needs the lease this host holds', t
   const wrong = observeIsolation({ teamRoot: f.team, productRoot: f.product, lease: 'sha256:' + '0'.repeat(64) });
   assert.deepEqual(codes(wrong), ['OWNERSHIP_HELD_BY_OTHER']); assert.equal(wrong.status, 'blocked');
   mkdirSync(other); write(other, 'agents/roster.md', roster); for (const duty of DUTIES) write(other, `.claude/agents/demo-worker-${duty}.md`, wrapper(duty));
+  armed(other, f.product);
   const stolen = observeIsolation({ teamRoot: other, productRoot: f.product, lease: f.lease });
   assert.deepEqual(codes(stolen), ['OWNERSHIP_HELD_BY_OTHER'], 'a lease digest does not transfer to another team root');
   assert.ok(!JSON.stringify(stolen).includes(f.team), 'the other holder is not disclosed');
@@ -143,4 +154,24 @@ test('CLI prints the record and exits 0 only when the gate is clear', t => {
   assert.equal(JSON.parse(run('--team-root', f.team, '--product-root', f.product).stdout).findings.some(x => x.code === 'OWNERSHIP_NOT_PRESENTED'), true);
   assert.equal(blocked.status, 2); assert.equal(JSON.parse(blocked.stdout).status, 'blocked');
   assert.equal(run('--team-root', f.team).status, 1, 'usage error');
+});
+
+test('a team root without an armed write boundary is blocked', t => {
+  const blocked = f => { const result = f.observe(); assert.equal(result.status, 'blocked'); return codes(result).includes('WRITE_BOUNDARY_NOT_ARMED'); };
+  assert.ok(blocked(fixture(t, { armed: false })), 'nothing armed');
+  const edited = fixture(t), file = join(edited.team, '.claude/rw-write-boundary.json');
+  writeFileSync(file, readFileSync(file, 'utf8').replace('src/**', '**'));
+  assert.ok(blocked(edited), 'a boundary changed after arming');
+  const elsewhere = fixture(t); armed(elsewhere.team, elsewhere.base);
+  assert.ok(blocked(elsewhere), 'a boundary armed for another product root');
+  const unhooked = fixture(t); writeFileSync(join(unhooked.team, '.claude/settings.json'), '{}');
+  assert.ok(blocked(unhooked), 'the hook is not registered');
+  const gone = fixture(t); write(gone.team, '.claude/settings.json', JSON.stringify({ hooks: { PreToolUse: [{ matcher: 'Write|Edit|NotebookEdit|MultiEdit', hooks: [{ type: 'command', command: `node "${join(gone.base, 'missing.mjs')}"` }] }] } }));
+  assert.ok(blocked(gone), 'the registered hook file does not exist');
+  const disabled = fixture(t); write(disabled.team, '.claude/settings.local.json', JSON.stringify({ disableAllHooks: true }));
+  assert.ok(blocked(disabled), 'hooks are disabled in the team root');
+  const other = fixture(t), boundary = JSON.parse(readFileSync(join(other.team, '.claude/rw-write-boundary.json'), 'utf8'));
+  const { digest: _, ...body } = boundary; body.wrappers = { 'other-exec': body.wrappers['demo-worker-exec'], ...body.wrappers }; delete body.wrappers['demo-worker-exec'];
+  writeFileSync(join(other.team, '.claude/rw-write-boundary.json'), JSON.stringify({ ...body, digest: digest(body) }));
+  assert.ok(blocked(other), 'the boundary names other wrappers than the roster');
 });

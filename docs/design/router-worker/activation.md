@@ -77,7 +77,8 @@ copy carries accepted findings.
 
 The runtime starts in the `.rw-active` directory. Before any call the host still
 needs, each on its own record: the ownership lease held by that directory on a
-disposable clone of the product, the isolation gate `clear` with that lease, the
+disposable clone of the product, the [write boundary](write-boundary.md) armed
+for that product, the isolation gate `clear` with that lease, the
 frozen run arguments, and the budget gate from settlement. Activation replaces
 none of them. After the run the copy is deleted or archived, never reused and
 never merged back into the instance.
