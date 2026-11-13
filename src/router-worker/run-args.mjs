@@ -114,7 +114,8 @@ export function accountRun({ args, record, result }) {
     const { digest: recorded, ...body } = record;
     check(recorded === digest(body) && record.argsDigest === digest(args), 'ARGS_NOT_THE_FROZEN_ARGS');
     check(result.runId === args.runId && result.rounds === args.rounds && result.executionMode === 'wrappers'
-      && result.failurePolicy === 'halt-on-failure' && (result.launchManifestDigest ?? null) === (args.launchManifestDigest ?? null), 'RUN_IDENTITY_MISMATCH');
+      && result.failurePolicy === 'halt-on-failure' && (result.launchManifestDigest ?? null) === (args.launchManifestDigest ?? null)
+      && result.budgetStatus?.ceiling === args.budgetCeilingTokens, 'RUN_IDENTITY_MISMATCH');
     const results = result.results;
     check(Array.isArray(results) && results.length <= args.plan.length && result.dispatchedCount === results.length, 'DISPATCH_COUNT_MISMATCH');
     check(results.every((r, i) => r.iter === i + 1 && r.ticket === args.plan[i]?.ticket && r.agentType === args.plan[i]?.agentType), 'CALL_NOT_IN_PLAN');

@@ -17,7 +17,7 @@ class Refusal extends Error { constructor(code, reason) { super(reason); this.co
 const need = (condition, reason) => { if (!condition) throw new Refusal('BOUNDARY_REFUSED', reason); };
 const canonicalDirectory = path => typeof path === 'string' && isAbsolute(path) && resolve(path) === path
   && lstatSync(path, { throwIfNoEntry: false })?.isDirectory() && realpathSync(path) === path;
-const within = (path, grants) => grants.some(grant => grant.endsWith('/**') ? path.startsWith(grant.slice(0, -2)) : path === grant);
+export const within = (path, grants) => grants.some(grant => grant.endsWith('/**') ? path.startsWith(grant.slice(0, -2)) : path === grant);
 
 export function armBoundary({ inputs, teamRoot, productRoot, hookPath, methodBundle }) {
   try {
