@@ -2,6 +2,7 @@ import { readFileSync, lstatSync, readlinkSync } from 'node:fs';
 import { resolve, join, dirname } from 'node:path';
 import { digest } from '../loop/contracts.mjs';
 import { git, inside, canonicalDirectory, isRepositoryRoot, readLease } from './lease.mjs';
+import { boundaryGap } from './write-boundary.mjs';
 
 // Rollout gate G-02. Observes what a host can check without a live runtime and
 // reports the 'runtime-isolation' admission gate. Only 'clear' admits a call.
@@ -117,6 +118,8 @@ export function observeIsolation({ teamRoot, productRoot, lease }) {
     const head = observeProduct(product, team, add), wrappers = observeWrappers(team, add);
     observeOwnership(product, team, lease, add);
     observeSettings([['team', team], ['product', product]], add);
+    const gap = boundaryGap({ teamRoot: team, productRoot: product, wrappers });
+    if (gap) add('WRITE_BOUNDARY_NOT_ARMED', 'blocked', gap);
     const accepted = acceptedUnknowns(team);
     for (const finding of findings) if (finding.severity === 'unknown' && accepted.includes(finding.code)) finding.severity = 'accepted';
     findings.sort((a, b) => a.code.localeCompare(b.code) || a.detail.localeCompare(b.detail));

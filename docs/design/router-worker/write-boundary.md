@@ -65,4 +65,8 @@ names the wrapper and the product-relative path, never a host path.
   modes.
 - **Per run, not per ticket.** The execution wrapper gets the union of the
   run's mandates, because the hook cannot tell which ticket a call belongs to.
-- The isolation gate does not yet require an armed boundary.
+- **The isolation gate checks that the boundary is in place, not that it works.**
+  It reports `WRITE_BOUNDARY_NOT_ARMED` (blocked) when the boundary file is
+  missing or changed, was armed for another product root, names other wrappers
+  than the roster, when the hook is not registered or its file is missing, or
+  when `disableAllHooks` is set in the team root. Arm before observing the gate.

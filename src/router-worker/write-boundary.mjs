@@ -64,6 +64,25 @@ export function readBoundary(projectDir) {
   } catch { return null; }
 }
 
+// Why the boundary of this team root does not hold for this product and these wrappers; null when it does.
+export function boundaryGap({ teamRoot, productRoot, wrappers }) {
+  const boundary = readBoundary(teamRoot);
+  if (!boundary) return 'no write boundary is armed, or it was changed after arming';
+  if (boundary.productRoot !== productRoot) return 'the write boundary was armed for another product root';
+  const named = Object.fromEntries(Object.entries(boundary.wrappers).map(([name, entry]) => [entry?.duty, name]));
+  if (Object.keys(boundary.wrappers).length !== DUTIES.length || DUTIES.some(duty => named[duty] !== wrappers[duty])) return 'the write boundary names other wrappers than the roster';
+  const settings = ['.claude/settings.json', '.claude/settings.local.json'].map(file => {
+    try { return JSON.parse(readFileSync(join(teamRoot, file), 'utf8')); } catch { return null; }
+  });
+  if (settings.some(file => file?.disableAllHooks)) return 'hooks are disabled in the team root';
+  const entries = Array.isArray(settings[0]?.hooks?.PreToolUse) ? settings[0].hooks.PreToolUse : [];
+  const hooked = entries.some(entry => entry?.matcher === MATCHER && Array.isArray(entry.hooks) && entry.hooks.some(hook => {
+    const path = hook?.type === 'command' && /^node "([^"]+)"$/.exec(hook.command ?? '')?.[1];
+    return path && basename(path) === 'rw-write-boundary.mjs' && lstatSync(path, { throwIfNoEntry: false })?.isFile();
+  }));
+  return hooked ? null : 'the write-boundary hook is not registered, or its file is missing';
+}
+
 // A path that does not exist yet is judged by its nearest existing ancestor, so a symlink cannot move it.
 function realTarget(path) {
   const pending = [];
