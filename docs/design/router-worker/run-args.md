@@ -37,6 +37,16 @@ Exit 0 prints `{args, record}`; exit 2 is a refusal; exit 1 is usage.
 | `executionMode` | always `wrappers` |
 | `failurePolicy` | always `halt-on-failure` (`continue` needs per-ticket isolation, which does not exist) |
 
+## Inputs that select a method
+
+A schema-v2 input that selects an approved method is compiled with the
+loader-verified method bundle. The CLI loads the pinned bundle of the kit it
+runs from, with the same integrity checks as `compile-router-worker.mjs`; in a
+two-root instance that is `<instance>/kit`. `freezeRun` takes the bundle as
+`methodBundle`. A serialized catalog is not accepted in its place: without the
+verified bundle the run is refused with `METHOD_BUNDLE_REQUIRED` and no
+arguments are produced.
+
 ## Refusals
 
 | Code | Reason |

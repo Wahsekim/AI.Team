@@ -40,12 +40,12 @@ function validateRun(run, count) {
   need(run.rounds === count, 'COUNT_MISMATCH', `the owner count ${run.rounds} must equal the ${count} frozen ticket(s); re-freeze a shorter or longer board`);
 }
 
-export async function freezeRun({ inputs, run, teamRoot }) {
+export async function freezeRun({ inputs, run, teamRoot, methodBundle }) {
   try {
     need(typeof teamRoot === 'string' && isAbsolute(teamRoot) && resolve(teamRoot) === teamRoot
       && lstatSync(teamRoot, { throwIfNoEntry: false })?.isDirectory() && realpathSync(teamRoot) === teamRoot, 'INVALID_RUN', 'A canonical team root is required');
     need(Array.isArray(inputs) && inputs.length >= 1 && inputs.length <= 300, 'INVALID_RUN', 'inputs must list 1 to 300 compiler inputs');
-    const frozen = inputs.map(input => parseJSON(canonical(input))), previews = frozen.map(input => compile(input));
+    const frozen = inputs.map(input => parseJSON(canonical(input))), previews = frozen.map(input => compile(input, { methodBundle }));
     const failed = previews.find(preview => preview.errors);
     if (failed) return { errors: failed.errors };
     validateRun(run, frozen.length);
