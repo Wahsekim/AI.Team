@@ -39,7 +39,7 @@ function second() {
   input.proposal.assignmentId = 'US-09.exec.1'; input.proposal.checkAssignmentId = 'US-09.check.1';
   return input;
 }
-const RUN = { rounds: 2, date: '2026-11-12', nextLifecycleNumber: 2, runId: 'rw-run-001', budgetCeilingTokens: 46800, estimatedOutputTokens: 36000 };
+const RUN = { rounds: 2, date: '2026-11-12', nextLifecycleNumber: 2, runId: 'rw-run-001', budgetCeilingTokens: 46800, estimatedOutputTokens: 36000, guardianEstimateTokens: 20000 };
 const freeze = (team, overrides = {}, inputs = [inputFixture(), second()]) => freezeRun({ inputs, run: { ...RUN, ...overrides }, teamRoot: team });
 const engine = (team, args, extra = {}) => runWorkflow({ scriptPath: join(team, '.claude/workflows/run-n-rounds.js'), args, agentImpl: makeAgentImpl({}), ...extra });
 const types = calls => calls.map(call => call.opts.agentType);
