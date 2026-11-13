@@ -25,6 +25,17 @@ async function runHook(script, home, stdinJson) {
   })
 }
 
+// Loop processes of one session. A loop forks for every command substitution, and
+// until that child execs it carries the loop's command line: a match whose parent
+// is itself a match is the same loop, not a second one.
+async function loopProcesses(sessionId) {
+  const { stdout } = await exec('ps', ['ax', '-o', 'pid=,ppid=,command='])
+  const rows = stdout.split('\n').map(line => /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line)).filter(Boolean)
+    .filter(m => m[3].endsWith(`watchdog-loop.sh ${sessionId}`)).map(m => ({ pid: m[1], ppid: m[2], command: m[3] }))
+  const pids = new Set(rows.map(row => row.pid))
+  return { loops: rows.filter(row => !pids.has(row.ppid)), table: rows.map(row => `${row.pid} ${row.ppid} ${row.command}`).join(' | ') }
+}
+
 async function withHome(fn) {
   const home = await mkdtemp(join(tmpdir(), 'ai-team-watchdog-'))
   try {
@@ -168,13 +179,8 @@ test('R-10: concurrent SessionStart hooks spawn at most one loop (start lock)', 
     try {
       assert.equal(a.code, 0, `first concurrent start failed: ${a.out}`)
       assert.equal(b.code, 0, `second concurrent start failed: ${b.out}`)
-      const { stdout } = await new Promise(res => {
-        const c = spawn('sh', ['-c', 'ps ax -o command= | grep "watchdog-loop.sh s11" | grep -v grep | wc -l'])
-        let out = ''
-        c.stdout.on('data', d => { out += d })
-        c.on('close', () => res({ stdout: out }))
-      })
-      assert.ok(parseInt(stdout.trim(), 10) <= 1, `expected at most one loop, got ${stdout.trim()}`)
+      const { loops, table } = await loopProcesses('s11')
+      assert.ok(loops.length <= 1, `expected at most one loop, got ${loops.length}: ${table}`)
     } finally {
       await runHook('stop-watchdog.sh', home, '{"session_id":"s11"}')
     }
@@ -223,8 +229,8 @@ test('R02-FIX-1: start lock is held until the spawned loop has exec\'d (no secon
       assert.equal(await new Promise(r => second.on('exit', r)), 0)
       reader = spawn('cat', [fifo], { stdio: ['ignore', 'ignore', 'ignore'] })
       assert.equal((await first).code, 0)
-      const { stdout } = await exec('sh', ['-c', 'ps ax -o command= | grep "watchdog-loop.sh s15$" | grep -v grep | wc -l'])
-      assert.equal(parseInt(stdout.trim(), 10), 1, `expected exactly one loop, got ${stdout.trim()}`)
+      const { loops, table } = await loopProcesses('s15')
+      assert.equal(loops.length, 1, `expected exactly one loop, got ${loops.length}: ${table}`)
     } finally {
       // Always open the FIFO so a still-blocked child can exec and the first
       // hook can close; only then stop the loop(s) and drop the reader.
