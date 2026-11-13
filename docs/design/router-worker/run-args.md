@@ -22,7 +22,8 @@ node kit/scripts/freeze-run-router-worker.mjs RUN.json --team-root <team-root>
 |---|---|
 | `rounds` | the owner count N; must equal the number of inputs |
 | `date`, `nextLifecycleNumber`, `runId` | ledger date, first lifecycle number, reconciliation key |
-| `budgetCeilingTokens` | the Q5 ceiling for this invocation |
+| `budgetCeilingTokens` | the Q5 ceiling for this invocation, in **output tokens** (see Units) |
+| `estimatedOutputTokens` | expected output tokens of all execution and check calls of the run, same unit |
 | `launchManifestDigest` (optional) | digest from `preflight-run.mjs`, echoed by the engine |
 
 Exit 0 prints `{args, record}`; exit 2 is a refusal; exit 1 is usage.
@@ -57,12 +58,29 @@ arguments are produced.
 | `DUPLICATE_TICKET` | one ticket twice in a run |
 | `POLICY_MISMATCH` | inputs carry different policies (one run has one policy and one Guardian) |
 | `DUTY_NOT_STAFFED` | the roster has no `active` `worker-exec`, `worker-check` or `worker-guard` row staffed by the policy wrapper; a dormant Guardian is a missing Guardian |
-| `BUDGET_BELOW_ESTIMATE` | the summed execution and check estimates reach 80% of the ceiling, the line at which the engine stops dispatching; such a run could not finish even on estimate |
-| `BUDGET_EXCEEDED` | ceiling above the summed ticket authorizations |
+| `BUDGET_BELOW_ESTIMATE` | `estimatedOutputTokens` reaches 80% of the ceiling, the line at which the engine stops dispatching; such a run could not finish even on estimate |
+| `BUDGET_CEILING_TOO_LOOSE` | the ceiling is more than three times `estimatedOutputTokens`; it would not stop a runaway |
 | `ENGINE_REJECTED` | the real engine validator (dry run, aborting agent, zero dispatch) rejects the arguments |
 
 The record binds the arguments (`argsDigest`), the engine copy, the roster, the
 policy and each input and preview digest, and states the budget figures.
+
+## Units
+
+Two units exist and are never compared or converted:
+
+| Figure | Unit | Meter |
+|---|---|---|
+| `record.budget` (ceiling, stop line, output estimate) | output tokens of the turn | the runtime's `budget.spent()`, which the engine's Q5 gate reads |
+| `record.tickets` (ticket estimates, authorizations) | `input+cache_creation` | `measure-spawn.mjs`, [settlement](settlement.md) |
+
+The E-01 smoke run (2026-11-13) froze a ceiling in the ticket unit. The engine
+counted 7,593 and 5,220 for calls that measured 59,717 and 29,511 in the ticket
+unit, so that ceiling could not have stopped a runaway. The engine ceiling only
+bounds output; the ticket authorization is enforced by settlement, after the
+call. The plan items still pass the ticket estimates to the engine as
+`estimatedTokens`, so the engine's `coaching` variance for Router/Worker runs
+compares two units and is not usable yet.
 
 Budget figures in the record: `ceiling`, `stopLine` (80% of the ceiling,
 rounded down), `estimated` and `authorized`. The accepted range is

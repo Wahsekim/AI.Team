@@ -255,9 +255,11 @@ enforcement are not observed
 `freeze-run-router-worker.mjs` builds the complete arguments of the count engine
 for a Router/Worker run: the plan comes from the compiled inputs, the Guardian
 from the policy and the allowed wrappers from the active roster rows, the
-failure policy is fixed to halt-on-failure, and the count and Q5 ceiling are
-checked against the frozen tickets and their authorizations (the estimates must
-stay below the 80% line at which the engine stops). The real engine
+failure policy is fixed to halt-on-failure, and the count is checked against
+the frozen tickets. The Q5 ceiling is in output tokens, the only figure the
+engine can read while it runs: it is checked against the run's output estimate
+(above the 80% stop line, at most three times the estimate). Input-side usage
+is not stopped during a run; it is settled per ticket afterwards. The real engine
 validator judges the result with zero dispatch
 ([details](docs/design/router-worker/run-args.md)).
 

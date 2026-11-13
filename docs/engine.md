@@ -207,6 +207,13 @@ in lifecycle headers).
   - If omitted, the invocation is REJECTED (`invalid-args`, zero dispatch) —
     there is no fallback to `budget.total`: gating against a number nobody
     declared produced vacuous ceilings, so the field is mandatory.
+  - **Unit:** the gate reads the runtime's `budget.spent()`, which counts the
+    OUTPUT tokens of the turn. That is not the lifecycle `Tokens:` unit
+    (`input+cache_creation`). In the E-01 smoke run (2026-11-13) the engine
+    counted 7,593 for a call the lifecycle meter put at 59,717. A first-loop
+    ceiling built from tier bands in the lifecycle unit is therefore several
+    times too loose; once one batch has run, use the `spentTrace` formula,
+    which is in the gate's own unit.
   - This is a PER-INVOCATION gate — the PM tracks the cumulative cross-batch
     loop ceiling herself (charter budget/halt table). Conflating the two axes
     caused a false-halt in the source project.
@@ -232,7 +239,7 @@ in lifecycle headers).
   estimatedTokens, measuredTokens, variancePct, beyondThreshold}` with a unique
   id (`<runId>:iter<N>:<kind>`); the count is derived mechanically with a STRICT
   `> 50%` rule (the review's five inputs yield four, not five). `meter` states
-  the unit: `budget.spent()` deltas, NOT provider billing — never convert
+  the unit: `budget.spent()` deltas (output tokens), NOT the lifecycle `Tokens:` unit and NOT provider billing — never convert
   engine deltas with an aggregate ratio or compare across meters; the workflow
   usage summary is a different meter with different scope (cache, retries).
 - **`launchManifestDigest`** — echoed from args (or `null` = no preflight
