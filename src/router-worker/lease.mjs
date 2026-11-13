@@ -76,12 +76,19 @@ export function acquireLease({ teamRoot, productRoot }) {
 }
 
 export function releaseLease({ productRoot, lease }) {
+  let lock = null;
   try {
-    const { path } = leasePath(productRoot), current = parse(path);
+    const { path } = leasePath(productRoot);
+    // Only a release frees the path, so with releases serialized no other lease can appear between the check and the unlink.
+    try { writeFileSync(`${path}.release-lock`, `${process.pid}\n`, { flag: 'wx' }); lock = `${path}.release-lock`; } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      return fail('LEASE_BUSY', `Another release holds ${path}.release-lock; if that release was interrupted, the operator removes the lock file`);
+    }
+    const current = parse(path);
     if (current.status === 'free') return fail('LEASE_NOT_HELD', 'The product carries no ownership lease');
     if (current.status !== 'held' || current.lease.digest !== lease)
       return fail('LEASE_MISMATCH', 'The presented digest is not the lease the product carries; an unreadable lease is removed by the operator, not by this tool');
     unlinkSync(path);
     return { status: 'free', released: lease };
-  } catch (error) { return fail('INVALID_LEASE', error.message); }
+  } catch (error) { return fail('INVALID_LEASE', error.message); } finally { if (lock) unlinkSync(lock); }
 }

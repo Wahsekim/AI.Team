@@ -3,7 +3,8 @@
 // never appears in the candidate diff.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, readdirSync } from 'node:fs';
+import fs, { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, readdirSync } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -13,6 +14,7 @@ import { digest } from '../src/loop/contracts.mjs';
 
 const CLI = fileURLToPath(new URL('../scripts/lease-router-worker.mjs', import.meta.url));
 const git = (dir, ...args) => execFileSync('git', ['-C', dir, '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', ...args], { encoding: 'utf8' });
+const readFileSyncText = path => fs.readFileSync(path, 'utf8');
 const write = (root, path, text) => { mkdirSync(dirname(join(root, path)), { recursive: true }); writeFileSync(join(root, path), text); };
 
 function fixture(t) {
@@ -70,6 +72,36 @@ test('an unreadable lease is unknown: it is neither taken over nor released by t
   assert.equal(readLease({ productRoot: f.product }).status, 'unknown', 'a record that does not match its digest is not trusted');
   assert.equal(acquireLease({ teamRoot: f.team, productRoot: f.product }).errors?.[0].code, 'LEASE_HELD');
   assert.equal(releaseLease({ productRoot: f.product, lease: held.lease.digest }).errors?.[0].code, 'LEASE_MISMATCH');
+});
+
+test('releases are serialized: a release paused before its unlink cannot remove a later lease', t => {
+  const f = fixture(t), held = acquireLease({ teamRoot: f.team, productRoot: f.product }), path = join(f.product, '.git/rw-ownership-lease.json');
+  const unlink = fs.unlinkSync, during = {};
+  fs.unlinkSync = function (target) {
+    if (target === path && !during.entered) {
+      during.entered = true;
+      during.release = releaseLease({ productRoot: f.product, lease: held.lease.digest });
+      during.acquire = acquireLease({ teamRoot: f.other, productRoot: f.product });
+    }
+    return unlink(target);
+  };
+  syncBuiltinESMExports();
+  let outer;
+  try { outer = releaseLease({ productRoot: f.product, lease: held.lease.digest }); } finally { fs.unlinkSync = unlink; syncBuiltinESMExports(); }
+  assert.equal(during.release.errors?.[0].code, 'LEASE_BUSY', 'a second release waits outside while the first holds the release lock');
+  assert.equal(during.acquire.errors?.[0].code, 'LEASE_HELD', 'no replacement lease exists before the unlink');
+  assert.deepEqual(outer, { status: 'free', released: held.lease.digest });
+  assert.deepEqual(readdirSync(join(f.product, '.git')).filter(name => name.includes('rw-ownership')), [], 'the release lock is removed');
+});
+
+test('an interrupted release leaves its lock: later releases are refused until the operator removes it', t => {
+  const f = fixture(t), held = acquireLease({ teamRoot: f.team, productRoot: f.product }), lock = join(f.product, '.git/rw-ownership-lease.json.release-lock');
+  writeFileSync(lock, 'left by a crashed release\n');
+  assert.equal(releaseLease({ productRoot: f.product, lease: held.lease.digest }).errors?.[0].code, 'LEASE_BUSY');
+  assert.deepEqual(readLease({ productRoot: f.product }), held, 'the lease and the foreign lock are untouched');
+  assert.equal(readFileSyncText(lock), 'left by a crashed release\n');
+  rmSync(lock);
+  assert.equal(releaseLease({ productRoot: f.product, lease: held.lease.digest }).status, 'free');
 });
 
 test('only a repository root separate from the team root can be leased', t => {

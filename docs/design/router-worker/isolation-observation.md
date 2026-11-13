@@ -89,6 +89,10 @@ enter the candidate diff. This is the only write these commands make.
   readable lease whose digest equals `--lease` and whose team root is the
   observed team root. The record never names another holder.
 - **Release** needs the digest of the lease that is held.
+  Releases are serialized by a lock file, `rw-ownership-lease.json.release-lock`,
+  next to the lease, so a release that has checked the digest cannot remove a
+  lease acquired afterwards. A second release meanwhile is refused with
+  `LEASE_BUSY`. A release that crashed leaves the lock; the operator removes it.
 - **No expiry and no takeover.** A lease left by a host that crashed stays until
   someone who can read it with `status` releases it by its digest. A lease file
   that is unreadable is removed by the operator by hand; the tool refuses to
