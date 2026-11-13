@@ -8,7 +8,7 @@ import { compile } from './compile.mjs';
 // from compiled previews and the roster, so count, Q5 ceiling, failure policy
 // and Guardian are frozen facts of the run and not values a caller may omit.
 const DUTIES = ['exec', 'check', 'guard'];
-const RUN_FIELDS = ['rounds', 'date', 'nextLifecycleNumber', 'runId', 'budgetCeilingTokens'];
+const RUN_FIELDS = ['rounds', 'date', 'nextLifecycleNumber', 'runId', 'budgetCeilingTokens', 'estimatedOutputTokens'];
 const ENGINE = '.claude/workflows/run-n-rounds.js';
 const ROSTER = 'agents/roster.md';
 const WRAPPER = /^\.claude\/agents\/([A-Za-z0-9._-]+)\.md$/;
@@ -35,7 +35,7 @@ function validateRun(run, count) {
     && Object.keys(run).every(key => RUN_FIELDS.includes(key) || key === 'launchManifestDigest')
     && RUN_FIELDS.every(key => key in run), 'INVALID_RUN',
   `run must carry exactly ${RUN_FIELDS.join(', ')} and optionally launchManifestDigest`);
-  need(positive(run.rounds) && positive(run.nextLifecycleNumber) && positive(run.budgetCeilingTokens)
+  need(positive(run.rounds) && positive(run.nextLifecycleNumber) && positive(run.budgetCeilingTokens) && positive(run.estimatedOutputTokens)
     && typeof run.date === 'string' && typeof run.runId === 'string', 'INVALID_RUN', 'run fields have the wrong type');
   need(run.rounds === count, 'COUNT_MISMATCH', `the owner count ${run.rounds} must equal the ${count} frozen ticket(s); re-freeze a shorter or longer board`);
 }
@@ -60,10 +60,12 @@ export async function freezeRun({ inputs, run, teamRoot, methodBundle }) {
 
     const estimated = sum(frozen.map(input => input.proposal.estimate.execTokens + input.proposal.estimate.checkTokens));
     const authorized = sum(frozen.map(input => input.mandate.budgetTokens));
-    // The engine stops dispatching once spend reaches 80% of the ceiling.
-    need(5 * estimated < 4 * run.budgetCeilingTokens, 'BUDGET_BELOW_ESTIMATE',
-      'The summed execution and check estimates reach the 80% line at which the engine stops; the run could not finish on estimate');
-    need(run.budgetCeilingTokens <= authorized, 'BUDGET_EXCEEDED', 'The ceiling exceeds the summed ticket authorizations');
+    // The engine meters output tokens of the turn (the runtime's budget.spent()) and stops dispatching at 80% of the
+    // ceiling. Ticket estimates and authorizations are in input+cache_creation and are never compared with it.
+    need(5 * run.estimatedOutputTokens < 4 * run.budgetCeilingTokens, 'BUDGET_BELOW_ESTIMATE',
+      'The output estimate reaches the 80% line at which the engine stops; the run could not finish on estimate');
+    need(run.budgetCeilingTokens <= 3 * run.estimatedOutputTokens, 'BUDGET_CEILING_TOO_LOOSE',
+      'The ceiling is more than three times the output estimate; it would not stop a runaway');
 
     const args = { rounds: run.rounds, date: run.date, nextLifecycleNumber: run.nextLifecycleNumber, runId: run.runId,
       executionMode: 'wrappers', failurePolicy: 'halt-on-failure', budgetCeilingTokens: run.budgetCeilingTokens,
@@ -80,7 +82,8 @@ export async function freezeRun({ inputs, run, teamRoot, methodBundle }) {
     const body = { schemaVersion: 1, stage: 'run-args-frozen-offline', launchable: false, argsDigest: digest(args),
       engineDigest: bytesDigest(engine), rosterDigest: bytesDigest(roster), policyDigest,
       items: frozen.map((input, i) => ({ ticket: tickets[i], inputDigest: digest(input), previewDigest: previews[i].manifest.digest })),
-      budget: { ceiling: run.budgetCeilingTokens, stopLine: Math.floor(run.budgetCeilingTokens * 4 / 5), estimated, authorized }, unresolved: UNRESOLVED };
+      budget: { unit: 'output', ceiling: run.budgetCeilingTokens, stopLine: Math.floor(run.budgetCeilingTokens * 4 / 5), estimatedOutput: run.estimatedOutputTokens },
+      tickets: { unit: 'input+cache_creation', estimated, authorized }, unresolved: UNRESOLVED };
     return { args, record: { ...body, digest: digest(body) } };
   } catch (error) {
     if (error instanceof Refusal) return { errors: [{ code: error.code, field: 'run', reason: error.message }] };

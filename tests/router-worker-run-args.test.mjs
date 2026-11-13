@@ -39,7 +39,7 @@ function second() {
   input.proposal.assignmentId = 'US-09.exec.1'; input.proposal.checkAssignmentId = 'US-09.check.1';
   return input;
 }
-const RUN = { rounds: 2, date: '2026-11-12', nextLifecycleNumber: 2, runId: 'rw-run-001', budgetCeilingTokens: 46800 };
+const RUN = { rounds: 2, date: '2026-11-12', nextLifecycleNumber: 2, runId: 'rw-run-001', budgetCeilingTokens: 46800, estimatedOutputTokens: 36000 };
 const freeze = (team, overrides = {}, inputs = [inputFixture(), second()]) => freezeRun({ inputs, run: { ...RUN, ...overrides }, teamRoot: team });
 const engine = (team, args, extra = {}) => runWorkflow({ scriptPath: join(team, '.claude/workflows/run-n-rounds.js'), args, agentImpl: makeAgentImpl({}), ...extra });
 const types = calls => calls.map(call => call.opts.agentType);
@@ -57,7 +57,8 @@ test('freezes the complete engine arguments from previews and the roster; the re
   assert.equal(record.launchable, false); assert.equal(record.stage, 'run-args-frozen-offline');
   assert.equal(record.argsDigest, digest(args));
   assert.deepEqual(record.items.map(item => item.ticket), ['US-08', 'US-09']);
-  assert.deepEqual(record.budget, { ceiling: 46800, stopLine: 37440, estimated: 36000, authorized: 48000 });
+  assert.deepEqual(record.budget, { unit: 'output', ceiling: 46800, stopLine: 37440, estimatedOutput: 36000 }, 'the engine gate is metered in output tokens');
+  assert.deepEqual(record.tickets, { unit: 'input+cache_creation', estimated: 36000, authorized: 48000 }, 'ticket estimates and authorizations stay in the ledger unit and are not compared with the ceiling');
   assert.ok(record.unresolved.includes('in-run-owner-stop-observation'), 'the engine cannot observe an owner stop mid-run');
   const { digest: recorded, ...body } = record;
   assert.equal(recorded, digest(body));
@@ -79,7 +80,10 @@ test('an incomplete or inconsistent run is refused before any argument is produc
   assert.equal(await code(freeze(team, {}, [inputFixture(), other])), 'POLICY_MISMATCH', 'one run has one policy and one Guardian');
   assert.equal(await code(freeze(team, { budgetCeilingTokens: 45000 })), 'BUDGET_BELOW_ESTIMATE', 'the engine stops at 80% of the ceiling, so the estimates must stay below that line');
   assert.equal((await freeze(team, { budgetCeilingTokens: 45001 })).errors, undefined);
-  assert.equal(await code(freeze(team, { budgetCeilingTokens: 48001 })), 'BUDGET_EXCEEDED', 'the ceiling cannot exceed the summed ticket authorizations');
+  assert.equal((await freeze(team, { budgetCeilingTokens: 108000 })).errors, undefined, 'a ceiling above the ticket authorizations is not refused: they are in another unit');
+  assert.equal(await code(freeze(team, { budgetCeilingTokens: 108001 })), 'BUDGET_CEILING_TOO_LOOSE', 'a ceiling above three times the output estimate gives no runaway protection');
+  assert.equal(await code(freeze(team, { estimatedOutputTokens: 0 })), 'INVALID_RUN');
+  { const { estimatedOutputTokens, ...without } = RUN; assert.equal((await freezeRun({ inputs: [inputFixture(), second()], run: without, teamRoot: team })).errors?.[0].code, 'INVALID_RUN', 'the output estimate is required'); }
   assert.equal(await code(freeze(team, { date: '2026-02-30' })), 'ENGINE_REJECTED', 'the real engine validator judges the frozen arguments');
   assert.equal(await code(freeze(team, { failurePolicy: 'continue' })), 'INVALID_RUN', 'only the fields of the owner directive are accepted');
   const broken = inputFixture(); broken.proposal.attempt = 2;
@@ -181,7 +185,7 @@ function methodInput(bundle) {
   input.mandate.policyDigest = digest(input.policy);
   return input;
 }
-const ONE = { ...RUN, rounds: 1, budgetCeilingTokens: 23400 };
+const ONE = { ...RUN, rounds: 1, budgetCeilingTokens: 23400, estimatedOutputTokens: 18000 };
 
 test('an input selecting an approved method freezes with the loader-verified bundle; only the check brief carries the method', async t => {
   const team = fixture(t), bundle = loadMethods(), input = methodInput(bundle);

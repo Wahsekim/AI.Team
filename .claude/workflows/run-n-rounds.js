@@ -837,7 +837,7 @@ const VARIANCE_THRESHOLD_PCT = 50
 const observations = results.flatMap(r => [r.estimates.worker, r.estimates.verifier]).filter(Boolean)
   .map(o => ({ ...o, beyondThreshold: Math.abs(o.variancePct) > VARIANCE_THRESHOLD_PCT }))
 const coaching = {
-  meter: 'engine budget.spent() deltas per spawn (harness units) — NOT provider billing; do not convert or compare across meters',
+  meter: 'engine budget.spent() deltas per spawn (OUTPUT tokens of the turn) — NOT the lifecycle Tokens: unit (input+cache_creation) and NOT provider billing; do not convert or compare across meters',
   varianceThresholdPct: VARIANCE_THRESHOLD_PCT,
   observations,
   beyondThresholdCount: new Set(observations.filter(o => o.beyondThreshold).map(o => o.id)).size,
