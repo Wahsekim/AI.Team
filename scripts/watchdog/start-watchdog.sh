@@ -66,7 +66,8 @@ if ! mkdir "$LOCK_DIR" 2>/dev/null; then
         exit 0
     fi
 fi
-trap 'rmdir "$LOCK_DIR" 2>/dev/null' EXIT
+# '|| true': under set -e a failing command in the EXIT trap replaces the exit status.
+trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
 
 # Already running for this session?
 if [ -f "$PID_FILE" ]; then
@@ -93,7 +94,7 @@ if [ -x "$LOOP_SCRIPT" ]; then
         2>> "$HOME/.claude/watchdog.stderr.log" &
     loop_pid=$!
     echo "$loop_pid" > "$PID_FILE"
-    disown
+    disown 2>/dev/null || true  # fails when the child was already reaped
     # Keep the start lock until the child has exec'd the loop: before exec its
     # argv is still this hook's, so a racing start would read the PID file as
     # stale and spawn a second loop. Capped at 100 polls (~6-8s, each forks ps

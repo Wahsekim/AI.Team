@@ -181,6 +181,23 @@ test('R-10: concurrent SessionStart hooks spawn at most one loop (start lock)', 
   })
 })
 
+test('FLAKE-2: a start hook whose lock cleanup fails still exits 0', async () => {
+  await withHome(async home => {
+    // An rmdir that always fails stands in for a lock directory that is already gone at exit.
+    const bin = join(home, 'bin')
+    await mkdir(bin)
+    await writeFile(join(bin, 'rmdir'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
+    const child = spawn('bash', [join(DIR, 'start-watchdog.sh')], { env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}` } })
+    child.stdin.end('{"session_id":"s16"}')
+    const code = await new Promise(res => child.on('close', res))
+    try {
+      assert.equal(code, 0, 'cleanup failure must not turn a successful start into a hook error')
+    } finally {
+      await runHook('stop-watchdog.sh', home, '{"session_id":"s16"}')
+    }
+  })
+})
+
 test('R02-FIX-1: start lock is held until the spawned loop has exec\'d (no second loop from a pre-exec PID)', async () => {
   await withHome(async home => {
     const hb = join(home, '.claude', 'heartbeats')
