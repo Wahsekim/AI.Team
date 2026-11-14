@@ -229,6 +229,7 @@ node kit/scripts/settle-router-worker.mjs REQUEST.json --instance .
 node kit/scripts/arm-boundary-router-worker.mjs RUN.json --team-root ACTIVE_COPY --product-root PRODUCT_ROOT
 node kit/scripts/launch-router-worker.mjs prepare RUN.json --team-root ACTIVE_COPY --product-root PRODUCT_ROOT
 node kit/scripts/launch-router-worker.mjs close RESULT.json --team-root ACTIVE_COPY
+node kit/scripts/launch-router-worker.mjs settle RESULT.json METER.json --team-root ACTIVE_COPY
 node kit/scripts/settle-run-router-worker.mjs REQUEST.json
 node kit/scripts/stack-source-router-worker.mjs --root . INPUT.json
 node kit/scripts/activate-router-worker.mjs SPEC.json DRAFT.json /abs/NEW.rw-active --instance . --approval APPROVAL.json --approval-digest DIGEST
@@ -300,8 +301,10 @@ observe the isolation gate, then write a single-use launch record with the engin
 arguments. Any refusal releases the lease it took. `close` matches the engine return to
 that record, reports product paths changed outside the write boundary (the only
 check that sees Bash writes, after the fact; Git-ignored paths are counted,
-not judged), and releases the lease. Usage
-settlement is not chained yet, and no call is admitted one by one during a run
+not judged), and releases the lease. `settle`
+matches the metered agents to the run's calls, checks that each call received
+its frozen brief, and settles tickets and run. No call is admitted one by one
+during a run
 ([details](docs/design/router-worker/launch-host.md)).
 
 `stack-source-router-worker.mjs` reads a project's verification commands from

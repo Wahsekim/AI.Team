@@ -64,7 +64,9 @@ arguments are produced.
 | `ENGINE_REJECTED` | the real engine validator (dry run, aborting agent, zero dispatch) rejects the arguments |
 
 The record binds the arguments (`argsDigest`), the engine copy, the roster, the
-policy and each input and preview digest, and states the budget figures.
+policy and each input and preview digest, and states the budget figures. Each
+item also carries the ticket's authorization (`authorizedTokens`, from its
+mandate), which the launch host's settle step settles against.
 
 ## Units
 

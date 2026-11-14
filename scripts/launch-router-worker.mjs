@@ -4,22 +4,31 @@
 // isolation gate, then write <copy>/rw-launch.json. Any refusal releases the lease.
 // close: account the engine return against that record, record what the run left in the
 // product, release the lease, then write <copy>/rw-close.json.
+// settle: match the metered agents to the calls, check the briefs, settle tickets and run,
+// then write <copy>/rw-settlement.json.
 // No model or network. Exit 0 prepared / closed clean, 2 refused or review, 1 usage.
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { prepareLaunch, closeLaunch } from '../src/router-worker/launch.mjs';
+import { settleLaunch } from '../src/router-worker/launch-settle.mjs';
+import { loadRetryRules } from '../src/router-worker/retries.mjs';
 import { loadMethods, MethodError } from '../src/router-worker/methods.mjs';
 
 const [command, file, teamFlag, team, productFlag, product] = process.argv.slice(2);
 const USAGE = 'usage: node scripts/launch-router-worker.mjs prepare RUN.json --team-root <activated copy> --product-root <product-root>   (RUN.json: {"run": {...}, "inputs": [...]})\n'
-  + '       node scripts/launch-router-worker.mjs close RESULT.json --team-root <activated copy>   (RESULT.json: the engine return)';
+  + '       node scripts/launch-router-worker.mjs close RESULT.json --team-root <activated copy>   (RESULT.json: the engine return)\n'
+  + '       node scripts/launch-router-worker.mjs settle RESULT.json METER.json --team-root <activated copy>   (METER.json: measure-spawn.mjs <session-dir> --json)';
 const readJSON = path => { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return undefined; } };
 const print = result => {
   if (result.errors) { console.error(JSON.stringify(result)); process.exitCode = 2; }
   else process.stdout.write(JSON.stringify(result, null, 2) + '\n');
 };
-if (command === 'close' && file && teamFlag === '--team-root' && team && process.argv.length === 6) {
+if (command === 'settle' && file && teamFlag && team === '--team-root' && productFlag && process.argv.length === 7) {
+  const result = settleLaunch({ teamRoot: resolve(productFlag), result: readJSON(file), meter: readJSON(teamFlag), rules: loadRetryRules() });
+  print(result);
+  if (!result.errors && result.status !== 'clear') process.exitCode = 2;
+} else if (command === 'close' && file && teamFlag === '--team-root' && team && process.argv.length === 6) {
   const result = closeLaunch({ teamRoot: resolve(team), result: readJSON(file) });
   print(result);
   if (!result.errors && result.status !== 'clean') process.exitCode = 2;

@@ -81,7 +81,7 @@ export async function freezeRun({ inputs, run, teamRoot, methodBundle }) {
 
     const body = { schemaVersion: 1, stage: 'run-args-frozen-offline', launchable: false, argsDigest: digest(args),
       engineDigest: bytesDigest(engine), rosterDigest: bytesDigest(roster), policyDigest,
-      items: frozen.map((input, i) => ({ ticket: tickets[i], inputDigest: digest(input), previewDigest: previews[i].manifest.digest })),
+      items: frozen.map((input, i) => ({ ticket: tickets[i], inputDigest: digest(input), previewDigest: previews[i].manifest.digest, authorizedTokens: input.mandate.budgetTokens })),
       budget: { unit: 'output', ceiling: run.budgetCeilingTokens, stopLine: Math.floor(run.budgetCeilingTokens * 4 / 5), estimatedOutput: run.estimatedOutputTokens },
       tickets: { unit: 'input+cache_creation', estimated, authorized },
       // The Guardian belongs to the run, not to a ticket; run settlement compares its measured usage with this.
