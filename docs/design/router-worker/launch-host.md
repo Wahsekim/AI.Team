@@ -126,7 +126,9 @@ the launch was closed with. It runs once.
 
 `<copy>/rw-settlement.json` carries `status` (`clear` only when the run gate is
 clear and there is no finding), the `calls` with agent id, tokens and finished
-flag, `mainSessionTokens`, the findings and the run settlement.
+flag, `mainSessionTokens`, the findings, the run settlement, and per dispatched
+ticket its retry journal, usage ledger and ticket settlement (`ticketRecords`).
+A retry of a ticket starts from that journal and ledger.
 
 The retry journal in step 3 is written after the run from the engine return
 (`journalSource: reconstructed-after-run`). Its admission gates are recorded as
@@ -135,6 +137,21 @@ calls and no host judged them one by one. It shows what was called, not that a
 gate was observed at call time; it will not catch a retry-cap breach inside a
 run, which the count engine cannot produce (one exec and at most one check per
 ticket).
+
+## Retries (owner decision 2026-11-14)
+
+Router/Worker is a parallel optional mode that stays in disposable copies; a
+real product repository may be run against only with a Bash sandbox. A retry
+after a failed check is dispatched by the PM main session by hand, with the
+owner present, as a continuation of the original session
+([continuation](continuation.md)); the count engine never retries.
+
+Not built yet. Open before it can be: whether the main session can address an
+agent that a workflow started (the documentation covers only agents started by
+the Agent tool, resumed with SendMessage and the agent id), where the resumed
+turns are written, and whether the write-boundary hook sees the same agent name
+on a resumed call. The isolation gate also refuses a product with uncommitted
+changes, which is exactly the state a retry starts from.
 
 ## What it does not do
 

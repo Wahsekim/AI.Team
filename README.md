@@ -303,7 +303,9 @@ that record, reports product paths changed outside the write boundary (the only
 check that sees Bash writes, after the fact; Git-ignored paths are counted,
 not judged), and releases the lease. `settle`
 matches the metered agents to the run's calls, checks that each call received
-its frozen brief, and settles tickets and run. No call is admitted one by one
+its frozen brief, and settles tickets and run, keeping each ticket's retry
+journal and ledger. Retries are dispatched by the PM by hand and are not built
+yet. No call is admitted one by one
 during a run
 ([details](docs/design/router-worker/launch-host.md)).
 

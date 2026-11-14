@@ -73,7 +73,7 @@ function settleTicket({ item, planItem, outcome, exec, check, launch, close, rul
     ledger = advanceSettlementLedger({ ledger, expectedDigest: ledger.digest, event: usageEventFromMeterRow({ row, callRef: call(row).callRef, eventId: `usage-${index + 1}` }) }).ledger;
   for (const [duty, row, brief] of [['exec', exec, planItem.brief], ['check', check, planItem.verifierBrief]])
     if (row && typeof brief === 'string' && !carriesBrief(readFileSync(row.file, 'utf8'), brief)) findings.push({ code: 'BRIEF_NOT_FOUND', ticket, duty });
-  return settleAgainstJournal({ ledger, retryJournal: journal, rules });
+  return { ticketId: ticket, journal, ledger, settlement: settleAgainstJournal({ ledger, retryJournal: journal, rules }) };
 }
 
 export function settleLaunch({ teamRoot, result, meter, rules }) {
@@ -99,14 +99,14 @@ export function settleLaunch({ teamRoot, result, meter, rules }) {
     need(rows.length === expected.length && rows.every((row, i) => row.agentType === expected[i].agentType), 'The metered agents are not the calls of this run, in order');
 
     const findings = [], row = (index, duty) => rows[expected.findIndex(call => call.index === index && call.duty === duty)];
-    const tickets = launch.runRecord.items.slice(0, account.calls.exec).map((item, index) => settleTicket({ item, planItem: plan[index],
+    const ticketRecords = launch.runRecord.items.slice(0, account.calls.exec).map((item, index) => settleTicket({ item, planItem: plan[index],
       outcome: result.results[index], exec: row(index, 'exec'), check: row(index, 'check'), launch, close, rules, findings }));
-    const guard = rows.at(-1), run = settleRun({ record: launch.runRecord, account, tickets, guardian: guard });
+    const guard = rows.at(-1), run = settleRun({ record: launch.runRecord, account, tickets: ticketRecords.map(entry => entry.settlement), guardian: guard });
     const body = { schemaVersion: 1, stage: 'launch-settled', runId: launch.runId, launchDigest: launch.digest, closeDigest: close.digest,
       status: run.runGate === 'clear' && !findings.length ? 'clear' : 'review',
       calls: expected.map((call, i) => ({ ticket: call.index === null ? null : plan[call.index].ticket, duty: call.duty, agentId: rows[i].agentId, tokens: rows[i].harnessEq, finished: rows[i].finished })),
       mainSessionTokens: Number.isSafeInteger(meter.session?.harnessEq) ? meter.session.harnessEq : null,
-      findings, run, journalSource: 'reconstructed-after-run', unresolved: UNRESOLVED };
+      findings, run, ticketRecords, journalSource: 'reconstructed-after-run', unresolved: UNRESOLVED };
     const record = { ...body, digest: digest(body) };
     try { writeFileSync(path, JSON.stringify(record, null, 2) + '\n', { flag: 'wx' }); }
     catch (error) { need(false, `The settlement record could not be written: ${error.code ?? 'unknown error'}`); }
