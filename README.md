@@ -230,6 +230,7 @@ node kit/scripts/arm-boundary-router-worker.mjs RUN.json --team-root ACTIVE_COPY
 node kit/scripts/launch-router-worker.mjs prepare RUN.json --team-root ACTIVE_COPY --product-root PRODUCT_ROOT
 node kit/scripts/launch-router-worker.mjs close RESULT.json --team-root ACTIVE_COPY
 node kit/scripts/launch-router-worker.mjs settle RESULT.json METER.json --team-root ACTIVE_COPY
+node kit/scripts/launch-router-worker.mjs retry REQUEST.json --team-root ACTIVE_COPY
 node kit/scripts/settle-run-router-worker.mjs REQUEST.json
 node kit/scripts/stack-source-router-worker.mjs --root . INPUT.json
 node kit/scripts/activate-router-worker.mjs SPEC.json DRAFT.json /abs/NEW.rw-active --instance . --approval APPROVAL.json --approval-digest DIGEST
@@ -306,8 +307,10 @@ check that sees Bash writes, after the fact; Git-ignored paths are counted,
 not judged), and releases the lease. `settle`
 matches the metered agents to the run's calls, checks that each call received
 its frozen brief, and settles tickets and run, keeping each ticket's retry
-journal and ledger. Retries are dispatched by the PM by hand and are not built
-yet. No call is admitted one by one
+journal and ledger. `retry` prepares an
+exec continuation after a failed check (journal rules, lease, isolation on the
+closed candidate) for the copy's PM session to send; closing a retry is not
+built yet. No call is admitted one by one
 during a run
 ([details](docs/design/router-worker/launch-host.md)).
 

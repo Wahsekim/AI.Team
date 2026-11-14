@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { prepareLaunch, closeLaunch, LAUNCH_FILE, CLOSE_FILE } from '../src/router-worker/launch.mjs';
 import { settleLaunch, SETTLE_FILE } from '../src/router-worker/launch-settle.mjs';
+import { prepareRetry } from '../src/router-worker/launch-retry.mjs';
 import { loadRetryRules, inspectRetryJournal } from '../src/router-worker/retries.mjs';
 import { candidateOf } from '../src/router-worker/closed-candidate.mjs';
 import { runWorkflow, makeAgentImpl } from '../scripts/lib/workflow-harness.mjs';
@@ -125,8 +126,8 @@ test('CLI prepares from RUN.json, exits 2 on refusal and 1 on usage', t => {
 });
 
 // A prepared copy and the return of the real engine for its arguments (mock agents, no model).
-async function ran(t, agents = {}) {
-  const f = fixture(t), launch = await f.prepare();
+async function ran(t, agents = {}, overrides = {}) {
+  const f = fixture(t), launch = await f.prepare(overrides);
   const { result } = await runWorkflow({ scriptPath: join(f.team, '.claude/workflows/run-n-rounds.js'), args: launch.args, agentImpl: makeAgentImpl(agents) });
   return { ...f, launch, result, close: (overrides = {}) => closeLaunch({ teamRoot: f.team, result, ...overrides }), closeFile: join(f.team, CLOSE_FILE) };
 }
@@ -294,4 +295,60 @@ test('CLI settles from RESULT.json and METER.json; exit 0 clear, 2 review or ref
   const ok = run('settle', result, meter, '--team-root', f.team);
   assert.equal(ok.status, 0, ok.stderr); assert.equal(JSON.parse(ok.stdout).status, 'clear');
   assert.equal(run('settle', result, meter, '--team-root', f.team).status, 2);
+});
+
+// Retry after a failed check: prepared by the launch host, sent by the PM session of the copy.
+const failingCheck = { verifier: () => ({ pass: false, staticPass: false, e2ePass: true, summary: 'one test fails', commandsRun: [{ command: 'npm test', exitCode: 1 }], failures: ['tag list test'] }) };
+async function failed(t, agents = failingCheck, overrides = {}) {
+  const f = await ran(t, agents, overrides); write(f.product, 'src/tag-list/view.ts', 'export const x = 2;\n');
+  const closed = f.close(), settled = settle(f, metered(f));
+  assert.equal(settled.errors, undefined, JSON.stringify(settled.errors));
+  const request = (overrides = {}) => {
+    const input = inputFixture();
+    input.proposal.assignmentId = 'US-08.exec.2'; input.proposal.checkAssignmentId = 'US-08.check.2'; input.baseline.candidateRef = closed.candidate;
+    return { input, divergence: { reason: 'The failed check named the tag list test; fix the empty-state branch', evidenceRef: { id: 'rw-settlement', digest: settled.digest } }, ...overrides };
+  };
+  return { ...f, closed, settled, request, retry: (overrides = {}) => prepareRetry({ teamRoot: f.team, request: request(), rules, ...overrides }) };
+}
+
+test('retry prepare compiles the continuation from the kept journal, takes the lease and admits the closed candidate', async t => {
+  const f = await failed(t), result = f.retry();
+  assert.equal(result.errors, undefined, JSON.stringify(result.errors));
+  assert.equal(result.stage, 'retry-prepared'); assert.equal(result.ticket, 'US-08'); assert.equal(result.duty, 'exec'); assert.equal(result.attempt, 2);
+  assert.equal(result.continuationOf, 'US-08.exec.1'); assert.equal(result.resumeAgentId, 'exec1', 'the agent the PM session resumes');
+  assert.equal(result.wrapper, 'sample-worker-exec'); assert.match(result.renderedBrief, /US-08\.exec\.1/);
+  assert.equal(result.closeDigest, f.closed.digest); assert.equal(result.settlementDigest, f.settled.digest);
+  const held = readLease({ productRoot: f.product });
+  assert.equal(held.status, 'held'); assert.equal(result.lease, held.lease.digest);
+  const state = inspectRetryJournal({ journal: result.journal, rules });
+  assert.deepEqual(state.assignments.at(-1), { ...state.assignments.at(-1), assignmentId: 'US-08.exec.2', status: 'prepared', attempt: 2 });
+  const { digest: recorded, ...body } = result;
+  assert.equal(recorded, digest(body)); assert.deepEqual(JSON.parse(readFileSync(join(f.team, 'rw-retry-1.json'), 'utf8')), result);
+  assert.ok(!JSON.stringify(result).includes(f.base), 'no host path in the record');
+  assert.equal(refusal(f.retry()).code, 'LAUNCH_REFUSED', 'one retry is pending at a time');
+  assert.equal(readLease({ productRoot: f.product }).lease.digest, result.lease);
+});
+
+test('retry prepare refuses and takes nothing when the ticket may not be retried or the product moved', async t => {
+  const passed = await failed(t, {});
+  assert.equal(refusal(passed.retry()).code, 'RETRY_STOPPED', 'a passing check is not retried'); assert.equal(passed.leased(), 'free');
+  const moved = await failed(t); writeFileSync(join(moved.product, 'src/tag-list/view.ts'), 'edited after close\n');
+  assert.match(refusal(moved.retry()).reason, /CANDIDATE_NOT_ADMITTED/); assert.equal(moved.leased(), 'free');
+  assert.equal(existsSync(join(moved.team, 'rw-retry-1.json')), false);
+  const narrow = inputFixture(); narrow.mandate.allowedWritePaths = ['src/tag-list/**']; narrow.proposal.expectedPaths = ['src/tag-list/view.ts'];
+  const wider = await failed(t, failingCheck, { inputs: [narrow] });
+  assert.match(refusal(wider.retry()).reason, /write boundary/, 'the retry asks for paths the run was not armed for'); assert.equal(wider.leased(), 'free');
+  const stale = await failed(t), other = stale.request(); other.input.baseline.candidateRef = { id: 'another', digest: digest('another') };
+  assert.equal(refusal(stale.retry({ request: other })).code, 'STALE_CANDIDATE');
+  const unsettled = await ran(t, failingCheck); unsettled.close();
+  assert.match(refusal(prepareRetry({ teamRoot: unsettled.team, request: passed.request(), rules })).reason, /settled/);
+});
+
+test('CLI prepares a retry from REQUEST.json; exit 0 prepared, 2 refused, 1 usage', async t => {
+  const f = await failed(t), file = join(f.base, 'retry.json'), run = (...argv) => spawnSync(process.execPath, [CLI, ...argv], { encoding: 'utf8' });
+  writeFileSync(file, JSON.stringify(f.request()));
+  assert.equal(run('retry', file).status, 1);
+  const ok = run('retry', file, '--team-root', f.team);
+  assert.equal(ok.status, 0, ok.stderr); assert.equal(JSON.parse(ok.stdout).stage, 'retry-prepared');
+  assert.equal(run('retry', file, '--team-root', f.team).status, 2);
 });

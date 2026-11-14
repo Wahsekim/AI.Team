@@ -51,7 +51,7 @@ function metered(meter, wrappers) {
 function settleTicket({ item, planItem, outcome, exec, check, launch, close, rules, findings }) {
   const ticket = item.ticket, ref = (id, value) => ({ id, digest: digest(value) });
   const admission = { sourceRef: { id: 'rw-launch', digest: launch.digest }, gates: Object.fromEntries(GATES.map(gate => [gate, 'clear'])) };
-  const receiptRef = { id: 'rw-close', digest: close.digest }, candidate = ref(`${ticket}-candidate`, { head: close.productHead, paths: close.changedPaths });
+  const receiptRef = { id: 'rw-close', digest: close.digest }, candidate = close.candidate ?? ref(`${ticket}-candidate`, { head: close.productHead, paths: close.changedPaths });
   const call = row => ({ sessionRef: ref(`agent-${row.agentId}`, row.agentId), callRef: { id: `transcript-${row.agentId}`, digest: bytesDigest(readFileSync(row.file)) } });
   let journal = createRetryJournal({ ticketId: ticket, rules }), count = 0;
   const send = event => { journal = advanceRetryJournal({ journal, rules, expectedDigest: journal.digest, event: { eventId: `event-${++count}`, ...event } }).journal; };
