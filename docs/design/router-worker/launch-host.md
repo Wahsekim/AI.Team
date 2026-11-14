@@ -73,7 +73,9 @@ Otherwise close records what the run left and releases the lease:
 | `LEASE_NOT_HELD_BY_THIS_LAUNCH`, `LEASE_RELEASE_FAILED` | the lease was not released by this close; another host's lease is left alone |
 
 `<copy>/rw-close.json` carries `status` (`clean` or `review`), the `account`
-(calls and engine blockers), `productHead`, `changedPaths`, `hookLog` (counts
+(calls and engine blockers), `productHead`, `candidate` (the product state the
+run ended in: commit plus every tracked and untracked file by content),
+`changedPaths`, `hookLog` (counts
 from the [hook call log](write-boundary.md): calls, calls by the run's
 wrappers, their Bash calls, refusals, calls with no agent name), the findings
 and `leaseReleased`. `hookLog` is not a finding: a worker that only read files
@@ -150,8 +152,9 @@ Not built yet. Open before it can be: whether the main session can address an
 agent that a workflow started (the documentation covers only agents started by
 the Agent tool, resumed with SendMessage and the agent id), where the resumed
 turns are written, and whether the write-boundary hook sees the same agent name
-on a resumed call. The isolation gate also refuses a product with uncommitted
-changes, which is exactly the state a retry starts from.
+on a resumed call. The isolation gate admits a retry on the product state the
+close record names (`--retry-of`, see
+[isolation](isolation-observation.md)); no command chains a retry yet.
 
 ## What it does not do
 

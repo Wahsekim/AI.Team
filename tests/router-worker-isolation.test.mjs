@@ -10,6 +10,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { observeIsolation } from '../src/router-worker/isolation.mjs';
 import { acquireLease, releaseLease } from '../src/router-worker/lease.mjs';
 import { digest } from '../src/loop/contracts.mjs';
+import { candidateOf, CLOSE_FILE } from '../src/router-worker/closed-candidate.mjs';
 
 const CLI = fileURLToPath(new URL('../scripts/isolation-router-worker.mjs', import.meta.url));
 const HOOK = fileURLToPath(new URL('../scripts/hooks/rw-write-boundary.mjs', import.meta.url));
@@ -174,4 +175,28 @@ test('a team root without an armed write boundary is blocked', t => {
   const { digest: _, ...body } = boundary; body.wrappers = { 'other-exec': body.wrappers['demo-worker-exec'], ...body.wrappers }; delete body.wrappers['demo-worker-exec'];
   writeFileSync(join(other.team, '.claude/rw-write-boundary.json'), JSON.stringify({ ...body, digest: digest(body) }));
   assert.ok(blocked(other), 'the boundary names other wrappers than the roster');
+});
+
+// What close leaves in the copy: a self-digested record naming the product state the run ended in.
+function closed(f) {
+  const body = { schemaVersion: 1, stage: 'launch-closed', candidate: candidateOf(f.product) };
+  write(f.team, CLOSE_FILE, JSON.stringify({ ...body, digest: digest(body) }));
+  return digest(body);
+}
+
+test('a retry is admitted on a product whose uncommitted state is exactly the candidate the launch was closed with', t => {
+  const f = fixture(t); write(f.product, 'src/new.js', 'export const y = 2;\n'); writeFileSync(join(f.product, 'src/app.js'), 'changed\n');
+  write(f.product, '.git/info/exclude', 'build/\n'); write(f.product, 'build/out.o', 'x');
+  const retryOf = closed(f), observe = (extra = {}) => observeIsolation({ teamRoot: f.team, productRoot: f.product, lease: f.lease, ...extra });
+  assert.deepEqual(codes(observe()), ['IGNORED_PATHS_PRESENT', 'PRODUCT_DIRTY'], 'without naming the close record nothing changes');
+  const admitted = observe({ retryOf });
+  assert.equal(admitted.status, 'clear', JSON.stringify(admitted.findings)); assert.equal(admitted.retryOf, retryOf);
+  assert.deepEqual(codes(observe({ retryOf: 'sha256:' + '0'.repeat(64) })), ['CANDIDATE_NOT_ADMITTED'], 'another close record than the one in the copy');
+  writeFileSync(join(f.product, 'src/new.js'), 'edited after close\n');
+  const moved = observe({ retryOf });
+  assert.equal(moved.status, 'blocked'); assert.deepEqual(codes(moved), ['CANDIDATE_NOT_ADMITTED']);
+  writeFileSync(join(f.product, 'src/new.js'), 'export const y = 2;\n');
+  assert.equal(observe({ retryOf }).status, 'clear', 'the same bytes again are the same candidate');
+  const record = join(f.team, CLOSE_FILE); writeFileSync(record, readFileSync(record, 'utf8').replace('launch-closed', 'launch-closed '));
+  assert.deepEqual(codes(observe({ retryOf })), ['CANDIDATE_NOT_ADMITTED'], 'an edited close record admits nothing');
 });
