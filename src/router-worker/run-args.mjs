@@ -30,13 +30,18 @@ function staffedWrappers(rosterText) {
   return Object.fromEntries(rows.map(cells => [cells[0], WRAPPER.exec(cells[2])[1]]));
 }
 
+const OPTIONAL_RUN_FIELDS = ['launchManifestDigest', 'maxAttemptsPerTicket'];
+// Owner decision 2026-11-14: one in-loop retry after a failed verification, with a fresh worker and verifier.
+const DEFAULT_ATTEMPTS = 2;
+
 function validateRun(run, count) {
   need(run && typeof run === 'object' && !Array.isArray(run)
-    && Object.keys(run).every(key => RUN_FIELDS.includes(key) || key === 'launchManifestDigest')
+    && Object.keys(run).every(key => RUN_FIELDS.includes(key) || OPTIONAL_RUN_FIELDS.includes(key))
     && RUN_FIELDS.every(key => key in run), 'INVALID_RUN',
-  `run must carry exactly ${RUN_FIELDS.join(', ')} and optionally launchManifestDigest`);
+  `run must carry exactly ${RUN_FIELDS.join(', ')} and optionally ${OPTIONAL_RUN_FIELDS.join(', ')}`);
   need(positive(run.rounds) && positive(run.nextLifecycleNumber) && positive(run.budgetCeilingTokens) && positive(run.estimatedOutputTokens) && positive(run.guardianEstimateTokens)
-    && typeof run.date === 'string' && typeof run.runId === 'string', 'INVALID_RUN', 'run fields have the wrong type');
+    && typeof run.date === 'string' && typeof run.runId === 'string'
+    && (run.maxAttemptsPerTicket === undefined || [1, 2, 3].includes(run.maxAttemptsPerTicket)), 'INVALID_RUN', 'run fields have the wrong type');
   need(run.rounds === count, 'COUNT_MISMATCH', `the owner count ${run.rounds} must equal the ${count} frozen ticket(s); re-freeze a shorter or longer board`);
 }
 
@@ -68,7 +73,8 @@ export async function freezeRun({ inputs, run, teamRoot, methodBundle }) {
       'The ceiling is more than three times the output estimate; it would not stop a runaway');
 
     const args = { rounds: run.rounds, date: run.date, nextLifecycleNumber: run.nextLifecycleNumber, runId: run.runId,
-      executionMode: 'wrappers', failurePolicy: 'halt-on-failure', budgetCeilingTokens: run.budgetCeilingTokens,
+      executionMode: 'wrappers', failurePolicy: 'halt-on-failure', maxAttemptsPerTicket: run.maxAttemptsPerTicket ?? DEFAULT_ATTEMPTS,
+      budgetCeilingTokens: run.budgetCeilingTokens,
       ...(run.launchManifestDigest === undefined ? {} : { launchManifestDigest: run.launchManifestDigest }),
       guardianAgentType: policy.profiles.guard.wrapper, allowedAgentTypes: Object.values(staffed).sort(),
       plan: previews.map(preview => preview.enginePlanItem) };
@@ -79,7 +85,7 @@ export async function freezeRun({ inputs, run, teamRoot, methodBundle }) {
     need(dry.result?.errorCode !== 'invalid-args', 'ENGINE_REJECTED',
       `The engine validator rejected the arguments: ${(dry.result?.validationErrors ?? []).join('; ').slice(0, 600)}`);
 
-    const body = { schemaVersion: 1, stage: 'run-args-frozen-offline', launchable: false, argsDigest: digest(args),
+    const body = { schemaVersion: 1, stage: 'run-args-frozen-offline', launchable: false, argsDigest: digest(args), maxAttemptsPerTicket: args.maxAttemptsPerTicket,
       engineDigest: bytesDigest(engine), rosterDigest: bytesDigest(roster), policyDigest,
       items: frozen.map((input, i) => ({ ticket: tickets[i], inputDigest: digest(input), previewDigest: previews[i].manifest.digest, authorizedTokens: input.mandate.budgetTokens })),
       budget: { unit: 'output', ceiling: run.budgetCeilingTokens, stopLine: Math.floor(run.budgetCeilingTokens * 4 / 5), estimatedOutput: run.estimatedOutputTokens },
@@ -115,17 +121,22 @@ export function accountRun({ args, record, result }) {
     check(recorded === digest(body) && record.argsDigest === digest(args), 'ARGS_NOT_THE_FROZEN_ARGS');
     check(result.runId === args.runId && result.rounds === args.rounds && result.executionMode === 'wrappers'
       && result.failurePolicy === 'halt-on-failure' && (result.launchManifestDigest ?? null) === (args.launchManifestDigest ?? null)
-      && result.budgetStatus?.ceiling === args.budgetCeilingTokens, 'RUN_IDENTITY_MISMATCH');
+      && result.budgetStatus?.ceiling === args.budgetCeilingTokens && result.maxAttemptsPerTicket === (args.maxAttemptsPerTicket ?? 1), 'RUN_IDENTITY_MISMATCH');
     const results = result.results;
     check(Array.isArray(results) && results.length <= args.plan.length && result.dispatchedCount === results.length, 'DISPATCH_COUNT_MISMATCH');
     check(results.every((r, i) => r.iter === i + 1 && r.ticket === args.plan[i]?.ticket && r.agentType === args.plan[i]?.agentType), 'CALL_NOT_IN_PLAN');
+    // One record per ticket; a retried ticket made `attempts` exec calls, and every attempt before the last was verified.
+    check(results.every(r => Number.isSafeInteger(r.attempts) && r.attempts >= 1 && r.attempts <= (args.maxAttemptsPerTicket ?? 1)
+      && Array.isArray(r.priorAttempts) && r.priorAttempts.length === r.attempts - 1), 'ATTEMPTS_NOT_IN_CAP');
     check(typeof result.guardian?.status === 'string', 'GUARDIAN_RECORD_MISSING');
     const todo = result.mainSessionTodo;
     check(todo.lifecycleEntries.length === results.length + 2
       && todo.nextLifecycleNumberAfter === args.nextLifecycleNumber + results.length + 1, 'LIFECYCLE_COUNT_MISMATCH');
     if (findings.length) return { status: 'unaccounted', findings };
     return { status: 'accounted', findings,
-      calls: { exec: results.length, check: results.filter(r => r.estimates.verifier !== null).length, guard: 1 },
+      calls: { tickets: results.length, exec: results.reduce((total, r) => total + r.attempts, 0),
+        check: results.reduce((total, r) => total + r.attempts - 1 + (r.estimates.verifier !== null ? 1 : 0), 0), guard: 1 },
+      attempts: results.map(r => r.attempts),
       nextLifecycleNumberAfter: todo.nextLifecycleNumberAfter,
       blockers: blockersOf(result) };
   } catch { return { status: 'unaccounted', findings: [...findings, 'RETURN_UNREADABLE'] }; }

@@ -26,6 +26,7 @@ node kit/scripts/freeze-run-router-worker.mjs RUN.json --team-root <team-root>
 | `estimatedOutputTokens` | expected output tokens of all execution and check calls of the run, same unit |
 | `guardianEstimateTokens` | expected usage of the Guardian call in `input+cache_creation`; recorded as `record.guardian`, not passed to the engine, compared by [run settlement](settlement.md#run-settlement) |
 | `launchManifestDigest` (optional) | digest from `preflight-run.mjs`, echoed by the engine |
+| `maxAttemptsPerTicket` (optional, 1 to 3, default 2) | attempts the engine may make per ticket: a failed verification on a clean execution is retried with a fresh worker and verifier. `estimatedOutputTokens` must cover the worst case |
 
 Exit 0 prints `{args, record}`; exit 2 is a refusal; exit 1 is usage.
 

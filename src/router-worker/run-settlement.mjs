@@ -17,10 +17,10 @@ export function settleRun({ record, account, tickets, guardian }) {
     && Array.isArray(record.items), 'A frozen run record with its own digest is required');
   expect(Array.isArray(tickets) && tickets.every(entry => selfDigested(entry) && entry.stage === 'offline-settlement' && entry.unit === UNIT),
     'Each ticket entry must be an unaltered ticket settlement');
-  // The engine dispatches the plan in order and may halt early: only the first `calls.exec` tickets ran.
-  expect(account?.status === 'accounted' && Number.isSafeInteger(account.calls?.exec) && account.calls.exec >= 0 && account.calls.exec <= record.items.length,
+  // The engine dispatches the plan in order and may halt early: only the first `calls.tickets` tickets ran.
+  expect(account?.status === 'accounted' && Number.isSafeInteger(account.calls?.tickets) && account.calls.tickets >= 0 && account.calls.tickets <= record.items.length,
     'The call accounting of this run (accountRun, status accounted) is required');
-  const all = record.items.map(item => item.ticket), planned = all.slice(0, account.calls.exec), settled = tickets.map(entry => entry.ticketId);
+  const all = record.items.map(item => item.ticket), planned = all.slice(0, account.calls.tickets), settled = tickets.map(entry => entry.ticketId);
   expect(new Set(settled).size === settled.length && settled.every(id => planned.includes(id)), 'Ticket settlements must be distinct tickets this run dispatched');
   expect(guardian === null || (guardian && typeof guardian.agentId === 'string' && count(guardian.harnessEq) && [true, false, null].includes(guardian.finished)),
     'guardian must be a measure-spawn subagent row or null');
@@ -35,7 +35,7 @@ export function settleRun({ record, account, tickets, guardian }) {
   const body = { schemaVersion: 1, stage: 'offline-run-settlement', launchable: false, unit: UNIT, recordDigest: record.digest,
     authorizedTokens: record.tickets.authorized, guardianEstimateTokens: estimate, ticketTokens, guardianTokens, totalTokens: ticketTokens + (guardianTokens ?? 0),
     runGate: blocked.length ? 'blocked' : unknown.length ? 'unknown' : 'clear', reasons: [...blocked, ...unknown],
-    undispatchedTickets: all.slice(account.calls.exec),
+    undispatchedTickets: all.slice(account.calls.tickets),
     tickets: tickets.map(entry => ({ ticketId: entry.ticketId, spentTokens: entry.spentTokens, budgetGate: entry.budgetGate, settlementDigest: entry.digest })),
     unresolved: UNRESOLVED };
   return { ...body, digest: digest(body) };

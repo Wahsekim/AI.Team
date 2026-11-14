@@ -114,8 +114,8 @@ the launch was closed with. It runs once.
 
 1. **Calls.** The metered workflow agents of the run's wrappers are put in the
    order the workflow journal started them. They must be exactly the calls the
-   engine return reports: per dispatched ticket the exec call, then the check
-   call if the engine dispatched one, and the Guardian last. Anything else is
+   engine return reports: per dispatched ticket and attempt the exec call, then
+   the check call if the engine dispatched one, and the Guardian last. Anything else is
    refused and nothing is written.
 2. **Briefs.** The transcript of each exec and check call must carry the frozen
    brief of its plan item (the runtime relays it with every line indented by two
@@ -133,7 +133,6 @@ the launch was closed with. It runs once.
 clear and there is no finding), the `calls` with agent id, tokens and finished
 flag, `mainSessionTokens`, the findings, the run settlement, and per dispatched
 ticket its retry journal, usage ledger and ticket settlement (`ticketRecords`).
-A retry of a ticket starts from that journal and ledger.
 
 The retry journal in step 3 is written after the run from the engine return
 (`journalSource: reconstructed-after-run`). Its admission gates are recorded as
@@ -146,54 +145,38 @@ ticket).
 ## Retries (owner decision 2026-11-14)
 
 Router/Worker is a parallel optional mode that stays in disposable copies; a
-real product repository may be run against only with a Bash sandbox. A retry
-after a failed check is dispatched by the PM main session by hand, with the
-owner present, as a continuation of the original session
-([continuation](continuation.md)); the count engine never retries.
+real product repository may be run against only with a Bash sandbox.
 
-The "PM main session" is the session the owner opened in the activated copy,
-the one that launched the engine. An agent can only be resumed by the session
-that started it, so the kit-development session cannot send a retry. Each retry
-is one instruction the owner gives in the copy's session (owner decision: no
-automatic retry inside a run).
+A retry happens inside the run. The frozen arguments carry
+`maxAttemptsPerTicket` (default 2: the first try and one retry; `RUN.json` may
+set 1 to 3). When a clean execution gets a failed verdict, the
+[count engine](../../engine.md) starts a fresh exec agent with the frozen brief
+plus the verifier's report as data, then a fresh check agent. Nothing is
+resumed, and the lease and the write boundary stay in place because the run has
+not ended. A ticket that still fails on its last attempt halts the run as before.
 
-### Prepare a retry (built)
+- `close` counts every attempt as a call (`account.calls`: `tickets`, `exec`,
+  `check`, `guard`; `account.attempts` per ticket) and refuses a return whose
+  attempt cap is not the frozen one or whose attempts exceed it.
+- `settle` expects, per ticket and attempt, the exec call and its check call,
+  each with its own transcript; the journal records a retry as a continuation
+  of the previous assignment in a declared fresh session, and the frozen brief
+  is checked in every attempt's transcript.
+- Every attempt spends against the one output ceiling and the one ticket
+  authorization. `estimatedOutputTokens` in `RUN.json` is therefore the worst
+  case with every allowed retry; freezing does not derive it.
+- Only the product state the run ended in is observed. The candidate of an
+  earlier attempt is named in the journal, not snapshotted.
 
-```sh
-node kit/scripts/launch-router-worker.mjs retry REQUEST.json --team-root <activated copy>
-```
+### Continuation after the run (kept, not wired)
 
-`REQUEST.json` is `{"input", "divergence"}` as for
-[continuation](continuation.md): the compiler input of the revised plan with new
-assignment ids and `baseline.candidateRef` equal to the `candidate` of the close
-record, and what changed since the failed attempt. Exit 0 prepared, 2 refused,
-1 usage. Steps:
-
-1. The copy must hold a launch that was closed and settled, and no prepared
-   retry.
-2. Compile the exec continuation from the ticket's kept journal. The journal's
-   rules refuse a ticket whose check passed, a ticket with a sticky stop, a
-   candidate other than the closed one, an unchanged plan and a third retry.
-3. Refuse a revised mandate that names write paths the run's boundary was not
-   armed for.
-4. Acquire the lease and observe the isolation gate with `--retry-of` the close
-   record. A refusal releases the lease.
-5. Record the journal `prepare` event and write `<copy>/rw-retry-1.json`: the
-   agent to resume (`resumeAgentId`), its wrapper, the attempt, the rendered
-   continuation brief and the advanced journal.
-
-The copy's session then resumes agent `resumeAgentId` with `renderedBrief`.
-
-### Not built
-
-- Whether the session can address an agent that a workflow started. The
-  documentation covers agents started by the Agent tool (SendMessage with the
-  agent id). Where the resumed turns are written, and whether the write-boundary
-  hook sees the same agent name on a resumed call, are not documented either.
-  The first attended retry answers these.
-- Closing and settling a retry, and the check continuation that follows the
-  repair. Until they exist, a prepared retry keeps the lease; the operator
-  releases it with `lease-router-worker.mjs release`.
+Before the decision above, a retry was to be a continuation of the original
+session sent by the PM session of the copy. `launch-router-worker.mjs retry`
+and `isolation-router-worker.mjs --retry-of` remain in the tree for that path:
+they prepare an exec continuation after a closed and settled run whose check
+failed. Closing and settling such a continuation is not built, and whether a
+session can resume an agent a workflow started was never verified. Nothing in
+the run flow calls them.
 
 ## What it does not do
 

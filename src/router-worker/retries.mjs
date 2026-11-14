@@ -55,7 +55,7 @@ export function createRetryJournal({ ticketId, rules }) {
 }
 
 function initial(ticketId) {
-  return { ticketId, assignments: [], started: { exec: 0, check: 0 }, sessions: { exec: null, check: null },
+  return { ticketId, assignments: [], started: { exec: 0, check: 0 }, sessions: { exec: null, check: null }, usedSessions: { exec: [], check: [] },
     stops: [], closes: [], fixVerifyRoundTrips: 0, pendingRepair: null };
 }
 const pending = state => state.assignments.some(a => ['prepared', 'started', 'unknown'].includes(a.status));
@@ -115,8 +115,11 @@ function transition(before, event, rules) {
     const lastCheck = state.assignments.filter(a => a.duty === 'check' && a.status === 'closed').at(-1);
     expect(lastCheck?.outcome !== 'pass', 'Passing check claim awaits settlement; further work needs a new reviewed transition', 'RETRY_STOPPED');
     if (previous) {
+      // A retry follows the previous assignment of its duty. It either resumes that duty's session or
+      // declares a fresh one (null); the attempt count is per ticket and duty either way.
       expect(previous.status === 'closed' && event.continuationOf === previous.assignmentId
-        && same(event.resumeSessionRef, state.sessions[event.duty]), 'Retry must continue the previous duty assignment and session', 'SESSION_CONTINUITY_REQUIRED');
+        && (event.resumeSessionRef === null || same(event.resumeSessionRef, state.sessions[event.duty])),
+      'Retry must continue the previous duty assignment, in its session or in a declared fresh one', 'SESSION_CONTINUITY_REQUIRED');
       expect(event.divergence !== null && event.divergence.previousPlanDigest === previous.planRef.digest
         && event.planRef.digest !== previous.planRef.digest, 'Retry needs a revised plan and explicit divergence evidence', 'RETRY_DIVERGENCE_REQUIRED');
     } else expect(event.continuationOf === null && event.resumeSessionRef === null && event.divergence === null,
@@ -141,14 +144,16 @@ function transition(before, event, rules) {
     expect(assignment.status === 'prepared', 'Only a prepared assignment may start');
     const blocked = GATES.filter(gate => event.admission.gates[gate] !== 'clear');
     if (blocked.length) { blocked.forEach(stop); return state; }
-    const own = state.sessions[assignment.duty], other = state.sessions[assignment.duty === 'exec' ? 'check' : 'exec'];
-    expect(!own || same(own, event.sessionRef), 'Resumed call must retain the duty session', 'SESSION_CONTINUITY_REQUIRED');
-    expect(!other || other.id !== event.sessionRef.id && other.digest !== event.sessionRef.digest,
-      'Author and checker cannot share session identity', 'DUTY_NOT_SEPARATED');
+    const shares = used => used.id === event.sessionRef.id || used.digest === event.sessionRef.digest;
+    expect(!state.usedSessions[assignment.duty === 'exec' ? 'check' : 'exec'].some(shares), 'Author and checker cannot share session identity', 'DUTY_NOT_SEPARATED');
+    const own = state.sessions[assignment.duty];
+    expect(!own || (assignment.resumeSessionRef === null ? !state.usedSessions[assignment.duty].some(shares) : same(own, event.sessionRef)),
+      'A resumed call must retain the duty session; a fresh retry must use a session no call of this duty used', 'SESSION_CONTINUITY_REQUIRED');
     expect(!state.assignments.some(a => a.callRef && (a.callRef.id === event.callRef.id || a.callRef.digest === event.callRef.digest)),
       'Host call already belongs to another assignment', 'IDEMPOTENCY_CONFLICT');
     assignment.started = true; assignment.status = 'started'; assignment.sessionRef = event.sessionRef; assignment.callRef = event.callRef;
     state.sessions[assignment.duty] = event.sessionRef; state.started[assignment.duty]++;
+    if (!state.usedSessions[assignment.duty].some(shares)) state.usedSessions[assignment.duty].push(event.sessionRef);
   } else if (event.type === 'cancel') {
     expect(assignment.status === 'prepared', 'Only a proved never-started preparation can be cancelled');
     assignment.status = 'cancelled'; assignment.receiptRef = event.neverStartedRef;

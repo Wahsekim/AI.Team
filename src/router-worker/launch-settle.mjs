@@ -48,31 +48,43 @@ function metered(meter, wrappers) {
   return [...rows].sort((a, b) => order.indexOf(a.agentId) - order.indexOf(b.agentId));
 }
 
-function settleTicket({ item, planItem, outcome, exec, check, launch, close, rules, findings }) {
-  const ticket = item.ticket, ref = (id, value) => ({ id, digest: digest(value) });
+// `attempts` is one {exec, check} pair of meter rows per attempt; `check` is null when the engine dispatched none.
+// Every attempt before the last ended in a failed verification, otherwise the engine would not have retried.
+function settleTicket({ item, planItem, outcome, attempts, launch, close, rules, findings }) {
+  const ticket = item.ticket, ref = (id, value) => ({ id, digest: digest(value) }), last = attempts.length;
   const admission = { sourceRef: { id: 'rw-launch', digest: launch.digest }, gates: Object.fromEntries(GATES.map(gate => [gate, 'clear'])) };
-  const receiptRef = { id: 'rw-close', digest: close.digest }, candidate = close.candidate ?? ref(`${ticket}-candidate`, { head: close.productHead, paths: close.changedPaths });
+  const receiptRef = { id: 'rw-close', digest: close.digest };
+  const closed = close.candidate ?? ref(`${ticket}-candidate`, { head: close.productHead, paths: close.changedPaths });
+  // Only the state the run ended in was observed; an earlier attempt's candidate is named, not snapshotted.
+  const candidate = k => k === last ? closed : ref(`${ticket}-candidate-${k}`, { attempt: k, before: closed.digest });
+  const plan = (duty, k) => ({ id: `${ticket}-${duty}-plan-${k}`, digest: k === 1 ? item.previewDigest : digest({ preview: item.previewDigest, duty, attempt: k }) });
   const call = row => ({ sessionRef: ref(`agent-${row.agentId}`, row.agentId), callRef: { id: `transcript-${row.agentId}`, digest: bytesDigest(readFileSync(row.file)) } });
   let journal = createRetryJournal({ ticketId: ticket, rules }), count = 0;
   const send = event => { journal = advanceRetryJournal({ journal, rules, expectedDigest: journal.digest, event: { eventId: `event-${++count}`, ...event } }).journal; };
-  const run = (duty, row, candidateRef, closing) => {
-    const assignmentId = `${ticket}.${duty}.1`;
-    send({ type: 'prepare', assignmentId, duty, planRef: { id: `${ticket}-${duty}-plan`, digest: item.previewDigest }, candidateRef, continuationOf: null, resumeSessionRef: null, divergence: null, admission });
+  const run = (duty, k, row, candidateRef, closing) => {
+    const assignmentId = `${ticket}.${duty}.${k}`;
+    send({ type: 'prepare', assignmentId, duty, planRef: plan(duty, k), candidateRef, admission, resumeSessionRef: null,
+      continuationOf: k === 1 ? null : `${ticket}.${duty}.${k - 1}`,
+      divergence: k === 1 ? null : { previousPlanDigest: plan(duty, k - 1).digest, reason: 'The verifier rejected the previous attempt; the engine retried with a fresh agent', evidenceRef: receiptRef } });
     send({ type: 'start', assignmentId, ...call(row), admission });
     send({ type: 'close', assignmentId, receiptRef, ...closing });
   };
-  const blocked = outcome.worker?.blocked === true, progress = outcome.worker?.progress === true;
-  run('exec', exec, ref('launch-product-head', launch.productHead),
-    { outcome: blocked ? 'blocked' : 'candidate', progress, outcomeKey: `exec-1-${blocked ? 'blocked' : 'candidate'}`, candidateRef: blocked && !check ? null : candidate });
-  if (check) {
-    const pass = outcome.verifier?.pass === true;
-    run('check', check, candidate, { outcome: pass ? 'pass' : 'fail', progress: true, outcomeKey: `check-1-${pass ? 'pass' : 'fail'}`, candidateRef: candidate });
-  }
-  let ledger = createSettlementLedger({ ticketId: ticket, authorizedTokens: item.authorizedTokens });
-  for (const [index, row] of [exec, check].filter(Boolean).entries())
-    ledger = advanceSettlementLedger({ ledger, expectedDigest: ledger.digest, event: usageEventFromMeterRow({ row, callRef: call(row).callRef, eventId: `usage-${index + 1}` }) }).ledger;
-  for (const [duty, row, brief] of [['exec', exec, planItem.brief], ['check', check, planItem.verifierBrief]])
-    if (row && typeof brief === 'string' && !carriesBrief(readFileSync(row.file, 'utf8'), brief)) findings.push({ code: 'BRIEF_NOT_FOUND', ticket, duty });
+  let ledger = createSettlementLedger({ ticketId: ticket, authorizedTokens: item.authorizedTokens }), usage = 0;
+  const meter = row => { ledger = advanceSettlementLedger({ ledger, expectedDigest: ledger.digest, event: usageEventFromMeterRow({ row, callRef: call(row).callRef, eventId: `usage-${++usage}` }) }).ledger; };
+  attempts.forEach(({ exec, check }, index) => {
+    const k = index + 1, final = k === last;
+    const blocked = final && outcome.worker?.blocked === true, progress = final ? outcome.worker?.progress === true : true;
+    run('exec', k, exec, k === 1 ? ref('launch-product-head', launch.productHead) : candidate(k - 1),
+      { outcome: blocked ? 'blocked' : 'candidate', progress, outcomeKey: `exec-${k}-${blocked ? 'blocked' : 'candidate'}`, candidateRef: blocked && !check ? null : candidate(k) });
+    meter(exec);
+    if (check) {
+      const pass = final && outcome.verifier?.pass === true;
+      run('check', k, check, candidate(k), { outcome: pass ? 'pass' : 'fail', progress: true, outcomeKey: `check-${k}-${pass ? 'pass' : 'fail'}`, candidateRef: candidate(k) });
+      meter(check);
+    }
+    for (const [duty, row, brief] of [['exec', exec, planItem.brief], ['check', check, planItem.verifierBrief]])
+      if (row && typeof brief === 'string' && !carriesBrief(readFileSync(row.file, 'utf8'), brief)) findings.push({ code: 'BRIEF_NOT_FOUND', ticket, duty, ...(last > 1 ? { attempt: k } : {}) });
+  });
   return { ticketId: ticket, journal, ledger, settlement: settleAgainstJournal({ ledger, retryJournal: journal, rules }) };
 }
 
@@ -91,20 +103,20 @@ export function settleLaunch({ teamRoot, result, meter, rules }) {
     const plan = launch.args.plan, guardType = launch.args.guardianAgentType;
     const rows = metered(meter, [...new Set([guardType, ...plan.flatMap(item => [item.agentType, item.verifierAgentType])])].filter(Boolean));
     const expected = [];
-    for (let i = 0; i < account.calls.exec; i++) {
-      expected.push({ index: i, duty: 'exec', agentType: plan[i].agentType });
-      if (result.results[i].estimates.verifier !== null) expected.push({ index: i, duty: 'check', agentType: plan[i].verifierAgentType });
+    for (let i = 0; i < account.calls.tickets; i++) for (let k = 1; k <= account.attempts[i]; k++) {
+      expected.push({ index: i, attempt: k, duty: 'exec', agentType: plan[i].agentType });
+      if (k < account.attempts[i] || result.results[i].estimates.verifier !== null) expected.push({ index: i, attempt: k, duty: 'check', agentType: plan[i].verifierAgentType });
     }
-    expected.push({ index: null, duty: 'guard', agentType: guardType });
+    expected.push({ index: null, attempt: null, duty: 'guard', agentType: guardType });
     need(rows.length === expected.length && rows.every((row, i) => row.agentType === expected[i].agentType), 'The metered agents are not the calls of this run, in order');
 
-    const findings = [], row = (index, duty) => rows[expected.findIndex(call => call.index === index && call.duty === duty)];
-    const ticketRecords = launch.runRecord.items.slice(0, account.calls.exec).map((item, index) => settleTicket({ item, planItem: plan[index],
-      outcome: result.results[index], exec: row(index, 'exec'), check: row(index, 'check'), launch, close, rules, findings }));
+    const findings = [], row = (index, attempt, duty) => rows[expected.findIndex(call => call.index === index && call.attempt === attempt && call.duty === duty)] ?? null;
+    const ticketRecords = launch.runRecord.items.slice(0, account.calls.tickets).map((item, index) => settleTicket({ item, planItem: plan[index], outcome: result.results[index],
+      attempts: Array.from({ length: account.attempts[index] }, (_, at) => ({ exec: row(index, at + 1, 'exec'), check: row(index, at + 1, 'check') })), launch, close, rules, findings }));
     const guard = rows.at(-1), run = settleRun({ record: launch.runRecord, account, tickets: ticketRecords.map(entry => entry.settlement), guardian: guard });
     const body = { schemaVersion: 1, stage: 'launch-settled', runId: launch.runId, launchDigest: launch.digest, closeDigest: close.digest,
       status: run.runGate === 'clear' && !findings.length ? 'clear' : 'review',
-      calls: expected.map((call, i) => ({ ticket: call.index === null ? null : plan[call.index].ticket, duty: call.duty, agentId: rows[i].agentId, tokens: rows[i].harnessEq, finished: rows[i].finished })),
+      calls: expected.map((call, i) => ({ ticket: call.index === null ? null : plan[call.index].ticket, duty: call.duty, attempt: call.attempt, agentId: rows[i].agentId, tokens: rows[i].harnessEq, finished: rows[i].finished })),
       mainSessionTokens: Number.isSafeInteger(meter.session?.harnessEq) ? meter.session.harnessEq : null,
       findings, run, ticketRecords, journalSource: 'reconstructed-after-run', unresolved: UNRESOLVED };
     const record = { ...body, digest: digest(body) };

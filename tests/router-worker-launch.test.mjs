@@ -157,7 +157,7 @@ test('close accounts the engine return against the launch record, lists the prod
   const closed = f.close();
   assert.equal(closed.errors, undefined, JSON.stringify(closed.errors));
   assert.equal(closed.stage, 'launch-closed'); assert.equal(closed.status, 'clean', JSON.stringify(closed.findings));
-  assert.equal(closed.launchDigest, f.launch.digest); assert.equal(closed.account.status, 'accounted'); assert.deepEqual(closed.account.calls, { exec: 1, check: 1, guard: 1 });
+  assert.equal(closed.launchDigest, f.launch.digest); assert.equal(closed.account.status, 'accounted'); assert.deepEqual(closed.account.calls, { tickets: 1, exec: 1, check: 1, guard: 1 });
   assert.deepEqual(closed.changedPaths, ['src/tag-list/empty.ts', 'src/tag-list/view.ts']); assert.equal(closed.leaseReleased, true);
   assert.equal(f.leased(), 'free');
   const { digest: recorded, ...body } = closed;
@@ -238,9 +238,9 @@ const jsonl = rows => rows.map(row => JSON.stringify(row)).join('\n') + '\n';
 const usageRow = (id, agentId, create) => ({ type: 'assistant', isSidechain: Boolean(agentId), agentId, requestId: `req_${id}`,
   message: { id: `msg_${id}`, model: 'm', role: 'assistant', content: [], usage: { input_tokens: 10, cache_creation_input_tokens: create, cache_read_input_tokens: 0, output_tokens: 100 } } });
 const relayed = text => ({ type: 'user', message: { role: 'user', content: `The computed task text follows:\n${text.split('\n').map(line => '  ' + line).join('\n')}\n  ` } });
-function metered(f, { execBrief, order = ['exec1', 'check1', 'guard1'], tokens = { exec1: 12000, check1: 6000, guard1: 5000 } } = {}) {
+function metered(f, { execBrief, order = ['exec1', 'check1', 'guard1'], tokens = { exec1: 12000, check1: 6000, guard1: 5000 }, extra = {} } = {}) {
   const plan = f.launch.args.plan[0], dir = join(f.base, 'projects'), wf = join(dir, 'sess/subagents/workflows/wf_1');
-  const agents = { exec1: ['sample-worker-exec', execBrief ?? plan.brief], check1: ['sample-worker-check', plan.verifierBrief], guard1: ['sample-worker-guard', 'Audit this run.'] };
+  const agents = { exec1: ['sample-worker-exec', execBrief ?? plan.brief], check1: ['sample-worker-check', plan.verifierBrief], guard1: ['sample-worker-guard', 'Audit this run.'], ...extra };
   mkdirSync(wf, { recursive: true }); writeFileSync(join(dir, 'sess.jsonl'), jsonl([usageRow('main', undefined, 7000)]));
   for (const [id, [agentType, brief]] of Object.entries(agents)) {
     writeFileSync(join(wf, `agent-${id}.jsonl`), jsonl([{ type: 'user', message: { role: 'user', content: 'harness preamble' } }, relayed(brief), usageRow(id, id, tokens[id])]));
@@ -296,6 +296,26 @@ test('a blocked worker whose returned work was checked settles as a stopped tick
   assert.equal(settled.run.tickets[0].ticketId, 'US-08'); assert.equal(settled.run.runGate, 'clear');
 });
 
+test('a ticket that passed on its retry settles as four calls of one ticket, each attempt in its own session', async t => {
+  let checks = 0;
+  const f = await ran(t, { verifier: () => ++checks === 1 ? failingCheck.verifier() : { pass: true, staticPass: true, e2ePass: true, summary: 'all green', commandsRun: [{ command: 'npm test', exitCode: 0 }], failures: [] } });
+  assert.equal(f.result.results[0].attempts, 2); f.close();
+  const plan = f.launch.args.plan[0], retryBrief = `${plan.brief}\n\n---\nRETRY: attempt 2 of 2 for this ticket.\n{"summary":"one test fails"}\n`;
+  const meter = () => metered(f, { order: ['exec1', 'check1', 'exec2', 'check2', 'guard1'], tokens: { exec1: 6000, check1: 3000, exec2: 5000, check2: 3000, guard1: 5000 },
+    extra: { exec2: ['sample-worker-exec', retryBrief], check2: ['sample-worker-check', plan.verifierBrief] } });
+  const settled = settle(f, meter());
+  assert.equal(settled.errors, undefined, JSON.stringify(settled.errors));
+  assert.deepEqual(settled.calls.map(call => [call.ticket, call.duty, call.attempt, call.agentId, call.tokens]), [
+    ['US-08', 'exec', 1, 'exec1', 6010], ['US-08', 'check', 1, 'check1', 3010], ['US-08', 'exec', 2, 'exec2', 5010], ['US-08', 'check', 2, 'check2', 3010], [null, 'guard', null, 'guard1', 5010]]);
+  assert.equal(settled.status, 'clear', JSON.stringify([settled.findings, settled.run.reasons])); assert.equal(settled.run.ticketTokens, 17040);
+  const state = inspectRetryJournal({ journal: settled.ticketRecords[0].journal, rules });
+  assert.deepEqual(state.assignments.map(a => [a.assignmentId, a.outcome]), [['US-08.exec.1', 'candidate'], ['US-08.check.1', 'fail'], ['US-08.exec.2', 'candidate'], ['US-08.check.2', 'pass']]);
+  assert.deepEqual(state.retryCounts, { exec: 1, check: 1 }); assert.equal(new Set(state.usedSessions.exec.map(ref => ref.id)).size, 2);
+  const short = await ran(t, { verifier: () => ++checks === 3 ? failingCheck.verifier() : { pass: true, staticPass: true, e2ePass: true, summary: 'ok', commandsRun: [{ command: 'npm test', exitCode: 0 }], failures: [] } });
+  short.close();
+  assert.match(refusal(settle(short, metered(short))).reason, /calls of this run/, 'a retried run metered as a single attempt');
+});
+
 test('settle refuses a meter that is not the calls of this run, an unclosed launch and another return; nothing is written', async t => {
   const f = await ran(t), file = join(f.team, SETTLE_FILE);
   assert.match(refusal(settle(f, metered(f))).reason, /closed/);
@@ -320,7 +340,8 @@ test('CLI settles from RESULT.json and METER.json; exit 0 clear, 2 review or ref
 // Retry after a failed check: prepared by the launch host, sent by the PM session of the copy.
 const failingCheck = { verifier: () => ({ pass: false, staticPass: false, e2ePass: true, summary: 'one test fails', commandsRun: [{ command: 'npm test', exitCode: 1 }], failures: ['tag list test'] }) };
 async function failed(t, agents = failingCheck, overrides = {}) {
-  const f = await ran(t, agents, overrides); write(f.product, 'src/tag-list/view.ts', 'export const x = 2;\n');
+  // This path continues a ticket after the run, so the run itself is frozen without the in-loop retry.
+  const f = await ran(t, agents, { run: { ...RUN, maxAttemptsPerTicket: 1 }, ...overrides }); write(f.product, 'src/tag-list/view.ts', 'export const x = 2;\n');
   const closed = f.close(), settled = settle(f, metered(f));
   assert.equal(settled.errors, undefined, JSON.stringify(settled.errors));
   const request = (overrides = {}) => {

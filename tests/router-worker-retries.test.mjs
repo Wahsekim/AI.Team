@@ -117,6 +117,27 @@ test('retry requires previous assignment, original session and a changed plan wi
   throws(() => r.send(start('exec', 2, { sessionRef: session('new') })), 'SESSION_CONTINUITY_REQUIRED');
 });
 
+test('a retry may run in a fresh session: one no call of the ticket used, and never the other duty\'s', () => {
+  const fresh = (duty, n) => prepare(duty, n, { resumeSessionRef: null });
+  const r = rig(); run(r, 'exec', 1, 'candidate'); run(r, 'check', 1, 'fail'); r.send(fresh('exec', 2));
+  throws(() => r.send(start('exec', 2)), 'SESSION_CONTINUITY_REQUIRED', 'a fresh retry cannot be started in the session it did not claim');
+  throws(() => r.send(start('exec', 2, { sessionRef: session('check') })), 'DUTY_NOT_SEPARATED');
+  r.send(start('exec', 2, { sessionRef: session('exec-second') })); r.send(close('exec', 2, 'candidate'));
+  r.send(fresh('check', 2));
+  throws(() => r.send(start('check', 2, { sessionRef: session('exec') })), 'DUTY_NOT_SEPARATED', 'an earlier author session is still an author session');
+  throws(() => r.send(start('check', 2, { sessionRef: session('exec-second') })), 'DUTY_NOT_SEPARATED');
+  r.send(start('check', 2, { sessionRef: session('check-second') })); r.send(close('check', 2, 'pass'));
+  const state = r.state();
+  assert.deepEqual(state.retryCounts, { exec: 1, check: 1 }, 'a fresh session does not reset the attempt count');
+  assert.deepEqual(state.sessions, { exec: session('exec-second'), check: session('check-second') });
+  const capped = rig(); run(capped, 'exec', 1, 'candidate'); run(capped, 'check', 1, 'fail');
+  capped.send(fresh('exec', 2)); capped.send(start('exec', 2, { sessionRef: session('e2') })); capped.send(close('exec', 2, 'candidate'));
+  capped.send(fresh('check', 2)); capped.send(start('check', 2, { sessionRef: session('c2') })); capped.send(close('check', 2, 'fail'));
+  capped.send(fresh('exec', 3)); capped.send(start('exec', 3, { sessionRef: session('e3') })); capped.send(close('exec', 3, 'candidate'));
+  capped.send(fresh('check', 3)); capped.send(start('check', 3, { sessionRef: session('c3') })); capped.send(close('check', 3, 'fail'));
+  throws(() => capped.send(fresh('exec', 4)), 'RETRY_LIMIT');
+});
+
 test('one host call cannot be attributed to two assignments', () => {
   const r = rig(); run(r, 'exec', 1, 'candidate'); r.send(prepare('check', 1));
   throws(() => r.send(start('check', 1, { callRef: reference('host-call-exec-1') })), 'IDEMPOTENCY_CONFLICT');
