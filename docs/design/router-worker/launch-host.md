@@ -2,8 +2,7 @@
 
 Status: `prepare`, `close` and `settle` exist and are tested offline; `prepare`
 and `close` were used in the third smoke run, `settle` has not yet run on a real
-session. The launch-manifest preflight is not chained yet. Nothing here calls a
-model.
+session. Nothing here calls a model.
 
 In the two disposable smoke runs every gate before and after the run was run by
 hand, in an order nothing enforced. The launch host puts them behind one command.
@@ -20,8 +19,12 @@ node kit/scripts/launch-router-worker.mjs prepare RUN.json --team-root <activate
 2 refused, 1 usage. Steps, in this order:
 
 1. Refuse if `<copy>/rw-launch.json` exists. An activated copy is prepared once.
-2. Freeze the run ([run arguments](run-args.md)). This writes nothing, so an
-   invalid run is refused before anything is taken.
+2. Freeze the run ([run arguments](run-args.md)), run the engine's static
+   launch preflight (`preflight-run.mjs`) on the frozen arguments, and freeze
+   again with its `launchManifestDigest`. A digest already in `RUN.json` is kept
+   and no preflight runs. None of this writes to the copy or the product, so an
+   invalid run or a failing preflight (`PREFLIGHT_FAILED`) is refused before
+   anything is taken.
 3. Acquire the ownership lease on the product for this copy.
 4. Arm the write boundary for the run's tickets.
 5. Observe the [isolation gate](isolation-observation.md) with that lease. It
@@ -198,8 +201,10 @@ The copy's session then resumes agent `resumeAgentId` with `renderedBrief`.
 
 - `owner-attendance`: ADR 0006 still requires the owner present; the script
   cannot observe that.
-- `launch-manifest-preflight`: `preflight-run.mjs` is not chained yet, so the
-  args carry no `launchManifestDigest` unless `RUN.json` supplies one.
+- `launch-manifest-preflight`: listed only when the record's `launchManifest`
+  is `absent` (a caller of the module that passed no preflight). The command
+  always chains it. The preflight runs before the write boundary is armed; the
+  manifest does not cover `.claude/settings.json`.
 - `in-run-admission`: no call is admitted one by one during the run. The retry
   cap and input-side usage are only judged afterwards. Closing this needs an
   external process that drives the runtime, which the owner did not choose for
