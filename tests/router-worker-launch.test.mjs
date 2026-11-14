@@ -139,6 +139,7 @@ test('close accounts the engine return against the launch record, lists the prod
   const { digest: recorded, ...body } = closed;
   assert.equal(recorded, digest(body)); assert.deepEqual(JSON.parse(readFileSync(f.closeFile, 'utf8')), closed);
   assert.ok(closed.unresolved.includes('usage-settlement'));
+  assert.deepEqual(closed.ignoredChanges, { count: 0, topLevel: {} });
   assert.deepEqual(closed.hookLog, { calls: 0, wrapperCalls: 0, wrapperBashCalls: 0, denied: 0, callsWithoutAgentType: 0, unreadableLines: 0 }, 'no hook ran under the mock engine, and the record says so');
   assert.equal(refusal(f.close()).code, 'LAUNCH_REFUSED', 'a launch is closed once');
 });
@@ -157,6 +158,18 @@ test('close reports what the run left that the gates do not allow, and still rel
   const theirs = acquireLease({ teamRoot: other, productRoot: taken.product }).lease.digest, result = taken.close();
   assert.ok(result.findings.some(finding => finding.code === 'LEASE_NOT_HELD_BY_THIS_LAUNCH')); assert.equal(result.leaseReleased, false);
   assert.equal(readLease({ productRoot: taken.product }).lease.digest, theirs, 'another host\'s lease is left alone');
+});
+
+test('git-ignored paths the run left are counted by top-level directory and do not keep the close from clean', async t => {
+  const ignoring = fixture(t); write(ignoring.product, '.gitignore', 'build/\n.dart_tool/\n'); git(ignoring.product, 'add', '-A'); git(ignoring.product, 'commit', '-q', '-m', 'ignore');
+  const launch = await ignoring.prepare(), { result } = await runWorkflow({ scriptPath: join(ignoring.team, '.claude/workflows/run-n-rounds.js'), args: launch.args, agentImpl: makeAgentImpl({}) });
+  write(ignoring.product, 'build/a.o', 'x'); write(ignoring.product, 'build/deep/b.o', 'x'); write(ignoring.product, '.dart_tool/version', 'x'); write(ignoring.product, 'src/tag-list/ok.ts', 'x\n');
+  const closed = closeLaunch({ teamRoot: ignoring.team, result });
+  assert.equal(closed.status, 'clean', JSON.stringify(closed.findings));
+  assert.deepEqual(closed.changedPaths, ['src/tag-list/ok.ts']);
+  assert.deepEqual(closed.ignoredChanges, { count: 3, topLevel: { '.dart_tool': 1, build: 2 } });
+  const mixed = await ran(t); write(mixed.product, 'stray.txt', 'x\n');
+  assert.deepEqual(mixed.close().findings, [{ code: 'WRITE_OUTSIDE_BOUNDARY', paths: ['stray.txt'] }], 'an untracked path outside the boundary is still a finding');
 });
 
 test('close summarizes the hook log of the run', async t => {

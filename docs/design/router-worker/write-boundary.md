@@ -74,10 +74,12 @@ The log tells apart three ways a forbidden write can get through:
   the shell. `BASH_NOT_SANDBOXED` stays an accepted unknown; closing it needs
   the Claude Code sandbox (`sandbox.filesystem`), which also has to admit the
   build tool's own caches.
-- **Not observed live.** The documentation says project hooks run inside
-  subagents and that workflow agents get the same permission checks; that the
-  hook fires for an agent started by the count engine, with `agent_type` set to
-  the wrapper name, has to be shown by a run that tries a forbidden write.
+- **Observed live once.** In the third disposable smoke run (2026-11-13, Claude
+  Code 2.1.323 (Claude Code)) the hook ran inside agents started by the count engine and received
+  the wrapper name as `agent_type`: a Write inside the boundary was allowed, a
+  Write outside it was refused before any permission prompt, and the worker saw
+  the reason. This is one run on one runtime version; the `hookLog` counts in
+  each close record show whether it held for that run.
 - **Permission modes.** A hook that exits 2 is documented to stop the call
   before permission rules are evaluated. Its effect under a non-default
   permission mode is not documented; the isolation gate already refuses such
