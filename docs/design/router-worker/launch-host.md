@@ -1,7 +1,9 @@
 # Launch host (owner decision 2026-11-13: one script before and after the run)
 
-Status: `prepare` and `close` exist and are tested offline. Usage settlement and
-the launch-manifest preflight are not chained yet. Nothing here calls a model.
+Status: `prepare`, `close` and `settle` exist and are tested offline; `prepare`
+and `close` were used in the third smoke run, `settle` has not yet run on a real
+session. The launch-manifest preflight is not chained yet. Nothing here calls a
+model.
 
 In the two disposable smoke runs every gate before and after the run was run by
 hand, in an order nothing enforced. The launch host puts them behind one command.
@@ -93,6 +95,47 @@ When the engine returns nothing (crash, interrupt), there is no return to
 close with. The operator releases the lease with `lease-router-worker.mjs
 release` and deletes the copy.
 
+## Settle
+
+```sh
+node kit/scripts/measure-spawn.mjs <session-dir> --json > METER.json
+node kit/scripts/launch-router-worker.mjs settle RESULT.json METER.json --team-root <activated copy>
+```
+
+`<session-dir>` is the Claude Code session directory of the launching session.
+Exit 0 settled clear, 2 refused or settled with something to review, 1 usage.
+Settle needs the launch record and the close record, and the same engine return
+the launch was closed with. It runs once.
+
+1. **Calls.** The metered workflow agents of the run's wrappers are put in the
+   order the workflow journal started them. They must be exactly the calls the
+   engine return reports: per dispatched ticket the exec call, then the check
+   call if the engine dispatched one, and the Guardian last. Anything else is
+   refused and nothing is written.
+2. **Briefs.** The transcript of each exec and check call must carry the frozen
+   brief of its plan item (the runtime relays it with every line indented by two
+   spaces). A call without it is the finding `BRIEF_NOT_FOUND` with ticket and
+   duty. This is the check that the engine was launched with the frozen task
+   text; it also fires if a later runtime relays briefs differently.
+3. **Tickets.** Per dispatched ticket: a retry journal, the usage ledger with
+   one meter read per call, and the [ticket settlement](settlement.md) against
+   the authorization frozen for that ticket (`items[].authorizedTokens` in the
+   run record).
+4. **Run.** The [run settlement](settlement.md): tickets plus the Guardian
+   against its estimate.
+
+`<copy>/rw-settlement.json` carries `status` (`clear` only when the run gate is
+clear and there is no finding), the `calls` with agent id, tokens and finished
+flag, `mainSessionTokens`, the findings and the run settlement.
+
+The retry journal in step 3 is written after the run from the engine return
+(`journalSource: reconstructed-after-run`). Its admission gates are recorded as
+clear with the launch record as their source, because the engine issued those
+calls and no host judged them one by one. It shows what was called, not that a
+gate was observed at call time; it will not catch a retry-cap breach inside a
+run, which the count engine cannot produce (one exec and at most one check per
+ticket).
+
 ## What it does not do
 
 `unresolved` in the record lists:
@@ -107,14 +150,10 @@ release` and deletes the copy.
   owner-attended single-round runs.
 - `bash-writes`: see the write boundary.
 
-The close record lists `usage-settlement` and `retry-journal`: metering,
-ticket settlement, run settlement and the retry journal are still run by hand
-after close.
-
 Nothing forces the main session to use the record's `args`: the main session
 starts the engine, and the script cannot stand between them. Close detects a
 different run id, count, ceiling, plan order or agent type from what the engine
-echoes. The engine does not echo the briefs, so a launch with changed task
-text is not detected; that needs the agent transcripts, which the settlement
-step will read. Until then the owner compares the launched arguments with
-`rw-launch.json` at launch.
+echoes. The engine does not echo the briefs; `settle` finds a changed brief
+afterwards from the agent transcripts. Nothing detects it before the calls are
+made, so the owner still compares the launched arguments with `rw-launch.json`
+at launch.

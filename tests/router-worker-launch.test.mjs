@@ -8,6 +8,8 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { prepareLaunch, closeLaunch, LAUNCH_FILE, CLOSE_FILE } from '../src/router-worker/launch.mjs';
+import { settleLaunch, SETTLE_FILE } from '../src/router-worker/launch-settle.mjs';
+import { loadRetryRules } from '../src/router-worker/retries.mjs';
 import { runWorkflow, makeAgentImpl } from '../scripts/lib/workflow-harness.mjs';
 import { freezeRun } from '../src/router-worker/run-args.mjs';
 import { observeIsolation } from '../src/router-worker/isolation.mjs';
@@ -122,9 +124,9 @@ test('CLI prepares from RUN.json, exits 2 on refusal and 1 on usage', t => {
 });
 
 // A prepared copy and the return of the real engine for its arguments (mock agents, no model).
-async function ran(t) {
+async function ran(t, agents = {}) {
   const f = fixture(t), launch = await f.prepare();
-  const { result } = await runWorkflow({ scriptPath: join(f.team, '.claude/workflows/run-n-rounds.js'), args: launch.args, agentImpl: makeAgentImpl({}) });
+  const { result } = await runWorkflow({ scriptPath: join(f.team, '.claude/workflows/run-n-rounds.js'), args: launch.args, agentImpl: makeAgentImpl(agents) });
   return { ...f, launch, result, close: (overrides = {}) => closeLaunch({ teamRoot: f.team, result, ...overrides }), closeFile: join(f.team, CLOSE_FILE) };
 }
 
@@ -204,4 +206,84 @@ test('CLI closes from RESULT.json; exit 0 clean, 2 review or refused, 1 usage', 
   const review = await ran(t); write(review.product, 'stray.txt', 'x\n'); writeFileSync(file, JSON.stringify(review.result));
   const flagged = run('close', file, '--team-root', review.team);
   assert.equal(flagged.status, 2); assert.equal(JSON.parse(flagged.stdout).status, 'review');
+});
+
+// Settlement after close: a Claude Code session directory in the real on-disk layout, metered by the real meter.
+const METER = fileURLToPath(new URL('../scripts/measure-spawn.mjs', import.meta.url));
+const jsonl = rows => rows.map(row => JSON.stringify(row)).join('\n') + '\n';
+const usageRow = (id, agentId, create) => ({ type: 'assistant', isSidechain: Boolean(agentId), agentId, requestId: `req_${id}`,
+  message: { id: `msg_${id}`, model: 'm', role: 'assistant', content: [], usage: { input_tokens: 10, cache_creation_input_tokens: create, cache_read_input_tokens: 0, output_tokens: 100 } } });
+const relayed = text => ({ type: 'user', message: { role: 'user', content: `The computed task text follows:\n${text.split('\n').map(line => '  ' + line).join('\n')}\n  ` } });
+function metered(f, { execBrief, order = ['exec1', 'check1', 'guard1'], tokens = { exec1: 12000, check1: 6000, guard1: 5000 } } = {}) {
+  const plan = f.launch.args.plan[0], dir = join(f.base, 'projects'), wf = join(dir, 'sess/subagents/workflows/wf_1');
+  const agents = { exec1: ['sample-worker-exec', execBrief ?? plan.brief], check1: ['sample-worker-check', plan.verifierBrief], guard1: ['sample-worker-guard', 'Audit this run.'] };
+  mkdirSync(wf, { recursive: true }); writeFileSync(join(dir, 'sess.jsonl'), jsonl([usageRow('main', undefined, 7000)]));
+  for (const [id, [agentType, brief]] of Object.entries(agents)) {
+    writeFileSync(join(wf, `agent-${id}.jsonl`), jsonl([{ type: 'user', message: { role: 'user', content: 'harness preamble' } }, relayed(brief), usageRow(id, id, tokens[id])]));
+    writeFileSync(join(wf, `agent-${id}.meta.json`), JSON.stringify({ agentType, description: id }));
+  }
+  writeFileSync(join(wf, 'journal.jsonl'), jsonl([{ type: 'launched' }, ...order.flatMap(agentId => [{ type: 'started', agentId }, { type: 'result', agentId, result: {} }])]));
+  const run = spawnSync(process.execPath, [METER, join(dir, 'sess'), '--json'], { encoding: 'utf8' });
+  assert.equal(run.status, 0, run.stderr);
+  return JSON.parse(run.stdout);
+}
+const rules = loadRetryRules();
+const settle = (f, meter, overrides = {}) => settleLaunch({ teamRoot: f.team, result: f.result, meter, rules, ...overrides });
+
+test('settle maps the metered agents to the calls of the run, checks the briefs and settles tickets and run', async t => {
+  const f = await ran(t); f.close();
+  const settled = settle(f, metered(f));
+  assert.equal(settled.errors, undefined, JSON.stringify(settled.errors));
+  assert.equal(settled.stage, 'launch-settled'); assert.equal(settled.status, 'clear', JSON.stringify([settled.findings, settled.run.reasons]));
+  assert.deepEqual(settled.calls.map(({ ticket, duty, agentId, tokens, finished }) => ({ ticket, duty, agentId, tokens, finished })), [
+    { ticket: 'US-08', duty: 'exec', agentId: 'exec1', tokens: 12010, finished: true }, { ticket: 'US-08', duty: 'check', agentId: 'check1', tokens: 6010, finished: true },
+    { ticket: null, duty: 'guard', agentId: 'guard1', tokens: 5010, finished: true }]);
+  assert.equal(settled.run.runGate, 'clear'); assert.equal(settled.run.ticketTokens, 18020); assert.equal(settled.run.guardianTokens, 5010);
+  assert.equal(settled.mainSessionTokens, 7010); assert.deepEqual(settled.findings, []);
+  assert.equal(settled.journalSource, 'reconstructed-after-run'); assert.equal(settled.launchDigest, f.launch.digest);
+  const { digest: recorded, ...body } = settled;
+  assert.equal(recorded, digest(body)); assert.deepEqual(JSON.parse(readFileSync(join(f.team, SETTLE_FILE), 'utf8')), settled);
+  assert.ok(!JSON.stringify(settled).includes(f.base), 'no host path in the record');
+  assert.equal(refusal(settle(f, metered(f))).code, 'LAUNCH_REFUSED', 'a launch is settled once');
+});
+
+test('settle reports a call whose transcript does not carry the frozen brief, and usage beyond an estimate', async t => {
+  const changed = await ran(t); changed.close();
+  const settled = settle(changed, metered(changed, { execBrief: changed.launch.args.plan[0].brief.replace('US-08', 'US-99') }));
+  assert.equal(settled.status, 'review'); assert.deepEqual(settled.findings, [{ code: 'BRIEF_NOT_FOUND', ticket: 'US-08', duty: 'exec' }]);
+  const heavy = await ran(t); heavy.close();
+  const over = settle(heavy, metered(heavy, { tokens: { exec1: 12000, check1: 6000, guard1: 25000 } }));
+  assert.equal(over.status, 'review'); assert.equal(over.run.runGate, 'blocked'); assert.deepEqual(over.run.reasons, ['guardian-over-estimate']);
+});
+
+test('a blocked worker whose returned work was checked settles as a stopped ticket; one that was not checked settles without a check call', async t => {
+  const blockedWorker = { worker: () => ({ outcome: 'blocked', progress: true, filesTouched: ['src/tag-list/view.ts'], decisionsCount: 1, selfReportTokens: 100, blocked: true, terminalStop: false, notes: '' }) };
+  const f = await ran(t, blockedWorker); f.close();
+  const checked = f.result.results[0].estimates.verifier !== null, meter = metered(f, checked ? {} : { order: ['exec1', 'guard1'] });
+  if (!checked) meter.subagents = meter.subagents.filter(row => row.agentId !== 'check1');
+  const settled = settle(f, meter);
+  assert.equal(settled.errors, undefined, JSON.stringify(settled.errors));
+  assert.deepEqual(settled.calls.map(call => call.duty), checked ? ['exec', 'check', 'guard'] : ['exec', 'guard']);
+  assert.equal(settled.run.tickets[0].ticketId, 'US-08'); assert.equal(settled.run.runGate, 'clear');
+});
+
+test('settle refuses a meter that is not the calls of this run, an unclosed launch and another return; nothing is written', async t => {
+  const f = await ran(t), file = join(f.team, SETTLE_FILE);
+  assert.match(refusal(settle(f, metered(f))).reason, /closed/);
+  f.close();
+  assert.match(refusal(settle(f, metered(f, { order: ['check1', 'exec1', 'guard1'] }))).reason, /calls of this run/);
+  const partial = metered(f); partial.subagents = partial.subagents.filter(row => row.agentId !== 'guard1');
+  assert.equal(refusal(settle(f, partial)).code, 'LAUNCH_REFUSED');
+  assert.equal(refusal(settle(f, metered(f), { result: { ...f.result, runId: 'another' } })).code, 'LAUNCH_REFUSED');
+  assert.equal(refusal(settle(f, null)).code, 'LAUNCH_REFUSED');
+  assert.equal(existsSync(file), false);
+});
+
+test('CLI settles from RESULT.json and METER.json; exit 0 clear, 2 review or refused, 1 usage', async t => {
+  const f = await ran(t), result = join(f.base, 'result.json'), meter = join(f.base, 'meter.json'), run = (...argv) => spawnSync(process.execPath, [CLI, ...argv], { encoding: 'utf8' });
+  f.close(); writeFileSync(result, JSON.stringify(f.result)); writeFileSync(meter, JSON.stringify(metered(f)));
+  assert.equal(run('settle', result, '--team-root', f.team).status, 1);
+  const ok = run('settle', result, meter, '--team-root', f.team);
+  assert.equal(ok.status, 0, ok.stderr); assert.equal(JSON.parse(ok.stdout).status, 'clear');
+  assert.equal(run('settle', result, meter, '--team-root', f.team).status, 2);
 });
