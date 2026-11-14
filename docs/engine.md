@@ -97,11 +97,16 @@ The rule, in preference order:
    This does NOT violate the PM's "never spawn fresh" anti-pattern — that rule
    applies only when continuation is actually available.
 
+With `maxAttemptsPerTicket` above 1 the engine performs path 2 itself, inside
+the loop and bounded by that number, for the one case it can judge: a real
+failed verdict on a clean execution. What is left in `fixRetestQueue` after
+the last attempt is drained by the main session under this rule.
+
 ## Args contract
 
 ```js
 { rounds, plan, date, nextLifecycleNumber, executionMode, budgetCeilingTokens,
-  failurePolicy?, runId?, launchManifestDigest? }
+  failurePolicy?, maxAttemptsPerTicket?, runId?, launchManifestDigest? }
 ```
 
 **Preflight first (review 2026-09-25, F-02 / Slice B).** Before invoking the
@@ -162,6 +167,20 @@ in lifecycle headers).
   verification, blocked/no-progress worker) — later workers never build on an
   unattested workspace. `'continue'` is legal ONLY for plans the caller
   asserts are per-ticket isolated and dependency-free.
+- `maxAttemptsPerTicket` (optional, integer 1 to 3, default 1 = no in-loop
+  retry): with a higher value, a code-shipping ticket whose verification
+  FAILED on a clean execution is attempted again inside the same iteration by
+  a FRESH worker and a FRESH verifier. The retry worker gets the plan item's
+  brief unchanged, followed by the attempt number and the verifier's report
+  (summary, failures, commands) as one sanitized line of at most 4,000
+  characters, marked as data. The verifier brief is the same for every
+  attempt. Not retried, and routed to the main session as before: a blocked,
+  no-progress, erroring or invalid worker, a terminal-stop request, an
+  ownership violation, a missing or ungrounded verdict, and a ticket with
+  `deliveryRequired`. No retry starts once the Q5 gate has tripped. A ticket
+  still failing on its last attempt takes the normal fix-retest route and
+  `failurePolicy` applies. Every attempt spends against the one ceiling, so
+  size the ceiling for the retries you allow.
 
 - `date` (YYYY-MM-DD) and `nextLifecycleNumber` are REQUIRED — the workflow
   body has no clock and cannot read `agents/lifecycle.md` to count entries.
@@ -320,7 +339,13 @@ in lifecycle headers).
 - `results[i].workerTokens` / `results[i].verifierTokens` are the per-spawn
   harness figures for lifecycle attribution and coaching KPIs;
   `selfReportTokens` is the distrusted M4 self-report (dual-record >30%
-  divergence).
+  divergence). With retries they describe the LAST attempt of the ticket;
+  `results[i].attempts` is the number of attempts made and
+  `results[i].priorAttempts` lists the earlier ones (worker and verification
+  status, their own worker and verifier tokens, a short verifier summary).
+  The lifecycle entry of a retried ticket states the attempt and the earlier
+  attempts' tokens. There is still one record and one lifecycle entry per
+  ticket. `maxAttemptsPerTicket` is echoed at the top level.
 - **Guardian is fail-closed**: if the guardian throws, is skipped, or returns
   null, the engine STILL returns the full recovery package (results, queues,
   paste-ready blocks) with `guardian.status: 'unavailable'`,

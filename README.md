@@ -361,7 +361,9 @@ is the operating model:
   ADRs — all under the slim-active + archive rotation regime;
 - coach-curated lessons index and independent periodic audit;
 - a mechanical count-directed loop engine with a guardian audit node
-  (`.claude/workflows/run-n-rounds.js`, contract in `docs/engine.md`);
+  (`.claude/workflows/run-n-rounds.js`, contract in `docs/engine.md`; an opt-in
+  `maxAttemptsPerTicket` retries a ticket whose verification failed, with a
+  fresh worker and a fresh verifier, at most three attempts);
 - Claude cold-start indexes and project-scoped agent wrappers.
 
 ### Role-specific method injection (skill packs)
