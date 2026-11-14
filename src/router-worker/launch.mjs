@@ -5,11 +5,13 @@ import { freezeRun, accountRun } from './run-args.mjs';
 import { acquireLease, releaseLease, readLease, git } from './lease.mjs';
 import { armBoundary, readBoundary, within, LOG_FILE } from './write-boundary.mjs';
 import { observeIsolation } from './isolation.mjs';
+import { CLOSE_FILE, candidateOf } from './closed-candidate.mjs';
+
+export { CLOSE_FILE };
 
 // Launch host, before the run: the gates run in one fixed order and a launch
 // record exists only when all of them passed. A copy is prepared once.
 export const LAUNCH_FILE = 'rw-launch.json';
-export const CLOSE_FILE = 'rw-close.json';
 const CLOSE_UNRESOLVED = ['usage-settlement', 'retry-journal', 'work-quality'];
 const UNRESOLVED = ['owner-attendance', 'launch-manifest-preflight', 'in-run-admission', 'bash-writes'];
 const refuse = reason => ({ errors: [{ code: 'LAUNCH_REFUSED', field: 'launch', reason }] });
@@ -95,7 +97,7 @@ export function closeLaunch({ teamRoot, result }) {
   if (!leaseReleased) findings.push({ code: ours ? 'LEASE_RELEASE_FAILED' : 'LEASE_NOT_HELD_BY_THIS_LAUNCH' });
 
   const body = { schemaVersion: 1, stage: 'launch-closed', runId: launch.runId, launchDigest: launch.digest, status: findings.length ? 'review' : 'clean',
-    account, productHead: head, changedPaths: changed, ignoredChanges, hookLog: hookLog(teamRoot, launch.args.allowedAgentTypes), findings, leaseReleased, unresolved: CLOSE_UNRESOLVED };
+    account, productHead: head, candidate: candidateOf(product), changedPaths: changed, ignoredChanges, hookLog: hookLog(teamRoot, launch.args.allowedAgentTypes), findings, leaseReleased, unresolved: CLOSE_UNRESOLVED };
   const record = { ...body, digest: digest(body) };
   try { writeFileSync(closePath, JSON.stringify(record, null, 2) + '\n', { flag: 'wx' }); }
   catch (error) { return refuse(`The close record could not be written: ${error.code ?? 'unknown error'}`); }

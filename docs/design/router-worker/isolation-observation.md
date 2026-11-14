@@ -25,6 +25,7 @@ gives `blocked`; otherwise any finding gives `unknown`; only an empty list is
 |---|---|---|
 | Product | `PRODUCT_NOT_REPOSITORY_ROOT`, `PRODUCT_NOT_SEPARATE`, `PRODUCT_NO_CANDIDATE` | blocked |
 | Product | `PRODUCT_DIRTY` (uncommitted or untracked paths: existing work is unexplained) | blocked |
+| Product | `CANDIDATE_NOT_ADMITTED` (with `--retry-of`: the product is not the candidate of the presented close record) | blocked |
 | Product | `PRODUCT_OPERATION_IN_PROGRESS` (index lock, merge, rebase, cherry-pick, revert, bisect) | blocked |
 | Product | `PRODUCT_SHARED_METADATA` (more than one work tree on the repository) | blocked |
 | Product | `IGNORED_PATHS_PRESENT`, `SUBMODULE_PRESENT`, `EXTERNAL_SYMLINK` (content the candidate diff cannot see) | unknown |
@@ -45,6 +46,26 @@ rules) are counted and never copied into the record.
 Every draft wrapper is marked inactive, so a staging copy produced by
 `team-mode.mjs stage` always observes as `blocked`. That is intended: there is
 no activation step yet.
+
+## A retry starts from the closed candidate
+
+```sh
+node kit/scripts/isolation-router-worker.mjs --team-root <copy> --product-root <product> --lease <digest> --retry-of <close-record-digest>
+```
+
+After a run the product holds the run's uncommitted work, which the gate above
+calls `PRODUCT_DIRTY`. A retry of a ticket starts from that work. With
+`--retry-of`, the gate replaces `PRODUCT_DIRTY` and `IGNORED_PATHS_PRESENT` by
+one check: the copy holds the intact close record with that digest
+([launch host](launch-host.md)), and the product is still the candidate that
+record names: the same commit and the same bytes in every tracked and untracked
+file. Otherwise the finding is `CANDIDATE_NOT_ADMITTED` (blocked). Without
+`--retry-of` nothing changes.
+
+Git-ignored paths are not part of the candidate, so build output left by the
+check does not block a retry and a change there between close and retry is not
+seen. A product that cannot be snapshotted (tracked symlink, submodule, size
+cap) has no candidate and admits no retry.
 
 ## Accepted findings
 

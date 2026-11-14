@@ -253,7 +253,9 @@ product, and the host must present the ownership lease it holds on the product. 
 file in the product's Git directory, outside the work tree, so a second host or
 team root is refused until it is released by its digest. A lease never expires
 and is never taken over automatically. Only `clear` (exit 0) admits a call; a
-draft wrapper always observes as `blocked`. Session independence and runtime
+draft wrapper always observes as `blocked`. With `--retry-of`, a product whose
+uncommitted state is exactly the candidate of a close record is admitted for a
+retry. Session independence and runtime
 enforcement are not observed
 ([details](docs/design/router-worker/isolation-observation.md)).
 

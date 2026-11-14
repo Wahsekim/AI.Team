@@ -10,6 +10,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { prepareLaunch, closeLaunch, LAUNCH_FILE, CLOSE_FILE } from '../src/router-worker/launch.mjs';
 import { settleLaunch, SETTLE_FILE } from '../src/router-worker/launch-settle.mjs';
 import { loadRetryRules, inspectRetryJournal } from '../src/router-worker/retries.mjs';
+import { candidateOf } from '../src/router-worker/closed-candidate.mjs';
 import { runWorkflow, makeAgentImpl } from '../scripts/lib/workflow-harness.mjs';
 import { freezeRun } from '../src/router-worker/run-args.mjs';
 import { observeIsolation } from '../src/router-worker/isolation.mjs';
@@ -142,6 +143,8 @@ test('close accounts the engine return against the launch record, lists the prod
   assert.equal(recorded, digest(body)); assert.deepEqual(JSON.parse(readFileSync(f.closeFile, 'utf8')), closed);
   assert.ok(closed.unresolved.includes('usage-settlement'));
   assert.deepEqual(closed.ignoredChanges, { count: 0, topLevel: {} });
+  assert.deepEqual(closed.candidate, candidateOf(f.product), 'the product state the run ended in');
+  assert.equal(observeIsolation({ teamRoot: f.team, productRoot: f.product, lease: acquireLease({ teamRoot: f.team, productRoot: f.product }).lease.digest, retryOf: closed.digest }).status, 'clear');
   assert.deepEqual(closed.hookLog, { calls: 0, wrapperCalls: 0, wrapperBashCalls: 0, denied: 0, callsWithoutAgentType: 0, unreadableLines: 0 }, 'no hook ran under the mock engine, and the record says so');
   assert.equal(refusal(f.close()).code, 'LAUNCH_REFUSED', 'a launch is closed once');
 });
