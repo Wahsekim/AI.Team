@@ -7,8 +7,10 @@
 // settle: match the metered agents to the calls, check the briefs, settle tickets and run,
 // then write <copy>/rw-settlement.json.
 // No model or network. Exit 0 prepared / closed clean, 2 refused or review, 1 usage.
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { spawnSync } from 'node:child_process';
+import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { prepareLaunch, closeLaunch } from '../src/router-worker/launch.mjs';
 import { settleLaunch } from '../src/router-worker/launch-settle.mjs';
@@ -21,6 +23,19 @@ const USAGE = 'usage: node scripts/launch-router-worker.mjs prepare RUN.json --t
   + '       node scripts/launch-router-worker.mjs close RESULT.json --team-root <activated copy>   (RESULT.json: the engine return)\n'
   + '       node scripts/launch-router-worker.mjs settle RESULT.json METER.json --team-root <activated copy>   (METER.json: measure-spawn.mjs <session-dir> --json)\n'
   + '       node scripts/launch-router-worker.mjs retry REQUEST.json --team-root <activated copy>   (REQUEST.json: {"input", "divergence"}; prepares an exec continuation after a failed check)';
+// The static launch preflight of the engine, run on the frozen arguments; its digest goes into them.
+function launchManifest(args, { teamRoot, productRoot }) {
+  const dir = mkdtempSync(join(tmpdir(), 'rw-launch-manifest-'));
+  try {
+    const file = join(dir, 'args.json'); writeFileSync(file, JSON.stringify(args));
+    const run = spawnSync(process.execPath, [fileURLToPath(new URL('./preflight-run.mjs', import.meta.url)), file, '--team-root', teamRoot, '--product-root', productRoot], { encoding: 'utf8' });
+    let found;
+    try { found = JSON.parse(run.stdout).launchManifestDigest; } catch { found = null; }
+    if (run.status === 0 && /^sha256:[a-f0-9]{64}$/.test(found ?? '')) return { digest: found };
+    const failures = (run.stderr ?? '').split('\n').filter(line => line.startsWith('FAIL - ')).map(line => line.split(':')[0]).join('; ');
+    return { errors: [{ code: 'PREFLIGHT_FAILED', field: 'launch', reason: `The launch preflight did not pass: ${failures || 'no manifest produced'}` }] };
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
 const readJSON = path => { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return undefined; } };
 const print = result => {
   if (result.errors) { console.error(JSON.stringify(result)); process.exitCode = 2; }
@@ -51,7 +66,7 @@ if (command === 'retry' && file && teamFlag === '--team-root' && team && process
   try {
     result = request && typeof request === 'object'
       ? await prepareLaunch({ inputs: request.inputs, run: request.run, teamRoot: resolve(team), productRoot: resolve(product),
-        hookPath: fileURLToPath(new URL('./hooks/rw-write-boundary.mjs', import.meta.url)), ...(needsMethods ? { methodBundle: loadMethods() } : {}) })
+        hookPath: fileURLToPath(new URL('./hooks/rw-write-boundary.mjs', import.meta.url)), manifest: launchManifest, ...(needsMethods ? { methodBundle: loadMethods() } : {}) })
       : { errors: [{ code: 'LAUNCH_REFUSED', field: 'launch', reason: 'RUN.json is not readable JSON' }] };
   } catch (error) {
     if (!(error instanceof MethodError)) throw error;

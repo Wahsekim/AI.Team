@@ -38,6 +38,8 @@ function fixture(t, { status = 'activated-disposable-smoke' } = {}) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'rw-launch-'))), team = join(base, 'demo.rw-active'), product = join(base, 'product');
   t.after(() => rmSync(base, { recursive: true, force: true }));
   write(team, 'agents/roster.md', roster); write(team, 'profiles/team-mode.json', JSON.stringify({ status }));
+  for (const file of ['charter.md', 'CLAUDE.md', 'profiles/project.md', 'profiles/stack.md', 'agents/pm.md', 'agents/templates.md', 'agents/_shared/meta-rules.md', 'decisions/0001-x.md'])
+    write(team, file, '# fixture\n');
   for (const duty of DUTIES) write(team, `.claude/agents/sample-worker-${duty}.md`, wrapper(duty));
   mkdirSync(join(team, '.claude/workflows')); copyFileSync(ENGINE, join(team, '.claude/workflows/run-n-rounds.js'));
   write(product, 'src/tag-list/view.ts', 'export const x = 1;\n');
@@ -64,6 +66,23 @@ test('prepare takes the lease, arms the boundary, observes the gate clear and wr
   assert.equal(recorded, digest(body));
   assert.deepEqual(JSON.parse(readFileSync(f.launchFile, 'utf8')), result, 'the record on disk is the record returned');
   assert.ok(result.unresolved.includes('in-run-admission') && result.unresolved.includes('owner-attendance'));
+});
+
+test('prepare chains the launch manifest: the frozen arguments carry its digest, and a failing preflight takes nothing', async t => {
+  const f = fixture(t), seen = [];
+  const manifest = args => { seen.push(args); return { digest: 'sha256:' + 'a'.repeat(64) }; };
+  const result = await f.prepare({ manifest });
+  assert.equal(result.errors, undefined, JSON.stringify(result.errors));
+  assert.equal(result.args.launchManifestDigest, 'sha256:' + 'a'.repeat(64)); assert.equal(result.launchManifest, 'chained');
+  assert.equal(seen.length, 1); assert.equal(seen[0].launchManifestDigest, undefined, 'the manifest is taken of the arguments without the digest');
+  assert.deepEqual({ ...result.args, launchManifestDigest: undefined }, { ...seen[0], launchManifestDigest: undefined });
+  assert.ok(!result.unresolved.includes('launch-manifest-preflight'));
+  const refused = fixture(t), failing = await refused.prepare({ manifest: () => ({ errors: [{ code: 'PREFLIGHT_FAILED', field: 'launch', reason: 'FAIL - wrappers' }] }) });
+  assert.equal(refusal(failing).code, 'PREFLIGHT_FAILED'); assert.equal(refused.leased(), 'free'); assert.equal(existsSync(refused.launchFile), false);
+  const supplied = await fixture(t).prepare({ run: { ...RUN, launchManifestDigest: 'sha256:' + 'b'.repeat(64) }, manifest });
+  assert.equal(supplied.launchManifest, 'supplied'); assert.equal(seen.length, 1, 'a digest in RUN.json is kept and no preflight runs');
+  const absent = await fixture(t).prepare();
+  assert.equal(absent.launchManifest, 'absent'); assert.ok(absent.unresolved.includes('launch-manifest-preflight'));
 });
 
 test('an activated copy is prepared once; a second prepare is refused and changes nothing', async t => {
@@ -120,6 +139,7 @@ test('CLI prepares from RUN.json, exits 2 on refusal and 1 on usage', t => {
   writeFileSync(file, JSON.stringify({ run: RUN, inputs: [inputFixture()] }));
   const ok = run('prepare', file, '--team-root', f.team, '--product-root', f.product);
   assert.equal(ok.status, 0, ok.stderr); assert.equal(JSON.parse(ok.stdout).stage, 'launch-prepared');
+  assert.equal(JSON.parse(ok.stdout).launchManifest, 'chained'); assert.match(JSON.parse(ok.stdout).args.launchManifestDigest, /^sha256:[a-f0-9]{64}$/);
   assert.match(JSON.parse(readFileSync(join(f.team, '.claude/settings.json'), 'utf8')).hooks.PreToolUse[0].hooks[0].command, /scripts\/hooks\/rw-write-boundary\.mjs"$/);
   assert.equal(run('prepare', file, '--team-root', f.team, '--product-root', f.product).status, 2);
   assert.equal(run('prepare', file).status, 1); assert.equal(run('launch', file, '--team-root', f.team, '--product-root', f.product).status, 1);

@@ -16,13 +16,21 @@ const CLOSE_UNRESOLVED = ['usage-settlement', 'retry-journal', 'work-quality'];
 const UNRESOLVED = ['owner-attendance', 'launch-manifest-preflight', 'in-run-admission', 'bash-writes'];
 const refuse = reason => ({ errors: [{ code: 'LAUNCH_REFUSED', field: 'launch', reason }] });
 
-export async function prepareLaunch({ inputs, run, teamRoot, productRoot, hookPath, methodBundle }) {
+export async function prepareLaunch({ inputs, run, teamRoot, productRoot, hookPath, methodBundle, manifest }) {
   if (typeof teamRoot !== 'string' || typeof productRoot !== 'string') return refuse('Team and product roots are required');
   const launchPath = join(teamRoot, LAUNCH_FILE);
   if (lstatSync(launchPath, { throwIfNoEntry: false })) return refuse('This copy was already prepared for a launch; an activated copy is used once');
   // Freezing writes nothing, so an invalid run is refused before the lease is taken.
-  const frozen = await freezeRun({ inputs, run, teamRoot, ...(methodBundle ? { methodBundle } : {}) });
+  const freeze = frozenRun => freezeRun({ inputs, run: frozenRun, teamRoot, ...(methodBundle ? { methodBundle } : {}) });
+  let frozen = await freeze(run), launchManifest = run?.launchManifestDigest === undefined ? 'absent' : 'supplied';
   if (frozen.errors) return frozen;
+  // The manifest is taken of the arguments without its own digest, then the run is frozen again with it.
+  if (manifest && launchManifest === 'absent') {
+    const taken = await manifest(frozen.args, { teamRoot, productRoot });
+    if (taken.errors) return taken;
+    frozen = await freeze({ ...run, launchManifestDigest: taken.digest }); launchManifest = 'chained';
+    if (frozen.errors) return frozen;
+  }
   const acquired = acquireLease({ teamRoot, productRoot });
   if (acquired.errors) return acquired;
   const lease = acquired.lease.digest;
@@ -36,7 +44,8 @@ export async function prepareLaunch({ inputs, run, teamRoot, productRoot, hookPa
       return refuse(`The runtime-isolation gate is ${isolation.status}: ${isolation.findings.filter(f => f.severity !== 'accepted').map(f => f.code).join(', ')}`);
     const body = { schemaVersion: 1, stage: 'launch-prepared', runId: frozen.args.runId, teamRoot, productRoot, productHead: isolation.product.head,
       lease, isolationDigest: isolation.digest, boundaryDigest: armed.boundaryDigest, argsDigest: frozen.record.argsDigest,
-      runRecord: frozen.record, args: frozen.args, unresolved: UNRESOLVED };
+      runRecord: frozen.record, args: frozen.args, launchManifest,
+      unresolved: UNRESOLVED.filter(item => item !== 'launch-manifest-preflight' || launchManifest === 'absent') };
     const record = { ...body, digest: digest(body) };
     try { writeFileSync(launchPath, JSON.stringify(record, null, 2) + '\n', { flag: 'wx' }); }
     catch (error) { return refuse(`The launch record could not be written: ${error.code ?? 'unknown error'}`); }

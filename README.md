@@ -299,7 +299,8 @@ explained afterwards
 ([details](docs/design/router-worker/write-boundary.md)).
 
 `launch-router-worker.mjs prepare` chains the steps that precede a run in one
-fixed order: freeze the run, take the product lease, arm the write boundary,
+fixed order: freeze the run with the engine's launch-manifest digest, take the
+product lease, arm the write boundary,
 observe the isolation gate, then write a single-use launch record with the engine
 arguments. Any refusal releases the lease it took. `close` matches the engine return to
 that record, reports product paths changed outside the write boundary (the only
