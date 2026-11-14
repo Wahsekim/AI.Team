@@ -76,9 +76,14 @@ allowed; a fourth is refused. A cancelled preparation can be replaced under a ne
 assignment ID with the same next attempt number. Previously used assignment IDs
 cannot be recycled. Transport/event replay does not create another call or close.
 
-A retry must reference the previous started assignment of that duty and its
-original session. Exec and check session IDs **and** identity digests must differ.
-A missing/lost session cannot be silently replaced. Retry `divergence` must name
+A retry must reference the previous started assignment of that duty. It either
+resumes that duty's session (`resumeSessionRef` names it, and the call must
+start in it) or declares a fresh one (`resumeSessionRef: null`, owner decision
+2026-11-14: the count engine retries with fresh agents), which must be a session
+no call of that duty used. The attempt count is per ticket and duty either way.
+No session may ever serve both exec and check, across all attempts: IDs **and**
+identity digests must differ. A resume that names a session cannot silently
+start in another. Retry `divergence` must name
 the previous plan digest, include an evidence ref and explanation, and use a new
 `planRef.digest`. This proves a declared plan revision, not meaningful semantic
 improvement; the host/PM must inspect the actual evidence and avoid cosmetic edits.

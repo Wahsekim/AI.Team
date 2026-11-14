@@ -52,7 +52,7 @@ function ticket(id, { exec = 11000, check = 5000, checkFinished = true } = {}) {
   return settleAgainstJournal({ ledger, retryJournal: journal, rules });
 }
 const guardRow = (overrides = {}) => ({ agentId: 'g1', agentType: 'sample-worker-guard', finished: true, uniqueMessages: 3, harnessEq: 17000, ...overrides });
-const account = (exec = 2) => ({ status: 'accounted', findings: [], calls: { exec, check: exec, guard: 1 }, nextLifecycleNumberAfter: 5, blockers: [] });
+const account = (exec = 2) => ({ status: 'accounted', findings: [], calls: { tickets: exec, exec, check: exec, guard: 1 }, nextLifecycleNumberAfter: 5, blockers: [] });
 const code = fn => { try { fn(); } catch (error) { return error.code; } return null; };
 
 test('a frozen run records the Guardian estimate in the ledger unit; it is not an engine argument', async t => {

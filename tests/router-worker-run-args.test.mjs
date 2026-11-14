@@ -49,7 +49,7 @@ test('freezes the complete engine arguments from previews and the roster; the re
   assert.equal(frozen.errors, undefined, JSON.stringify(frozen.errors));
   const { args, record } = frozen;
   assert.deepEqual(Object.keys(args).sort(), ['allowedAgentTypes', 'budgetCeilingTokens', 'date', 'executionMode', 'failurePolicy',
-    'guardianAgentType', 'nextLifecycleNumber', 'plan', 'rounds', 'runId']);
+    'guardianAgentType', 'maxAttemptsPerTicket', 'nextLifecycleNumber', 'plan', 'rounds', 'runId']);
   assert.equal(args.executionMode, 'wrappers'); assert.equal(args.failurePolicy, 'halt-on-failure');
   assert.equal(args.guardianAgentType, 'sample-worker-guard', 'the Guardian comes from the frozen policy, not from the caller');
   assert.deepEqual(args.allowedAgentTypes, ['sample-auditor', 'sample-worker-check', 'sample-worker-exec', 'sample-worker-guard'], 'active roster wrappers only');
@@ -68,7 +68,7 @@ test('freezes the complete engine arguments from previews and the roster; the re
   assert.deepEqual(types(calls), ['sample-worker-exec', 'sample-worker-check', 'sample-worker-exec', 'sample-worker-check', 'sample-worker-guard']);
   const account = accountRun({ args, record, result });
   assert.equal(account.status, 'accounted', JSON.stringify(account.findings));
-  assert.deepEqual(account.calls, { exec: 2, check: 2, guard: 1 });
+  assert.deepEqual(account.calls, { tickets: 2, exec: 2, check: 2, guard: 1 });
   assert.equal(account.nextLifecycleNumberAfter, 5); assert.deepEqual(account.blockers, []);
 });
 
@@ -112,7 +112,7 @@ test('Q5 budget stop before the verifier: no check call, no later ticket, Guardi
   assert.match(result.haltReason, /token-burnout/); assert.equal(result.allPassed, false);
   const account = accountRun({ args, record, result });
   assert.equal(account.status, 'accounted', JSON.stringify(account.findings));
-  assert.deepEqual(account.calls, { exec: 1, check: 0, guard: 1 });
+  assert.deepEqual(account.calls, { tickets: 1, exec: 1, check: 0, guard: 1 });
   assert.ok(account.blockers.includes('budget-gate') && account.blockers.includes('run-incomplete'), JSON.stringify(account.blockers));
 });
 
@@ -121,7 +121,7 @@ test('a missing Guardian fails closed: work that passed is still not continuable
   const { result } = await engine(team, args, { agentImpl: makeAgentImpl({ guardian: () => { throw new Error('guardian unavailable'); } }) });
   assert.equal(result.allPassed, false); assert.equal(result.nextInvocationBlocked, true);
   const account = accountRun({ args, record, result });
-  assert.equal(account.status, 'accounted'); assert.deepEqual(account.calls, { exec: 2, check: 2, guard: 1 });
+  assert.equal(account.status, 'accounted'); assert.deepEqual(account.calls, { tickets: 2, exec: 2, check: 2, guard: 1 });
   assert.deepEqual(account.blockers, ['guardian-unavailable']);
 });
 
@@ -159,7 +159,7 @@ test('duplicate delivery of one return reconciles once: lifecycle entries and th
   const once = readFileSync(join(team, 'agents/lifecycle.md'), 'utf8');
   const again = apply(); assert.equal(again.status, 0, again.stdout + again.stderr);
   assert.equal(readFileSync(join(team, 'agents/lifecycle.md'), 'utf8'), once);
-  assert.equal(once.split('\n').filter(line => /^## \[\d+\]/.test(line)).length, 1 + accountRun({ args, record, result }).calls.exec + 1, 'bootstrap, one entry per ticket, one Guardian entry');
+  assert.equal(once.split('\n').filter(line => /^## \[\d+\]/.test(line)).length, 1 + accountRun({ args, record, result }).calls.tickets + 1, 'bootstrap, one entry per ticket, one Guardian entry');
   assert.match(once, /Next NNN to assign: 005/);
 });
 
@@ -214,4 +214,23 @@ test('CLI loads the pinned bundle of its own kit for a method-bearing input', t 
   const out = spawnSync(process.execPath, [CLI, file, '--team-root', team], { encoding: 'utf8' });
   assert.equal(out.status, 0, out.stderr);
   assert.match(JSON.stringify(JSON.parse(out.stdout).args.plan[0]), /pstack-blast-radius/);
+});
+
+test('the run allows one retry per ticket by default; every attempt is a call the accounting counts', async t => {
+  const team = fixture(t), { args, record } = await freeze(team);
+  assert.equal(args.maxAttemptsPerTicket, 2); assert.equal(record.maxAttemptsPerTicket, 2);
+  assert.equal((await freeze(team, { maxAttemptsPerTicket: 1 })).args.maxAttemptsPerTicket, 1);
+  for (const value of [0, 4, '2']) assert.equal((await freeze(team, { maxAttemptsPerTicket: value })).errors?.[0].code, 'INVALID_RUN', String(value));
+  let checks = 0;
+  const failOnce = makeAgentImpl({ verifier: () => ++checks === 1
+    ? { pass: false, staticPass: false, e2ePass: true, summary: 'one test fails', commandsRun: [{ command: 'npm test', exitCode: 1 }], failures: ['x'] }
+    : { pass: true, staticPass: true, e2ePass: true, summary: 'all green', commandsRun: [{ command: 'npm test', exitCode: 0 }], failures: [] } });
+  const { result, calls } = await engine(team, args, { agentImpl: failOnce });
+  assert.deepEqual(types(calls), ['sample-worker-exec', 'sample-worker-check', 'sample-worker-exec', 'sample-worker-check', 'sample-worker-exec', 'sample-worker-check', 'sample-worker-guard']);
+  const account = accountRun({ args, record, result });
+  assert.equal(account.status, 'accounted', JSON.stringify(account.findings));
+  assert.deepEqual(account.calls, { tickets: 2, exec: 3, check: 3, guard: 1 }); assert.deepEqual(account.attempts, [2, 1]);
+  assert.equal(accountRun({ args, record, result: { ...result, maxAttemptsPerTicket: 3 } }).status, 'unaccounted', 'a run with another attempt cap than the frozen one');
+  const over = structuredClone(result); over.results[1].attempts = 3;
+  assert.equal(accountRun({ args, record, result: over }).status, 'unaccounted', 'more attempts than the cap');
 });
