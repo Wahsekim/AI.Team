@@ -148,13 +148,49 @@ after a failed check is dispatched by the PM main session by hand, with the
 owner present, as a continuation of the original session
 ([continuation](continuation.md)); the count engine never retries.
 
-Not built yet. Open before it can be: whether the main session can address an
-agent that a workflow started (the documentation covers only agents started by
-the Agent tool, resumed with SendMessage and the agent id), where the resumed
-turns are written, and whether the write-boundary hook sees the same agent name
-on a resumed call. The isolation gate admits a retry on the product state the
-close record names (`--retry-of`, see
-[isolation](isolation-observation.md)); no command chains a retry yet.
+The "PM main session" is the session the owner opened in the activated copy,
+the one that launched the engine. An agent can only be resumed by the session
+that started it, so the kit-development session cannot send a retry. Each retry
+is one instruction the owner gives in the copy's session (owner decision: no
+automatic retry inside a run).
+
+### Prepare a retry (built)
+
+```sh
+node kit/scripts/launch-router-worker.mjs retry REQUEST.json --team-root <activated copy>
+```
+
+`REQUEST.json` is `{"input", "divergence"}` as for
+[continuation](continuation.md): the compiler input of the revised plan with new
+assignment ids and `baseline.candidateRef` equal to the `candidate` of the close
+record, and what changed since the failed attempt. Exit 0 prepared, 2 refused,
+1 usage. Steps:
+
+1. The copy must hold a launch that was closed and settled, and no prepared
+   retry.
+2. Compile the exec continuation from the ticket's kept journal. The journal's
+   rules refuse a ticket whose check passed, a ticket with a sticky stop, a
+   candidate other than the closed one, an unchanged plan and a third retry.
+3. Refuse a revised mandate that names write paths the run's boundary was not
+   armed for.
+4. Acquire the lease and observe the isolation gate with `--retry-of` the close
+   record. A refusal releases the lease.
+5. Record the journal `prepare` event and write `<copy>/rw-retry-1.json`: the
+   agent to resume (`resumeAgentId`), its wrapper, the attempt, the rendered
+   continuation brief and the advanced journal.
+
+The copy's session then resumes agent `resumeAgentId` with `renderedBrief`.
+
+### Not built
+
+- Whether the session can address an agent that a workflow started. The
+  documentation covers agents started by the Agent tool (SendMessage with the
+  agent id). Where the resumed turns are written, and whether the write-boundary
+  hook sees the same agent name on a resumed call, are not documented either.
+  The first attended retry answers these.
+- Closing and settling a retry, and the check continuation that follows the
+  repair. Until they exist, a prepared retry keeps the lease; the operator
+  releases it with `lease-router-worker.mjs release`.
 
 ## What it does not do
 
