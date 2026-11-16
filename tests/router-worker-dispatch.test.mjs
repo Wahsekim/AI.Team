@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { nextCall, decideDispatch, DISPATCH_LOG } from '../src/router-worker/dispatch.mjs';
+import { nextCall, decideDispatch, DISPATCH_LOG, PLACEHOLDER } from '../src/router-worker/dispatch.mjs';
 import { digest } from '../src/loop/contracts.mjs';
 
 const HOOK = fileURLToPath(new URL('../scripts/hooks/rw-dispatch-gate.mjs', import.meta.url));
@@ -99,6 +99,18 @@ test('the gate refuses every dispatch that is not exactly the next call', () => 
   assert.match(decideDispatch({ input: agent(), launch: launchRecord(), events: r.events }).reason, /launch-router-worker\.mjs next/);
 });
 
+test('the main session sends a placeholder and the gate supplies the exact call, so it never handles the brief text', () => {
+  const r = rig(), call = r.next();
+  const started = decideDispatch({ input: { tool_name: 'Agent', tool_input: { description: 'T-1 exec', subagent_type: 'whatever', prompt: PLACEHOLDER, run_in_background: true } }, launch: launchRecord(), events: r.events });
+  assert.equal(started.decision, 'allow');
+  assert.deepEqual(started.updatedInput, { description: 'T-1 exec', subagent_type: call.subagent_type, prompt: call.prompt, run_in_background: false }, 'agent type and prompt are the gate\'s; the call runs in the foreground');
+  r.events.push(started.event); r.back('sample-worker-exec', 'exec-a', execReport()); r.step('check-a', checkReport(false));
+  const fix = r.next(), resumed = decideDispatch({ input: { tool_name: 'SendMessage', tool_input: { to: 'someone-else', message: PLACEHOLDER, summary: 'retry' } }, launch: launchRecord(), events: r.events });
+  assert.equal(resumed.decision, 'allow'); assert.deepEqual(resumed.updatedInput, { to: 'exec-a', message: fix.message, summary: 'retry' }, 'the recipient is the agent the gate recorded');
+  assert.equal(decideDispatch({ input: { tool_name: 'Agent', tool_input: { subagent_type: 'sample-worker-exec', prompt: PLACEHOLDER } }, launch: launchRecord(), events: r.events }).decision, 'deny', 'a placeholder for the wrong kind of call');
+  assert.equal(decideDispatch({ input: { tool_name: 'SendMessage', tool_input: { to: fix.to, message: fix.message } }, launch: launchRecord(), events: r.events }).updatedInput, undefined, 'an exact call is admitted as it is');
+});
+
 test('calls the gate does not judge, and a launch record that is missing or changed', () => {
   const r = rig(), allow = input => decideDispatch({ input, launch: launchRecord(), events: r.events });
   assert.equal(allow({ tool_name: 'Bash', tool_input: { command: 'ls' } }).decision, 'allow');
@@ -118,7 +130,9 @@ test('the hook process keeps the dispatch log, exits 2 with the reason on a refu
   const call = nextCall({ launch: launchRecord(), events: [] }), agent = { tool_name: 'Agent', tool_input: { subagent_type: call.subagent_type, prompt: call.prompt } };
   const refused = hook({ tool_name: 'Agent', tool_input: { subagent_type: 'general-purpose', prompt: 'x' } });
   assert.equal(refused.status, 2); assert.match(refused.stderr, /not the next admitted call/); assert.doesNotMatch(refused.stderr, new RegExp(team));
-  assert.equal(hook(agent).status, 0);
+  const rewritten = hook({ tool_name: 'Agent', tool_input: { subagent_type: 'x', prompt: PLACEHOLDER } });
+  assert.equal(rewritten.status, 0);
+  assert.deepEqual(JSON.parse(rewritten.stdout).hookSpecificOutput, { hookEventName: 'PreToolUse', permissionDecision: 'allow', updatedInput: { subagent_type: call.subagent_type, prompt: call.prompt, run_in_background: false } });
   assert.equal(hook(agent).status, 2, 'the log remembers the pending call');
   assert.equal(hook({ tool_name: 'SubagentHandback', agent_type: 'sample-worker-exec', agent_id: 'exec-a', tool_input: { message: execReport() } }).status, 0);
   const lines = readFileSync(join(team, DISPATCH_LOG), 'utf8').trim().split('\n').map(line => JSON.parse(line));

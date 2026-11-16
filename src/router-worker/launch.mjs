@@ -6,6 +6,7 @@ import { acquireLease, releaseLease, readLease, git } from './lease.mjs';
 import { armBoundary, readBoundary, within, LOG_FILE } from './write-boundary.mjs';
 import { observeIsolation } from './isolation.mjs';
 import { CLOSE_FILE, candidateOf } from './closed-candidate.mjs';
+import { armGate } from './dispatch-arm.mjs';
 
 export { CLOSE_FILE };
 
@@ -16,7 +17,7 @@ const CLOSE_UNRESOLVED = ['usage-settlement', 'retry-journal', 'work-quality'];
 const UNRESOLVED = ['owner-attendance', 'launch-manifest-preflight', 'in-run-admission', 'bash-writes'];
 const refuse = reason => ({ errors: [{ code: 'LAUNCH_REFUSED', field: 'launch', reason }] });
 
-export async function prepareLaunch({ inputs, run, teamRoot, productRoot, hookPath, methodBundle, manifest }) {
+export async function prepareLaunch({ inputs, run, teamRoot, productRoot, hookPath, gateHookPath, methodBundle, manifest }) {
   if (typeof teamRoot !== 'string' || typeof productRoot !== 'string') return refuse('Team and product roots are required');
   const launchPath = join(teamRoot, LAUNCH_FILE);
   if (lstatSync(launchPath, { throwIfNoEntry: false })) return refuse('This copy was already prepared for a launch; an activated copy is used once');
@@ -38,11 +39,13 @@ export async function prepareLaunch({ inputs, run, teamRoot, productRoot, hookPa
   try {
     const armed = armBoundary({ inputs, teamRoot, productRoot, hookPath, ...(methodBundle ? { methodBundle } : {}) });
     if (armed.errors) return armed;
-    const isolation = observeIsolation({ teamRoot, productRoot, lease });
+    const dispatch = frozen.record.dispatch;
+    if (dispatch === 'main-session') { const gate = armGate({ teamRoot, hookPath: gateHookPath }); if (gate.errors) return gate; }
+    const isolation = observeIsolation({ teamRoot, productRoot, lease, dispatch });
     if (isolation.errors) return isolation;
     if (isolation.status !== 'clear')
       return refuse(`The runtime-isolation gate is ${isolation.status}: ${isolation.findings.filter(f => f.severity !== 'accepted').map(f => f.code).join(', ')}`);
-    const body = { schemaVersion: 1, stage: 'launch-prepared', runId: frozen.args.runId, teamRoot, productRoot, productHead: isolation.product.head,
+    const body = { schemaVersion: 1, stage: 'launch-prepared', dispatch, runId: frozen.args.runId, teamRoot, productRoot, productHead: isolation.product.head,
       lease, isolationDigest: isolation.digest, boundaryDigest: armed.boundaryDigest, argsDigest: frozen.record.argsDigest,
       runRecord: frozen.record, args: frozen.args, launchManifest,
       unresolved: UNRESOLVED.filter(item => item !== 'launch-manifest-preflight' || launchManifest === 'absent') };

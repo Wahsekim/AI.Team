@@ -30,10 +30,12 @@ function staffedWrappers(rosterText) {
   return Object.fromEntries(rows.map(cells => [cells[0], WRAPPER.exec(cells[2])[1]]));
 }
 
-const OPTIONAL_RUN_FIELDS = ['launchManifestDigest', 'maxAttemptsPerTicket'];
-// Owner decision 2026-11-16: retries are made by the same agents, which the engine cannot resume, so an
-// engine run makes one attempt per ticket unless RUN.json asks for the engine's fresh-agent retry.
-const DEFAULT_ATTEMPTS = 1;
+const OPTIONAL_RUN_FIELDS = ['launchManifestDigest', 'maxAttemptsPerTicket', 'dispatch'];
+const DISPATCH = ['engine', 'main-session'];
+// Owner decision 2026-11-16: retries are made by the same agents. The engine cannot resume an agent, so an
+// engine run makes one attempt per ticket unless RUN.json asks for its fresh-agent retry; a main-session
+// dispatch resumes its agents and allows one retry.
+const DEFAULT_ATTEMPTS = { engine: 1, 'main-session': 2 };
 
 function validateRun(run, count) {
   need(run && typeof run === 'object' && !Array.isArray(run)
@@ -42,7 +44,8 @@ function validateRun(run, count) {
   `run must carry exactly ${RUN_FIELDS.join(', ')} and optionally ${OPTIONAL_RUN_FIELDS.join(', ')}`);
   need(positive(run.rounds) && positive(run.nextLifecycleNumber) && positive(run.budgetCeilingTokens) && positive(run.estimatedOutputTokens) && positive(run.guardianEstimateTokens)
     && typeof run.date === 'string' && typeof run.runId === 'string'
-    && (run.maxAttemptsPerTicket === undefined || [1, 2, 3].includes(run.maxAttemptsPerTicket)), 'INVALID_RUN', 'run fields have the wrong type');
+    && (run.maxAttemptsPerTicket === undefined || [1, 2, 3].includes(run.maxAttemptsPerTicket))
+    && (run.dispatch === undefined || DISPATCH.includes(run.dispatch)), 'INVALID_RUN', 'run fields have the wrong type');
   need(run.rounds === count, 'COUNT_MISMATCH', `the owner count ${run.rounds} must equal the ${count} frozen ticket(s); re-freeze a shorter or longer board`);
 }
 
@@ -74,7 +77,7 @@ export async function freezeRun({ inputs, run, teamRoot, methodBundle }) {
       'The ceiling is more than three times the output estimate; it would not stop a runaway');
 
     const args = { rounds: run.rounds, date: run.date, nextLifecycleNumber: run.nextLifecycleNumber, runId: run.runId,
-      executionMode: 'wrappers', failurePolicy: 'halt-on-failure', maxAttemptsPerTicket: run.maxAttemptsPerTicket ?? DEFAULT_ATTEMPTS,
+      executionMode: 'wrappers', failurePolicy: 'halt-on-failure', maxAttemptsPerTicket: run.maxAttemptsPerTicket ?? DEFAULT_ATTEMPTS[run.dispatch ?? 'engine'],
       budgetCeilingTokens: run.budgetCeilingTokens,
       ...(run.launchManifestDigest === undefined ? {} : { launchManifestDigest: run.launchManifestDigest }),
       guardianAgentType: policy.profiles.guard.wrapper, allowedAgentTypes: Object.values(staffed).sort(),
@@ -86,7 +89,7 @@ export async function freezeRun({ inputs, run, teamRoot, methodBundle }) {
     need(dry.result?.errorCode !== 'invalid-args', 'ENGINE_REJECTED',
       `The engine validator rejected the arguments: ${(dry.result?.validationErrors ?? []).join('; ').slice(0, 600)}`);
 
-    const body = { schemaVersion: 1, stage: 'run-args-frozen-offline', launchable: false, argsDigest: digest(args), maxAttemptsPerTicket: args.maxAttemptsPerTicket,
+    const body = { schemaVersion: 1, stage: 'run-args-frozen-offline', launchable: false, argsDigest: digest(args), dispatch: run.dispatch ?? 'engine', maxAttemptsPerTicket: args.maxAttemptsPerTicket,
       engineDigest: bytesDigest(engine), rosterDigest: bytesDigest(roster), policyDigest,
       items: frozen.map((input, i) => ({ ticket: tickets[i], inputDigest: digest(input), previewDigest: previews[i].manifest.digest, authorizedTokens: input.mandate.budgetTokens })),
       budget: { unit: 'output', ceiling: run.budgetCeilingTokens, stopLine: Math.floor(run.budgetCeilingTokens * 4 / 5), estimatedOutput: run.estimatedOutputTokens },

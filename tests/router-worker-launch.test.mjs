@@ -12,6 +12,7 @@ import { settleLaunch, SETTLE_FILE } from '../src/router-worker/launch-settle.mj
 import { prepareRetry } from '../src/router-worker/launch-retry.mjs';
 import { loadRetryRules, inspectRetryJournal } from '../src/router-worker/retries.mjs';
 import { candidateOf } from '../src/router-worker/closed-candidate.mjs';
+import { nextCall } from '../src/router-worker/dispatch.mjs';
 import { runWorkflow, makeAgentImpl } from '../scripts/lib/workflow-harness.mjs';
 import { freezeRun } from '../src/router-worker/run-args.mjs';
 import { observeIsolation } from '../src/router-worker/isolation.mjs';
@@ -22,6 +23,7 @@ import { inputFixture } from './fixtures/router-worker/input.mjs';
 
 const ENGINE = fileURLToPath(new URL('../.claude/workflows/run-n-rounds.js', import.meta.url));
 const HOOK = fileURLToPath(new URL('../scripts/hooks/rw-write-boundary.mjs', import.meta.url));
+const GATE = fileURLToPath(new URL('../scripts/hooks/rw-dispatch-gate.mjs', import.meta.url));
 const CLI = fileURLToPath(new URL('../scripts/launch-router-worker.mjs', import.meta.url));
 const ARM = fileURLToPath(new URL('../scripts/arm-boundary-router-worker.mjs', import.meta.url));
 const DUTIES = ['exec', 'check', 'guard'];
@@ -44,7 +46,7 @@ function fixture(t, { status = 'activated-disposable-smoke' } = {}) {
   mkdirSync(join(team, '.claude/workflows')); copyFileSync(ENGINE, join(team, '.claude/workflows/run-n-rounds.js'));
   write(product, 'src/tag-list/view.ts', 'export const x = 1;\n');
   git(product, 'init', '-q'); git(product, 'add', '-A'); git(product, 'commit', '-q', '-m', 'product');
-  const prepare = (overrides = {}) => prepareLaunch({ inputs: [inputFixture()], run: RUN, teamRoot: team, productRoot: product, hookPath: HOOK, ...overrides });
+  const prepare = (overrides = {}) => prepareLaunch({ inputs: [inputFixture()], run: RUN, teamRoot: team, productRoot: product, hookPath: HOOK, gateHookPath: GATE, ...overrides });
   return { base, team, product, prepare, launchFile: join(team, LAUNCH_FILE), leased: () => readLease({ productRoot: product }).status };
 }
 const refusal = result => result.errors?.[0];
@@ -83,6 +85,37 @@ test('prepare chains the launch manifest: the frozen arguments carry its digest,
   assert.equal(supplied.launchManifest, 'supplied'); assert.equal(seen.length, 1, 'a digest in RUN.json is kept and no preflight runs');
   const absent = await fixture(t).prepare();
   assert.equal(absent.launchManifest, 'absent'); assert.ok(absent.unresolved.includes('launch-manifest-preflight'));
+});
+
+test('a main-session run is prepared with the dispatch gate armed; an engine run is not', async t => {
+  const gateEntries = f => (JSON.parse(readFileSync(join(f.team, '.claude/settings.json'), 'utf8')).hooks.PreToolUse).filter(entry => entry.matcher === 'Agent|Task|SendMessage|Workflow|SubagentHandback');
+  const f = fixture(t), result = await f.prepare({ run: { ...RUN, dispatch: 'main-session' } });
+  assert.equal(result.errors, undefined, JSON.stringify(result.errors));
+  assert.equal(result.dispatch, 'main-session'); assert.equal(result.runRecord.dispatch, 'main-session'); assert.equal(result.args.maxAttemptsPerTicket, 2, 'one retry by the same agents by default');
+  assert.deepEqual(gateEntries(f), [{ matcher: 'Agent|Task|SendMessage|Workflow|SubagentHandback', hooks: [{ type: 'command', command: `node "${GATE}"` }] }]);
+  const first = nextCall({ launch: JSON.parse(readFileSync(f.launchFile, 'utf8')), events: [] });
+  assert.equal(first.action, 'agent'); assert.equal(first.subagent_type, 'sample-worker-exec'); assert.ok(first.prompt.startsWith(result.args.plan[0].brief));
+  assert.equal(observeIsolation({ teamRoot: f.team, productRoot: f.product, lease: result.lease, dispatch: 'main-session' }).status, 'clear');
+  const engine = fixture(t), plain = await engine.prepare();
+  assert.equal(plain.dispatch, 'engine'); assert.equal(plain.args.maxAttemptsPerTicket, 1); assert.deepEqual(gateEntries(engine), []);
+  assert.equal(nextCall({ launch: plain, events: [] }).action, 'refused', 'an engine launch has no main-session calls');
+  assert.ok(observeIsolation({ teamRoot: engine.team, productRoot: engine.product, lease: plain.lease, dispatch: 'main-session' }).findings.some(finding => finding.code === 'DISPATCH_GATE_NOT_ARMED'));
+  assert.equal(refusal(await fixture(t).prepare({ run: { ...RUN, dispatch: 'somewhere' } })).code, 'INVALID_RUN');
+  const noGate = fixture(t), refused = await noGate.prepare({ run: { ...RUN, dispatch: 'main-session' }, gateHookPath: join(noGate.base, 'missing.mjs') });
+  assert.match(refusal(refused).reason, /DISPATCH_GATE_NOT_ARMED/); assert.equal(noGate.leased(), 'free'); assert.equal(existsSync(noGate.launchFile), false);
+});
+
+test('CLI next prints the one call the gate admits, and refuses a copy that is not a main-session launch', async t => {
+  const f = fixture(t), file = join(f.base, 'run.json'), run = (...argv) => spawnSync(process.execPath, [CLI, ...argv], { encoding: 'utf8' });
+  writeFileSync(file, JSON.stringify({ run: { ...RUN, dispatch: 'main-session' }, inputs: [inputFixture()] }));
+  assert.equal(run('prepare', file, '--team-root', f.team, '--product-root', f.product).status, 0);
+  const next = run('next', '--team-root', f.team);
+  assert.equal(next.status, 0, next.stderr);
+  assert.deepEqual((({ action, ticket, duty, attempt, subagent_type }) => ({ action, ticket, duty, attempt, subagent_type }))(JSON.parse(next.stdout)), { action: 'agent', ticket: 'US-08', duty: 'exec', attempt: 1, subagent_type: 'sample-worker-exec' });
+  assert.equal(JSON.parse(next.stdout).placeholder, 'rw:next'); assert.equal(JSON.parse(next.stdout).prompt, undefined, 'the brief text stays with the gate');
+  const engine = fixture(t); writeFileSync(file, JSON.stringify({ run: RUN, inputs: [inputFixture()] }));
+  assert.equal(run('prepare', file, '--team-root', engine.team, '--product-root', engine.product).status, 0);
+  assert.equal(run('next', '--team-root', engine.team).status, 2); assert.equal(run('next').status, 1);
 });
 
 test('an activated copy is prepared once; a second prepare is refused and changes nothing', async t => {

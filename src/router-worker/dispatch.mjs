@@ -5,9 +5,11 @@ import { digest } from '../loop/contracts.mjs';
 // a pure function of the launch record and the dispatch log: `nextCall` renders the one call that
 // may come next, and `decideDispatch` (the PreToolUse hook) admits exactly that call.
 export const DISPATCH_LOG = '.claude/rw-dispatch.jsonl';
+// The main session sends this instead of a prompt or message; the gate replaces it with the exact text.
+export const PLACEHOLDER = 'rw:next';
 const GATED = ['Agent', 'Task', 'SendMessage', 'Workflow'];
 const STOPPED = ['exec-report-invalid', 'exec-blocked', 'exec-no-progress', 'check-report-invalid', 'check-failed'];
-const NEXT = 'Run `node kit/scripts/launch-router-worker.mjs next --team-root <copy>` and make exactly the call it prints.';
+const NEXT = 'Run `node kit/scripts/launch-router-worker.mjs next --team-root <copy>` and make the call it names, with the placeholder as its text.';
 const EXEC_CONTRACT = '\n\n---\nFINAL REPORT (required). End your work with a final report that is one JSON object and nothing else:\n'
   + '{"outcome": "<what you did>", "blocked": <true if you could not complete the ticket>, "progress": <true if you changed or decided something>, "filesTouched": ["<repo-relative path>"]}\n';
 const CHECK_CONTRACT = '\n\n---\nFINAL REPORT (required). End your work with a final report that is one JSON object and nothing else:\n'
@@ -102,9 +104,12 @@ export function decideDispatch({ input, launch, events }) {
   if (!GATED.includes(tool)) return allow();
   if (!intact(launch)) return deny('This copy has no intact main-session launch record; no agent may be dispatched');
   const call = nextCall({ launch, events }), given = input.tool_input ?? {};
-  const matches = call.action === 'agent' ? ['Agent', 'Task'].includes(tool) && given.subagent_type === call.subagent_type && given.prompt === call.prompt
-    : call.action === 'message' ? tool === 'SendMessage' && given.to === call.to && given.message === call.message : false;
-  if (!matches) return deny(call.action === 'wait' ? `A call is still pending (${call.ticket} ${call.duty}); wait for its report` : call.action === 'done'
+  const starts = call.action === 'agent' && ['Agent', 'Task'].includes(tool), resumes = call.action === 'message' && tool === 'SendMessage';
+  // With the placeholder the gate fills in the call; a call that already is the exact one passes as it is.
+  const updatedInput = starts && given.prompt === PLACEHOLDER ? { ...given, subagent_type: call.subagent_type, prompt: call.prompt, run_in_background: false }
+    : resumes && given.message === PLACEHOLDER ? { ...given, to: call.to, message: call.message } : null;
+  const exact = starts ? given.subagent_type === call.subagent_type && given.prompt === call.prompt : resumes ? given.to === call.to && given.message === call.message : false;
+  if (!updatedInput && !exact) return deny(call.action === 'wait' ? `A call is still pending (${call.ticket} ${call.duty}); wait for its report` : call.action === 'done'
     ? 'The run has no further call; run close and settle' : `This is not the next admitted call of the run. ${NEXT}`);
-  return allow({ type: 'dispatched', ticket: call.ticket, duty: call.duty, attempt: call.attempt, mode: call.action === 'agent' ? 'start' : 'resume' });
+  return { ...allow({ type: 'dispatched', ticket: call.ticket, duty: call.duty, attempt: call.attempt, mode: call.action === 'agent' ? 'start' : 'resume' }), ...(updatedInput ? { updatedInput } : {}) };
 }

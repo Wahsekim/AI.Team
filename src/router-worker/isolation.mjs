@@ -4,6 +4,7 @@ import { digest } from '../loop/contracts.mjs';
 import { git, inside, canonicalDirectory, isRepositoryRoot, readLease } from './lease.mjs';
 import { boundaryGap } from './write-boundary.mjs';
 import { isClosedCandidate } from './closed-candidate.mjs';
+import { gateGap } from './dispatch-arm.mjs';
 
 // Rollout gate G-02. Observes what a host can check without a live runtime and
 // reports the 'runtime-isolation' admission gate. Only 'clear' admits a call.
@@ -118,7 +119,7 @@ function acceptedUnknowns(team) {
   } catch { return []; }
 }
 
-export function observeIsolation({ teamRoot, productRoot, lease, retryOf }) {
+export function observeIsolation({ teamRoot, productRoot, lease, retryOf, dispatch }) {
   try {
     const team = canonicalDirectory(teamRoot, 'Team root'), product = canonicalDirectory(productRoot, 'Product root');
     const findings = [], add = (code, severity, detail) => findings.push({ code, severity, detail });
@@ -127,6 +128,9 @@ export function observeIsolation({ teamRoot, productRoot, lease, retryOf }) {
     observeSettings([['team', team], ['product', product]], add);
     const gap = boundaryGap({ teamRoot: team, productRoot: product, wrappers });
     if (gap) add('WRITE_BOUNDARY_NOT_ARMED', 'blocked', gap);
+    // A run the main session dispatches is only as bounded as the gate that admits its calls.
+    const ungated = dispatch === 'main-session' ? gateGap({ teamRoot: team }) : null;
+    if (ungated) add('DISPATCH_GATE_NOT_ARMED', 'blocked', ungated);
     const accepted = acceptedUnknowns(team);
     for (const finding of findings) if (finding.severity === 'unknown' && accepted.includes(finding.code)) finding.severity = 'accepted';
     findings.sort((a, b) => a.code.localeCompare(b.code) || a.detail.localeCompare(b.detail));
