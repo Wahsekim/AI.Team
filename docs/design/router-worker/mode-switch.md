@@ -143,6 +143,9 @@ a file is moved back only where its place is empty.
   files under `holiday/specialist/` are not among them.
 - **Bootstrap does not offer the mode yet**, and the gate flag
   (`dispatch: main-session`) cannot be set: both are later steps.
-- The ledger line is written by the command with the host's UTC date. It records
-  that the owner confirmed the proposal by its digest; it cannot know who typed
-  the command.
+- **Nothing ties the confirmation to the owner.** The digest is printed by the
+  proposal and accepted on the command line, so any session that can run the
+  command can do both steps, an unattended PM session included. The ledger line
+  says a proposal was confirmed by its digest and does not say by whom. Whether
+  the confirmation should need something only the owner can do is an open owner
+  decision.

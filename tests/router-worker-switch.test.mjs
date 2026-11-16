@@ -77,7 +77,8 @@ test('the switch packs the specialist team into holiday/ and makes the three wor
   assert.equal(mode.confirmedProposal, result.proposalDigest); assert.ok(mode.ownFiles.includes('agents/worker-exec.md'));
   assert.deepEqual(f.digests(SHARED), shared, 'charter, ledgers, lessons, memory and profiles are not packed and not changed');
   const ledger = f.read('pm-decisions.md');
-  assert.ok(ledger.startsWith(ledgerBefore), 'the PM ledger is appended, never rewritten'); assert.match(ledger.slice(ledgerBefore.length), /switched from specialist to router-worker/);
+  assert.ok(ledger.startsWith(ledgerBefore), 'the PM ledger is appended, never rewritten'); assert.match(ledger.slice(ledgerBefore.length), /MODE SWITCH: from specialist to router-worker/);
+  assert.doesNotMatch(ledger.slice(ledgerBefore.length), /OWNER/, 'the line does not claim who confirmed');
   assert.equal(refusal(f.apply()).code, 'SWITCH_REFUSED', 'already in that mode');
 });
 

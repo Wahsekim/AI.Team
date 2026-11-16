@@ -264,7 +264,7 @@ export function switchMode({ confirm, validate, ...options }) {
   }
   releaseLease({ productRoot, lease });
   const at = new Date().toISOString();
-  appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} OWNER: team mode switched from ${live.name} to ${to} (proposal ${proposalDigest}, confirmed by its digest). ${body.pack.length} file(s) packed under holiday/${live.name}.\n`);
+  appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} MODE SWITCH: from ${live.name} to ${to}; proposal ${proposalDigest} was confirmed by its digest on the command line (the command cannot tell who ran it). ${body.pack.length} file(s) packed under holiday/${live.name}.\n`);
   const record = { schemaVersion: 1, stage: 'mode-switched', mode: to, from: live.name, proposalDigest, packed: body.pack, installed: body.install, kept: body.kept, leftInHoliday, validator: verdict, switchedAt: at };
   return { ...record, digest: digest(record) };
 }
