@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { prepareLaunch, closeLaunch, LAUNCH_FILE, CLOSE_FILE } from '../src/router-worker/launch.mjs';
+import { EXPORT_FILE } from '../src/router-worker/export.mjs';
 import { settleLaunch, SETTLE_FILE } from '../src/router-worker/launch-settle.mjs';
 import { prepareRetry } from '../src/router-worker/launch-retry.mjs';
 import { loadRetryRules, inspectRetryJournal } from '../src/router-worker/retries.mjs';
@@ -17,7 +18,7 @@ import { runWorkflow, makeAgentImpl } from '../scripts/lib/workflow-harness.mjs'
 import { freezeRun } from '../src/router-worker/run-args.mjs';
 import { observeIsolation } from '../src/router-worker/isolation.mjs';
 import { acquireLease, readLease, releaseLease } from '../src/router-worker/lease.mjs';
-import { digest } from '../src/loop/contracts.mjs';
+import { digest, bytesDigest } from '../src/loop/contracts.mjs';
 import { loadMethods, methodCatalog } from '../src/router-worker/methods.mjs';
 import { inputFixture } from './fixtures/router-worker/input.mjs';
 
@@ -94,13 +95,14 @@ test('a main-session run is prepared with the dispatch gate armed; an engine run
   const gateEntries = f => (JSON.parse(readFileSync(join(f.team, '.claude/settings.json'), 'utf8')).hooks.PreToolUse).filter(entry => entry.matcher === 'Agent|Task|SendMessage|Workflow|SubagentHandback');
   const f = fixture(t), result = await f.prepare({ run: { ...RUN, dispatch: 'main-session' } });
   assert.equal(result.errors, undefined, JSON.stringify(result.errors));
-  assert.equal(result.dispatch, 'main-session'); assert.equal(result.runRecord.dispatch, 'main-session'); assert.equal(result.args.maxAttemptsPerTicket, 2, 'one retry by the same agents by default');
+  assert.equal(result.dispatch, 'main-session'); assert.equal(result.runRecord.dispatch, 'main-session');
+  assert.ok(!result.unresolved.includes('in-run-admission'), 'every call of a main-session run is admitted by the gate'); assert.equal(result.args.maxAttemptsPerTicket, 2, 'one retry by the same agents by default');
   assert.deepEqual(gateEntries(f), [{ matcher: 'Agent|Task|SendMessage|Workflow|SubagentHandback', hooks: [{ type: 'command', command: `node "${GATE}"` }] }]);
   const first = nextCall({ launch: JSON.parse(readFileSync(f.launchFile, 'utf8')), events: [] });
   assert.equal(first.action, 'agent'); assert.equal(first.subagent_type, 'sample-worker-exec'); assert.ok(first.prompt.startsWith(result.args.plan[0].brief));
   assert.equal(observeIsolation({ teamRoot: f.team, productRoot: f.product, lease: result.lease, dispatch: 'main-session' }).status, 'clear');
   const engine = fixture(t), plain = await engine.prepare();
-  assert.equal(plain.dispatch, 'engine'); assert.equal(plain.args.maxAttemptsPerTicket, 1); assert.deepEqual(gateEntries(engine), []);
+  assert.equal(plain.dispatch, 'engine'); assert.equal(plain.args.maxAttemptsPerTicket, 1); assert.ok(plain.unresolved.includes('in-run-admission')); assert.deepEqual(gateEntries(engine), []);
   assert.equal(nextCall({ launch: plain, events: [] }).action, 'refused', 'an engine launch has no main-session calls');
   assert.ok(observeIsolation({ teamRoot: engine.team, productRoot: engine.product, lease: plain.lease, dispatch: 'main-session' }).findings.some(finding => finding.code === 'DISPATCH_GATE_NOT_ARMED'));
   assert.equal(refusal(await fixture(t).prepare({ run: { ...RUN, dispatch: 'somewhere' } })).code, 'INVALID_RUN');
@@ -581,4 +583,26 @@ test('retry preparation keeps the settled budget stop: it admits a retry only wh
   const last = prepared.journal.events.at(-1);
   assert.equal(last.type, 'prepare'); assert.equal(last.admission.gates.budget, 'clear'); assert.equal(last.admission.gates['runtime-isolation'], 'clear');
   assert.deepEqual(prepared.admissionObserved, ['budget', 'runtime-isolation'], 'the record says which gates this command observed');
+});
+
+test('close exports what the run changed as one patch that rebuilds the candidate on a clean checkout', async t => {
+  const f = await ran(t); const base = git(f.product, 'rev-parse', 'HEAD').trim();
+  write(f.product, '.git/info/exclude', 'build/\n');
+  writeFileSync(join(f.product, 'src/tag-list/view.ts'), 'export const x = 2;\n'); write(f.product, 'src/tag-list/empty state.ts', 'export const empty = true;\n');
+  write(f.product, 'build/out.o', 'ignored'); writeFileSync(join(f.product, 'src/tag-list/bin.dat'), Buffer.from([0, 1, 2, 255, 0]));
+  const indexBefore = git(f.product, 'diff', '--cached', '--name-only'), statusBefore = git(f.product, 'status', '--porcelain');
+  const closed = f.close();
+  assert.equal(closed.errors, undefined, JSON.stringify(closed.errors));
+  assert.deepEqual(closed.export, { file: EXPORT_FILE, digest: bytesDigest(readFileSync(join(f.team, EXPORT_FILE))), baseCommit: base, paths: ['src/tag-list/bin.dat', 'src/tag-list/empty state.ts', 'src/tag-list/view.ts'] });
+  assert.equal(git(f.product, 'diff', '--cached', '--name-only'), indexBefore, 'the clone\'s index is not touched'); assert.equal(git(f.product, 'status', '--porcelain'), statusBefore);
+  const fresh = join(f.base, 'fresh'); git(f.base, 'clone', '-q', f.product, fresh);
+  git(fresh, 'apply', '--binary', join(f.team, EXPORT_FILE));
+  assert.deepEqual(candidateOf(realpathSync(fresh)), closed.candidate, 'the patch on the base commit is byte for byte the state the run ended in');
+  assert.equal(existsSync(join(fresh, 'build/out.o')), false, 'ignored build output is not exported');
+  const untouched = await ran(t), nothing = untouched.close();
+  assert.equal(nothing.export, null); assert.equal(existsSync(join(untouched.team, EXPORT_FILE)), false, 'a run that changed nothing exports nothing');
+  const committed = await ran(t), start = git(committed.product, 'rev-parse', 'HEAD').trim();
+  write(committed.product, 'src/tag-list/ok.ts', 'x\n'); git(committed.product, 'add', '-A'); git(committed.product, 'commit', '-q', '-m', 'worker commit'); write(committed.product, 'src/tag-list/later.ts', 'y\n');
+  const moved = committed.close();
+  assert.equal(moved.export.baseCommit, start, 'the patch is taken from the commit the run started on'); assert.deepEqual(moved.export.paths, ['src/tag-list/later.ts', 'src/tag-list/ok.ts']);
 });

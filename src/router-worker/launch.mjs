@@ -9,6 +9,7 @@ import { CLOSE_FILE, candidateOf } from './closed-candidate.mjs';
 import { armGate } from './dispatch-arm.mjs';
 import { runSummary, DISPATCH_LOG } from './dispatch.mjs';
 import { withDispatchLock } from './dispatch-lock.mjs';
+import { exportChanges } from './export.mjs';
 
 export { CLOSE_FILE };
 
@@ -50,7 +51,7 @@ export async function prepareLaunch({ inputs, run, teamRoot, productRoot, hookPa
     const body = { schemaVersion: 1, stage: 'launch-prepared', dispatch, runId: frozen.args.runId, teamRoot, productRoot, productHead: isolation.product.head,
       lease, isolationDigest: isolation.digest, boundaryDigest: armed.boundaryDigest, argsDigest: frozen.record.argsDigest,
       runRecord: frozen.record, args: frozen.args, launchManifest,
-      unresolved: UNRESOLVED.filter(item => item !== 'launch-manifest-preflight' || launchManifest === 'absent') };
+      unresolved: UNRESOLVED.filter(item => (item !== 'launch-manifest-preflight' || launchManifest === 'absent') && (item !== 'in-run-admission' || dispatch !== 'main-session')) };
     const record = { ...body, digest: digest(body) };
     try { writeFileSync(launchPath, JSON.stringify(record, null, 2) + '\n', { flag: 'wx' }); }
     catch (error) { return refuse(`The launch record could not be written: ${error.code ?? 'unknown error'}`); }
@@ -138,13 +139,17 @@ export function closeLaunch({ teamRoot, result, pendingStopped = false }) {
   const { changed, ignoredChanges } = changedPaths(product), grants = Object.values(boundary?.wrappers ?? {}).flatMap(entry => entry.writePaths ?? []);
   const outside = changed.filter(path => !within(path, grants));
   if (outside.length) findings.push({ code: 'WRITE_OUTSIDE_BOUNDARY', paths: outside });
+  // The work leaves the disposable clone as a patch in the copy; the owner decides whether it reaches a real repository.
+  let exported = null;
+  try { exported = exportChanges({ productRoot: product, baseCommit: launch.productHead, teamRoot }); }
+  catch { findings.push({ code: 'EXPORT_FAILED' }); }
   const lease = readLease({ productRoot: product });
   const ours = lease.status === 'held' && lease.lease.digest === launch.lease;
   const leaseReleased = ours && !releaseLease({ productRoot: product, lease: launch.lease }).errors;
   if (!leaseReleased) findings.push({ code: ours ? 'LEASE_RELEASE_FAILED' : 'LEASE_NOT_HELD_BY_THIS_LAUNCH' });
 
   const body = { schemaVersion: 1, stage: 'launch-closed', runId: launch.runId, launchDigest: launch.digest, status: findings.length ? 'review' : 'clean',
-    account, productHead: head, candidate: candidateOf(product), changedPaths: changed, ignoredChanges, hookLog: hookLog(teamRoot, launch.args.allowedAgentTypes), findings, leaseReleased, unresolved: CLOSE_UNRESOLVED };
+    account, productHead: head, candidate: candidateOf(product), changedPaths: changed, export: exported, ignoredChanges, hookLog: hookLog(teamRoot, launch.args.allowedAgentTypes), findings, leaseReleased, unresolved: CLOSE_UNRESOLVED };
   const record = { ...body, digest: digest(body) };
   try { writeFileSync(closePath, JSON.stringify(record, null, 2) + '\n', { flag: 'wx' }); }
   catch (error) { return refuse(`The close record could not be written: ${error.code ?? 'unknown error'}`); }

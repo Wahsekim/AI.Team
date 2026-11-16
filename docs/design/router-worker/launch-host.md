@@ -78,7 +78,7 @@ Otherwise close records what the run left and releases the lease:
 `<copy>/rw-close.json` carries `status` (`clean` or `review`), the `account`
 (calls and engine blockers), `productHead`, `candidate` (the product state the
 run ended in: commit plus every tracked and untracked file by content),
-`changedPaths`, `hookLog` (counts
+`changedPaths`, `export` (the result patch), `hookLog` (counts
 from the [hook call log](write-boundary.md): calls, calls by the run's
 wrappers, their Bash calls, refusals, calls with no agent name), the findings
 and `leaseReleased`. `hookLog` is not a finding: a worker that only read files
@@ -87,6 +87,29 @@ about the quality of the work. Read `account.blockers` for the engine's verdict.
 
 `WRITE_OUTSIDE_BOUNDARY` is found after the fact and only inside the product
 work tree. A write elsewhere on the machine is not seen.
+
+### The result leaves the clone as a patch
+
+The product clone has no remote and is deleted with its directory. Close
+therefore writes `<copy>/rw-result.patch`: everything the run changed against
+the commit it started on, as one Git patch with binary content. It holds tracked
+changes, new files and any commit made during the run; Git-ignored paths are
+left out. The close record carries `export`: the file name, its digest, the base
+commit and the paths, or `null` when nothing changed. The patch is built in a
+throwaway index; the clone's own index and work tree are only read. A patch that
+cannot be built is the finding `EXPORT_FAILED`.
+
+Applied to a checkout at the base commit, the patch reproduces the recorded
+`candidate` byte for byte (a test checks this). To take the result into a real
+repository, the owner copies the patch out before deleting the directory and
+applies it at that commit:
+
+```sh
+git -C <repository> apply --check --binary <path>/rw-result.patch   # then without --check
+```
+
+Nothing in the kit applies it. The patch includes paths reported as
+`WRITE_OUTSIDE_BOUNDARY`; read the close record before applying.
 
 Git-ignored paths are not judged (owner decision 2026-11-13, after the third
 smoke run listed 65 build artifacts of the check wrapper's verification
