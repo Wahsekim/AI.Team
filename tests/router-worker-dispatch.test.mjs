@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync, spawn } from 'node:child_process';
 import { nextCall, decideDispatch, runSummary, DISPATCH_LOG, PLACEHOLDER } from '../src/router-worker/dispatch.mjs';
 import { digest } from '../src/loop/contracts.mjs';
+import { runWorkflow, makeAgentImpl } from '../scripts/lib/workflow-harness.mjs';
 import { withDispatchLock, DISPATCH_LOCK } from '../src/router-worker/dispatch-lock.mjs';
 
 const HOOK = fileURLToPath(new URL('../scripts/hooks/rw-dispatch-gate.mjs', import.meta.url));
@@ -230,4 +231,32 @@ test('the dispatch lock is exclusive and is never taken over', t => {
   writeFileSync(lock, JSON.stringify({ pid: 2147483646, at: 'x' }));
   assert.throws(() => withDispatchLock(team, () => 'never', { waitMs: 60 }), error => error.code === 'DISPATCH_LOCKED' && /gone/.test(error.message), 'a dead holder\'s lock is for the operator');
   assert.equal(existsSync(lock), true);
+});
+
+test('a pass must be grounded as the count engine requires: no-op, comment-only and multi-line commands are no evidence', () => {
+  const verdict = commandsRun => { const r = rig(); r.step('exec-a', execReport()); r.step('check-a', checkReport(true, { commandsRun })); const end = r.next(); return end.action === 'done' ? end.tickets[0].status : 'passed'; };
+  const one = command => [{ command, exitCode: 0 }];
+  for (const command of ['true', ':', 'exit 0', '  TRUE  ', 'echo all good', 'true # ran the suite', '# npm test', 'npm test\nnpm run lint'])
+    assert.equal(verdict(one(command)), 'check-report-invalid', JSON.stringify(command));
+  assert.equal(verdict([{ command: 'true', exitCode: 0 }, { command: 'echo done', exitCode: 0 }]), 'check-report-invalid', 'only no-ops');
+  assert.equal(verdict(one('npm test')), 'passed');
+  assert.equal(verdict(one('echo starting tests && npm test')), 'passed', 'a compound command that starts with echo is real evidence');
+  assert.equal(verdict([{ command: 'echo start', exitCode: 0 }, { command: 'fvm flutter test', exitCode: 0 }]), 'passed', 'a real command next to a no-op');
+  const r = rig(); r.step('exec-a', execReport()); r.step('check-a', checkReport(true, { commandsRun: one('true') }));
+  assert.deepEqual(r.next().tickets.map(t => t.status), ['check-report-invalid', 'not-dispatched'], 'a rejected pass does not advance to the next ticket');
+});
+
+test('the gate and the count engine judge the same command evidence the same way', async () => {
+  const ENGINE = fileURLToPath(new URL('../.claude/workflows/run-n-rounds.js', import.meta.url));
+  const corpus = [['true'], [':'], ['exit 0'], ['echo ok'], ['true # note'], ['# only a comment'], ['npm test\nnpm run lint'], ['true', 'echo done'],
+    ['npm test'], ['echo start && npm test'], ['echo start', 'fvm flutter test'], ['fvm dart format --set-exit-if-changed .', 'fvm flutter analyze', 'fvm flutter test']];
+  for (const commands of corpus) {
+    const commandsRun = commands.map(command => ({ command, exitCode: 0 }));
+    const r = rig(); r.step('exec-a', execReport()); r.step('check-a', checkReport(true, { commandsRun }));
+    const end = r.next(), gate = end.action === 'done' ? end.tickets[0].status === 'passed' : true;
+    const { result } = await runWorkflow({ scriptPath: ENGINE, enforceSchema: false, args: { rounds: 1, date: '2026-11-16', nextLifecycleNumber: 1, executionMode: 'wrappers', budgetCeilingTokens: 100000,
+      guardianAgentType: 'g', allowedAgentTypes: ['b', 'q', 'g'], plan: [{ ticket: 'T-1', agentType: 'b', brief: 'x', isCodeShipping: true, verifierAgentType: 'q' }] },
+      agentImpl: makeAgentImpl({ verifier: () => ({ pass: true, staticPass: true, e2ePass: true, summary: 's', commandsRun, failures: [] }) }) });
+    assert.equal(gate, result.results[0].verificationStatus === 'passed', JSON.stringify(commands));
+  }
 });
