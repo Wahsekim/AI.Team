@@ -39,8 +39,15 @@ from it.
 
 A ticket stops, and with it the run, on: an exec report that is not the contract
 JSON, a blocked exec, an exec without progress, a check report that is not the
-contract JSON or claims a pass without a command that ran with exit code 0, and
-a check that still fails on the last attempt. Later tickets are not dispatched.
+contract JSON or claims a pass that is not grounded, and a check that still
+fails on the last attempt. Later tickets are not dispatched.
+
+A pass is grounded by the count engine's rules, kept identical and compared
+against the engine in a test over one corpus of command lists: at least one
+command, every command a single line with exit code 0 and something left after
+its comment is removed, and not every command a no-op (`true`, `:`, `exit 0`, a
+bare `echo`). One intended difference: the engine also requires its two
+sub-gates (`staticPass`, `e2ePass`); the check contract here has only `pass`.
 
 The agent ids used for a resume are the ones the hook saw in the hand-back of
 the admitted call; the main session never supplies an id.

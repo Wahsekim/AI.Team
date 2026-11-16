@@ -35,9 +35,15 @@ function checkOutcome(report) {
   if (!report || typeof report.pass !== 'boolean' || typeof report.summary !== 'string' || !commands
     || !commands.every(c => c && typeof c.command === 'string' && c.command.trim() && Number.isInteger(c.exitCode))) return 'check-report-invalid';
   // A pass must be grounded in commands the checker ran; a claimed pass over a failing or missing command is no verdict.
-  if (report.pass) return commands.length && commands.every(c => c.exitCode === 0) ? 'pass' : 'check-report-invalid';
+  if (report.pass) return commands.length && commands.every(c => c.exitCode === 0 && evidence(c.command)) && !commands.every(c => NOOP.test(canonicalCommand(c.command))) ? 'pass' : 'check-report-invalid';
   return 'fail';
 }
+// The count engine's grounding rules (run-n-rounds.js, verifier gate), kept identical here: a command is one line,
+// is judged without its trailing or whole-line comment, and a list of nothing but no-ops verifies nothing.
+// Command content stays checker-reported; this is a tripwire for a lazy checker, not an adversarial defense.
+const NOOP = /^\s*(?:true|:|exit\s+0)\s*$|^\s*echo\b[^&|;>]*$/i;
+const canonicalCommand = command => String(command).replace(/\s#.*$/, '').replace(/^\s*#.*$/, '').trim();
+const evidence = command => !/[\r\n]/.test(command) && canonicalCommand(command).length > 0;
 const oneLine = (value, max) => JSON.stringify(value).replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, max);
 
 function replay(launch, events) {
