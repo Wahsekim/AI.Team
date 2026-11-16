@@ -107,6 +107,13 @@ node kit/scripts/measure-spawn.mjs <session-dir> --json > METER.json
 node kit/scripts/launch-router-worker.mjs settle RESULT.json METER.json --team-root <activated copy>
 ```
 
+The retry rules used by `settle` and `retry` are those of the copy: its own
+`charter.md`, read through the kit that serves the command. A copy that is not a
+two-root instance of that kit is refused (`RETRY_RULES_REFUSED`), and a charter
+whose retry wording changed is refused (`RETRY_RULE_REVIEW_REQUIRED`) before
+anything is settled or admitted. The journal carries the digest of those rules,
+so a retry after a charter change is refused as well.
+
 `<session-dir>` is the Claude Code session directory of the launching session.
 Exit 0 settled clear, 2 refused or settled with something to review, 1 usage.
 Settle needs the launch record and the close record, and the same engine return
