@@ -189,6 +189,33 @@ test('R-10: concurrent SessionStart hooks spawn at most one loop (start lock)', 
   })
 })
 
+test('R-10: a lock that is held cannot be released by a stray rmdir, so a second hook cannot start a second loop', async () => {
+  await withHome(async home => {
+    // A slow `dirname` holds the first hook between taking the lock and writing its PID file: the window in
+    // which a second hook has nothing but the lock to stop it.
+    const bin = join(home, 'bin'), lock = join(home, '.claude', 'heartbeats', 's12.start-lock')
+    await mkdir(bin)
+    await writeFile(join(bin, 'dirname'), '#!/bin/sh\nsleep 1\nexec /usr/bin/dirname "$@"\n', { mode: 0o755 })
+    const first = spawn('bash', [join(DIR, 'start-watchdog.sh')], { env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}` } })
+    first.stdin.end('{"session_id":"s12"}')
+    const done = new Promise(res => first.on('close', res))
+    try {
+      for (let i = 0; i < 100; i++) { try { await access(lock); break } catch { await new Promise(r => setTimeout(r, 10)) } }
+      await new Promise(r => setTimeout(r, 150))
+      // What stop-watchdog.sh, a stale-lock recovery or any other stray cleanup would do to a lock it does not own.
+      await exec('rmdir', [lock]).catch(() => {})
+      const second = await runHook('start-watchdog.sh', home, '{"session_id":"s12"}')
+      assert.equal(second.code, 0, second.out)
+      assert.equal(await done, 0)
+      const { loops, table } = await loopProcesses('s12')
+      assert.equal(loops.length, 1, `the lock survived the rmdir, so only the first hook spawned: ${table}`)
+      await assert.rejects(access(lock), 'the owner removes its own lock when it exits')
+    } finally {
+      await runHook('stop-watchdog.sh', home, '{"session_id":"s12"}')
+    }
+  })
+})
+
 test('FLAKE-2: a start hook whose lock cleanup fails still exits 0', async () => {
   await withHome(async home => {
     // An rmdir that always fails stands in for a lock directory that is already gone at exit.

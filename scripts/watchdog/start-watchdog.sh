@@ -63,14 +63,25 @@ if ! mkdir "$LOCK_DIR" 2>/dev/null; then
     case "$lock_mtime" in ''|*[!0-9]*) lock_mtime="" ;; esac
     now_s=$(date +%s)
     if [ -n "$lock_mtime" ] && [ $((now_s - lock_mtime)) -gt 60 ]; then
+        rm -f "$LOCK_DIR/owner" 2>/dev/null || true
         rmdir "$LOCK_DIR" 2>/dev/null || true
         mkdir "$LOCK_DIR" 2>/dev/null || exit 0
     else
         exit 0
     fi
 fi
+# The lock carries its owner. A directory with a file in it cannot be removed by
+# a plain rmdir, so nothing but this hook's own cleanup can release a held lock
+# (observed on Linux CI: both of two racing hooks got past an empty lock
+# directory). The exclusive create is a second barrier: a hook that does not get
+# to write the owner file does not hold the lock.
+if ! ( set -C; echo "$$" > "$LOCK_DIR/owner" ) 2>/dev/null; then
+    exit 0
+fi
+# Only the owning process releases the lock: a subshell shares $$ but not
+# BASHPID (unset before bash 4, where the guard is then always true).
 # '|| true': under set -e a failing command in the EXIT trap replaces the exit status.
-trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
+trap 'if [ "${BASHPID:-$$}" = "$$" ] && [ "$(cat "$LOCK_DIR/owner" 2>/dev/null)" = "$$" ]; then rm -f "$LOCK_DIR/owner"; rmdir "$LOCK_DIR" 2>/dev/null || true; fi' EXIT
 
 # Already running for this session?
 if [ -f "$PID_FILE" ]; then
