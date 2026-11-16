@@ -31,8 +31,9 @@ function staffedWrappers(rosterText) {
 }
 
 const OPTIONAL_RUN_FIELDS = ['launchManifestDigest', 'maxAttemptsPerTicket'];
-// Owner decision 2026-11-14: one in-loop retry after a failed verification, with a fresh worker and verifier.
-const DEFAULT_ATTEMPTS = 2;
+// Owner decision 2026-11-16: retries are made by the same agents, which the engine cannot resume, so an
+// engine run makes one attempt per ticket unless RUN.json asks for the engine's fresh-agent retry.
+const DEFAULT_ATTEMPTS = 1;
 
 function validateRun(run, count) {
   need(run && typeof run === 'object' && !Array.isArray(run)

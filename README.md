@@ -308,11 +308,11 @@ check that sees Bash writes, after the fact; Git-ignored paths are counted,
 not judged), and releases the lease. `settle`
 matches the metered agents to the run's calls, checks that each call received
 its frozen brief, and settles tickets and run, keeping each ticket's retry
-journal and ledger. A failed verification is
-retried once inside the run by the engine, with a fresh worker and verifier
-(`maxAttemptsPerTicket`, default 2); `close` and `settle` count every attempt.
-The `retry` command belongs to an earlier, unwired design (continuation after
-the run). No call is admitted one by one
+journal and ledger. An engine run makes one
+attempt per ticket by default; `maxAttemptsPerTicket` 2 or 3 turns on the
+engine's retry with fresh agents, which `close` and `settle` count per attempt.
+Retries by the same agents need dispatch by the main session and are being
+built; the `retry` command belongs to an earlier, unwired design. No call is admitted one by one
 during a run
 ([details](docs/design/router-worker/launch-host.md)).
 

@@ -298,7 +298,8 @@ test('a blocked worker whose returned work was checked settles as a stopped tick
 
 test('a ticket that passed on its retry settles as four calls of one ticket, each attempt in its own session', async t => {
   let checks = 0;
-  const f = await ran(t, { verifier: () => ++checks === 1 ? failingCheck.verifier() : { pass: true, staticPass: true, e2ePass: true, summary: 'all green', commandsRun: [{ command: 'npm test', exitCode: 0 }], failures: [] } });
+  const twice = { run: { ...RUN, maxAttemptsPerTicket: 2 } };
+  const f = await ran(t, { verifier: () => ++checks === 1 ? failingCheck.verifier() : { pass: true, staticPass: true, e2ePass: true, summary: 'all green', commandsRun: [{ command: 'npm test', exitCode: 0 }], failures: [] } }, twice);
   assert.equal(f.result.results[0].attempts, 2); f.close();
   const plan = f.launch.args.plan[0], retryBrief = `${plan.brief}\n\n---\nRETRY: attempt 2 of 2 for this ticket.\n{"summary":"one test fails"}\n`;
   const meter = () => metered(f, { order: ['exec1', 'check1', 'exec2', 'check2', 'guard1'], tokens: { exec1: 6000, check1: 3000, exec2: 5000, check2: 3000, guard1: 5000 },
@@ -311,7 +312,7 @@ test('a ticket that passed on its retry settles as four calls of one ticket, eac
   const state = inspectRetryJournal({ journal: settled.ticketRecords[0].journal, rules });
   assert.deepEqual(state.assignments.map(a => [a.assignmentId, a.outcome]), [['US-08.exec.1', 'candidate'], ['US-08.check.1', 'fail'], ['US-08.exec.2', 'candidate'], ['US-08.check.2', 'pass']]);
   assert.deepEqual(state.retryCounts, { exec: 1, check: 1 }); assert.equal(new Set(state.usedSessions.exec.map(ref => ref.id)).size, 2);
-  const short = await ran(t, { verifier: () => ++checks === 3 ? failingCheck.verifier() : { pass: true, staticPass: true, e2ePass: true, summary: 'ok', commandsRun: [{ command: 'npm test', exitCode: 0 }], failures: [] } });
+  const short = await ran(t, { verifier: () => ++checks === 3 ? failingCheck.verifier() : { pass: true, staticPass: true, e2ePass: true, summary: 'ok', commandsRun: [{ command: 'npm test', exitCode: 0 }], failures: [] } }, twice);
   short.close();
   assert.match(refusal(settle(short, metered(short))).reason, /calls of this run/, 'a retried run metered as a single attempt');
 });
