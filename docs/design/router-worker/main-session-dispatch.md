@@ -59,6 +59,21 @@ the admitted call; the main session never supplies an id.
 - An agent's hand-back is recorded when the agent is one of the run's wrappers.
 - Without an intact main-session launch record every dispatch is refused.
 - A call that cannot be recorded is refused, so it cannot be admitted twice.
+- **One lock per run.** The hook reads the log, decides and appends under an
+  exclusive lock (`.claude/rw-dispatch.lock`), so two hook processes that
+  overlap cannot both admit a call; the second waits, then sees the first
+  admission and is refused. The lock is never taken over: when it is still held
+  after the wait, or was left by a process that is gone, the call is refused and
+  the operator inspects the log and removes the lock file.
+- **One invocation, one admission.** A dispatch is recorded with its tool-use
+  id; the same invocation delivered again gets the same answer and no second
+  admission.
+- **Closed is terminal.** `close` appends a `closed` line to the log under the
+  same lock before it does anything else. After it the hook admits nothing,
+  `next` prints `closed`, and a hand-back that arrives later is recorded as
+  evidence without reopening dispatch.
+- **Lease.** A dispatch is admitted only while the product still carries the
+  lease the run was prepared with.
 
 Observed on Claude Code 2.1.323 with a headless probe: `PreToolUse` fires for
 the main session's `Agent` (input `subagent_type`, `prompt`) and `SendMessage`
@@ -131,9 +146,17 @@ node kit/scripts/launch-router-worker.mjs settle METER.json --team-root <activat
 There is no engine return. `close` takes the calls from the dispatch log:
 `account.source` is `dispatch-log`, `calls` counts tickets, exec and check calls
 (`guard` is 0), `attempts` and `tickets` give each dispatched ticket's attempts
-and status, and `blockers` names every ticket that did not pass. A run the main
-session left before its end is still closed and its lease released, with the
-finding `RUN_NOT_FINISHED` and the call that was due. The product checks
+and status, and `blockers` names every ticket that did not pass.
+
+Close revokes dispatch first, then frees the product:
+
+- A run left between two calls is closed with the finding `RUN_NOT_FINISHED`
+  and the call that was due; its lease is released.
+- While a call is out, close refuses: dispatch is already revoked, but the
+  lease stays held and no close record is written, because the agent may still
+  be writing. Close again once it has handed back, or with `--pending-stopped`
+  after confirming the agent has stopped; that word is recorded as
+  `PENDING_CALL_STOPPED_BY_OPERATOR`. The kit cannot stop an agent itself. The product checks
 (changed paths against the write boundary, moved head, candidate snapshot, hook
 log) are those of an engine run.
 

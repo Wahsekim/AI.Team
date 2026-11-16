@@ -44,9 +44,12 @@ function replay(launch, events) {
   const plan = launch.args.plan, max = launch.args.maxAttemptsPerTicket ?? 1;
   const tickets = plan.map((item, index) => ({ ticket: item.ticket, status: 'not-dispatched', attempts: 0, due: 'exec', authorized: launch.runRecord?.items?.[index]?.authorizedTokens ?? null,
     exec: { agentId: null, report: null, tokens: 0 }, check: { agentId: null, report: null, tokens: 0 } }));
-  let pending = null;
+  let pending = null, closed = false;
   const calls = [];
   for (const event of events) {
+    // Closing is terminal: a hand-back that arrives later is kept as evidence, a dispatch is not.
+    if (event.type === 'closed') { closed = true; continue; }
+    if (event.type === 'dispatched' && closed) continue;
     if (event.type === 'dispatched') {
       const entry = tickets.find(t => t.ticket === event.ticket);
       if (!entry) continue;
@@ -77,12 +80,18 @@ function replay(launch, events) {
       pending = null;
     }
   }
-  return { tickets, pending, max, plan, calls };
+  return { tickets, pending, max, plan, calls, closed };
 }
 
 export function nextCall({ launch, events }) {
   if (!intact(launch)) return { action: 'refused', reason: 'This copy has no intact main-session launch record' };
-  const { tickets, pending, max, plan } = replay(launch, events);
+  const state = replay(launch, events);
+  if (state.closed) return { action: 'closed', tickets: state.tickets.map(({ ticket, status, attempts }) => ({ ticket, status, attempts })) };
+  return advance(state);
+}
+
+// The call that is due, whether or not the run was closed.
+function advance({ tickets, pending, max, plan }) {
   if (pending) return { action: 'wait', ...pending };
   const summary = () => tickets.map(({ ticket, status, attempts }) => ({ ticket, status, attempts }));
   // A ticket that stopped halts the run: later tickets must not build on unaccepted work.
@@ -107,13 +116,13 @@ export function nextCall({ launch, events }) {
 // ticket's status, and whether the run reached its end. Null without an intact main-session launch record.
 export function runSummary({ launch, events }) {
   if (!intact(launch)) return null;
-  const { tickets, calls } = replay(launch, events), next = nextCall({ launch, events });
-  return { finished: next.action === 'done', pending: next.action === 'done' ? null : `${next.ticket} ${next.duty}`, calls,
+  const state = replay(launch, events), { tickets, calls } = state, next = advance(state);
+  return { finished: next.action === 'done', pending: next.action === 'done' ? null : `${next.ticket} ${next.duty}`, callOut: next.action === 'wait', closed: state.closed, calls,
     tickets: tickets.map(({ ticket, status, attempts, exec, check }) => ({ ticket, status, attempts, execAgentId: exec.agentId, checkAgentId: check.agentId })) };
 }
 
 // PreToolUse decision. `event`, when present, is appended to the dispatch log by the caller.
-export function decideDispatch({ input, launch, events, meter }) {
+export function decideDispatch({ input, launch, events, meter, leaseHeld }) {
   const allow = event => ({ decision: 'allow', ...(event ? { event } : {}) }), deny = reason => ({ decision: 'deny', reason });
   const tool = input?.tool_name, fromAgent = typeof input?.agent_type === 'string';
   if (fromAgent) {
@@ -126,7 +135,12 @@ export function decideDispatch({ input, launch, events, meter }) {
   }
   if (!GATED.includes(tool)) return allow();
   if (!intact(launch)) return deny('This copy has no intact main-session launch record; no agent may be dispatched');
-  const call = nextCall({ launch, events }), given = input.tool_input ?? {};
+  const given = input.tool_input ?? {};
+  // One invocation may reach the hook twice: it is admitted once and answered the same way.
+  const earlier = typeof input.tool_use_id === 'string' ? events.findIndex(event => event.type === 'dispatched' && event.toolUseId === input.tool_use_id) : -1;
+  const call = nextCall({ launch, events: earlier >= 0 ? events.slice(0, earlier) : events });
+  if (earlier < 0 && call.action === 'closed') return deny('This run was closed; no further call is admitted');
+  if (earlier < 0 && leaseHeld === false) return deny('This run no longer holds the product lease; no further call is admitted');
   const starts = call.action === 'agent' && ['Agent', 'Task'].includes(tool), resumes = call.action === 'message' && tool === 'SendMessage';
   // With the placeholder the gate fills in the call; a call that already is the exact one passes as it is.
   const updatedInput = starts && given.prompt === PLACEHOLDER ? { ...given, subagent_type: call.subagent_type, prompt: call.prompt, run_in_background: false }
@@ -134,5 +148,7 @@ export function decideDispatch({ input, launch, events, meter }) {
   const exact = starts ? given.subagent_type === call.subagent_type && given.prompt === call.prompt : resumes ? given.to === call.to && given.message === call.message : false;
   if (!updatedInput && !exact) return deny(call.action === 'wait' ? `A call is still pending (${call.ticket} ${call.duty}); wait for its report` : call.action === 'done'
     ? 'The run has no further call; run close and settle' : `This is not the next admitted call of the run. ${NEXT}`);
-  return { ...allow({ type: 'dispatched', ticket: call.ticket, duty: call.duty, attempt: call.attempt, mode: call.action === 'agent' ? 'start' : 'resume' }), ...(updatedInput ? { updatedInput } : {}) };
+  const event = earlier >= 0 ? null : { type: 'dispatched', ticket: call.ticket, duty: call.duty, attempt: call.attempt, mode: call.action === 'agent' ? 'start' : 'resume',
+    ...(typeof input.tool_use_id === 'string' ? { toolUseId: input.tool_use_id } : {}) };
+  return { ...allow(event), ...(updatedInput ? { updatedInput } : {}) };
 }

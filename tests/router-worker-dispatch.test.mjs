@@ -3,13 +3,14 @@
 // call that may come next and the hook admits exactly that call.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, realpathSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, realpathSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
-import { nextCall, decideDispatch, DISPATCH_LOG, PLACEHOLDER } from '../src/router-worker/dispatch.mjs';
+import { spawnSync, spawn } from 'node:child_process';
+import { nextCall, decideDispatch, runSummary, DISPATCH_LOG, PLACEHOLDER } from '../src/router-worker/dispatch.mjs';
 import { digest } from '../src/loop/contracts.mjs';
+import { withDispatchLock, DISPATCH_LOCK } from '../src/router-worker/dispatch-lock.mjs';
 
 const HOOK = fileURLToPath(new URL('../scripts/hooks/rw-dispatch-gate.mjs', import.meta.url));
 const item = ticket => ({ ticket, agentType: 'sample-worker-exec', brief: `EXEC BRIEF ${ticket}`, verifierAgentType: 'sample-worker-check', verifierBrief: `CHECK BRIEF ${ticket}` });
@@ -169,4 +170,64 @@ test('the hook process keeps the dispatch log, exits 2 with the reason on a refu
   assert.equal(JSON.parse(readFileSync(join(team, DISPATCH_LOG), 'utf8').trim().split('\n').at(-1)).harnessTokens, 4010, 'the hook reads the agent\'s transcript with the meter');
   assert.equal(hook('{broken').status, 2);
   assert.equal(hook({ tool_name: 'Read', tool_input: {} }).status, 0);
+});
+
+test('a closed run admits nothing: next reports it, and a late hand-back is kept without reopening dispatch', () => {
+  const r = rig(); r.step('exec-a', execReport());
+  const check = r.next(); assert.equal(r.main(check).decision, 'allow');
+  r.events.push({ type: 'closed' });
+  assert.equal(r.next().action, 'closed');
+  const again = decideDispatch({ input: { tool_name: 'Agent', tool_input: { subagent_type: 'x', prompt: PLACEHOLDER } }, launch: launchRecord(), events: r.events });
+  assert.equal(again.decision, 'deny'); assert.match(again.reason, /closed/); assert.equal(again.event, undefined);
+  const late = r.back('sample-worker-check', 'check-a', checkReport(false));
+  assert.equal(late.decision, 'allow'); assert.equal(late.event.type, 'returned', 'the hand-back is evidence and is recorded');
+  assert.equal(r.next().action, 'closed', 'a failed check after close does not start a retry');
+  assert.equal(decideDispatch({ input: { tool_name: 'SendMessage', tool_input: { to: 'x', message: PLACEHOLDER } }, launch: launchRecord(), events: r.events }).decision, 'deny');
+  const summary = runSummary({ launch: launchRecord(), events: r.events });
+  assert.equal(summary.closed, true); assert.equal(summary.tickets[0].checkAgentId, 'check-a');
+});
+
+test('the gate admits nothing once the run no longer holds the product lease', () => {
+  const r = rig(), input = { tool_name: 'Agent', tool_input: { subagent_type: 'x', prompt: PLACEHOLDER } };
+  const lost = decideDispatch({ input, launch: launchRecord(), events: r.events, leaseHeld: false });
+  assert.equal(lost.decision, 'deny'); assert.match(lost.reason, /lease/); assert.equal(lost.event, undefined);
+  assert.equal(decideDispatch({ input, launch: launchRecord(), events: r.events, leaseHeld: true }).decision, 'allow');
+  assert.equal(decideDispatch({ input: { tool_name: 'SubagentHandback', agent_type: 'sample-worker-exec', agent_id: 'a', tool_input: { message: 'x' } }, launch: launchRecord(), events: r.events, leaseHeld: false }).decision, 'allow');
+});
+
+test('the same invocation delivered twice is admitted once and answered the same way', () => {
+  const r = rig(), input = { tool_name: 'Agent', tool_use_id: 'toolu_1', tool_input: { subagent_type: 'x', prompt: PLACEHOLDER } };
+  const first = decideDispatch({ input, launch: launchRecord(), events: r.events }); r.events.push(first.event);
+  assert.equal(first.event.toolUseId, 'toolu_1');
+  const repeat = decideDispatch({ input, launch: launchRecord(), events: r.events });
+  assert.equal(repeat.decision, 'allow'); assert.equal(repeat.event, undefined, 'no second admission'); assert.deepEqual(repeat.updatedInput, first.updatedInput);
+  assert.equal(decideDispatch({ input: { ...input, tool_use_id: 'toolu_2' }, launch: launchRecord(), events: r.events }).decision, 'deny', 'another invocation while the call is out');
+});
+
+test('two hook processes that overlap admit one call: the decision and its record are taken under one lock', async t => {
+  const team = realpathSync(mkdtempSync(join(tmpdir(), 'rw-dispatch-race-'))); t.after(() => rmSync(team, { recursive: true, force: true }));
+  mkdirSync(join(team, '.claude')); writeFileSync(join(team, 'rw-launch.json'), JSON.stringify(launchRecord()));
+  // Test-only shim: each hook process pauses just before it records its admission, so the two decisions overlap.
+  const shim = join(team, 'slow-append.mjs');
+  writeFileSync(shim, `import fs from 'node:fs'; import { syncBuiltinESMExports } from 'node:module';
+const append = fs.appendFileSync;
+fs.appendFileSync = function (path, ...rest) { if (String(path).endsWith('rw-dispatch.jsonl')) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 400); return append(path, ...rest); };
+syncBuiltinESMExports();`);
+  const start = id => new Promise(resolve => { const child = spawn(process.execPath, ['--import', shim, HOOK], { env: { PATH: process.env.PATH, CLAUDE_PROJECT_DIR: team } });
+    child.on('close', code => resolve(code)); child.stdin.end(JSON.stringify({ tool_name: 'Agent', tool_use_id: id, tool_input: { subagent_type: 'x', prompt: PLACEHOLDER } })); });
+  const codes = await Promise.all([start('toolu_a'), start('toolu_b')]);
+  const admitted = readFileSync(join(team, DISPATCH_LOG), 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(event => event.type === 'dispatched');
+  assert.equal(admitted.length, 1, 'one admission in the log'); assert.deepEqual(codes.sort(), [0, 2], 'one hook admits, the other refuses');
+});
+
+test('the dispatch lock is exclusive and is never taken over', t => {
+  const team = realpathSync(mkdtempSync(join(tmpdir(), 'rw-dispatch-lock-'))); t.after(() => rmSync(team, { recursive: true, force: true }));
+  mkdirSync(join(team, '.claude')); const lock = join(team, DISPATCH_LOCK);
+  assert.equal(withDispatchLock(team, () => { assert.equal(existsSync(lock), true); return 'ran'; }), 'ran'); assert.equal(existsSync(lock), false, 'released after the work');
+  assert.throws(() => withDispatchLock(team, () => { throw Error('work failed'); }), /work failed/); assert.equal(existsSync(lock), false, 'released when the work throws');
+  writeFileSync(lock, JSON.stringify({ pid: process.pid, at: 'x' }));
+  assert.throws(() => withDispatchLock(team, () => 'never', { waitMs: 60 }), error => error.code === 'DISPATCH_LOCKED' && /another process/.test(error.message));
+  writeFileSync(lock, JSON.stringify({ pid: 2147483646, at: 'x' }));
+  assert.throws(() => withDispatchLock(team, () => 'never', { waitMs: 60 }), error => error.code === 'DISPATCH_LOCKED' && /gone/.test(error.message), 'a dead holder\'s lock is for the operator');
+  assert.equal(existsSync(lock), true);
 });
