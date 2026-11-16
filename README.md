@@ -315,7 +315,8 @@ engine's retry with fresh agents, which `close` and `settle` count per attempt.
 Retries by the same agents need dispatch by the main session
 (`"dispatch": "main-session"`): `prepare` arms a gate hook that admits only the
 one next call and writes its text itself, `next` names that call, and `close`
-and `settle` read the gate's log instead of an engine return. The gate also
+and `settle` read the gate's log instead of an engine return. Its decisions are serialized by a lock, a closed run or a run that lost its
+lease dispatches nothing, and the gate
 stops a ticket that used up its authorization; the output ceiling of `RUN.json`
 is not enforced in such a run. Not yet run with the real wrappers
 ([details](docs/design/router-worker/main-session-dispatch.md)); the `retry`

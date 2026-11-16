@@ -470,11 +470,33 @@ test('close reads a main-session run from the dispatch log: calls, attempts and 
   const stopped = failed.close();
   assert.equal(stopped.status, 'clean', 'clean says the run stayed inside its gates, not that the work passed');
   assert.deepEqual(stopped.account.blockers, ['ticket-stopped:US-08:check-failed']); assert.deepEqual(stopped.account.attempts, [2]);
-  const pending = await dispatchedRun(t, [['exec-a', execJSON()]], { leavePending: true }), abandoned = pending.close();
-  assert.equal(abandoned.status, 'review'); assert.deepEqual(abandoned.findings, [{ code: 'RUN_NOT_FINISHED', pending: 'US-08 check' }]);
-  assert.equal(abandoned.leaseReleased, true, 'an abandoned run is still closed and its lease released');
   const never = await dispatchedRun(t, []);
   assert.deepEqual(never.close().findings, [{ code: 'RUN_NOT_FINISHED', pending: 'US-08 exec' }]);
+});
+
+test('close revokes dispatch before it frees the product, and does not free it while a call is out', async t => {
+  const gate = (f, input) => spawnSync(process.execPath, [GATE], { input: JSON.stringify(input), encoding: 'utf8', env: { PATH: process.env.PATH, CLAUDE_PROJECT_DIR: f.team } });
+  const start = { tool_name: 'Agent', tool_input: { subagent_type: 'x', prompt: PLACEHOLDER } }, events = f => readFileSync(join(f.team, DISPATCH_LOG), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  const between = await dispatchedRun(t, [['exec-a', execJSON()]]), closed = between.close();
+  assert.equal(closed.status, 'review'); assert.deepEqual(closed.findings, [{ code: 'RUN_NOT_FINISHED', pending: 'US-08 check' }]); assert.equal(between.leased(), 'free');
+  const after = gate(between, start);
+  assert.equal(after.status, 2, 'the check that was due is not dispatched after close'); assert.match(after.stderr, /closed/);
+  assert.equal(events(between).filter(event => event.type === 'dispatched').length, 1); assert.equal(events(between).at(-1).type, 'closed');
+  assert.equal(nextCall({ launch: between.launch, events: events(between) }).action, 'closed');
+  assert.equal(refusal(between.close()).code, 'LAUNCH_REFUSED', 'a launch is closed once');
+  const out = await dispatchedRun(t, [['exec-a', execJSON()]], { leavePending: true }), refused = out.close();
+  assert.match(refusal(refused).reason, /still out/); assert.equal(out.leased(), 'held', 'the product is not freed under a running agent'); assert.equal(existsSync(out.closeFile), false);
+  assert.equal(gate(out, start).status, 2, 'dispatch is revoked even though the close was refused');
+  assert.equal(gate(out, { tool_name: 'SubagentHandback', agent_type: 'sample-worker-check', agent_id: 'check-a', tool_input: { message: checkJSON(false) } }).status, 0, 'its hand-back is still recorded');
+  const done = closeLaunch({ teamRoot: out.team });
+  assert.equal(done.errors, undefined, JSON.stringify(done.errors)); assert.equal(done.leaseReleased, true, 'once the call has handed back, the run closes');
+  assert.deepEqual(done.account.calls, { tickets: 1, exec: 1, check: 1, guard: 0 }, 'the failed check that came back after close did not start a retry'); assert.equal(done.account.tickets[0].attempts, 1);
+  const stuck = await dispatchedRun(t, [['exec-a', execJSON()]], { leavePending: true }); stuck.close();
+  const attested = closeLaunch({ teamRoot: stuck.team, pendingStopped: true });
+  assert.equal(attested.leaseReleased, true); assert.deepEqual(attested.findings.map(finding => finding.code), ['RUN_NOT_FINISHED', 'PENDING_CALL_STOPPED_BY_OPERATOR']);
+  const taken = await dispatchedRun(t, []); releaseLease({ productRoot: taken.product, lease: taken.launch.lease }); acquireLease({ teamRoot: join(taken.base), productRoot: taken.product });
+  const lost = gate(taken, start);
+  assert.equal(lost.status, 2, 'a run that lost the product lease dispatches nothing'); assert.match(lost.stderr, /lease/);
 });
 
 test('CLI closes and settles a main-session run without an engine return', async t => {
