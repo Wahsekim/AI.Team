@@ -377,12 +377,13 @@ test('CLI settles from RESULT.json and METER.json; exit 0 clear, 2 review or ref
 
 // Retry after a failed check: prepared by the launch host, sent by the PM session of the copy.
 const failingCheck = { verifier: () => ({ pass: false, staticPass: false, e2ePass: true, summary: 'one test fails', commandsRun: [{ command: 'npm test', exitCode: 1 }], failures: ['tag list test'] }) };
-async function failed(t, agents = failingCheck, overrides = {}, options = {}) {
+async function failed(t, agents = failingCheck, overrides = {}, options = {}, meterOptions = {}) {
   // This path continues a ticket after the run, so the run itself is frozen without the in-loop retry.
   const f = await ran(t, agents, { run: { ...RUN, maxAttemptsPerTicket: 1 }, ...overrides }, options); write(f.product, 'src/tag-list/view.ts', 'export const x = 2;\n');
   // An instance is settled, and later retried, under the rules of its own charter.
   const own = options.instance ? loadRetryRules({ instanceRoot: f.team }) : rules;
-  const closed = f.close(), settled = settle(f, metered(f), { rules: own });
+  // By default the first round leaves room for a retry: 9,020 of 24,000 spent, 6,000 estimated for the rework.
+  const closed = f.close(), settled = settle(f, metered(f, { tokens: { exec1: 6000, check1: 3000, guard1: 5000 }, ...meterOptions }), { rules: own });
   assert.equal(settled.errors, undefined, JSON.stringify(settled.errors));
   const request = (overrides = {}) => {
     const input = inputFixture();
@@ -556,4 +557,28 @@ test('CLI settle and retry take their rules from the charter of the copy, throug
   const retry = await failed(t, failingCheck, {}, { instance: true }), request = join(retry.base, 'retry.json'); writeFileSync(request, JSON.stringify(retry.request()));
   writeFileSync(join(retry.team, 'charter.md'), '# rewritten\n');
   assert.match(run('retry', request, '--team-root', retry.team).stderr, /RETRY_RULE_REVIEW_REQUIRED/); assert.equal(retry.leased(), 'free');
+});
+
+test('retry preparation keeps the settled budget stop: it admits a retry only when the kept ledger leaves room for it', async t => {
+  const spent = tokens => failed(t, failingCheck, {}, {}, { tokens: { ...tokens, guard1: 5000 } });
+  const refused = async (f, pattern, request) => {
+    const result = f.retry(request ? { request } : {});
+    assert.equal(refusal(result)?.code, 'RETRY_BUDGET_REFUSED', JSON.stringify(result).slice(0, 300)); assert.match(refusal(result).reason, pattern);
+    assert.equal(f.leased(), 'free', 'no lease is taken'); assert.equal(existsSync(join(f.team, 'rw-retry-1.json')), false, 'no retry record is written');
+  };
+  const overrun = await spent({ exec1: 20000, check1: 11000 });
+  assert.equal(overrun.settled.ticketRecords[0].settlement.budgetGate, 'blocked', '31,020 of 24,000');
+  await refused(overrun, /authorization-exhausted/);
+  const tight = await spent({ exec1: 12000, check1: 9000 });
+  assert.equal(tight.settled.ticketRecords[0].settlement.budgetGate, 'clear', '21,020 of 24,000 settles clear');
+  await refused(tight, /insufficient-remaining/);
+  const raised = tight.request(); raised.input.mandate.budgetTokens = 23999;
+  await refused(tight, /authorization/, raised);
+  const roomy = await spent({ exec1: 3000, check1: 2000 }), prepared = roomy.retry();
+  assert.equal(prepared.errors, undefined, JSON.stringify(prepared.errors)); assert.equal(prepared.stage, 'retry-prepared');
+  assert.deepEqual(prepared.budget, { unit: 'input+cache_creation', authorizedTokens: 24000, spentTokens: 5020, remainingTokens: 18980, nextEstimateTokens: prepared.budget.nextEstimateTokens, gate: 'clear' });
+  assert.ok(prepared.budget.nextEstimateTokens > 0 && prepared.budget.nextEstimateTokens <= 18980);
+  const last = prepared.journal.events.at(-1);
+  assert.equal(last.type, 'prepare'); assert.equal(last.admission.gates.budget, 'clear'); assert.equal(last.admission.gates['runtime-isolation'], 'clear');
+  assert.deepEqual(prepared.admissionObserved, ['budget', 'runtime-isolation'], 'the record says which gates this command observed');
 });
