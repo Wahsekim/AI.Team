@@ -311,8 +311,10 @@ its frozen brief, and settles tickets and run, keeping each ticket's retry
 journal and ledger. An engine run makes one
 attempt per ticket by default; `maxAttemptsPerTicket` 2 or 3 turns on the
 engine's retry with fresh agents, which `close` and `settle` count per attempt.
-Retries by the same agents need dispatch by the main session and are being
-built; the `retry` command belongs to an earlier, unwired design. No call is admitted one by one
+Retries by the same agents need dispatch by the main session: its gate (the
+one next admitted call, enforced by a hook) exists and is not wired yet
+([details](docs/design/router-worker/main-session-dispatch.md)); the `retry`
+command belongs to an earlier, unwired design. No call is admitted one by one
 during a run
 ([details](docs/design/router-worker/launch-host.md)).
 
