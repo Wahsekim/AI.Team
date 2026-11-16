@@ -7,6 +7,7 @@ import { armBoundary, readBoundary, within, LOG_FILE } from './write-boundary.mj
 import { observeIsolation } from './isolation.mjs';
 import { CLOSE_FILE, candidateOf } from './closed-candidate.mjs';
 import { armGate } from './dispatch-arm.mjs';
+import { runSummary, DISPATCH_LOG } from './dispatch.mjs';
 
 export { CLOSE_FILE };
 
@@ -82,6 +83,23 @@ function hookLog(teamRoot, wrappers) {
     unreadableLines: parsed.length - calls.length };
 }
 
+// The dispatch log of a main-session run, as the gate hook wrote it.
+export function dispatchEvents(teamRoot) {
+  try { return readFileSync(join(teamRoot, DISPATCH_LOG), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line)); }
+  catch (error) { return error.code === 'ENOENT' ? [] : null; }
+}
+
+// A main-session run has no engine return: its calls are the ones the gate admitted.
+function dispatchAccount(launch, teamRoot) {
+  const events = dispatchEvents(teamRoot), summary = events && runSummary({ launch, events });
+  if (!summary) return { account: { status: 'unaccounted', findings: ['DISPATCH_LOG_UNREADABLE'] }, pending: null };
+  const dispatched = summary.tickets.filter(ticket => ticket.attempts > 0), count = duty => summary.calls.filter(call => call.duty === duty).length;
+  return { pending: summary.finished ? null : summary.pending, account: { status: 'accounted', source: 'dispatch-log', findings: [],
+    calls: { tickets: dispatched.length, exec: count('exec'), check: count('check'), guard: 0 }, attempts: dispatched.map(ticket => ticket.attempts),
+    tickets: dispatched.map(({ ticket, status, attempts }) => ({ ticket, status, attempts })),
+    blockers: dispatched.filter(ticket => ticket.status !== 'passed').map(ticket => `ticket-stopped:${ticket.ticket}:${ticket.status}`) } };
+}
+
 // After the run. A return that is not the return of this launch is refused and the lease stays held;
 // otherwise the lease is released and what the run left is recorded, clean or not.
 export function closeLaunch({ teamRoot, result }) {
@@ -92,10 +110,13 @@ export function closeLaunch({ teamRoot, result }) {
   if (recorded !== digest(launchBody) || launch.stage !== 'launch-prepared' || launch.teamRoot !== teamRoot) return refuse('The launch record was changed or belongs to another copy');
   const closePath = join(teamRoot, CLOSE_FILE);
   if (lstatSync(closePath, { throwIfNoEntry: false })) return refuse('This launch was already closed');
-  const account = accountRun({ args: launch.args, record: launch.runRecord, result });
-  if (account.status !== 'accounted') return refuse(`The engine return is not the return of this launch: ${account.findings.join(', ')}`);
+  const mainSession = launch.dispatch === 'main-session', dispatched = mainSession ? dispatchAccount(launch, teamRoot) : null;
+  const account = mainSession ? dispatched.account : accountRun({ args: launch.args, record: launch.runRecord, result });
+  if (account.status !== 'accounted') return refuse(`The ${mainSession ? 'dispatch log' : 'engine return'} is not the return of this launch: ${account.findings.join(', ')}`);
 
   const product = launch.productRoot, findings = [];
+  // A run the main session left before its end is still closed: the lease must not outlive it.
+  if (dispatched?.pending) findings.push({ code: 'RUN_NOT_FINISHED', pending: dispatched.pending });
   const boundary = readBoundary(teamRoot);
   if (boundary?.digest !== launch.boundaryDigest) findings.push({ code: 'BOUNDARY_CHANGED' });
   const head = git(product, 'rev-parse', 'HEAD')?.trim() ?? null;

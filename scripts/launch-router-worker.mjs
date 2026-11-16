@@ -24,7 +24,8 @@ const USAGE = 'usage: node scripts/launch-router-worker.mjs prepare RUN.json --t
   + '       node scripts/launch-router-worker.mjs close RESULT.json --team-root <activated copy>   (RESULT.json: the engine return)\n'
   + '       node scripts/launch-router-worker.mjs settle RESULT.json METER.json --team-root <activated copy>   (METER.json: measure-spawn.mjs <session-dir> --json)\n'
   + '       node scripts/launch-router-worker.mjs retry REQUEST.json --team-root <activated copy>   (REQUEST.json: {"input", "divergence"}; prepares an exec continuation after a failed check)\n'
-  + '       node scripts/launch-router-worker.mjs next --team-root <activated copy>   (main-session dispatch: the one call the gate admits next)';
+  + '       node scripts/launch-router-worker.mjs next --team-root <activated copy>   (main-session dispatch: the one call the gate admits next)\n'
+  + '       main-session dispatch has no engine return: close --team-root <activated copy>, settle METER.json --team-root <activated copy>';
 // The static launch preflight of the engine, run on the frozen arguments; its digest goes into them.
 function launchManifest(args, { teamRoot, productRoot }) {
   const dir = mkdtempSync(join(tmpdir(), 'rw-launch-manifest-'));
@@ -43,7 +44,16 @@ const print = result => {
   if (result.errors) { console.error(JSON.stringify(result)); process.exitCode = 2; }
   else process.stdout.write(JSON.stringify(result, null, 2) + '\n');
 };
-if (command === 'next' && file === '--team-root' && teamFlag && process.argv.length === 5) {
+if (command === 'close' && file === '--team-root' && teamFlag && process.argv.length === 5) {
+  // A main-session run has no engine return; close reads the dispatch log.
+  const result = closeLaunch({ teamRoot: resolve(teamFlag) });
+  print(result);
+  if (!result.errors && result.status !== 'clean') process.exitCode = 2;
+} else if (command === 'settle' && file && teamFlag === '--team-root' && team && process.argv.length === 6) {
+  const result = settleLaunch({ teamRoot: resolve(team), meter: readJSON(file), rules: loadRetryRules() });
+  print(result);
+  if (!result.errors && result.status !== 'clear') process.exitCode = 2;
+} else if (command === 'next' && file === '--team-root' && teamFlag && process.argv.length === 5) {
   // The one call the dispatch gate admits next. The text of the call stays with the gate: the main session sends the placeholder.
   let events = [];
   try { events = readFileSync(join(resolve(teamFlag), DISPATCH_LOG), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line)); } catch { events = []; }
