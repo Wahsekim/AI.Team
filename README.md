@@ -231,6 +231,7 @@ node kit/scripts/launch-router-worker.mjs prepare RUN.json --team-root ACTIVE_CO
 node kit/scripts/launch-router-worker.mjs close RESULT.json --team-root ACTIVE_COPY
 node kit/scripts/launch-router-worker.mjs settle RESULT.json METER.json --team-root ACTIVE_COPY
 node kit/scripts/launch-router-worker.mjs retry REQUEST.json --team-root ACTIVE_COPY
+node kit/scripts/launch-router-worker.mjs next --team-root ACTIVE_COPY
 node kit/scripts/settle-run-router-worker.mjs REQUEST.json
 node kit/scripts/stack-source-router-worker.mjs --root . INPUT.json
 node kit/scripts/activate-router-worker.mjs SPEC.json DRAFT.json /abs/NEW.rw-active --instance . --approval APPROVAL.json --approval-digest DIGEST
@@ -311,8 +312,10 @@ its frozen brief, and settles tickets and run, keeping each ticket's retry
 journal and ledger. An engine run makes one
 attempt per ticket by default; `maxAttemptsPerTicket` 2 or 3 turns on the
 engine's retry with fresh agents, which `close` and `settle` count per attempt.
-Retries by the same agents need dispatch by the main session: its gate (the
-one next admitted call, enforced by a hook) exists and is not wired yet
+Retries by the same agents need dispatch by the main session
+(`"dispatch": "main-session"`): `prepare` arms a gate hook that admits only the
+one next call and writes its text itself, and `next` names that call; `close`
+and `settle` do not handle such a run yet
 ([details](docs/design/router-worker/main-session-dispatch.md)); the `retry`
 command belongs to an earlier, unwired design. No call is admitted one by one
 during a run

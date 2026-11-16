@@ -17,3 +17,4 @@ try {
   if (verdict.event) appendFileSync(log, JSON.stringify({ at: new Date().toISOString(), ...verdict.event }) + '\n');
 } catch { verdict = { decision: 'deny', reason: 'The dispatch gate could not read its input or its log' }; }
 if (verdict.decision === 'deny') { console.error(`Router/Worker dispatch gate: ${verdict.reason}`); process.exitCode = 2; }
+else if (verdict.updatedInput) process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow', updatedInput: verdict.updatedInput } }) + '\n');

@@ -1,8 +1,9 @@
 # Main-session dispatch (owner decision 2026-11-16)
 
-Status: the gate (next-call function and hook) exists and is tested offline. It
-is not wired: `prepare` does not arm it yet, there is no `next` command, and
-`close` and `settle` do not read its log. Nothing here calls a model.
+Status: the gate exists and is tested offline; `prepare` arms it for a
+main-session run and `next` prints the admitted call. `close` and `settle` do
+not read its log yet, so such a run cannot be closed with the launch host.
+Nothing here calls a model.
 
 ## Why
 
@@ -67,6 +68,34 @@ calls carry the same `agent_type` and `agent_id`, so the
 [write boundary](write-boundary.md) keeps judging it; resumed turns are appended
 to the agent's one transcript.
 
+## Preparing and driving a run
+
+`RUN.json` carries `"dispatch": "main-session"` in `run` (default `engine`).
+`maxAttemptsPerTicket` then defaults to 2: the first try and one retry by the
+same agents. `launch-router-worker.mjs prepare` freezes the run as for an
+engine run, registers the gate hook in the copy's `.claude/settings.json`
+(matcher `Agent|Task|SendMessage|Workflow|SubagentHandback`) and passes the
+isolation gate only when that hook is in place (`DISPATCH_GATE_NOT_ARMED`
+otherwise). The launch record carries `dispatch`.
+
+The main session, opened after prepare, repeats one step:
+
+```sh
+node kit/scripts/launch-router-worker.mjs next --team-root <activated copy>
+```
+
+- `action: "agent"`: call the Agent tool with `subagent_type` as printed and
+  the prompt `rw:next`.
+- `action: "message"`: call SendMessage with the message `rw:next`.
+- `action: "wait"`: wait for the pending agent's report.
+- `action: "done"`: stop; the output lists each ticket's status and attempts.
+
+The gate replaces the placeholder with the exact frozen text, sets the agent
+type or the recipient itself and makes the call run in the foreground, so the
+main session never handles a brief or a check report. `next` prints no brief
+text. A call with any other text is admitted only if it is exactly the one the
+gate would have written.
+
 ## What the gate does not do
 
 - It cannot make the main session continue. A run the main session abandons
@@ -75,6 +104,10 @@ to the agent's one transcript.
   are judged by neither the write boundary nor this gate.
 - Reports are the agents' own claims. The check's pass is grounded only in the
   commands it lists, as in the count engine.
+- Prompt rewriting relies on the runtime honouring a hook's `updatedInput`,
+  observed on Claude Code 2.1.323 for `Agent` and `SendMessage`. On a runtime
+  that ignores it the agent would receive the literal placeholder; its report
+  would not be the contract JSON and the ticket would stop.
 - No usage limit yet: the retry cap bounds calls, nothing bounds tokens during
   the run. A pending call whose agent dies has no hand-back and leaves the run
   at `wait`.

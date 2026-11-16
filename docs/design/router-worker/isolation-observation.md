@@ -34,6 +34,7 @@ gives `blocked`; otherwise any finding gives `unknown`; only an empty list is
 | Wrappers | `WRAPPER_INACTIVE_DRAFT` (the file still says "Do not run from this draft") | blocked |
 | Wrappers | `BASH_NOT_SANDBOXED` (check or guard has Bash and no isolated runner is observed) | unknown |
 | Write boundary | `WRITE_BOUNDARY_NOT_ARMED` (no boundary file, changed after arming, armed for another product or other wrappers, hook not registered or missing, hooks disabled; see [write boundary](write-boundary.md)) | blocked |
+| Dispatch gate | `DISPATCH_GATE_NOT_ARMED` (only for a main-session run: the [dispatch gate](main-session-dispatch.md) hook is not registered, its file is missing, or hooks are disabled) | blocked |
 | Ownership | `OWNERSHIP_NOT_HELD`, `OWNERSHIP_NOT_PRESENTED`, `OWNERSHIP_HELD_BY_OTHER` | blocked |
 | Ownership | `OWNERSHIP_UNREADABLE` (a lease file that does not parse or does not match its digest) | unknown |
 | Host settings | `HOST_PERMISSION_BYPASS` (non-default permission mode in `.claude/settings*.json` of either root) | blocked |
