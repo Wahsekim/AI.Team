@@ -14,7 +14,6 @@ import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { prepareLaunch, closeLaunch } from '../src/router-worker/launch.mjs';
 import { settleLaunch } from '../src/router-worker/launch-settle.mjs';
-import { prepareRetry } from '../src/router-worker/launch-retry.mjs';
 import { nextCall, DISPATCH_LOG, PLACEHOLDER } from '../src/router-worker/dispatch.mjs';
 import { loadRetryRules } from '../src/router-worker/retries.mjs';
 import { loadMethods, MethodError } from '../src/router-worker/methods.mjs';
@@ -23,7 +22,6 @@ const [command, file, teamFlag, team, productFlag, product] = process.argv.slice
 const USAGE = 'usage: node scripts/launch-router-worker.mjs prepare RUN.json --team-root <activated copy> --product-root <product-root>   (RUN.json: {"run": {...}, "inputs": [...]})\n'
   + '       node scripts/launch-router-worker.mjs close RESULT.json --team-root <activated copy>   (RESULT.json: the engine return)\n'
   + '       node scripts/launch-router-worker.mjs settle RESULT.json METER.json --team-root <activated copy>   (METER.json: measure-spawn.mjs <session-dir> --json)\n'
-  + '       node scripts/launch-router-worker.mjs retry REQUEST.json --team-root <activated copy>   (REQUEST.json: {"input", "divergence"}; prepares an exec continuation after a failed check)\n'
   + '       node scripts/launch-router-worker.mjs next --team-root <activated copy>   (main-session dispatch: the one call the gate admits next)\n'
   + '       main-session dispatch has no engine return: close --team-root <activated copy> [--pending-stopped], settle METER.json --team-root <activated copy>';
 // The static launch preflight of the engine, run on the frozen arguments; its digest goes into them.
@@ -67,13 +65,6 @@ if (command === 'close' && file === '--team-root' && teamFlag && (process.argv.l
   const { prompt, message, wrapper, ...call } = nextCall({ launch: readJSON(join(resolve(teamFlag), 'rw-launch.json')), events });
   process.stdout.write(JSON.stringify(['agent', 'message'].includes(call.action) ? { ...call, placeholder: PLACEHOLDER } : call, null, 2) + '\n');
   if (call.action === 'refused') process.exitCode = 2;
-} else if (command === 'retry' && file && teamFlag === '--team-root' && team && process.argv.length === 6) {
-  const request = readJSON(file), needsMethods = request?.input?.schemaVersion === 2 && (request.input.catalog?.methods?.length || request.input.proposal?.checkMethodIds?.length);
-  let result;
-  const bound = rulesOf(resolve(team));
-  try { result = bound.errors ? bound : prepareRetry({ teamRoot: resolve(team), request, rules: bound.rules, ...(needsMethods ? { methodBundle: loadMethods() } : {}) }); }
-  catch (error) { if (!(error instanceof MethodError)) throw error; result = { errors: [error.finding] }; }
-  print(result);
 } else if (command === 'settle' && file && teamFlag && team === '--team-root' && productFlag && process.argv.length === 7) {
   const bound = rulesOf(resolve(productFlag)), result = bound.errors ? bound : settleLaunch({ teamRoot: resolve(productFlag), result: readJSON(file), meter: readJSON(teamFlag), rules: bound.rules });
   print(result);
