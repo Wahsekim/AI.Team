@@ -39,6 +39,13 @@ function launchManifest(args, { teamRoot, productRoot }) {
     return { errors: [{ code: 'PREFLIGHT_FAILED', field: 'launch', reason: `The launch preflight did not pass: ${failures || 'no manifest produced'}` }] };
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }
+// The retry rules are the deployed copy's: its own charter, read through the kit that serves this command.
+// A copy that is not a two-root instance of this kit, or whose charter no longer carries the reviewed
+// rule text, is refused before anything is settled or admitted.
+function rulesOf(teamRoot) {
+  try { return { rules: loadRetryRules({ instanceRoot: teamRoot }) }; }
+  catch (error) { return { errors: [{ code: error?.code === 'RETRY_RULE_REVIEW_REQUIRED' ? error.code : 'RETRY_RULES_REFUSED', field: 'rules', reason: String(error?.message ?? 'The retry rules of the copy could not be read') }] }; }
+}
 const readJSON = path => { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return undefined; } };
 const print = result => {
   if (result.errors) { console.error(JSON.stringify(result)); process.exitCode = 2; }
@@ -50,7 +57,7 @@ if (command === 'close' && file === '--team-root' && teamFlag && (process.argv.l
   print(result);
   if (!result.errors && result.status !== 'clean') process.exitCode = 2;
 } else if (command === 'settle' && file && teamFlag === '--team-root' && team && process.argv.length === 6) {
-  const result = settleLaunch({ teamRoot: resolve(team), meter: readJSON(file), rules: loadRetryRules() });
+  const bound = rulesOf(resolve(team)), result = bound.errors ? bound : settleLaunch({ teamRoot: resolve(team), meter: readJSON(file), rules: bound.rules });
   print(result);
   if (!result.errors && result.status !== 'clear') process.exitCode = 2;
 } else if (command === 'next' && file === '--team-root' && teamFlag && process.argv.length === 5) {
@@ -63,11 +70,12 @@ if (command === 'close' && file === '--team-root' && teamFlag && (process.argv.l
 } else if (command === 'retry' && file && teamFlag === '--team-root' && team && process.argv.length === 6) {
   const request = readJSON(file), needsMethods = request?.input?.schemaVersion === 2 && (request.input.catalog?.methods?.length || request.input.proposal?.checkMethodIds?.length);
   let result;
-  try { result = prepareRetry({ teamRoot: resolve(team), request, rules: loadRetryRules(), ...(needsMethods ? { methodBundle: loadMethods() } : {}) }); }
+  const bound = rulesOf(resolve(team));
+  try { result = bound.errors ? bound : prepareRetry({ teamRoot: resolve(team), request, rules: bound.rules, ...(needsMethods ? { methodBundle: loadMethods() } : {}) }); }
   catch (error) { if (!(error instanceof MethodError)) throw error; result = { errors: [error.finding] }; }
   print(result);
 } else if (command === 'settle' && file && teamFlag && team === '--team-root' && productFlag && process.argv.length === 7) {
-  const result = settleLaunch({ teamRoot: resolve(productFlag), result: readJSON(file), meter: readJSON(teamFlag), rules: loadRetryRules() });
+  const bound = rulesOf(resolve(productFlag)), result = bound.errors ? bound : settleLaunch({ teamRoot: resolve(productFlag), result: readJSON(file), meter: readJSON(teamFlag), rules: bound.rules });
   print(result);
   if (!result.errors && result.status !== 'clear') process.exitCode = 2;
 } else if (command === 'close' && file && teamFlag === '--team-root' && team && process.argv.length === 6) {

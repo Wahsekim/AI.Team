@@ -2,7 +2,7 @@
 // leaves a single-use launch record; any refusal leaves the product unleased.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, rmSync, realpathSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, rmSync, realpathSync, existsSync, symlinkSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -36,12 +36,15 @@ const roster = ['| Role id | Role file | Wrapper file | Model | Reasoning | Stat
 const RUN = { rounds: 1, date: '2026-11-13', nextLifecycleNumber: 1, runId: 'rw-launch-001', budgetCeilingTokens: 23400, estimatedOutputTokens: 18000, guardianEstimateTokens: 20000 };
 
 // An activated disposable copy and a separate clean product repository.
-function fixture(t, { status = 'activated-disposable-smoke' } = {}) {
+const KIT = fileURLToPath(new URL('../', import.meta.url)).replace(/\/$/, '');
+function fixture(t, { status = 'activated-disposable-smoke', instance = false } = {}) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'rw-launch-'))), team = join(base, 'demo.rw-active'), product = join(base, 'product');
   t.after(() => rmSync(base, { recursive: true, force: true }));
   write(team, 'agents/roster.md', roster); write(team, 'profiles/team-mode.json', JSON.stringify({ status }));
   for (const file of ['charter.md', 'CLAUDE.md', 'profiles/project.md', 'profiles/stack.md', 'agents/pm.md', 'agents/templates.md', 'agents/_shared/meta-rules.md', 'decisions/0001-x.md'])
     write(team, file, '# fixture\n');
+  // A two-root instance of this kit: its own charter, the kit under kit/.
+  if (instance) { symlinkSync(KIT, join(team, 'kit')); write(team, 'kit.lock', 'instance_schema=1\n'); copyFileSync(join(KIT, 'charter.template.md'), join(team, 'charter.md')); }
   for (const duty of DUTIES) write(team, `.claude/agents/sample-worker-${duty}.md`, wrapper(duty));
   mkdirSync(join(team, '.claude/workflows')); copyFileSync(ENGINE, join(team, '.claude/workflows/run-n-rounds.js'));
   write(product, 'src/tag-list/view.ts', 'export const x = 1;\n');
@@ -179,8 +182,8 @@ test('CLI prepares from RUN.json, exits 2 on refusal and 1 on usage', t => {
 });
 
 // A prepared copy and the return of the real engine for its arguments (mock agents, no model).
-async function ran(t, agents = {}, overrides = {}) {
-  const f = fixture(t), launch = await f.prepare(overrides);
+async function ran(t, agents = {}, overrides = {}, options = {}) {
+  const f = fixture(t, options), launch = await f.prepare(overrides);
   const { result } = await runWorkflow({ scriptPath: join(f.team, '.claude/workflows/run-n-rounds.js'), args: launch.args, agentImpl: makeAgentImpl(agents) });
   return { ...f, launch, result, close: (overrides = {}) => closeLaunch({ teamRoot: f.team, result, ...overrides }), closeFile: join(f.team, CLOSE_FILE) };
 }
@@ -363,7 +366,7 @@ test('settle refuses a meter that is not the calls of this run, an unclosed laun
 });
 
 test('CLI settles from RESULT.json and METER.json; exit 0 clear, 2 review or refused, 1 usage', async t => {
-  const f = await ran(t), result = join(f.base, 'result.json'), meter = join(f.base, 'meter.json'), run = (...argv) => spawnSync(process.execPath, [CLI, ...argv], { encoding: 'utf8' });
+  const f = await ran(t, {}, {}, { instance: true }), result = join(f.base, 'result.json'), meter = join(f.base, 'meter.json'), run = (...argv) => spawnSync(process.execPath, [CLI, ...argv], { encoding: 'utf8' });
   f.close(); writeFileSync(result, JSON.stringify(f.result)); writeFileSync(meter, JSON.stringify(metered(f)));
   assert.equal(run('settle', result, '--team-root', f.team).status, 2, 'the one-file form is for a main-session run; an engine launch needs its return');
   assert.equal(run('settle').status, 1);
@@ -374,17 +377,19 @@ test('CLI settles from RESULT.json and METER.json; exit 0 clear, 2 review or ref
 
 // Retry after a failed check: prepared by the launch host, sent by the PM session of the copy.
 const failingCheck = { verifier: () => ({ pass: false, staticPass: false, e2ePass: true, summary: 'one test fails', commandsRun: [{ command: 'npm test', exitCode: 1 }], failures: ['tag list test'] }) };
-async function failed(t, agents = failingCheck, overrides = {}) {
+async function failed(t, agents = failingCheck, overrides = {}, options = {}) {
   // This path continues a ticket after the run, so the run itself is frozen without the in-loop retry.
-  const f = await ran(t, agents, { run: { ...RUN, maxAttemptsPerTicket: 1 }, ...overrides }); write(f.product, 'src/tag-list/view.ts', 'export const x = 2;\n');
-  const closed = f.close(), settled = settle(f, metered(f));
+  const f = await ran(t, agents, { run: { ...RUN, maxAttemptsPerTicket: 1 }, ...overrides }, options); write(f.product, 'src/tag-list/view.ts', 'export const x = 2;\n');
+  // An instance is settled, and later retried, under the rules of its own charter.
+  const own = options.instance ? loadRetryRules({ instanceRoot: f.team }) : rules;
+  const closed = f.close(), settled = settle(f, metered(f), { rules: own });
   assert.equal(settled.errors, undefined, JSON.stringify(settled.errors));
   const request = (overrides = {}) => {
     const input = inputFixture();
     input.proposal.assignmentId = 'US-08.exec.2'; input.proposal.checkAssignmentId = 'US-08.check.2'; input.baseline.candidateRef = closed.candidate;
     return { input, divergence: { reason: 'The failed check named the tag list test; fix the empty-state branch', evidenceRef: { id: 'rw-settlement', digest: settled.digest } }, ...overrides };
   };
-  return { ...f, closed, settled, request, retry: (overrides = {}) => prepareRetry({ teamRoot: f.team, request: request(), rules, ...overrides }) };
+  return { ...f, closed, settled, request, retry: (overrides = {}) => prepareRetry({ teamRoot: f.team, request: request(), rules: own, ...overrides }) };
 }
 
 test('retry prepare compiles the continuation from the kept journal, takes the lease and admits the closed candidate', async t => {
@@ -421,7 +426,7 @@ test('retry prepare refuses and takes nothing when the ticket may not be retried
 });
 
 test('CLI prepares a retry from REQUEST.json; exit 0 prepared, 2 refused, 1 usage', async t => {
-  const f = await failed(t), file = join(f.base, 'retry.json'), run = (...argv) => spawnSync(process.execPath, [CLI, ...argv], { encoding: 'utf8' });
+  const f = await failed(t, failingCheck, {}, { instance: true }), file = join(f.base, 'retry.json'), run = (...argv) => spawnSync(process.execPath, [CLI, ...argv], { encoding: 'utf8' });
   writeFileSync(file, JSON.stringify(f.request()));
   assert.equal(run('retry', file).status, 1);
   const ok = run('retry', file, '--team-root', f.team);
@@ -432,8 +437,8 @@ test('CLI prepares a retry from REQUEST.json; exit 0 prepared, 2 refused, 1 usag
 // A main-session run: the dispatch log is written here the way the gate hook writes it.
 const execJSON = (over = {}) => JSON.stringify({ outcome: 'done', blocked: false, progress: true, filesTouched: ['src/tag-list/view.ts'], ...over });
 const checkJSON = pass => JSON.stringify({ pass, summary: pass ? 'all green' : 'one test fails', failures: pass ? [] : ['tag list test'], commandsRun: [{ command: 'npm test', exitCode: pass ? 0 : 1 }] });
-async function dispatchedRun(t, steps, { leavePending = false } = {}) {
-  const f = fixture(t), launch = await f.prepare({ run: { ...RUN, dispatch: 'main-session' } }), events = [];
+async function dispatchedRun(t, steps, { leavePending = false, instance = false } = {}) {
+  const f = fixture(t, { instance }), launch = await f.prepare({ run: { ...RUN, dispatch: 'main-session' } }), events = [];
   const admit = () => { const call = nextCall({ launch, events }), tool = call.action === 'agent' ? 'Agent' : 'SendMessage';
     const verdict = decideDispatch({ input: { tool_name: tool, tool_input: call.action === 'agent' ? { subagent_type: 'x', prompt: PLACEHOLDER } : { to: 'x', message: PLACEHOLDER } }, launch, events });
     assert.equal(verdict.decision, 'allow', JSON.stringify(call)); events.push(verdict.event); return call; };
@@ -500,7 +505,7 @@ test('close revokes dispatch before it frees the product, and does not free it w
 });
 
 test('CLI closes and settles a main-session run without an engine return', async t => {
-  const f = await dispatchedRun(t, retried), run = (...argv) => spawnSync(process.execPath, [CLI, ...argv], { encoding: 'utf8' }), meter = join(f.base, 'meter.json');
+  const f = await dispatchedRun(t, retried, { instance: true }), run = (...argv) => spawnSync(process.execPath, [CLI, ...argv], { encoding: 'utf8' }), meter = join(f.base, 'meter.json');
   const closed = run('close', '--team-root', f.team);
   assert.equal(closed.status, 0, closed.stderr); assert.equal(JSON.parse(closed.stdout).account.source, 'dispatch-log');
   const prompts = firstPrompts(f.launch);
@@ -527,4 +532,28 @@ test('settle of a main-session run binds each agent by the id the gate recorded 
   assert.deepEqual(other.findings, [{ code: 'BRIEF_NOT_FOUND', ticket: 'US-08', duty: 'exec' }]); assert.equal(other.status, 'review');
   const missing = await dispatchedRun(t, retried); missing.close();
   assert.match(refusal(settleLaunch({ teamRoot: missing.team, rules, meter: meteredAgents(missing, { 'exec-a': ['sample-worker-exec', prompts.exec, 9000] }) })).reason, /check-a/);
+});
+
+test('CLI settle and retry take their rules from the charter of the copy, through the kit that serves the command', async t => {
+  const run = (...argv) => spawnSync(process.execPath, [CLI, ...argv], { encoding: 'utf8' });
+  const drifted = await ran(t, {}, {}, { instance: true }), result = join(drifted.base, 'result.json'), meter = join(drifted.base, 'meter.json');
+  drifted.close(); writeFileSync(result, JSON.stringify(drifted.result)); writeFileSync(meter, JSON.stringify(metered(drifted)));
+  const charter = join(drifted.team, 'charter.md'); writeFileSync(charter, readFileSync(charter, 'utf8').replace('at most twice', 'at most once'));
+  const refused = run('settle', result, meter, '--team-root', drifted.team);
+  assert.equal(refused.status, 2); assert.match(refused.stderr, /RETRY_RULE_REVIEW_REQUIRED/); assert.equal(existsSync(join(drifted.team, SETTLE_FILE)), false, 'a changed charter publishes no settlement');
+  const kept = await ran(t, {}, {}, { instance: true }); kept.close(); writeFileSync(result, JSON.stringify(kept.result)); writeFileSync(meter, JSON.stringify(metered(kept)));
+  const settled = run('settle', result, meter, '--team-root', kept.team);
+  assert.equal(settled.status, 0, settled.stderr);
+  const sources = Object.keys(loadRetryRules({ instanceRoot: kept.team }).sourceDigests);
+  assert.ok(sources.includes('charter.md') && !sources.includes('charter.template.md'));
+  assert.equal(JSON.parse(settled.stdout).ticketRecords[0].journal.rulesDigest, digest(loadRetryRules({ instanceRoot: kept.team })), 'the journal is bound to the copy\'s charter');
+  const foreign = await ran(t); foreign.close(); writeFileSync(result, JSON.stringify(foreign.result)); writeFileSync(meter, JSON.stringify(metered(foreign)));
+  const unrelated = run('settle', result, meter, '--team-root', foreign.team);
+  assert.equal(unrelated.status, 2, 'a team root that is not an instance of this kit'); assert.match(unrelated.stderr, /RETRY_RULES_REFUSED/);
+  const mainSession = await dispatchedRun(t, retried, { instance: true }); mainSession.close();
+  writeFileSync(join(mainSession.team, 'charter.md'), '# rewritten\n'); writeFileSync(meter, '{}');
+  assert.match(run('settle', meter, '--team-root', mainSession.team).stderr, /RETRY_RULE_REVIEW_REQUIRED/, 'the main-session form too');
+  const retry = await failed(t, failingCheck, {}, { instance: true }), request = join(retry.base, 'retry.json'); writeFileSync(request, JSON.stringify(retry.request()));
+  writeFileSync(join(retry.team, 'charter.md'), '# rewritten\n');
+  assert.match(run('retry', request, '--team-root', retry.team).stderr, /RETRY_RULE_REVIEW_REQUIRED/); assert.equal(retry.leased(), 'free');
 });
