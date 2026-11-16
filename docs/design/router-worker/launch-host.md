@@ -190,6 +190,16 @@ prepare an exec continuation after a closed and settled engine run whose check
 failed. They assumed the engine-started agent could be resumed, which the probe
 above disproved. Nothing in the run flow calls them.
 
+`retry` admits on budget from what the ticket already spent: the kept ledger,
+the kept journal and the rework estimate of the request, settled together. It
+refuses (`RETRY_BUDGET_REFUSED`), before the lease is taken or anything is
+written, when that settlement is blocked or unknown (authorization exhausted,
+not enough left for the estimate, partial or unknown usage) and when the request
+names another authorization than the one the ticket was settled with. The retry
+record carries the budget figures and `admissionObserved`: this command observes
+the budget and runtime-isolation gates; the other gates of the journal are
+recorded clear without an observation (`unobserved-admission-gates`).
+
 ## What it does not do
 
 `unresolved` in the record lists:
