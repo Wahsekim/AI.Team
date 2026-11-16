@@ -2,9 +2,10 @@
 // The live mode's own files go on holiday; shared history stays; the owner confirms the proposal.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, realpathSync, cpSync, existsSync, readdirSync, appendFileSync } from 'node:fs';
+import fs, { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, realpathSync, cpSync, existsSync, readdirSync, appendFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
+import { syncBuiltinESMExports } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { proposeSwitch, switchMode, recoverSwitch, DEFAULT_LIMITS } from '../src/router-worker/switch.mjs';
@@ -44,6 +45,8 @@ function fixture(t) {
   return { base, root, kit, product, spec, common, propose, apply, read, digests, tree, wrappers: () => readdirSync(join(root, '.claude/agents')).sort() };
 }
 const refusal = result => result.errors?.[0];
+const sansLedger = tree => tree.split('\n').filter(line => !line.endsWith('./pm-decisions.md')).join('\n');
+const passes = () => ({ ok: true, verdict: 'DEPLOYMENT-STRUCTURALLY-COMPLETE (injected)' });
 const OWN_SPECIALIST = ['agents/roster.md', 'agents/backend.md', '.claude/agents/tag-list-fixture-backend.md'];
 
 test('a proposal names the staffing, the limits and the files that move, and changes nothing', t => {
@@ -130,10 +133,10 @@ test('CLI proposes without --confirm and switches with it; exit 0 done, 2 refuse
 });
 
 test('an existing holiday folder is never touched by a refused switch', t => {
-  const f = fixture(t); mkdirSync(join(f.root, 'holiday/specialist/agents'), { recursive: true }); writeFileSync(join(f.root, 'holiday/specialist/agents/precious.md'), 'kept by hand\n');
+  const f = fixture(t); mkdirSync(join(f.root, 'holiday/specialist/agents'), { recursive: true }); writeFileSync(join(f.root, 'holiday/specialist/agents/roster.md'), 'kept by hand\n');
   const before = f.tree();
   for (const result of [f.propose(), switchMode({ to: 'router-worker', request: { spec: f.spec }, ...f.common, confirm: 'sha256:' + '0'.repeat(64) })]) {
-    assert.equal(refusal(result)?.code, 'SWITCH_REFUSED'); assert.match(refusal(result).reason, /holiday\/specialist already exists/); }
+    assert.equal(refusal(result)?.code, 'SWITCH_REFUSED'); assert.match(refusal(result).reason, /holiday\/specialist already holds a packed team/); }
   assert.equal(f.tree(), before);
 });
 
@@ -150,14 +153,15 @@ test('an interrupted switch is found by its journal and rolled back by recover; 
   // A switch that died after packing the roster and one wrapper: the journal is what it wrote first.
   const proposal = f.propose();
   mkdirSync(join(f.root, 'holiday/specialist/agents'), { recursive: true }); mkdirSync(join(f.root, 'holiday/specialist/.claude/agents'), { recursive: true });
-  writeFileSync(join(f.root, 'holiday/.switch-in-progress.json'), JSON.stringify({ schemaVersion: 1, from: 'specialist', to: 'router-worker', kind: 'draft', pack: proposal.pack, install: proposal.install, lease: null }));
+  writeFileSync(join(f.root, 'holiday/.switch-in-progress.json'), JSON.stringify({ schemaVersion: 1, from: 'specialist', to: 'router-worker', kind: 'draft', pack: proposal.pack, install: proposal.install, lease: null, productRoot: f.product, startedAt: new Date().toISOString() }));
   for (const path of ['agents/roster.md', '.claude/agents/tag-list-fixture-backend.md']) cpSync(join(f.root, path), join(f.root, 'holiday/specialist', path)), rmSync(join(f.root, path));
   writeFileSync(join(f.root, 'agents/worker-exec.md'), 'half written\n');
   for (const result of [f.propose(), switchMode({ to: 'router-worker', request: { spec: f.spec }, ...f.common, confirm: proposal.digest })]) {
     assert.equal(refusal(result)?.code, 'SWITCH_INTERRUPTED'); assert.match(refusal(result).reason, /recover/); }
   const recovered = recoverSwitch({ teamRoot: f.kit, instanceRoot: f.root });
   assert.equal(recovered.errors, undefined, JSON.stringify(recovered.errors)); assert.equal(recovered.stage, 'switch-rolled-back');
-  assert.equal(f.tree(), before, 'the specialist team is whole again');
+  assert.equal(sansLedger(f.tree()), sansLedger(before), 'the specialist team is whole again');
+  assert.match(f.read('pm-decisions.md'), /MODE SWITCH ROLLED BACK: the interrupted switch from specialist to router-worker/);
   assert.equal(f.apply().errors, undefined, 'and the switch can be made');
   assert.equal(refusal(recoverSwitch({ teamRoot: f.kit, instanceRoot: f.root })).code, 'SWITCH_REFUSED', 'nothing to recover');
 });
@@ -185,8 +189,18 @@ test('the specialist team\'s own files are read from the roster table, whatever 
     '|`data-2`| D | agents/data-2.md | `.claude/agents/sub/tag-list-fixture-data-2.md` | active |', '| lessons | L | `agents/lessons.md` | none | active |',
     '| coach | C | `agents/coach.md` | none | active |', '', '| Tier | Roles |', '|---|---|', '| Mid tier | lifecycle, backend |'].join('\n') + '\n');
   writeFileSync(join(f.root, 'agents/data-2.md'), '# data role\n'); mkdirSync(join(f.root, '.claude/agents/sub')); writeFileSync(join(f.root, '.claude/agents/sub/tag-list-fixture-data-2.md'), 'nested wrapper\n');
-  const pack = f.propose().pack;
-  assert.deepEqual(pack, ['.claude/agents/sub/tag-list-fixture-data-2.md', '.claude/agents/tag-list-fixture-backend.md', 'agents/backend.md', 'agents/data-2.md', 'agents/roster.md']);
+  assert.match(refusal(f.propose()).reason, /role file under agents\/ for the role lessons/, 'a row that names a ledger as a role file stops the switch');
+  const rows = readFileSync(roster, 'utf8').split('\n').filter(line => !line.startsWith('| lessons |'));
+  const expected = ['.claude/agents/sub/tag-list-fixture-data-2.md', '.claude/agents/tag-list-fixture-backend.md', 'agents/backend.md', 'agents/data-2.md', 'agents/roster.md'];
+  writeFileSync(roster, rows.join('\n')); assert.deepEqual(f.propose().pack, expected);
+  // Other ways the same table is written: a "Role" header, a linked file cell, an escaped pipe in an earlier cell.
+  writeFileSync(roster, rows.join('\n').replace('| Role id |', '| Role |').replace('| `agents/backend.md` |', '| [agents/backend.md](agents/backend.md) |').replace('| D |', '| a \\| b |'));
+  assert.deepEqual(f.propose().pack, expected);
+  // A delivery role whose file cannot be read would stay live in the other mode: the switch stops and names it.
+  writeFileSync(roster, rows.join('\n').replace('| `agents/backend.md` |', '| see the wiki |'));
+  assert.match(refusal(f.propose()).reason, /for the role backend/);
+  writeFileSync(roster, '# Roster\n\nNo table here.\n');
+  assert.match(refusal(f.propose()).reason, /no table/);
 });
 
 test('the product repository is the one the team is bound to, and it must be at rest', t => {
@@ -209,4 +223,99 @@ test('a mode profile or a manifest that names a shared file is refused, not obey
   const manifest = join(f.root, 'holiday/specialist/manifest.json'), packed = JSON.parse(readFileSync(manifest, 'utf8'));
   writeFileSync(manifest, JSON.stringify({ ...packed, files: [...packed.files, { path: '../outside.md', digest: 'sha256:' + '0'.repeat(64) }] }));
   assert.match(refusal(f.propose('specialist', {})).reason, /outside\.md/);
+});
+
+test('the first switch is bound to the product repository bootstrap recorded', t => {
+  const f = fixture(t), other = join(f.base, 'other'); mkdirSync(other); git(other, 'init', '-q'); writeFileSync(join(other, 'a'), 'x'); git(other, 'add', '-A'); git(other, 'commit', '-q', '-m', 'x');
+  writeFileSync(join(f.product, 'dirty.txt'), 'x\n');
+  const spec = { ...f.spec, project: { ...f.spec.project, productRoot: other } };
+  const elsewhere = proposeSwitch({ to: 'router-worker', request: { spec }, ...f.common, productRoot: other });
+  assert.match(refusal(elsewhere).reason, /recorded in profiles\/project\.md/, 'a spec naming another clean repository does not get the dirty one past the check');
+});
+
+test('a packed Router/Worker team comes back with its own staffing and limits, shown in the proposal; other limits are refused', t => {
+  const f = fixture(t); f.apply('router-worker', { spec: f.spec, limits: { outputAllowancePerTicket: 20000 } }); f.apply('specialist', {});
+  const proposal = f.propose('router-worker', { spec: f.spec });
+  assert.equal(proposal.errors, undefined, JSON.stringify(proposal.errors));
+  assert.equal(proposal.limits.outputAllowancePerTicket, 20000); assert.deepEqual(proposal.staffing.exec, f.spec.profiles.exec); assert.equal(proposal.dispatch, 'engine');
+  const other = f.propose('router-worker', { spec: f.spec, limits: { outputAllowancePerTicket: 99 } });
+  assert.match(refusal(other).reason, /limits it was packed with.*20000/);
+});
+
+test('a restore that fails is rolled back; a file in its way refuses it; a stray file in a holiday folder blocks nothing', t => {
+  const f = fixture(t); f.apply(); f.apply('specialist', {});
+  const before = f.tree();
+  const failed = f.apply('router-worker', { spec: f.spec }, undefined, { validate: () => ({ ok: false, verdict: 'DEPLOYMENT-INCOMPLETE — injected' }) });
+  assert.match(refusal(failed).reason, /injected/); assert.equal(f.tree(), before, 'both teams are where they were'); assert.equal(readLease({ productRoot: f.product }).status, 'free');
+  writeFileSync(join(f.root, 'agents/worker-exec.md'), 'in the way\n');
+  assert.match(refusal(f.propose()).reason, /in the way.*agents\/worker-exec\.md/); rmSync(join(f.root, 'agents/worker-exec.md'));
+  writeFileSync(join(f.root, 'holiday/router-worker/.DS_Store'), 'x');
+  const back = f.apply(); assert.equal(back.errors, undefined, JSON.stringify(back.errors)); assert.deepEqual(back.leftInHoliday, ['.DS_Store']);
+  const again = f.apply('specialist', {}); assert.equal(again.errors, undefined, 'the stray file does not block the next switch: ' + JSON.stringify(again.errors));
+  assert.ok(existsSync(join(f.root, 'holiday/router-worker/.DS_Store')) && existsSync(join(f.root, 'holiday/router-worker/manifest.json')));
+});
+
+test('recover obeys a journal only for files a mode may own', t => {
+  const f = fixture(t), proposal = f.propose(), shared = ['charter.md', 'agents/lessons.md', 'memory/pm.md', 'pm-decisions.md', 'kit.lock'], before = f.tree();
+  mkdirSync(join(f.root, 'holiday'));
+  for (const kind of ['draft', 'restore']) {
+    writeFileSync(join(f.root, 'holiday/.switch-in-progress.json'), JSON.stringify({ schemaVersion: 1, from: 'specialist', to: 'router-worker', kind, pack: proposal.pack, install: shared, lease: null, productRoot: f.product, startedAt: new Date().toISOString() }));
+    assert.match(refusal(recoverSwitch({ teamRoot: f.kit, instanceRoot: f.root })).reason, /not a mode's own.*charter\.md/);
+  }
+  rmSync(join(f.root, 'holiday'), { recursive: true }); assert.equal(f.tree(), before, 'nothing was moved or deleted');
+});
+
+test('CLI: switch recover rolls an interrupted switch back', t => {
+  const f = fixture(t), proposal = f.propose();
+  mkdirSync(join(f.root, 'holiday/specialist/agents'), { recursive: true });
+  writeFileSync(join(f.root, 'holiday/.switch-in-progress.json'), JSON.stringify({ schemaVersion: 1, from: 'specialist', to: 'router-worker', kind: 'draft', pack: proposal.pack, install: proposal.install, lease: null, productRoot: f.product, startedAt: new Date().toISOString() }));
+  cpSync(join(f.root, 'agents/roster.md'), join(f.root, 'holiday/specialist/agents/roster.md')); rmSync(join(f.root, 'agents/roster.md'));
+  const run = () => spawnSync('node', [CLI, 'switch', 'recover', '--instance', f.root], { encoding: 'utf8' });
+  const done = run(); assert.equal(done.status, 0, done.stdout + done.stderr); assert.equal(JSON.parse(done.stdout).stage, 'switch-rolled-back');
+  assert.ok(existsSync(join(f.root, 'agents/roster.md')) && !existsSync(join(f.root, 'holiday')));
+  assert.equal(run().status, 2, 'nothing left to recover');
+});
+
+// The process "dies" at its nth write under `roots`: that write and every later one fail, so nothing after it reaches the disk.
+const WRITES = ['renameSync', 'writeFileSync', 'rmSync', 'mkdirSync', 'rmdirSync', 'appendFileSync', 'linkSync', 'unlinkSync'];
+function dieAt(n, roots, action) {
+  const real = Object.fromEntries(WRITES.map(name => [name, fs[name]]));
+  let seen = 0;
+  for (const name of WRITES) fs[name] = (path, ...rest) => {
+    if (roots.some(root => String(path).startsWith(root)) && ++seen >= n) throw Object.assign(Error('the process died'), { code: 'EDEAD' });
+    return real[name](path, ...rest);
+  };
+  syncBuiltinESMExports();
+  try { action(); } catch { /* the death itself */ } finally { Object.assign(fs, real); syncBuiltinESMExports(); }
+  return seen;
+}
+
+test('a switch that dies at any write is undone by recover: the tree is as before, the lock is free, the next switch is possible', t => {
+  const f = fixture(t), roots = [f.root + '/', f.product + '/'], keep = join(f.base, 'snapshot');
+  const entries = dir => readdirSync(dir).filter(name => name !== 'kit');
+  const save = () => { rmSync(keep, { recursive: true, force: true }); mkdirSync(keep); for (const name of entries(f.root)) cpSync(join(f.root, name), join(keep, name), { recursive: true }); };
+  const unlock = () => { for (const name of readdirSync(join(f.product, '.git'))) if (name.startsWith('rw-ownership-lease')) rmSync(join(f.product, '.git', name)); };
+  const reset = () => { for (const name of entries(f.root)) rmSync(join(f.root, name), { recursive: true, force: true }); for (const name of entries(keep)) cpSync(join(keep, name), join(f.root, name), { recursive: true }); unlock(); };
+  const recover = () => recoverSwitch({ teamRoot: f.kit, instanceRoot: f.root });
+  // Every write of the two restores; a first switch drafts and stages a team for each attempt, so it is sampled.
+  const cases = [['router-worker', { spec: f.spec }, (n, total) => n <= 4 || n > total - 8 || n % 9 === 0],
+    ['specialist', {}, () => true], ['router-worker', { spec: f.spec }, () => true]];
+  for (const [to, request, sampled] of cases) {
+    save();
+    const before = sansLedger(f.tree()), confirm = f.propose(to, request).digest, attempt = () => f.apply(to, request, confirm, { validate: passes });
+    const total = dieAt(Infinity, roots, attempt);
+    assert.ok(total > 20, `the switch to ${to} was made (${total} writes)`);
+    for (let n = 1; n <= total; n++) {
+      if (!sampled(n, total)) continue;
+      reset(); dieAt(n, roots, attempt);
+      let recovered = recover();
+      // A death inside the lock's own release leaves the lock's guard file; its message names it, the operator removes it.
+      if (/release-lock/.test(refusal(recovered)?.reason ?? '')) { rmSync(join(f.product, '.git/rw-ownership-lease.json.release-lock')); recovered = recover(); }
+      const where = `switch to ${to}, death at write ${n} of ${total}`;
+      assert.ok(recovered.stage === 'switch-rolled-back' || /no interrupted switch/.test(refusal(recovered).reason), `${where}: ${JSON.stringify(recovered)}`);
+      assert.equal(sansLedger(f.tree()), before, where); assert.equal(readLease({ productRoot: f.product }).status, 'free', where);
+      assert.equal(f.propose(to, request).digest, confirm, `${where}: the same switch can be proposed again`);
+    }
+    reset(); assert.equal(attempt().errors, undefined);
+  }
 });
