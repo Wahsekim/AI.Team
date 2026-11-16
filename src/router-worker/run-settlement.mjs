@@ -25,12 +25,15 @@ export function settleRun({ record, account, tickets, guardian }) {
   expect(guardian === null || (guardian && typeof guardian.agentId === 'string' && count(guardian.harnessEq) && [true, false, null].includes(guardian.finished)),
     'guardian must be a measure-spawn subagent row or null');
 
+  // A main-session dispatch makes no Guardian call.
+  const guarded = record.dispatch !== 'main-session';
+  expect(guarded || guardian === null, 'A main-session run has no Guardian call to settle');
   const estimate = record.guardian.estimated, guardianTokens = guardian?.harnessEq ?? null;
   const blocked = [...tickets.filter(entry => entry.budgetGate === 'blocked').map(entry => `ticket-gate-blocked:${entry.ticketId}`),
     guardian?.finished === true && guardianTokens > estimate ? 'guardian-over-estimate' : null].filter(Boolean);
   const unknown = [...planned.filter(id => !settled.includes(id)).map(id => `ticket-unsettled:${id}`),
     ...tickets.filter(entry => entry.budgetGate === 'unknown').map(entry => `ticket-gate-unknown:${entry.ticketId}`),
-    guardian === null ? 'guardian-usage-missing' : guardian.finished !== true ? 'guardian-usage-partial' : null].filter(Boolean);
+    !guarded ? null : guardian === null ? 'guardian-usage-missing' : guardian.finished !== true ? 'guardian-usage-partial' : null].filter(Boolean);
   const ticketTokens = tickets.reduce((total, entry) => total + entry.spentTokens, 0);
   const body = { schemaVersion: 1, stage: 'offline-run-settlement', launchable: false, unit: UNIT, recordDigest: record.digest,
     authorizedTokens: record.tickets.authorized, guardianEstimateTokens: estimate, ticketTokens, guardianTokens, totalTokens: ticketTokens + (guardianTokens ?? 0),

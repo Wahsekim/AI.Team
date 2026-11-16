@@ -1,8 +1,8 @@
 # Main-session dispatch (owner decision 2026-11-16)
 
-Status: the gate exists and is tested offline; `prepare` arms it for a
-main-session run and `next` prints the admitted call. `close` and `settle` do
-not read its log yet, so such a run cannot be closed with the launch host.
+Status: built and tested offline end to end: `prepare` arms the gate, `next`
+names the admitted call, `close` and `settle` read the dispatch log. Not yet
+run with real agents; the hook mechanics were observed in headless probes only.
 Nothing here calls a model.
 
 ## Why
@@ -95,6 +95,31 @@ type or the recipient itself and makes the call run in the foreground, so the
 main session never handles a brief or a check report. `next` prints no brief
 text. A call with any other text is admitted only if it is exactly the one the
 gate would have written.
+
+## Closing and settling
+
+```sh
+node kit/scripts/launch-router-worker.mjs close --team-root <activated copy>
+node kit/scripts/measure-spawn.mjs <session-dir> --json > METER.json
+node kit/scripts/launch-router-worker.mjs settle METER.json --team-root <activated copy>
+```
+
+There is no engine return. `close` takes the calls from the dispatch log:
+`account.source` is `dispatch-log`, `calls` counts tickets, exec and check calls
+(`guard` is 0), `attempts` and `tickets` give each dispatched ticket's attempts
+and status, and `blockers` names every ticket that did not pass. A run the main
+session left before its end is still closed and its lease released, with the
+finding `RUN_NOT_FINISHED` and the call that was due. The product checks
+(changed paths against the write boundary, moved head, candidate snapshot, hook
+log) are those of an engine run.
+
+`settle` binds each agent by the id the gate recorded, not by order, and refuses
+a meter that lacks one of them. An agent has one transcript for all its
+attempts, so the read after the run is charged to its first call and its later
+calls add nothing: usage is known per ticket and duty, not per attempt. The
+journal records a retry as a continuation in the same session. The frozen brief
+is looked for in each agent's transcript, where the Agent tool puts the prompt
+unchanged. The run settlement has no Guardian term.
 
 ## What the gate does not do
 

@@ -44,16 +44,19 @@ function replay(launch, events) {
   const plan = launch.args.plan, max = launch.args.maxAttemptsPerTicket ?? 1;
   const tickets = plan.map(item => ({ ticket: item.ticket, status: 'not-dispatched', attempts: 0, due: 'exec', exec: { agentId: null, report: null }, check: { agentId: null, report: null } }));
   let pending = null;
+  const calls = [];
   for (const event of events) {
     if (event.type === 'dispatched') {
       const entry = tickets.find(t => t.ticket === event.ticket);
       if (!entry) continue;
       pending = { ticket: event.ticket, duty: event.duty, attempt: event.attempt, mode: event.mode };
+      calls.push({ ...pending, agentId: null, returned: false });
       entry.status = 'running'; entry.attempts = event.attempt;
     } else if (event.type === 'returned' && pending) {
       const entry = tickets.find(t => t.ticket === pending.ticket), item = plan.find(p => p.ticket === pending.ticket), slot = entry[pending.duty];
       if (event.agentType !== (pending.duty === 'exec' ? item.agentType : item.verifierAgentType) || (pending.mode === 'resume' && event.agentId !== slot.agentId)) continue;
       slot.agentId = event.agentId; slot.report = parseReport(event.message);
+      Object.assign(calls.at(-1), { agentId: event.agentId, returned: true });
       if (pending.duty === 'exec') { const outcome = execOutcome(slot.report); if (outcome === 'ok') entry.due = 'check'; else entry.status = outcome; }
       else {
         const outcome = checkOutcome(slot.report);
@@ -64,7 +67,7 @@ function replay(launch, events) {
       pending = null;
     }
   }
-  return { tickets, pending, max, plan };
+  return { tickets, pending, max, plan, calls };
 }
 
 export function nextCall({ launch, events }) {
@@ -88,6 +91,15 @@ export function nextCall({ launch, events }) {
   return { action: 'message', ...base, attempt: entry.attempts, wrapper: item.verifierAgentType, to: entry.check.agentId,
     message: `RECHECK: attempt ${entry.attempts} of ${max} for ticket ${entry.ticket}. The author changed the candidate after your report. Run every verification command again on the current state; `
       + 'do not rely on your earlier results. End with the same final report JSON object as before and nothing else.\n' };
+}
+
+// What the dispatch log says happened: every admitted call with the agent that answered it, each
+// ticket's status, and whether the run reached its end. Null without an intact main-session launch record.
+export function runSummary({ launch, events }) {
+  if (!intact(launch)) return null;
+  const { tickets, calls } = replay(launch, events), next = nextCall({ launch, events });
+  return { finished: next.action === 'done', pending: next.action === 'done' ? null : `${next.ticket} ${next.duty}`, calls,
+    tickets: tickets.map(({ ticket, status, attempts, exec, check }) => ({ ticket, status, attempts, execAgentId: exec.agentId, checkAgentId: check.agentId })) };
 }
 
 // PreToolUse decision. `event`, when present, is appended to the dispatch log by the caller.

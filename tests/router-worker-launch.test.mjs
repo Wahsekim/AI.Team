@@ -12,7 +12,7 @@ import { settleLaunch, SETTLE_FILE } from '../src/router-worker/launch-settle.mj
 import { prepareRetry } from '../src/router-worker/launch-retry.mjs';
 import { loadRetryRules, inspectRetryJournal } from '../src/router-worker/retries.mjs';
 import { candidateOf } from '../src/router-worker/closed-candidate.mjs';
-import { nextCall } from '../src/router-worker/dispatch.mjs';
+import { nextCall, decideDispatch, DISPATCH_LOG, PLACEHOLDER } from '../src/router-worker/dispatch.mjs';
 import { runWorkflow, makeAgentImpl } from '../scripts/lib/workflow-harness.mjs';
 import { freezeRun } from '../src/router-worker/run-args.mjs';
 import { observeIsolation } from '../src/router-worker/isolation.mjs';
@@ -365,7 +365,8 @@ test('settle refuses a meter that is not the calls of this run, an unclosed laun
 test('CLI settles from RESULT.json and METER.json; exit 0 clear, 2 review or refused, 1 usage', async t => {
   const f = await ran(t), result = join(f.base, 'result.json'), meter = join(f.base, 'meter.json'), run = (...argv) => spawnSync(process.execPath, [CLI, ...argv], { encoding: 'utf8' });
   f.close(); writeFileSync(result, JSON.stringify(f.result)); writeFileSync(meter, JSON.stringify(metered(f)));
-  assert.equal(run('settle', result, '--team-root', f.team).status, 1);
+  assert.equal(run('settle', result, '--team-root', f.team).status, 2, 'the one-file form is for a main-session run; an engine launch needs its return');
+  assert.equal(run('settle').status, 1);
   const ok = run('settle', result, meter, '--team-root', f.team);
   assert.equal(ok.status, 0, ok.stderr); assert.equal(JSON.parse(ok.stdout).status, 'clear');
   assert.equal(run('settle', result, meter, '--team-root', f.team).status, 2);
@@ -426,4 +427,82 @@ test('CLI prepares a retry from REQUEST.json; exit 0 prepared, 2 refused, 1 usag
   const ok = run('retry', file, '--team-root', f.team);
   assert.equal(ok.status, 0, ok.stderr); assert.equal(JSON.parse(ok.stdout).stage, 'retry-prepared');
   assert.equal(run('retry', file, '--team-root', f.team).status, 2);
+});
+
+// A main-session run: the dispatch log is written here the way the gate hook writes it.
+const execJSON = (over = {}) => JSON.stringify({ outcome: 'done', blocked: false, progress: true, filesTouched: ['src/tag-list/view.ts'], ...over });
+const checkJSON = pass => JSON.stringify({ pass, summary: pass ? 'all green' : 'one test fails', failures: pass ? [] : ['tag list test'], commandsRun: [{ command: 'npm test', exitCode: pass ? 0 : 1 }] });
+async function dispatchedRun(t, steps, { leavePending = false } = {}) {
+  const f = fixture(t), launch = await f.prepare({ run: { ...RUN, dispatch: 'main-session' } }), events = [];
+  const admit = () => { const call = nextCall({ launch, events }), tool = call.action === 'agent' ? 'Agent' : 'SendMessage';
+    const verdict = decideDispatch({ input: { tool_name: tool, tool_input: call.action === 'agent' ? { subagent_type: 'x', prompt: PLACEHOLDER } : { to: 'x', message: PLACEHOLDER } }, launch, events });
+    assert.equal(verdict.decision, 'allow', JSON.stringify(call)); events.push(verdict.event); return call; };
+  for (const [agentId, message] of steps) { const call = admit(); events.push(decideDispatch({ input: { tool_name: 'SubagentHandback', agent_type: call.wrapper, agent_id: agentId, tool_input: { message } }, launch, events }).event); }
+  if (leavePending) admit();
+  writeFileSync(join(f.team, DISPATCH_LOG), events.map(event => JSON.stringify(event)).join('\n') + '\n');
+  return { ...f, launch, close: () => closeLaunch({ teamRoot: f.team }), closeFile: join(f.team, CLOSE_FILE) };
+}
+const retried = [['exec-a', execJSON()], ['check-a', checkJSON(false)], ['exec-a', execJSON()], ['check-a', checkJSON(true)]];
+// Agent-tool agents: one transcript per agent, whatever the attempts; the first message is the prompt verbatim.
+function meteredAgents(f, agents) {
+  const dir = join(f.base, 'projects'), sub = join(dir, 'sess/subagents');
+  mkdirSync(sub, { recursive: true }); writeFileSync(join(dir, 'sess.jsonl'), jsonl([usageRow('main', undefined, 7000)]));
+  for (const [id, [agentType, prompt, tokens]] of Object.entries(agents)) {
+    writeFileSync(join(sub, `agent-${id}.jsonl`), jsonl([{ type: 'user', message: { role: 'user', content: prompt } }, usageRow(id, id, tokens)]));
+    writeFileSync(join(sub, `agent-${id}.meta.json`), JSON.stringify({ agentType, description: id, finished: true }));
+  }
+  const run = spawnSync(process.execPath, [METER, join(dir, 'sess'), '--json'], { encoding: 'utf8' });
+  assert.equal(run.status, 0, run.stderr);
+  return JSON.parse(run.stdout);
+}
+const firstPrompts = launch => { const plan = launch.args.plan[0], events = [];
+  return { exec: nextCall({ launch, events }).prompt, check: `${plan.verifierBrief}\n\n---\nFINAL REPORT (required).` }; };
+
+test('close reads a main-session run from the dispatch log: calls, attempts and each ticket\'s status', async t => {
+  const f = await dispatchedRun(t, retried); write(f.product, 'src/tag-list/view.ts', 'export const x = 2;\n');
+  const closed = f.close();
+  assert.equal(closed.errors, undefined, JSON.stringify(closed.errors));
+  assert.equal(closed.status, 'clean', JSON.stringify(closed.findings)); assert.equal(closed.leaseReleased, true); assert.equal(f.leased(), 'free');
+  assert.deepEqual(closed.account, { status: 'accounted', source: 'dispatch-log', findings: [], calls: { tickets: 1, exec: 2, check: 2, guard: 0 }, attempts: [2],
+    tickets: [{ ticket: 'US-08', status: 'passed', attempts: 2 }], blockers: [] });
+  assert.deepEqual(closed.changedPaths, ['src/tag-list/view.ts']);
+  const failed = await dispatchedRun(t, [['exec-a', execJSON()], ['check-a', checkJSON(false)], ['exec-a', execJSON()], ['check-a', checkJSON(false)]]);
+  const stopped = failed.close();
+  assert.equal(stopped.status, 'clean', 'clean says the run stayed inside its gates, not that the work passed');
+  assert.deepEqual(stopped.account.blockers, ['ticket-stopped:US-08:check-failed']); assert.deepEqual(stopped.account.attempts, [2]);
+  const pending = await dispatchedRun(t, [['exec-a', execJSON()]], { leavePending: true }), abandoned = pending.close();
+  assert.equal(abandoned.status, 'review'); assert.deepEqual(abandoned.findings, [{ code: 'RUN_NOT_FINISHED', pending: 'US-08 check' }]);
+  assert.equal(abandoned.leaseReleased, true, 'an abandoned run is still closed and its lease released');
+  const never = await dispatchedRun(t, []);
+  assert.deepEqual(never.close().findings, [{ code: 'RUN_NOT_FINISHED', pending: 'US-08 exec' }]);
+});
+
+test('CLI closes and settles a main-session run without an engine return', async t => {
+  const f = await dispatchedRun(t, retried), run = (...argv) => spawnSync(process.execPath, [CLI, ...argv], { encoding: 'utf8' }), meter = join(f.base, 'meter.json');
+  const closed = run('close', '--team-root', f.team);
+  assert.equal(closed.status, 0, closed.stderr); assert.equal(JSON.parse(closed.stdout).account.source, 'dispatch-log');
+  const prompts = firstPrompts(f.launch);
+  writeFileSync(meter, JSON.stringify(meteredAgents(f, { 'exec-a': ['sample-worker-exec', prompts.exec, 9000], 'check-a': ['sample-worker-check', prompts.check, 6000] })));
+  const settled = run('settle', meter, '--team-root', f.team);
+  assert.equal(settled.status, 0, settled.stderr); assert.equal(JSON.parse(settled.stdout).status, 'clear');
+  const engine = await ran(t);
+  assert.equal(run('close', '--team-root', engine.team).status, 2, 'an engine launch still needs its return');
+});
+
+test('settle of a main-session run binds each agent by the id the gate recorded and charges one transcript per agent', async t => {
+  const f = await dispatchedRun(t, retried); f.close();
+  const prompts = firstPrompts(f.launch), meter = () => meteredAgents(f, { 'exec-a': ['sample-worker-exec', prompts.exec, 9000], 'check-a': ['sample-worker-check', prompts.check, 6000] });
+  const settled = settleLaunch({ teamRoot: f.team, meter: meter(), rules });
+  assert.equal(settled.errors, undefined, JSON.stringify(settled.errors));
+  assert.equal(settled.status, 'clear', JSON.stringify([settled.findings, settled.run.reasons]));
+  assert.deepEqual(settled.calls, [{ ticket: 'US-08', duty: 'exec', attempts: 2, agentId: 'exec-a', tokens: 9010, finished: true }, { ticket: 'US-08', duty: 'check', attempts: 2, agentId: 'check-a', tokens: 6010, finished: true }]);
+  assert.equal(settled.run.ticketTokens, 15020); assert.equal(settled.run.guardianTokens, null); assert.equal(settled.run.runGate, 'clear');
+  const state = inspectRetryJournal({ journal: settled.ticketRecords[0].journal, rules });
+  assert.deepEqual(state.assignments.map(a => [a.assignmentId, a.outcome]), [['US-08.exec.1', 'candidate'], ['US-08.check.1', 'fail'], ['US-08.exec.2', 'candidate'], ['US-08.check.2', 'pass']]);
+  assert.equal(state.usedSessions.exec.length, 1, 'the retry ran in the session of the first attempt'); assert.deepEqual(state.retryCounts, { exec: 1, check: 1 });
+  const edited = await dispatchedRun(t, retried); edited.close();
+  const other = settleLaunch({ teamRoot: edited.team, rules, meter: meteredAgents(edited, { 'exec-a': ['sample-worker-exec', 'Another brief entirely', 9000], 'check-a': ['sample-worker-check', prompts.check, 6000] }) });
+  assert.deepEqual(other.findings, [{ code: 'BRIEF_NOT_FOUND', ticket: 'US-08', duty: 'exec' }]); assert.equal(other.status, 'review');
+  const missing = await dispatchedRun(t, retried); missing.close();
+  assert.match(refusal(settleLaunch({ teamRoot: missing.team, rules, meter: meteredAgents(missing, { 'exec-a': ['sample-worker-exec', prompts.exec, 9000] }) })).reason, /check-a/);
 });

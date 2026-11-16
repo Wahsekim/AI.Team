@@ -314,8 +314,9 @@ attempt per ticket by default; `maxAttemptsPerTicket` 2 or 3 turns on the
 engine's retry with fresh agents, which `close` and `settle` count per attempt.
 Retries by the same agents need dispatch by the main session
 (`"dispatch": "main-session"`): `prepare` arms a gate hook that admits only the
-one next call and writes its text itself, and `next` names that call; `close`
-and `settle` do not handle such a run yet
+one next call and writes its text itself, `next` names that call, and `close`
+and `settle` read the gate's log instead of an engine return; not yet run with
+real agents
 ([details](docs/design/router-worker/main-session-dispatch.md)); the `retry`
 command belongs to an earlier, unwired design. No call is admitted one by one
 during a run
