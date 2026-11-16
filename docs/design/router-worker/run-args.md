@@ -26,6 +26,7 @@ node kit/scripts/freeze-run-router-worker.mjs RUN.json --team-root <team-root>
 | `estimatedOutputTokens` | expected output tokens of all execution and check calls of the run, same unit |
 | `guardianEstimateTokens` | expected usage of the Guardian call in `input+cache_creation`; recorded as `record.guardian`, not passed to the engine, compared by [run settlement](settlement.md#run-settlement) |
 | `launchManifestDigest` (optional) | digest from `preflight-run.mjs`, echoed by the engine |
+| `budgetCeilingTokens`, `estimatedOutputTokens` | enforced only for `engine` dispatch (`record.budget.enforced`). A `main-session` run has no output meter; its limits are the attempt cap and each ticket's authorization, enforced by the dispatch gate |
 | `dispatch` (optional, `engine` or `main-session`, default `engine`) | who dispatches the calls: the count engine, or the copy's main session through the [dispatch gate](main-session-dispatch.md). The run record carries it; the engine arguments do not |
 | `maxAttemptsPerTicket` (optional, 1 to 3; default 1 for `engine`, 2 for `main-session`) | attempts per ticket. For `main-session` a retry resumes the same agents. For `engine`, above 1, a failed verification on a clean execution is retried by the engine with a FRESH worker and verifier, which re-read the project; `estimatedOutputTokens` must then cover the worst case |
 

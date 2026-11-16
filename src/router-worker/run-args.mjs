@@ -92,7 +92,8 @@ export async function freezeRun({ inputs, run, teamRoot, methodBundle }) {
     const body = { schemaVersion: 1, stage: 'run-args-frozen-offline', launchable: false, argsDigest: digest(args), dispatch: run.dispatch ?? 'engine', maxAttemptsPerTicket: args.maxAttemptsPerTicket,
       engineDigest: bytesDigest(engine), rosterDigest: bytesDigest(roster), policyDigest,
       items: frozen.map((input, i) => ({ ticket: tickets[i], inputDigest: digest(input), previewDigest: previews[i].manifest.digest, authorizedTokens: input.mandate.budgetTokens })),
-      budget: { unit: 'output', ceiling: run.budgetCeilingTokens, stopLine: Math.floor(run.budgetCeilingTokens * 4 / 5), estimatedOutput: run.estimatedOutputTokens },
+      // Only the count engine meters output tokens. A main-session dispatch is bounded by its attempt cap and, per ticket, by the authorization the dispatch gate enforces.
+      budget: { unit: 'output', enforced: (run.dispatch ?? 'engine') === 'engine', ceiling: run.budgetCeilingTokens, stopLine: Math.floor(run.budgetCeilingTokens * 4 / 5), estimatedOutput: run.estimatedOutputTokens },
       tickets: { unit: 'input+cache_creation', estimated, authorized },
       // The Guardian belongs to the run, not to a ticket; run settlement compares its measured usage with this.
       guardian: { unit: 'input+cache_creation', estimated: run.guardianEstimateTokens }, unresolved: UNRESOLVED };
