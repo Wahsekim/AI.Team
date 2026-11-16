@@ -306,7 +306,8 @@ observe the isolation gate, then write a single-use launch record with the engin
 arguments. Any refusal releases the lease it took. `close` matches the engine return to
 that record, reports product paths changed outside the write boundary (the only
 check that sees Bash writes, after the fact; Git-ignored paths are counted,
-not judged), and releases the lease. `settle`
+not judged), writes what the run changed as one patch (`rw-result.patch`) so
+the result can leave the disposable clone, and releases the lease. `settle`
 matches the metered agents to the run's calls, checks that each call received
 its frozen brief, and settles tickets and run, keeping each ticket's retry
 journal and ledger. An engine run makes one
