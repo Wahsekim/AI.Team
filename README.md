@@ -206,6 +206,14 @@ two retries, with no reset when the model, skill or worker instance changes.
 [ADR 0008](decisions/0008-router-worker-topology.md) records the owner's approval
 of these two mappings only.
 
+[ADR 0010](decisions/0010-router-worker-second-mode.md) sets the target: a
+deployed team works in specialist mode or in Router/Worker mode, chosen at
+bootstrap or by a switch that packs the inactive mode into `holiday/`. It works
+under "run N rounds" in the real product repository, through the count engine,
+with a lock, write limits and after-run checks. **That standing mode is not
+built yet.** What exists today runs only in a throwaway copy of the team with a
+clone of the product, and is described below.
+
 What exists today is offline tooling in `src/router-worker/`: a deterministic
 compiler (first-attempt `exec` and `check` previews only), local source/context
 preflight, inert deployment drafts, candidate/check-record binding and persisted
