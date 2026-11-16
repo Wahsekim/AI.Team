@@ -117,14 +117,37 @@ test('a switch is refused, and nothing moves, when the product is dirty, a batch
   assert.equal(refusal(none.propose('holiday', {})).code, 'SWITCH_REFUSED');
 });
 
-test('CLI proposes without --confirm and switches with it; exit 0 done, 2 refused or proposal only, 1 usage', t => {
-  const f = fixture(t), file = join(f.base, 'switch.json'), run = (...argv) => spawnSync(process.execPath, [CLI, ...argv], { encoding: 'utf8' });
+test('CLI: a switch is confirmed only by a code typed at an interactive terminal; without one it proposes and changes nothing', t => {
+  const f = fixture(t), file = join(f.base, 'switch.json'), run = (...argv) => spawnSync(process.execPath, [CLI, ...argv], { encoding: 'utf8', input: 'anything\n' });
   writeFileSync(file, JSON.stringify({ spec: f.spec }));
-  const proposed = run('switch', 'router-worker', file, '--instance', f.root, '--product-root', f.product);
+  const args = ['switch', 'router-worker', file, '--instance', f.root, '--product-root', f.product];
+  const proposed = run(...args);
   assert.equal(proposed.status, 2, 'a proposal is not a switch'); const proposal = JSON.parse(proposed.stdout);
-  assert.equal(proposal.stage, 'switch-proposed'); assert.equal(existsSync(join(f.root, 'holiday')), false);
-  const done = run('switch', 'router-worker', file, '--instance', f.root, '--product-root', f.product, '--confirm', proposal.digest);
-  assert.equal(done.status, 0, done.stderr); assert.equal(JSON.parse(done.stdout).stage, 'mode-switched');
+  assert.equal(proposal.stage, 'switch-proposed'); assert.match(proposed.stderr, /interactive terminal/); assert.equal(existsSync(join(f.root, 'holiday')), false);
+  assert.equal(run(...args, '--confirm', proposal.digest).status, 1, 'the digest on the command line is no longer a confirmation');
+  assert.equal(spawnSync(process.execPath, [CLI, ...args], { encoding: 'utf8', input: proposal.digest.slice(-8) + '\n' }).status, 2, 'nor is the code on a pipe');
+  assert.equal(existsSync(join(f.root, 'holiday')), false);
+  // The same command inside a pseudo-terminal, with the answer typed when the question appears.
+  const pty = (answer) => spawnSync('python3', ['-c', `
+import os, pty, sys
+argv, answer = sys.argv[2:], sys.argv[1]
+pid, fd = pty.fork()
+if pid == 0: os.execvp(argv[0], argv)
+seen, sent = b'', False
+while True:
+    try: chunk = os.read(fd, 4096)
+    except OSError: break
+    if not chunk: break
+    seen += chunk
+    if not sent and b'anything else cancels' in seen:
+        os.write(fd, ((seen.split(b'Type ')[-1].split(b' ')[0].decode() if answer == 'CODE' else answer) + '\\n').encode()); sent = True
+sys.stdout.write(seen.decode(errors='replace')); sys.exit(os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1]))
+`, answer, process.execPath, CLI, ...args], { encoding: 'utf8' });
+  const cancelled = pty('no');
+  assert.equal(cancelled.status, 2, cancelled.stdout + cancelled.stderr); assert.match(cancelled.stdout, /Cancelled/); assert.equal(existsSync(join(f.root, 'holiday')), false);
+  const done = pty('CODE');
+  assert.equal(done.status, 0, done.stdout + done.stderr); assert.match(done.stdout, /"stage": "mode-switched"/);
+  assert.match(f.read('pm-decisions.md'), /confirmed by its code, typed at an interactive terminal/);
   assert.equal(run('switch', 'router-worker').status, 1);
   assert.equal(run('switch', 'bogus', '/nonexistent', '--instance', f.root, '--product-root', f.product).status, 1, 'an unknown mode is a usage error, before any file is read');
   assert.equal(run('switch', 'specialist', file, '--instance', f.root, '--instance', f.root, '--product-root', f.product).status, 1, 'a repeated flag');

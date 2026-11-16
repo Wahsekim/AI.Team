@@ -247,11 +247,11 @@ export function recoverSwitch({ teamRoot, instanceRoot }) {
   } catch (error) { return refusal(error); }
 }
 
-export function switchMode({ confirm, validate, ...options }) {
+export function switchMode({ confirm, validate, atTerminal, ...options }) {
   let planned;
   try { planned = plan(options); } catch (error) { return refusal(error); }
   const { instance, kit, live, body, kind, packed, draft, spec, limits } = planned, proposalDigest = digest(body), to = body.to, productRoot = options.productRoot;
-  if (confirm !== proposalDigest) return { errors: [{ code: 'SWITCH_NOT_CONFIRMED', field: 'switch', reason: 'The owner confirms a switch by the digest of its proposal; this digest is not the current proposal' }] };
+  if (confirm !== proposalDigest) return { errors: [{ code: 'SWITCH_NOT_CONFIRMED', field: 'switch', reason: 'A switch is confirmed by the digest of its proposal; this digest is not the current proposal' }] };
 
   const journalPath = join(instance, JOURNAL), out = join(instance, HOLIDAY, live.name), into = join(instance, HOLIDAY, to);
   const started = { schemaVersion: 1, from: live.name, to, kind, pack: body.pack, install: body.install, lease: null, productRoot, startedAt: new Date().toISOString(),
@@ -305,7 +305,7 @@ export function switchMode({ confirm, validate, ...options }) {
     }
     // 5. The lock is given back and the ledger written while the journal still stands: a death here is found and undone.
     need(releaseLease({ productRoot, lease }).status === 'free', 'The lock on the product repository could not be released');
-    appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} MODE SWITCH: from ${live.name} to ${to}; proposal ${proposalDigest} was confirmed by its digest on the command line (the command cannot tell who ran it). ${body.pack.length} file(s) packed under holiday/${live.name}.\n`);
+    appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} MODE SWITCH: from ${live.name} to ${to}; proposal ${proposalDigest} was confirmed ${atTerminal === true ? 'by its code, typed at an interactive terminal' : 'by a program that called the switch directly, not at a terminal'}. ${body.pack.length} file(s) packed under holiday/${live.name}.\n`);
     rmSync(journalPath);
   } catch (error) {
     try { rollBack(instance, journal); } catch (undo) {

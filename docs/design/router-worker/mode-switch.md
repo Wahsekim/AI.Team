@@ -6,8 +6,7 @@ used on a real team. It changes which team is live; it does not run a batch.
 
 ```sh
 node kit/scripts/team-mode.mjs switch router-worker REQUEST.json --instance . --product-root <product>
-node kit/scripts/team-mode.mjs switch router-worker REQUEST.json --instance . --product-root <product> --confirm <digest>
-node kit/scripts/team-mode.mjs switch specialist    REQUEST.json --instance . --product-root <product> [--confirm <digest>]
+node kit/scripts/team-mode.mjs switch specialist    REQUEST.json --instance . --product-root <product>
 node kit/scripts/team-mode.mjs switch recover --instance .
 ```
 
@@ -20,9 +19,9 @@ accepted on the first switch into Router/Worker mode only (see below).
 
 Exit 0 switched, 2 refused or proposal only, 1 usage.
 
-## Two steps: propose, then confirm
+## Propose, then confirm at a terminal
 
-Without `--confirm` the command prints a proposal and changes nothing:
+The command prints a proposal:
 
 | Field | Content |
 |---|---|
@@ -35,10 +34,20 @@ Without `--confirm` the command prints a proposal and changes nothing:
 | `kept` | files of the new team that are already there and stay as they are (shared governance role files) |
 | `digest` | the digest of the proposal |
 
-The owner confirms by running the same command with `--confirm <digest>`. The
-proposal is computed again at that moment; a digest that is not the current
-proposal is refused (`SWITCH_NOT_CONFIRMED`): the team, the kit or the request
-changed since the proposal was read. The digest covers the lists of files and,
+Run at an interactive terminal, the command then asks for a code (the last
+eight characters of the digest) and switches when that code is typed. Anything
+else cancels. Run anywhere else (a pipe, a script, a PM session, which runs
+commands without a terminal), it prints the proposal, changes nothing and exits
+2. There is no flag that confirms (owner decision, 2026-11-17): the switch is
+the one moment the owner approves by hand, and an unattended session must not
+be able to approve itself. This is a barrier against that case, not a proof of
+identity: a program that builds a pseudo-terminal, or that calls
+`switchMode` directly, gets past it. The ledger line says whether the code was
+typed at a terminal.
+
+The proposal is computed again when the code is typed; if the team, the kit or
+the request changed since, the switch is refused (`SWITCH_NOT_CONFIRMED`). The
+digest covers the lists of files and,
 for a packed team, the digest of its manifest. It does not cover the content of
 files outside those lists.
 
@@ -173,9 +182,5 @@ was, the lock is free and the same switch can be proposed again.
   files under `holiday/specialist/` are not among them.
 - **Bootstrap does not offer the mode yet**, and the gate flag
   (`dispatch: main-session`) cannot be set: both are later steps.
-- **Nothing ties the confirmation to the owner.** The digest is printed by the
-  proposal and accepted on the command line, so any session that can run the
-  command can do both steps, an unattended PM session included. The ledger line
-  says a proposal was confirmed by its digest and does not say by whom. Whether
-  the confirmation should need something only the owner can do is an open owner
-  decision.
+- **The terminal check is not a proof of identity** (above). It needs a POSIX
+  terminal (`/dev/tty`).

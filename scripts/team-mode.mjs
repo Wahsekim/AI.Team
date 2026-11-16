@@ -1,4 +1,4 @@
-import { readFileSync, statSync, writeSync } from 'node:fs';
+import { readFileSync, statSync, writeSync, readSync, openSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { parseJSON } from '../src/loop/contracts.mjs';
 import { draftTeam, writeDraft, verifyDraft } from '../src/router-worker/draft.mjs';
@@ -6,22 +6,23 @@ import { stageTeam } from '../src/router-worker/stage.mjs';
 
 import { proposeSwitch, switchMode, recoverSwitch } from '../src/router-worker/switch.mjs';
 
-// switch <specialist|router-worker> <REQUEST.json> --instance <root> --product-root <product> [--confirm <proposal digest>]
-//   Without --confirm it prints the proposal and changes nothing (exit 2); the owner confirms it by its digest.
+// switch <specialist|router-worker> <REQUEST.json> --instance <root> --product-root <product>
+//   Prints the proposal. At an interactive terminal it then asks for the proposal's code and switches when it is
+//   typed; anywhere else it changes nothing (exit 2). A session that runs commands without a terminal cannot confirm.
 // switch recover --instance <root>
 //   Rolls back a switch that was interrupted.
 if (process.argv[2] === 'switch') {
   const [, to, ...tail] = process.argv.slice(2), recover = to === 'recover', [file, ...rest] = recover ? [null, ...tail] : tail, options = {};
   let wellFormed = rest.length % 2 === 0;
   for (let i = 0; i < rest.length; i += 2) { if (Object.hasOwn(options, rest[i]) || !rest[i + 1]) wellFormed = false; options[rest[i]] = rest[i + 1]; }
-  const allowed = recover ? ['--instance'] : ['--instance', '--product-root', '--confirm'];
+  const allowed = recover ? ['--instance'] : ['--instance', '--product-root'];
   const finish = (result, done) => {
     // Written synchronously: process.exit would cut a pending pipe write short.
     if (result.errors) { writeSync(2, JSON.stringify(result) + '\n'); process.exit(2); }
     writeSync(1, JSON.stringify(result, null, 2) + '\n'); process.exit(done ? 0 : 2);
   };
   if (!wellFormed || !Object.keys(options).every(key => allowed.includes(key)) || !options['--instance'] || (!recover && (!['specialist', 'router-worker'].includes(to) || !file || !options['--product-root']))) {
-    console.error('usage: node scripts/team-mode.mjs switch <specialist|router-worker> <REQUEST.json> --instance <instance-root> --product-root <product-root> [--confirm <proposal digest>]   (REQUEST.json: {"spec"?: {...}, "limits"?: {...}})\n'
+    console.error('usage: node scripts/team-mode.mjs switch <specialist|router-worker> <REQUEST.json> --instance <instance-root> --product-root <product-root>   (REQUEST.json; confirmed by typing a code at an interactive terminal: {"spec"?: {...}, "limits"?: {...}})\n'
       + '       node scripts/team-mode.mjs switch recover --instance <instance-root>   (rolls back an interrupted switch)');
     process.exit(1);
   }
@@ -31,8 +32,20 @@ if (process.argv[2] === 'switch') {
   try { request = JSON.parse(readFileSync(file, 'utf8')); } catch { request = null; }
   const common = { to, request, teamRoot, instanceRoot, productRoot: resolve(options['--product-root']) };
   const result = request === null ? { errors: [{ code: 'SWITCH_REFUSED', field: 'switch', reason: 'REQUEST.json is not readable JSON' }] }
-    : options['--confirm'] ? switchMode({ ...common, confirm: options['--confirm'] }) : proposeSwitch(common);
-  finish(result, result.stage === 'mode-switched');
+    : proposeSwitch(common);
+  if (result.errors) finish(result, false);
+  writeSync(1, JSON.stringify(result, null, 2) + '\n');
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    writeSync(2, 'Nothing was changed. A switch is confirmed by a person: run this command in an interactive terminal and type the code it asks for.\n');
+    process.exit(2);
+  }
+  const code = result.digest.slice(-8), typed = Buffer.alloc(256);
+  writeSync(1, `\nType ${code} to switch this team from ${result.from} to ${result.to}; anything else cancels: `);
+  let answer = '';
+  // Node's own stdin does not block on a terminal; the terminal is opened for the one line.
+  try { answer = typed.subarray(0, readSync(openSync('/dev/tty', 'r'), typed)).toString('utf8').trim(); } catch { /* no answer */ }
+  if (answer !== code) { writeSync(2, 'Cancelled; nothing was changed.\n'); process.exit(2); }
+  finish(switchMode({ ...common, confirm: result.digest, atTerminal: true }), true);
 }
 
 const argv = process.argv.slice(2), flag = argv.indexOf('--instance');
