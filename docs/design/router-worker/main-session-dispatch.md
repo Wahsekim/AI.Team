@@ -1,10 +1,9 @@
 # Main-session dispatch (owner decision 2026-11-16)
 
 Status: built and tested offline end to end: `prepare` arms the gate, `next`
-names the admitted call, `close` and `settle` read the dispatch log. Run once
-with the real UHF wrappers in a throwaway copy (E-05, 2026-11-16), before the
-lock, the closed state, the usage limit's review fixes and the result patch
-were added; those have not run with real agents. Nothing here calls a model.
+names the admitted call, `close` and `settle` read the dispatch log. Not yet
+run with real agents; the hook mechanics were observed in headless probes only.
+Nothing here calls a model.
 
 ## Why
 

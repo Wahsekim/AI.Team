@@ -332,6 +332,7 @@ test('a blocked worker whose returned work was checked settles as a stopped tick
   assert.equal(settled.run.tickets[0].ticketId, 'US-08'); assert.equal(settled.run.runGate, 'clear');
 });
 
+const failingCheck = { verifier: () => ({ pass: false, staticPass: false, e2ePass: true, summary: 'one test fails', commandsRun: [{ command: 'npm test', exitCode: 1 }], failures: ['tag list test'] }) };
 test('a ticket that passed on its retry settles as four calls of one ticket, each attempt in its own session', async t => {
   let checks = 0;
   const twice = { run: { ...RUN, maxAttemptsPerTicket: 2 } };
@@ -374,9 +375,6 @@ test('CLI settles from RESULT.json and METER.json; exit 0 clear, 2 review or ref
   assert.equal(ok.status, 0, ok.stderr); assert.equal(JSON.parse(ok.stdout).status, 'clear');
   assert.equal(run('settle', result, meter, '--team-root', f.team).status, 2);
 });
-
-// A check that fails once: used by the engine-retry settlement test.
-const failingCheck = { verifier: () => ({ pass: false, staticPass: false, e2ePass: true, summary: 'one test fails', commandsRun: [{ command: 'npm test', exitCode: 1 }], failures: ['tag list test'] }) };
 
 // A main-session run: the dispatch log is written here the way the gate hook writes it.
 const execJSON = (over = {}) => JSON.stringify({ outcome: 'done', blocked: false, progress: true, filesTouched: ['src/tag-list/view.ts'], ...over });

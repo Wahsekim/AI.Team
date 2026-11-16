@@ -134,7 +134,8 @@ The retry rules used by `settle` are those of the copy: its own
 `charter.md`, read through the kit that serves the command. A copy that is not a
 two-root instance of that kit is refused (`RETRY_RULES_REFUSED`), and a charter
 whose retry wording changed is refused (`RETRY_RULE_REVIEW_REQUIRED`) before
-anything is settled. The journal carries the digest of those rules.
+anything is settled. The retry journal that `settle` writes carries the digest
+of those rules.
 
 `<session-dir>` is the Claude Code session directory of the launching session.
 Exit 0 settled clear, 2 refused or settled with something to review, 1 usage.

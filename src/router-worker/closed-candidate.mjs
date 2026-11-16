@@ -1,10 +1,10 @@
 import { digest } from '../loop/contracts.mjs';
 import { snapshotRepository } from '../loop/snapshots.mjs';
 
-// The product state a launch was closed with: commit plus every tracked and untracked
-// (not ignored) file by content.
 export const CLOSE_FILE = 'rw-close.json';
 
+// The product state a launch is closed with: commit plus every tracked and untracked
+// (not ignored) file by content.
 // Null when the product cannot be snapshotted (tracked symlink, submodule, size cap).
 export function candidateOf(productRoot) {
   try {

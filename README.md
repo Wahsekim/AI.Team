@@ -316,9 +316,8 @@ one next call and writes its text itself, `next` names that call, and `close`
 and `settle` read the gate's log instead of an engine return. Its decisions are serialized by a lock, a closed run or a run that lost its
 lease dispatches nothing, and the gate
 stops a ticket that used up its authorization; the output ceiling of `RUN.json`
-is not enforced in such a run. It ran once with real wrappers, in a throwaway
-copy ([details](docs/design/router-worker/main-session-dispatch.md)). In an
-engine batch no call is admitted one by one
+is not enforced in such a run. Not yet run with the real wrappers
+([details](docs/design/router-worker/main-session-dispatch.md)). No call is admitted one by one
 during a run
 ([details](docs/design/router-worker/launch-host.md)).
 
