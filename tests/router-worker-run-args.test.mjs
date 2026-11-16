@@ -57,7 +57,7 @@ test('freezes the complete engine arguments from previews and the roster; the re
   assert.equal(record.launchable, false); assert.equal(record.stage, 'run-args-frozen-offline');
   assert.equal(record.argsDigest, digest(args));
   assert.deepEqual(record.items.map(item => item.ticket), ['US-08', 'US-09']);
-  assert.deepEqual(record.budget, { unit: 'output', ceiling: 46800, stopLine: 37440, estimatedOutput: 36000 }, 'the engine gate is metered in output tokens');
+  assert.deepEqual(record.budget, { unit: 'output', enforced: true, ceiling: 46800, stopLine: 37440, estimatedOutput: 36000 }, 'the engine gate is metered in output tokens');
   assert.deepEqual(record.tickets, { unit: 'input+cache_creation', estimated: 36000, authorized: 48000 }, 'ticket estimates and authorizations stay in the ledger unit and are not compared with the ceiling');
   assert.ok(record.unresolved.includes('in-run-owner-stop-observation'), 'the engine cannot observe an owner stop mid-run');
   const { digest: recorded, ...body } = record;

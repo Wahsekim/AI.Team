@@ -8,7 +8,7 @@ export const DISPATCH_LOG = '.claude/rw-dispatch.jsonl';
 // The main session sends this instead of a prompt or message; the gate replaces it with the exact text.
 export const PLACEHOLDER = 'rw:next';
 const GATED = ['Agent', 'Task', 'SendMessage', 'Workflow'];
-const STOPPED = ['exec-report-invalid', 'exec-blocked', 'exec-no-progress', 'check-report-invalid', 'check-failed'];
+const STOPPED = ['exec-report-invalid', 'exec-blocked', 'exec-no-progress', 'check-report-invalid', 'check-failed', 'authorization-exhausted', 'usage-unknown'];
 const NEXT = 'Run `node kit/scripts/launch-router-worker.mjs next --team-root <copy>` and make the call it names, with the placeholder as its text.';
 const EXEC_CONTRACT = '\n\n---\nFINAL REPORT (required). End your work with a final report that is one JSON object and nothing else:\n'
   + '{"outcome": "<what you did>", "blocked": <true if you could not complete the ticket>, "progress": <true if you changed or decided something>, "filesTouched": ["<repo-relative path>"]}\n';
@@ -42,7 +42,8 @@ const oneLine = (value, max) => JSON.stringify(value).replace(/[\u0000-\u001f\u0
 
 function replay(launch, events) {
   const plan = launch.args.plan, max = launch.args.maxAttemptsPerTicket ?? 1;
-  const tickets = plan.map(item => ({ ticket: item.ticket, status: 'not-dispatched', attempts: 0, due: 'exec', exec: { agentId: null, report: null }, check: { agentId: null, report: null } }));
+  const tickets = plan.map((item, index) => ({ ticket: item.ticket, status: 'not-dispatched', attempts: 0, due: 'exec', authorized: launch.runRecord?.items?.[index]?.authorizedTokens ?? null,
+    exec: { agentId: null, report: null, tokens: 0 }, check: { agentId: null, report: null, tokens: 0 } }));
   let pending = null;
   const calls = [];
   for (const event of events) {
@@ -57,6 +58,14 @@ function replay(launch, events) {
       if (event.agentType !== (pending.duty === 'exec' ? item.agentType : item.verifierAgentType) || (pending.mode === 'resume' && event.agentId !== slot.agentId)) continue;
       slot.agentId = event.agentId; slot.report = parseReport(event.message);
       Object.assign(calls.at(-1), { agentId: event.agentId, returned: true });
+      // The reading is cumulative for the agent's one transcript. `undefined` means no meter was attached;
+      // `null` means the meter could not read it, and an unknown spend admits no further call.
+      if (event.harnessTokens !== undefined) slot.tokens = event.harnessTokens;
+      const limit = () => {
+        if (entry.status === 'passed' || STOPPED.includes(entry.status)) return;
+        if (entry.exec.tokens === null || entry.check.tokens === null) entry.status = 'usage-unknown';
+        else if (entry.authorized !== null && entry.exec.tokens + entry.check.tokens >= entry.authorized) entry.status = 'authorization-exhausted';
+      };
       if (pending.duty === 'exec') { const outcome = execOutcome(slot.report); if (outcome === 'ok') entry.due = 'check'; else entry.status = outcome; }
       else {
         const outcome = checkOutcome(slot.report);
@@ -64,6 +73,7 @@ function replay(launch, events) {
         else if (outcome === 'fail' && entry.attempts < max) entry.due = 'exec';
         else entry.status = outcome === 'fail' ? 'check-failed' : outcome;
       }
+      limit();
       pending = null;
     }
   }
@@ -103,7 +113,7 @@ export function runSummary({ launch, events }) {
 }
 
 // PreToolUse decision. `event`, when present, is appended to the dispatch log by the caller.
-export function decideDispatch({ input, launch, events }) {
+export function decideDispatch({ input, launch, events, meter }) {
   const allow = event => ({ decision: 'allow', ...(event ? { event } : {}) }), deny = reason => ({ decision: 'deny', reason });
   const tool = input?.tool_name, fromAgent = typeof input?.agent_type === 'string';
   if (fromAgent) {
@@ -111,7 +121,8 @@ export function decideDispatch({ input, launch, events }) {
     if (tool !== 'SubagentHandback' || !intact(launch)) return allow();
     const wrappers = launch.args.plan.flatMap(item => [item.agentType, item.verifierAgentType]);
     if (!wrappers.includes(input.agent_type) || typeof input.agent_id !== 'string') return allow();
-    return allow({ type: 'returned', agentId: input.agent_id, agentType: input.agent_type, message: typeof input.tool_input?.message === 'string' ? input.tool_input.message : '' });
+    return allow({ type: 'returned', agentId: input.agent_id, agentType: input.agent_type, message: typeof input.tool_input?.message === 'string' ? input.tool_input.message : '',
+      ...(meter ? { harnessTokens: meter(input.agent_id) ?? null } : {}) });
   }
   if (!GATED.includes(tool)) return allow();
   if (!intact(launch)) return deny('This copy has no intact main-session launch record; no agent may be dispatched');

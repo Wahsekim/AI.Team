@@ -96,6 +96,30 @@ main session never handles a brief or a check report. `next` prints no brief
 text. A call with any other text is admitted only if it is exactly the one the
 gate would have written.
 
+## Limits during the run
+
+Two things bound a main-session run, and the gate enforces both:
+
+- **Calls**: at most `maxAttemptsPerTicket` attempts per ticket, each one exec
+  call and one check call.
+- **Usage per ticket**: every hand-back is recorded with the agent's usage so
+  far (input + cache_creation, read from its transcript with
+  `measure-spawn.mjs`). When the exec and check agents of a ticket together
+  reach the ticket's authorization, the ticket stops as
+  `authorization-exhausted` and no further call is admitted. A reading that
+  cannot be taken stops it as `usage-unknown`. A ticket that already passed is
+  not undone; settlement reports its overrun.
+
+The reading is taken when the agent hands back, before the runtime has written
+that last turn, so it lags by one turn (an agent that answers in a single turn
+reads 0). The limit is checked between calls: one call can overshoot it. The
+exact figures are those of `settle`.
+
+The output ceiling and the output estimate in `RUN.json` are NOT enforced in a
+main-session run: only the count engine meters output tokens. They are still
+required by run freezing, and the run record says so with `budget.enforced:
+false`. Main-session and governance usage are bounded by nothing.
+
 ## Closing and settling
 
 ```sh
@@ -133,8 +157,7 @@ unchanged. The run settlement has no Guardian term.
   observed on Claude Code 2.1.323 for `Agent` and `SendMessage`. On a runtime
   that ignores it the agent would receive the literal placeholder; its report
   would not be the contract JSON and the ticket would stop.
-- No usage limit yet: the retry cap bounds calls, nothing bounds tokens during
-  the run. A pending call whose agent dies has no hand-back and leaves the run
-  at `wait`.
+- A pending call whose agent dies has no hand-back and leaves the run at
+  `wait`.
 - No Guardian call. The Guardian audits an engine loop; what audits a
   main-session dispatch is not decided.

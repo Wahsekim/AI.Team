@@ -111,6 +111,29 @@ test('the main session sends a placeholder and the gate supplies the exact call,
   assert.equal(decideDispatch({ input: { tool_name: 'SendMessage', tool_input: { to: fix.to, message: fix.message } }, launch: launchRecord(), events: r.events }).updatedInput, undefined, 'an exact call is admitted as it is');
 });
 
+test('the gate stops a ticket that used up its authorization: usage is measured at every hand-back', () => {
+  const limited = () => launchRecord({ runRecord: { items: [{ ticket: 'T-1', authorizedTokens: 20000 }, { ticket: 'T-2', authorizedTokens: 20000 }] } });
+  const drive = usage => { const launch = limited(), events = [];
+    const back = (agentType, agentId, message) => events.push(decideDispatch({ input: { tool_name: 'SubagentHandback', agent_type: agentType, agent_id: agentId, tool_input: { message } }, launch, events, meter: id => usage[id] }).event);
+    const main = () => { const call = nextCall({ launch, events }); events.push(decideDispatch({ input: call.action === 'agent' ? { tool_name: 'Agent', tool_input: { subagent_type: 'x', prompt: PLACEHOLDER } } : { tool_name: 'SendMessage', tool_input: { to: 'x', message: PLACEHOLDER } }, launch, events }).event); return call; };
+    return { launch, events, back, main, next: () => nextCall({ launch, events }) }; };
+  const usage = { 'exec-a': 15000, 'check-a': 6000 }, r = drive(usage);
+  r.main(); r.back('sample-worker-exec', 'exec-a', execReport());
+  assert.equal(r.events.at(-1).harnessTokens, 15000, 'the reading is kept in the log');
+  assert.equal(r.next().duty, 'check', '15,000 of 20,000: the check may start');
+  r.main(); r.back('sample-worker-check', 'check-a', checkReport(false));
+  const end = r.next();
+  assert.equal(end.action, 'done', '21,000 of 20,000: no retry is dispatched');
+  assert.deepEqual(end.tickets.map(t => [t.ticket, t.status]), [['T-1', 'authorization-exhausted'], ['T-2', 'not-dispatched']]);
+  const passed = drive(usage); passed.main(); passed.back('sample-worker-exec', 'exec-a', execReport()); passed.main(); passed.back('sample-worker-check', 'check-a', checkReport(true));
+  assert.equal(passed.next().ticket, 'T-2', 'a ticket that passed is not undone by its usage; settlement reports the overrun');
+  const blind = drive({ 'exec-a': null }); blind.main(); blind.back('sample-worker-exec', 'exec-a', execReport());
+  assert.deepEqual(blind.next().tickets.map(t => t.status), ['usage-unknown', 'not-dispatched'], 'a reading that cannot be taken stops the ticket');
+  const resumed = drive({ 'exec-a': 9000, 'check-a': 4000 }); resumed.main(); resumed.back('sample-worker-exec', 'exec-a', execReport()); resumed.main(); resumed.back('sample-worker-check', 'check-a', checkReport(false));
+  resumed.main(); Object.assign(resumed.launch, {}); resumed.back('sample-worker-exec', 'exec-a', execReport());
+  assert.equal(resumed.next().duty, 'check', 'a resumed agent is read cumulatively, not added twice: 9,000 + 4,000');
+});
+
 test('calls the gate does not judge, and a launch record that is missing or changed', () => {
   const r = rig(), allow = input => decideDispatch({ input, launch: launchRecord(), events: r.events });
   assert.equal(allow({ tool_name: 'Bash', tool_input: { command: 'ls' } }).decision, 'allow');
@@ -137,6 +160,13 @@ test('the hook process keeps the dispatch log, exits 2 with the reason on a refu
   assert.equal(hook({ tool_name: 'SubagentHandback', agent_type: 'sample-worker-exec', agent_id: 'exec-a', tool_input: { message: execReport() } }).status, 0);
   const lines = readFileSync(join(team, DISPATCH_LOG), 'utf8').trim().split('\n').map(line => JSON.parse(line));
   assert.deepEqual(lines.map(line => [line.type, line.ticket ?? null, line.duty ?? null, line.agentId ?? null]), [['dispatched', 'T-1', 'exec', null], ['returned', null, null, 'exec-a']]);
+  const session = join(team, 'projects'), sub = join(session, 'sess-1/subagents'); mkdirSync(sub, { recursive: true });
+  writeFileSync(join(session, 'sess-1.jsonl'), ''); writeFileSync(join(sub, 'agent-check-a.meta.json'), JSON.stringify({ agentType: 'sample-worker-check', finished: false }));
+  writeFileSync(join(sub, 'agent-check-a.jsonl'), JSON.stringify({ type: 'assistant', isSidechain: true, agentId: 'check-a', requestId: 'r1',
+    message: { id: 'm1', model: 'm', role: 'assistant', content: [], usage: { input_tokens: 10, cache_creation_input_tokens: 4000, cache_read_input_tokens: 0, output_tokens: 5 } } }) + '\n');
+  hook({ tool_name: 'Agent', tool_input: { subagent_type: 'x', prompt: PLACEHOLDER } });
+  hook({ tool_name: 'SubagentHandback', agent_type: 'sample-worker-check', agent_id: 'check-a', session_id: 'sess-1', transcript_path: join(session, 'sess-1.jsonl'), tool_input: { message: checkReport(true) } });
+  assert.equal(JSON.parse(readFileSync(join(team, DISPATCH_LOG), 'utf8').trim().split('\n').at(-1)).harnessTokens, 4010, 'the hook reads the agent\'s transcript with the meter');
   assert.equal(hook('{broken').status, 2);
   assert.equal(hook({ tool_name: 'Read', tool_input: {} }).status, 0);
 });
