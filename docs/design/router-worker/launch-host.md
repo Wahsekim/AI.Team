@@ -142,41 +142,46 @@ gate was observed at call time; it will not catch a retry-cap breach inside a
 run, which the count engine cannot produce (one exec and at most one check per
 ticket).
 
-## Retries (owner decision 2026-11-14)
+## Retries
 
-Router/Worker is a parallel optional mode that stays in disposable copies; a
-real product repository may be run against only with a Bash sandbox.
+Owner decisions: Router/Worker is a parallel optional mode that stays in
+disposable copies; a real product repository may be run against only with a Bash
+sandbox; within the retry cap the SAME exec agent fixes its own work and the
+SAME check agent verifies again, with the check report going back to the router
+(2026-11-16).
 
-A retry happens inside the run. The frozen arguments carry
-`maxAttemptsPerTicket` (default 2: the first try and one retry; `RUN.json` may
-set 1 to 3). When a clean execution gets a failed verdict, the
-[count engine](../../engine.md) starts a fresh exec agent with the frozen brief
-plus the verifier's report as data, then a fresh check agent. Nothing is
-resumed, and the lease and the write boundary stay in place because the run has
-not ended. A ticket that still fails on its last attempt halts the run as before.
+Two live runs settled how that can be done:
 
-- `close` counts every attempt as a call (`account.calls`: `tickets`, `exec`,
-  `check`, `guard`; `account.attempts` per ticket) and refuses a return whose
-  attempt cap is not the frozen one or whose attempts exceed it.
-- `settle` expects, per ticket and attempt, the exec call and its check call,
-  each with its own transcript; the journal records a retry as a continuation
-  of the previous assignment in a declared fresh session, and the frozen brief
-  is checked in every attempt's transcript.
-- Every attempt spends against the one output ceiling and the one ticket
-  authorization. `estimatedOutputTokens` in `RUN.json` is therefore the worst
-  case with every allowed retry; freezing does not derive it.
-- Only the product state the run ended in is observed. The candidate of an
-  earlier attempt is named in the journal, not snapshotted.
+- E-04 (2026-11-16): the count engine retried SMOKE-05 with a fresh exec and a
+  fresh check agent and it passed. The retry cost about 34,000 input-side tokens
+  for a one-line fix, because fresh agents re-read the project.
+- A probe in the E-04 session: an agent the engine started cannot be resumed
+  (`SendMessage`: "No transcript found for agent ID"; its transcript lives under
+  `subagents/workflows/`). An agent started with the Agent tool can: a headless
+  probe on Claude Code 2.1.323 resumed one with `SendMessage`, its context was
+  intact, its turns were appended to the same transcript, and its tool calls
+  kept the same agent name and id in hook input. A `PreToolUse` hook sees and
+  can refuse both `Agent` and `SendMessage` calls of the main session.
+
+So a run with same-agent retries cannot be dispatched by the engine. It is
+dispatched by the copy's main session with the Agent tool, each call admitted by
+a hook against the frozen plan. That path is being built; until it exists, an
+engine run makes one attempt per ticket (`maxAttemptsPerTicket` default 1) and a
+failed check halts it.
+
+The engine's own retry with fresh agents stays available: `RUN.json` may set
+`maxAttemptsPerTicket` to 2 or 3. Then `close` counts every attempt as a call
+(`account.calls`: `tickets`, `exec`, `check`, `guard`; `account.attempts` per
+ticket), `settle` expects an exec and a check call per attempt, each with its
+own transcript, every attempt spends against the one output ceiling and the one
+ticket authorization, and only the product state the run ended in is observed.
 
 ### Continuation after the run (kept, not wired)
 
-Before the decision above, a retry was to be a continuation of the original
-session sent by the PM session of the copy. `launch-router-worker.mjs retry`
-and `isolation-router-worker.mjs --retry-of` remain in the tree for that path:
-they prepare an exec continuation after a closed and settled run whose check
-failed. Closing and settling such a continuation is not built, and whether a
-session can resume an agent a workflow started was never verified. Nothing in
-the run flow calls them.
+`launch-router-worker.mjs retry` and `isolation-router-worker.mjs --retry-of`
+prepare an exec continuation after a closed and settled engine run whose check
+failed. They assumed the engine-started agent could be resumed, which the probe
+above disproved. Nothing in the run flow calls them.
 
 ## What it does not do
 

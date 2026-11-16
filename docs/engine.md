@@ -344,7 +344,8 @@ in lifecycle headers).
   `results[i].priorAttempts` lists the earlier ones (worker and verification
   status, their own worker and verifier tokens, a short verifier summary).
   The lifecycle entry of a retried ticket states the attempt and the earlier
-  attempts' tokens. There is still one record and one lifecycle entry per
+  attempts' tokens. The guardian receives `priorAttempts` and
+  `allAttemptsTokens` per ticket, the figure that matches the spend trace. There is still one record and one lifecycle entry per
   ticket. `maxAttemptsPerTicket` is echoed at the top level.
 - **Guardian is fail-closed**: if the guardian throws, is skipped, or returns
   null, the engine STILL returns the full recovery package (results, queues,

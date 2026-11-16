@@ -216,10 +216,11 @@ test('CLI loads the pinned bundle of its own kit for a method-bearing input', t 
   assert.match(JSON.stringify(JSON.parse(out.stdout).args.plan[0]), /pstack-blast-radius/);
 });
 
-test('the run allows one retry per ticket by default; every attempt is a call the accounting counts', async t => {
-  const team = fixture(t), { args, record } = await freeze(team);
+test('an engine run makes one attempt per ticket unless the run asks for the fresh-agent retry; every attempt is a call the accounting counts', async t => {
+  const team = fixture(t);
+  assert.equal((await freeze(team)).args.maxAttemptsPerTicket, 1);
+  const { args, record } = await freeze(team, { maxAttemptsPerTicket: 2 });
   assert.equal(args.maxAttemptsPerTicket, 2); assert.equal(record.maxAttemptsPerTicket, 2);
-  assert.equal((await freeze(team, { maxAttemptsPerTicket: 1 })).args.maxAttemptsPerTicket, 1);
   for (const value of [0, 4, '2']) assert.equal((await freeze(team, { maxAttemptsPerTicket: value })).errors?.[0].code, 'INVALID_RUN', String(value));
   let checks = 0;
   const failOnce = makeAgentImpl({ verifier: () => ++checks === 1

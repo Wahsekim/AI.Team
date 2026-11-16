@@ -89,3 +89,16 @@ test('maxAttemptsPerTicket must be an integer from 1 to 3', async () => {
     assert.equal(result.errorCode, 'invalid-args', String(value)); assert.equal(calls.length, 0)
   }
 })
+
+test('the guardian is given every attempt\'s tokens, so a retried ticket does not read as an accounting gap', async () => {
+  const budget = makeBudget(), impl = agents([fail, pass])
+  const spend = (prompt, opts, index) => { if (opts.agentType !== 'proj-chaos') budget.bump(1000 * index); return impl(prompt, opts, index) }
+  const { calls } = await run({ maxAttemptsPerTicket: 2, rounds: 1, plan: [item('T-1')] }, spend, { budgetImpl: budget })
+  const guardian = calls.at(-1).prompt
+  assert.match(guardian, /maxAttemptsPerTicket=2/)
+  const facts = JSON.parse(guardian.match(/\[\n \{[\s\S]*?\n\]/)[0])[0]
+  assert.equal(facts.attempts, 2); assert.equal(facts.workerTokens, 3000); assert.equal(facts.verifierTokens, 4000)
+  assert.deepEqual(facts.priorAttempts, [{ attempt: 1, workerTokens: 1000, verifierTokens: 2000 }])
+  assert.equal(facts.allAttemptsTokens, 10000, 'the figure that matches the spend trace')
+  assert.match(guardian, /allAttemptsTokens/)
+})
