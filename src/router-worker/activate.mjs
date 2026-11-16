@@ -16,16 +16,17 @@ const UNRESOLVED = ['live-runtime-evidence', 'independent-sessions', 'runtime-to
   'disposable-product-clone', 'owner-attended-ceilings', 'session-resume-for-retries'];
 const ACTIVE = 'Activated for one owner-approved disposable smoke run';
 // Every inactive marker the draft writes, by file class. Each must be found exactly once.
-const REWRITES = [
+const rewritesFor = ({ active, description, roster }) => [
   [/^\.claude\/agents\/[^/]+\.md$/, [
-    [/^description: "Inactive Router\/Worker (.+) draft; requires approved activation"$/m, 'description: "Router/Worker $1; disposable smoke activation"'],
-    ['Do not run from this draft. Runtime activation is not implemented.', `${ACTIVE}. Work only from a frozen assignment issued by the PM.`]]],
+    [/^description: "Inactive Router\/Worker (.+) draft; requires approved activation"$/m, `description: "Router/Worker $1; ${description}"`],
+    ['Do not run from this draft. Runtime activation is not implemented.', `${active}. Work only from a frozen assignment issued by the PM.`]]],
   [/^agents\/worker-(exec|check|guard)\.md$/, [
-    ['This is an inactive deployment draft. Do not dispatch until owner mappings and runtime gates pass.', `${ACTIVE}; every admission gate still applies to each call.`]]],
-  [/^agents\/router-worker-(contract|router)\.md$/, [['INACTIVE DRAFT. ', `${ACTIVE}. `]]],
+    ['This is an inactive deployment draft. Do not dispatch until owner mappings and runtime gates pass.', `${active}; every admission gate still applies to each call.`]]],
+  [/^agents\/router-worker-(contract|router)\.md$/, [['INACTIVE DRAFT. ', `${active}. `]]],
   [/^agents\/roster\.md$/, [
-    ['INACTIVE: ADR 0008 ratifies topology equivalence, not this deployment; project coverage and runtime evidence remain required.', `${ACTIVE}; this roster is not the project's standing roster.`]]],
+    ['INACTIVE: ADR 0008 ratifies topology equivalence, not this deployment; project coverage and runtime evidence remain required.', `${active}; ${roster}`]]],
 ];
+const SMOKE = { active: ACTIVE, description: 'disposable smoke activation', roster: "this roster is not the project's standing roster." };
 
 class Refusal extends Error { constructor(code, reason) { super(reason); this.code = code; } }
 const need = (condition, code, reason) => { if (!condition) throw new Refusal(code, reason); };
@@ -46,15 +47,16 @@ function readApproval(path, expectedDigest, spec, draft) {
   return approval;
 }
 
-function rewrite(copy, paths) {
-  for (const path of paths) for (const [, edits] of REWRITES.filter(([pattern]) => pattern.test(path))) {
-    let text = readFileSync(join(copy, path), 'utf8');
+// Turns the draft's inactive files under `root` into live ones. Throws when a marker is missing or duplicated.
+export function makeLive(root, paths, phrases) {
+  for (const path of paths) for (const [, edits] of rewritesFor(phrases).filter(([pattern]) => pattern.test(path))) {
+    let text = readFileSync(join(root, path), 'utf8');
     for (const [from, to] of edits) {
       const found = typeof from === 'string' ? text.split(from).length - 1 : (text.match(new RegExp(from.source, 'gm')) ?? []).length;
       need(found === 1, 'ACTIVATION_REFUSED', `${path}: expected exactly one inactive marker, found ${found}`);
       text = text.replace(from, to);
     }
-    writeFileSync(join(copy, path), text);
+    writeFileSync(join(root, path), text);
   }
 }
 
@@ -76,7 +78,7 @@ export function activateTeam(input, artifact, activePath, { teamRoot = ROOT, ins
     need(staged.unstaffed.length === 0, 'ACTIVATION_REFUSED',
       `Enabled workflow duties are unstaffed: ${staged.unstaffed.map(entry => `${entry.workflow}/${entry.role}`).slice(0, 8).join(', ')}`);
 
-    rewrite(candidate, Object.keys(draft.files));
+    makeLive(candidate, Object.keys(draft.files), SMOKE);
     const activation = { scope: SCOPE, approvalFileDigest: expectedApprovalDigest, specDigest: digest(spec), draftDigest: draft.digest, acceptedUnknowns: approval.acceptedUnknowns };
     const mode = { ...JSON.parse(draft.files['profiles/team-mode.json']), status: STATUS, launchable: true, activation };
     writeFileSync(join(candidate, 'profiles/team-mode.json'), JSON.stringify(mode, null, 2) + '\n');

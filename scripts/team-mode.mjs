@@ -1,8 +1,31 @@
-import { readFileSync, statSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { readFileSync, statSync, writeSync } from 'node:fs';
+import { resolve, join } from 'node:path';
 import { parseJSON } from '../src/loop/contracts.mjs';
 import { draftTeam, writeDraft, verifyDraft } from '../src/router-worker/draft.mjs';
 import { stageTeam } from '../src/router-worker/stage.mjs';
+
+import { proposeSwitch, switchMode } from '../src/router-worker/switch.mjs';
+
+// switch <specialist|router-worker> <REQUEST.json> --instance <root> --product-root <product> [--confirm <proposal digest>]
+// Without --confirm it prints the proposal and changes nothing (exit 2); the owner confirms it by its digest.
+if (process.argv[2] === 'switch') {
+  const [, to, file, ...rest] = process.argv.slice(2), options = {};
+  for (let i = 0; i < rest.length; i += 2) options[rest[i]] = rest[i + 1];
+  const known = Object.keys(options).every(key => ['--instance', '--product-root', '--confirm'].includes(key)) && Object.values(options).every(Boolean);
+  if (!to || !file || !known || !options['--instance'] || !options['--product-root']) {
+    console.error('usage: node scripts/team-mode.mjs switch <specialist|router-worker> <REQUEST.json> --instance <instance-root> --product-root <product-root> [--confirm <proposal digest>]   (REQUEST.json: {"spec"?: {...}, "limits"?: {...}})');
+    process.exit(1);
+  }
+  let request;
+  try { request = JSON.parse(readFileSync(file, 'utf8')); } catch { request = null; }
+  const common = { to, request, teamRoot: join(resolve(options['--instance']), 'kit'), instanceRoot: resolve(options['--instance']), productRoot: resolve(options['--product-root']) };
+  const result = request === null ? { errors: [{ code: 'SWITCH_REFUSED', field: 'switch', reason: 'REQUEST.json is not readable JSON' }] }
+    : options['--confirm'] ? switchMode({ ...common, confirm: options['--confirm'] }) : proposeSwitch(common);
+  if (result.errors) { writeSync(2, JSON.stringify(result) + '\n'); process.exit(2); }
+  // Written synchronously: process.exit would cut a pending pipe write short.
+  writeSync(1, JSON.stringify(result, null, 2) + '\n');
+  process.exit(result.stage === 'mode-switched' ? 0 : 2);
+}
 
 const argv = process.argv.slice(2), flag = argv.indexOf('--instance');
 const instance = flag === -1 ? [] : argv.splice(flag, 2).slice(1);
