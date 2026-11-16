@@ -238,7 +238,6 @@ node kit/scripts/arm-boundary-router-worker.mjs RUN.json --team-root ACTIVE_COPY
 node kit/scripts/launch-router-worker.mjs prepare RUN.json --team-root ACTIVE_COPY --product-root PRODUCT_ROOT
 node kit/scripts/launch-router-worker.mjs close RESULT.json --team-root ACTIVE_COPY
 node kit/scripts/launch-router-worker.mjs settle RESULT.json METER.json --team-root ACTIVE_COPY
-node kit/scripts/launch-router-worker.mjs retry REQUEST.json --team-root ACTIVE_COPY
 node kit/scripts/launch-router-worker.mjs next --team-root ACTIVE_COPY
 node kit/scripts/settle-run-router-worker.mjs REQUEST.json
 node kit/scripts/stack-source-router-worker.mjs --root . INPUT.json
@@ -263,9 +262,7 @@ product, and the host must present the ownership lease it holds on the product. 
 file in the product's Git directory, outside the work tree, so a second host or
 team root is refused until it is released by its digest. A lease never expires
 and is never taken over automatically. Only `clear` (exit 0) admits a call; a
-draft wrapper always observes as `blocked`. With `--retry-of`, a product whose
-uncommitted state is exactly the candidate of a close record is admitted for a
-retry. Session independence and runtime
+draft wrapper always observes as `blocked`. Session independence and runtime
 enforcement are not observed
 ([details](docs/design/router-worker/isolation-observation.md)).
 
@@ -328,8 +325,7 @@ and `settle` read the gate's log instead of an engine return. Its decisions are 
 lease dispatches nothing, and the gate
 stops a ticket that used up its authorization; the output ceiling of `RUN.json`
 is not enforced in such a run. Not yet run with the real wrappers
-([details](docs/design/router-worker/main-session-dispatch.md)); the `retry`
-command belongs to an earlier, unwired design. No call is admitted one by one
+([details](docs/design/router-worker/main-session-dispatch.md)). No call is admitted one by one
 during a run
 ([details](docs/design/router-worker/launch-host.md)).
 

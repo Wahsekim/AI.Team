@@ -10,7 +10,6 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { prepareLaunch, closeLaunch, LAUNCH_FILE, CLOSE_FILE } from '../src/router-worker/launch.mjs';
 import { EXPORT_FILE } from '../src/router-worker/export.mjs';
 import { settleLaunch, SETTLE_FILE } from '../src/router-worker/launch-settle.mjs';
-import { prepareRetry } from '../src/router-worker/launch-retry.mjs';
 import { loadRetryRules, inspectRetryJournal } from '../src/router-worker/retries.mjs';
 import { candidateOf } from '../src/router-worker/closed-candidate.mjs';
 import { nextCall, decideDispatch, DISPATCH_LOG, PLACEHOLDER } from '../src/router-worker/dispatch.mjs';
@@ -203,7 +202,6 @@ test('close accounts the engine return against the launch record, lists the prod
   assert.ok(closed.unresolved.includes('usage-settlement'));
   assert.deepEqual(closed.ignoredChanges, { count: 0, topLevel: {} });
   assert.deepEqual(closed.candidate, candidateOf(f.product), 'the product state the run ended in');
-  assert.equal(observeIsolation({ teamRoot: f.team, productRoot: f.product, lease: acquireLease({ teamRoot: f.team, productRoot: f.product }).lease.digest, retryOf: closed.digest }).status, 'clear');
   assert.deepEqual(closed.hookLog, { calls: 0, wrapperCalls: 0, wrapperBashCalls: 0, denied: 0, callsWithoutAgentType: 0, unreadableLines: 0 }, 'no hook ran under the mock engine, and the record says so');
   assert.equal(refusal(f.close()).code, 'LAUNCH_REFUSED', 'a launch is closed once');
 });
@@ -334,6 +332,7 @@ test('a blocked worker whose returned work was checked settles as a stopped tick
   assert.equal(settled.run.tickets[0].ticketId, 'US-08'); assert.equal(settled.run.runGate, 'clear');
 });
 
+const failingCheck = { verifier: () => ({ pass: false, staticPass: false, e2ePass: true, summary: 'one test fails', commandsRun: [{ command: 'npm test', exitCode: 1 }], failures: ['tag list test'] }) };
 test('a ticket that passed on its retry settles as four calls of one ticket, each attempt in its own session', async t => {
   let checks = 0;
   const twice = { run: { ...RUN, maxAttemptsPerTicket: 2 } };
@@ -375,66 +374,6 @@ test('CLI settles from RESULT.json and METER.json; exit 0 clear, 2 review or ref
   const ok = run('settle', result, meter, '--team-root', f.team);
   assert.equal(ok.status, 0, ok.stderr); assert.equal(JSON.parse(ok.stdout).status, 'clear');
   assert.equal(run('settle', result, meter, '--team-root', f.team).status, 2);
-});
-
-// Retry after a failed check: prepared by the launch host, sent by the PM session of the copy.
-const failingCheck = { verifier: () => ({ pass: false, staticPass: false, e2ePass: true, summary: 'one test fails', commandsRun: [{ command: 'npm test', exitCode: 1 }], failures: ['tag list test'] }) };
-async function failed(t, agents = failingCheck, overrides = {}, options = {}, meterOptions = {}) {
-  // This path continues a ticket after the run, so the run itself is frozen without the in-loop retry.
-  const f = await ran(t, agents, { run: { ...RUN, maxAttemptsPerTicket: 1 }, ...overrides }, options); write(f.product, 'src/tag-list/view.ts', 'export const x = 2;\n');
-  // An instance is settled, and later retried, under the rules of its own charter.
-  const own = options.instance ? loadRetryRules({ instanceRoot: f.team }) : rules;
-  // By default the first round leaves room for a retry: 9,020 of 24,000 spent, 6,000 estimated for the rework.
-  const closed = f.close(), settled = settle(f, metered(f, { tokens: { exec1: 6000, check1: 3000, guard1: 5000 }, ...meterOptions }), { rules: own });
-  assert.equal(settled.errors, undefined, JSON.stringify(settled.errors));
-  const request = (overrides = {}) => {
-    const input = inputFixture();
-    input.proposal.assignmentId = 'US-08.exec.2'; input.proposal.checkAssignmentId = 'US-08.check.2'; input.baseline.candidateRef = closed.candidate;
-    return { input, divergence: { reason: 'The failed check named the tag list test; fix the empty-state branch', evidenceRef: { id: 'rw-settlement', digest: settled.digest } }, ...overrides };
-  };
-  return { ...f, closed, settled, request, retry: (overrides = {}) => prepareRetry({ teamRoot: f.team, request: request(), rules: own, ...overrides }) };
-}
-
-test('retry prepare compiles the continuation from the kept journal, takes the lease and admits the closed candidate', async t => {
-  const f = await failed(t), result = f.retry();
-  assert.equal(result.errors, undefined, JSON.stringify(result.errors));
-  assert.equal(result.stage, 'retry-prepared'); assert.equal(result.ticket, 'US-08'); assert.equal(result.duty, 'exec'); assert.equal(result.attempt, 2);
-  assert.equal(result.continuationOf, 'US-08.exec.1'); assert.equal(result.resumeAgentId, 'exec1', 'the agent the PM session resumes');
-  assert.equal(result.wrapper, 'sample-worker-exec'); assert.match(result.renderedBrief, /US-08\.exec\.1/);
-  assert.equal(result.closeDigest, f.closed.digest); assert.equal(result.settlementDigest, f.settled.digest);
-  const held = readLease({ productRoot: f.product });
-  assert.equal(held.status, 'held'); assert.equal(result.lease, held.lease.digest);
-  const state = inspectRetryJournal({ journal: result.journal, rules });
-  assert.deepEqual(state.assignments.at(-1), { ...state.assignments.at(-1), assignmentId: 'US-08.exec.2', status: 'prepared', attempt: 2 });
-  const { digest: recorded, ...body } = result;
-  assert.equal(recorded, digest(body)); assert.deepEqual(JSON.parse(readFileSync(join(f.team, 'rw-retry-1.json'), 'utf8')), result);
-  assert.ok(!JSON.stringify(result).includes(f.base), 'no host path in the record');
-  assert.equal(refusal(f.retry()).code, 'LAUNCH_REFUSED', 'one retry is pending at a time');
-  assert.equal(readLease({ productRoot: f.product }).lease.digest, result.lease);
-});
-
-test('retry prepare refuses and takes nothing when the ticket may not be retried or the product moved', async t => {
-  const passed = await failed(t, {});
-  assert.equal(refusal(passed.retry()).code, 'RETRY_STOPPED', 'a passing check is not retried'); assert.equal(passed.leased(), 'free');
-  const moved = await failed(t); writeFileSync(join(moved.product, 'src/tag-list/view.ts'), 'edited after close\n');
-  assert.match(refusal(moved.retry()).reason, /CANDIDATE_NOT_ADMITTED/); assert.equal(moved.leased(), 'free');
-  assert.equal(existsSync(join(moved.team, 'rw-retry-1.json')), false);
-  const narrow = inputFixture(); narrow.mandate.allowedWritePaths = ['src/tag-list/**']; narrow.proposal.expectedPaths = ['src/tag-list/view.ts'];
-  const wider = await failed(t, failingCheck, { inputs: [narrow] });
-  assert.match(refusal(wider.retry()).reason, /write boundary/, 'the retry asks for paths the run was not armed for'); assert.equal(wider.leased(), 'free');
-  const stale = await failed(t), other = stale.request(); other.input.baseline.candidateRef = { id: 'another', digest: digest('another') };
-  assert.equal(refusal(stale.retry({ request: other })).code, 'STALE_CANDIDATE');
-  const unsettled = await ran(t, failingCheck); unsettled.close();
-  assert.match(refusal(prepareRetry({ teamRoot: unsettled.team, request: passed.request(), rules })).reason, /settled/);
-});
-
-test('CLI prepares a retry from REQUEST.json; exit 0 prepared, 2 refused, 1 usage', async t => {
-  const f = await failed(t, failingCheck, {}, { instance: true }), file = join(f.base, 'retry.json'), run = (...argv) => spawnSync(process.execPath, [CLI, ...argv], { encoding: 'utf8' });
-  writeFileSync(file, JSON.stringify(f.request()));
-  assert.equal(run('retry', file).status, 1);
-  const ok = run('retry', file, '--team-root', f.team);
-  assert.equal(ok.status, 0, ok.stderr); assert.equal(JSON.parse(ok.stdout).stage, 'retry-prepared');
-  assert.equal(run('retry', file, '--team-root', f.team).status, 2);
 });
 
 // A main-session run: the dispatch log is written here the way the gate hook writes it.
@@ -537,7 +476,7 @@ test('settle of a main-session run binds each agent by the id the gate recorded 
   assert.match(refusal(settleLaunch({ teamRoot: missing.team, rules, meter: meteredAgents(missing, { 'exec-a': ['sample-worker-exec', prompts.exec, 9000] }) })).reason, /check-a/);
 });
 
-test('CLI settle and retry take their rules from the charter of the copy, through the kit that serves the command', async t => {
+test('CLI settle takes its rules from the charter of the copy, through the kit that serves the command', async t => {
   const run = (...argv) => spawnSync(process.execPath, [CLI, ...argv], { encoding: 'utf8' });
   const drifted = await ran(t, {}, {}, { instance: true }), result = join(drifted.base, 'result.json'), meter = join(drifted.base, 'meter.json');
   drifted.close(); writeFileSync(result, JSON.stringify(drifted.result)); writeFileSync(meter, JSON.stringify(metered(drifted)));
@@ -556,33 +495,6 @@ test('CLI settle and retry take their rules from the charter of the copy, throug
   const mainSession = await dispatchedRun(t, retried, { instance: true }); mainSession.close();
   writeFileSync(join(mainSession.team, 'charter.md'), '# rewritten\n'); writeFileSync(meter, '{}');
   assert.match(run('settle', meter, '--team-root', mainSession.team).stderr, /RETRY_RULE_REVIEW_REQUIRED/, 'the main-session form too');
-  const retry = await failed(t, failingCheck, {}, { instance: true }), request = join(retry.base, 'retry.json'); writeFileSync(request, JSON.stringify(retry.request()));
-  writeFileSync(join(retry.team, 'charter.md'), '# rewritten\n');
-  assert.match(run('retry', request, '--team-root', retry.team).stderr, /RETRY_RULE_REVIEW_REQUIRED/); assert.equal(retry.leased(), 'free');
-});
-
-test('retry preparation keeps the settled budget stop: it admits a retry only when the kept ledger leaves room for it', async t => {
-  const spent = tokens => failed(t, failingCheck, {}, {}, { tokens: { ...tokens, guard1: 5000 } });
-  const refused = async (f, pattern, request) => {
-    const result = f.retry(request ? { request } : {});
-    assert.equal(refusal(result)?.code, 'RETRY_BUDGET_REFUSED', JSON.stringify(result).slice(0, 300)); assert.match(refusal(result).reason, pattern);
-    assert.equal(f.leased(), 'free', 'no lease is taken'); assert.equal(existsSync(join(f.team, 'rw-retry-1.json')), false, 'no retry record is written');
-  };
-  const overrun = await spent({ exec1: 20000, check1: 11000 });
-  assert.equal(overrun.settled.ticketRecords[0].settlement.budgetGate, 'blocked', '31,020 of 24,000');
-  await refused(overrun, /authorization-exhausted/);
-  const tight = await spent({ exec1: 12000, check1: 9000 });
-  assert.equal(tight.settled.ticketRecords[0].settlement.budgetGate, 'clear', '21,020 of 24,000 settles clear');
-  await refused(tight, /insufficient-remaining/);
-  const raised = tight.request(); raised.input.mandate.budgetTokens = 23999;
-  await refused(tight, /authorization/, raised);
-  const roomy = await spent({ exec1: 3000, check1: 2000 }), prepared = roomy.retry();
-  assert.equal(prepared.errors, undefined, JSON.stringify(prepared.errors)); assert.equal(prepared.stage, 'retry-prepared');
-  assert.deepEqual(prepared.budget, { unit: 'input+cache_creation', authorizedTokens: 24000, spentTokens: 5020, remainingTokens: 18980, nextEstimateTokens: prepared.budget.nextEstimateTokens, gate: 'clear' });
-  assert.ok(prepared.budget.nextEstimateTokens > 0 && prepared.budget.nextEstimateTokens <= 18980);
-  const last = prepared.journal.events.at(-1);
-  assert.equal(last.type, 'prepare'); assert.equal(last.admission.gates.budget, 'clear'); assert.equal(last.admission.gates['runtime-isolation'], 'clear');
-  assert.deepEqual(prepared.admissionObserved, ['budget', 'runtime-isolation'], 'the record says which gates this command observed');
 });
 
 test('close exports what the run changed as one patch that rebuilds the candidate on a clean checkout', async t => {

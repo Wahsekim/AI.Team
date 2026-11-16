@@ -130,12 +130,12 @@ node kit/scripts/measure-spawn.mjs <session-dir> --json > METER.json
 node kit/scripts/launch-router-worker.mjs settle RESULT.json METER.json --team-root <activated copy>
 ```
 
-The retry rules used by `settle` and `retry` are those of the copy: its own
+The retry rules used by `settle` are those of the copy: its own
 `charter.md`, read through the kit that serves the command. A copy that is not a
 two-root instance of that kit is refused (`RETRY_RULES_REFUSED`), and a charter
 whose retry wording changed is refused (`RETRY_RULE_REVIEW_REQUIRED`) before
-anything is settled or admitted. The journal carries the digest of those rules,
-so a retry after a charter change is refused as well.
+anything is settled. The retry journal that `settle` writes carries the digest
+of those rules.
 
 `<session-dir>` is the Claude Code session directory of the launching session.
 Exit 0 settled clear, 2 refused or settled with something to review, 1 usage.
@@ -206,22 +206,14 @@ ticket), `settle` expects an exec and a check call per attempt, each with its
 own transcript, every attempt spends against the one output ceiling and the one
 ticket authorization, and only the product state the run ended in is observed.
 
-### Continuation after the run (kept, not wired)
+### Continuation after an engine run (removed)
 
-`launch-router-worker.mjs retry` and `isolation-router-worker.mjs --retry-of`
-prepare an exec continuation after a closed and settled engine run whose check
-failed. They assumed the engine-started agent could be resumed, which the probe
-above disproved. Nothing in the run flow calls them.
-
-`retry` admits on budget from what the ticket already spent: the kept ledger,
-the kept journal and the rework estimate of the request, settled together. It
-refuses (`RETRY_BUDGET_REFUSED`), before the lease is taken or anything is
-written, when that settlement is blocked or unknown (authorization exhausted,
-not enough left for the estimate, partial or unknown usage) and when the request
-names another authorization than the one the ticket was settled with. The retry
-record carries the budget figures and `admissionObserved`: this command observes
-the budget and runtime-isolation gates; the other gates of the journal are
-recorded clear without an observation (`unobserved-admission-gates`).
+An earlier design continued a ticket after an engine run by resuming its exec
+agent from the main session (`launch-router-worker.mjs retry`,
+`isolation-router-worker.mjs --retry-of`). The probe above showed that an
+engine-started agent cannot be resumed, so the path could not work; it was
+removed ([ADR 0010](../../../decisions/0010-router-worker-second-mode.md),
+decision 16). A failed ticket of an engine batch goes to the PM.
 
 ## What it does not do
 

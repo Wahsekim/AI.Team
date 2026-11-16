@@ -3,7 +3,6 @@ import { resolve, join, dirname } from 'node:path';
 import { digest } from '../loop/contracts.mjs';
 import { git, inside, canonicalDirectory, isRepositoryRoot, readLease } from './lease.mjs';
 import { boundaryGap } from './write-boundary.mjs';
-import { isClosedCandidate } from './closed-candidate.mjs';
 import { gateGap } from './dispatch-arm.mjs';
 
 // Rollout gate G-02. Observes what a host can check without a live runtime and
@@ -19,7 +18,7 @@ const NOT_OBSERVED = ['independent-sessions', 'runtime-tool-enforcement', 'canar
 
 const exists = path => Boolean(lstatSync(path, { throwIfNoEntry: false }));
 
-function observeProduct(product, team, add, retryOf) {
+function observeProduct(product, team, add) {
   if (!isRepositoryRoot(product)) { add('PRODUCT_NOT_REPOSITORY_ROOT', 'blocked', 'the product root is not the top of its own Git repository'); return null; }
   if (inside(team, product) || inside(product, team)) add('PRODUCT_NOT_SEPARATE', 'blocked', 'the team root and the product root contain one another');
   const head = git(product, 'rev-parse', 'HEAD')?.trim() ?? null;
@@ -27,14 +26,8 @@ function observeProduct(product, team, add, retryOf) {
   const status = git(product, 'status', '--porcelain', '--ignored');
   if (status === null) { add('PRODUCT_STATE_UNREADABLE', 'unknown', 'git status failed'); return head; }
   const lines = status.split('\n').filter(Boolean), ignored = lines.filter(line => line.startsWith('!!')).length;
-  // A retry starts from the candidate its launch was closed with: that state, and only that state, is explained.
-  if (retryOf !== undefined) {
-    if (!isClosedCandidate({ teamRoot: team, productRoot: product, closeDigest: retryOf }))
-      add('CANDIDATE_NOT_ADMITTED', 'blocked', 'the product is not the candidate of the presented close record, or that record is missing or changed');
-  } else {
-    if (lines.length - ignored) add('PRODUCT_DIRTY', 'blocked', `${lines.length - ignored} uncommitted or untracked path(s): existing work is unexplained`);
-    if (ignored) add('IGNORED_PATHS_PRESENT', 'unknown', `${ignored} ignored path(s) exist: writes there are invisible to the candidate diff`);
-  }
+  if (lines.length - ignored) add('PRODUCT_DIRTY', 'blocked', `${lines.length - ignored} uncommitted or untracked path(s): existing work is unexplained`);
+  if (ignored) add('IGNORED_PATHS_PRESENT', 'unknown', `${ignored} ignored path(s) exist: writes there are invisible to the candidate diff`);
   const gitDir = git(product, 'rev-parse', '--absolute-git-dir')?.trim();
   const busy = gitDir ? IN_PROGRESS.filter(name => exists(join(gitDir, name))) : [];
   if (busy.length) add('PRODUCT_OPERATION_IN_PROGRESS', 'blocked', `Git operation or lock in progress: ${busy.join(', ')}`);
@@ -119,11 +112,11 @@ function acceptedUnknowns(team) {
   } catch { return []; }
 }
 
-export function observeIsolation({ teamRoot, productRoot, lease, retryOf, dispatch }) {
+export function observeIsolation({ teamRoot, productRoot, lease, dispatch }) {
   try {
     const team = canonicalDirectory(teamRoot, 'Team root'), product = canonicalDirectory(productRoot, 'Product root');
     const findings = [], add = (code, severity, detail) => findings.push({ code, severity, detail });
-    const head = observeProduct(product, team, add, retryOf), wrappers = observeWrappers(team, add);
+    const head = observeProduct(product, team, add), wrappers = observeWrappers(team, add);
     observeOwnership(product, team, lease, add);
     observeSettings([['team', team], ['product', product]], add);
     const gap = boundaryGap({ teamRoot: team, productRoot: product, wrappers });
@@ -136,7 +129,7 @@ export function observeIsolation({ teamRoot, productRoot, lease, retryOf, dispat
     findings.sort((a, b) => a.code.localeCompare(b.code) || a.detail.localeCompare(b.detail));
     const status = findings.some(f => f.severity === 'blocked') ? 'blocked' : findings.some(f => f.severity === 'unknown') ? 'unknown' : 'clear';
     const body = { schemaVersion: 1, gate: 'runtime-isolation', status, product: { root: product, head }, teamRoot: team, wrappers,
-      lease: lease ?? null, ...(retryOf === undefined ? {} : { retryOf }), findings, notObserved: NOT_OBSERVED };
+      lease: lease ?? null, findings, notObserved: NOT_OBSERVED };
     return { ...body, digest: digest(body) };
   } catch (error) { return { errors: [{ code: 'INVALID_ISOLATION_OBSERVATION', field: 'isolation', reason: error.message }] }; }
 }
