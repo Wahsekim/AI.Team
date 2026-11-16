@@ -8,6 +8,7 @@ used on a real team. It changes which team is live; it does not run a batch.
 node kit/scripts/team-mode.mjs switch router-worker REQUEST.json --instance . --product-root <product>
 node kit/scripts/team-mode.mjs switch router-worker REQUEST.json --instance . --product-root <product> --confirm <digest>
 node kit/scripts/team-mode.mjs switch specialist    REQUEST.json --instance . --product-root <product> [--confirm <digest>]
+node kit/scripts/team-mode.mjs switch recover --instance .
 ```
 
 `REQUEST.json` is `{"spec"?, "limits"?}`: the Router/Worker team spec that
@@ -30,11 +31,15 @@ Without `--confirm` the command prints a proposal and changes nothing:
 | `dispatch` | `engine` |
 | `pack` | the files that go on holiday |
 | `install` | the files that are put in place |
+| `kept` | files of the new team that are already there and stay as they are (shared governance role files) |
 | `digest` | the digest of the proposal |
 
-The owner confirms by running the same command with `--confirm <digest>`. A
-digest that is not the current proposal is refused (`SWITCH_NOT_CONFIRMED`): the
-team, the kit or the request changed since the proposal was read.
+The owner confirms by running the same command with `--confirm <digest>`. The
+proposal is computed again at that moment; a digest that is not the current
+proposal is refused (`SWITCH_NOT_CONFIRMED`): the team, the kit or the request
+changed since the proposal was read. The digest covers the lists of files and,
+for a packed team, the digest of its manifest. It does not cover the content of
+files outside those lists.
 
 ## What moves
 
@@ -42,18 +47,26 @@ A mode's own files:
 
 | Mode | Its own files |
 |---|---|
-| specialist | `agents/roster.md`; every wrapper under `.claude/agents/`; the role file of each roster role that is not the PM or a governance role; `profiles/team-mode.json` if there is one |
-| Router/Worker | the files the switch wrote: roster, the three worker role files, the Router/Worker contract and router supplement, all wrappers, `profiles/team-mode.json` |
+| specialist | `agents/roster.md`; everything under `.claude/agents/`, subfolders included; for each row of the roster's role table whose role is not the PM or a governance role, the file its "Role file" column names; `profiles/team-mode.json` if there is one |
+| Router/Worker | `agents/roster.md`; the three worker role files; the Router/Worker contract and router supplement; everything under `.claude/agents/`, including a wrapper added while the mode was live; `profiles/team-mode.json` |
 
 They are moved to `holiday/<mode>/`, with a `manifest.json` listing each path
 and its digest. Nothing else moves: charter, decisions, ledgers, lessons,
 memory, profiles, the PM and governance role files stay where they are. A
-governance role file the instance already has is kept as the instance wrote it.
+governance role file is shared: one the switch had to create stays live in both
+modes, and one the instance already had is kept as the instance wrote it
+(`kept` in the proposal).
+
+The roster is read by its table header ("Role id", "Role file"), with or without
+backticks or emphasis around a cell. A profile or a manifest that names a file
+outside these sets, such as the charter or a ledger, is refused, not obeyed.
 
 A folder under `holiday/` is outside `.claude/agents/`, so the runtime cannot
 dispatch a packed wrapper.
 
 ## Into Router/Worker mode
+
+The first time, from a spec:
 
 1. The team is drafted from the spec and a full copy is staged and validated in
    a scratch directory. A draft that does not validate, or an enabled workflow
@@ -67,29 +80,58 @@ dispatch a packed wrapper.
    back and the switch is refused.
 5. One line is appended to `pm-decisions.md`.
 
+Every later time, the packed Router/Worker team comes back as it was packed,
+edits included: a model changed in the roster, a wrapper that was added. It is
+not drafted again. The deployment validator still runs where the team stands,
+because the kit may have changed while the team was packed; a kit upgrade is
+then handled as for any live team. A request that brings another spec while a
+packed team exists is refused: move `holiday/router-worker` away first to draft
+a new team.
+
 ## Back to specialist mode
 
 The packed specialist team is checked against its manifest first: a file that is
 missing or was edited under `holiday/specialist/` refuses the switch. The
-Router/Worker files are packed, with the spec and limits in their manifest, and
-the specialist files are moved back. They come back byte for byte, so the
-deployment validator is not run again: the team is the one that was packed.
+Router/Worker files are packed and the specialist files are moved back. They
+come back byte for byte, so the deployment validator is not run again.
 
-Switching to Router/Worker again drafts the team afresh from the kept spec with
-the kit as it is then, so an upgraded kit is taken into account; the proposal
-shows the staffing again for confirmation.
+After a team is unpacked its holiday folder is removed. Anything else found in
+that folder is left where it is and reported (`leftInHoliday`).
+
+## The product repository
+
+The team is bound to the product repository its Router/Worker spec names; the
+`--product-root` given must be that one, in both directions. The switch is
+refused when that repository has uncommitted or untracked changes (the first ten
+paths are listed), a Git operation in progress, or a lock held by a batch. The
+switch takes that lock itself for its own length, so no batch can start half-way.
+
+## A switch that fails or dies
+
+Before the first file moves, the switch writes a journal
+(`holiday/.switch-in-progress.json`) naming every file it will pack and every
+file it will put in place. If a later step fails, the journal is used to put
+everything back, and the lock is released. If the process dies, the journal
+stays: every further proposal or switch is refused (`SWITCH_INTERRUPTED`) until
+
+```sh
+node kit/scripts/team-mode.mjs switch recover --instance .
+```
+
+rolls the interrupted switch back. Only files the journal names are touched, and
+a file is moved back only where its place is empty.
 
 ## Refusals (`SWITCH_REFUSED`)
 
 - The team is already in that mode, or the mode is unknown.
 - The deployment is not in the two-root layout. The message points to
   `scripts/migrate-to-instance.sh`.
-- The product root is not the top of a Git repository, has uncommitted or
-  untracked changes (the first ten paths are listed), or carries a lock: a batch
-  is open.
-- The spec names another product root than the one given.
+- The product repository is not the one the team is bound to, or is not at rest
+  (above).
 - `holiday/<mode>/` for the mode being left already exists: a packed team is
-  never overwritten.
+  never overwritten, and the folder is not touched.
+- A file is in the way of the team being put in place.
+- A mode profile or manifest names a file that cannot belong to that mode.
 
 ## Not covered
 
