@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, appendFileSync, rmSync, lstatSync, mkdirSync, renameSync, copyFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync, rmSync, lstatSync, mkdirSync, renameSync, copyFileSync, realpathSync, readdirSync } from 'node:fs';
 import { join, resolve, relative, isAbsolute, sep } from 'node:path';
 import { digest, bytesDigest } from '../loop/contracts.mjs';
 import { instanceOf } from './roots.mjs';
@@ -52,13 +52,19 @@ export function changedPaths(product) {
   return [...new Set(paths)].sort();
 }
 
-// Where the repository's commit hooks live, as a path inside the product; null when they are in .git or outside it.
-// A worker that could write there would run code as the PM at the next commit.
-export function hooksPathOf(product) {
-  const configured = git(product, 'config', '--get', 'core.hooksPath')?.trim();
-  if (!configured) return null;
-  const inside = relative(product, isAbsolute(configured) ? configured : resolve(product, configured));
-  return inside && !inside.startsWith('..') && !isAbsolute(inside) ? inside.split(sep).join('/') : null;
+// The repository's commit hooks: the folder Git runs them from, with links resolved, the paths inside the
+// product a ticket must not write (the folder, and its parent when it is husky's `_` stub folder), and a
+// digest of its files. Workers run as the PM's user: this finds a hook that was written or moved during a
+// batch; it cannot find a hook that calls a script the worker edited.
+export function hooksOf(product) {
+  const configured = git(product, 'config', '--get', 'core.hooksPath')?.trim(), gitDir = git(product, 'rev-parse', '--absolute-git-dir')?.trim();
+  let folder = configured ? (isAbsolute(configured) ? configured : resolve(product, configured)) : gitDir ? join(gitDir, 'hooks') : null;
+  try { folder = folder && realpathSync(folder); } catch { /* a folder that does not exist holds no hook */ }
+  const inside = path => { const rel = relative(product, path); return rel && !rel.startsWith('..') && !isAbsolute(rel) ? rel.split(sep).join('/') : null; };
+  const guarded = folder ? [inside(folder), folder.endsWith(`${sep}_`) ? inside(resolve(folder, '..')) : null, configured && !isAbsolute(configured) ? configured.replace(/\/+$/, '') : null].filter(Boolean) : [];
+  let files = [];
+  try { files = readdirSync(folder, { withFileTypes: true }).filter(entry => entry.isFile() || entry.isSymbolicLink()).map(entry => { try { return [entry.name, bytesDigest(readFileSync(join(folder, entry.name)))]; } catch { return [entry.name, null]; } }).sort(([a], [b]) => a.localeCompare(b)); } catch { /* no folder */ }
+  return { configured: configured || null, guarded: [...new Set(guarded.filter(path => !path.startsWith('.git/') && path !== '.git'))], digest: digest({ configured: configured || null, files }) };
 }
 // The content of each path as it stands: a digest for a file, null for anything else.
 export const contentOf = (product, paths) => Object.fromEntries(paths.map(path => {
@@ -181,8 +187,8 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     const closed = readBoundary(instance);
     need(closed && closed.productRoot === productRoot, 'The write-boundary file is missing or was changed. It is rebuilt by a mode switch: team-mode.mjs switch specialist, then switch router-worker');
     need(Object.values(closed.wrappers).every(entry => entry.writePaths.length === 0), 'The write boundary is open: an earlier batch was not closed. Clear it with: rw-batch.mjs abort --instance <instance-root>');
-    const hooksPath = hooksPathOf(productRoot), hooked = hooksPath ? batch.tickets.flatMap(ticket => ticket.paths.filter(path => overlap(path, hooksPath) || overlap(path, `${hooksPath}/**`))) : [];
-    need(!hooked.length, `The repository's commit hooks live in ${hooksPath}; no ticket writes there (${hooked.slice(0, 5).join(', ')}): a hook runs as the PM at the next commit`);
+    const hooks = hooksOf(productRoot), hooked = batch.tickets.flatMap(ticket => ticket.paths.filter(path => hooks.guarded.some(guard => overlap(path, guard) || overlap(path, `${guard}/**`))));
+    need(!hooked.length, `The repository's commit hooks live in ${hooks.guarded.join(', ')}; no ticket writes there (${hooked.slice(0, 5).join(', ')}): a hook runs as the PM at the next commit`);
     const wrappers = Object.fromEntries(Object.entries(closed.wrappers).map(([name, entry]) => [entry.duty, name]));
 
     const runId = batch.runId ?? `rw-${product.head.slice(0, 8)}-L${batch.nextLifecycleNumber}`;
@@ -212,7 +218,7 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     opened = true;
     const at = new Date().toISOString();
     const body = { schemaVersion: 1, stage: 'batch-open', runId: frozen.args.runId, openedAt: at, productRoot, productHead: product.head, branch: product.branch,
-      startedAsIs: startAsIs === true, preexisting: product.preexisting, preexistingContent: contentOf(productRoot, product.preexisting), hooksPath, lease, boundaryDigest: boundary.digest, isolationDigest: isolation.digest,
+      startedAsIs: startAsIs === true, preexisting: product.preexisting, preexistingContent: contentOf(productRoot, product.preexisting), hooks, lease, boundaryDigest: boundary.digest, isolationDigest: isolation.digest,
       limits, ceiling: { outputTokens: ceiling, stopLine: Math.floor(ceiling * 4 / 5) },
       tickets: batch.tickets.map((ticket, i) => ({ id: ticket.id, title: ticket.title, commitMessage: ticket.commitMessage ?? `${ticket.id}: ${ticket.title}`, paths: ticket.paths, expectedPaths: inputs[i].proposal.expectedPaths })),
       sensitivePaths: batch.sensitivePaths, verificationCommands: batch.verificationCommands,
@@ -245,12 +251,18 @@ export function abortBatch({ teamRoot, instanceRoot }) {
     need(!exists(join(instance, JOURNAL)), 'A mode switch was interrupted; roll it back first with: team-mode.mjs switch recover --instance <instance-root>');
     const record = readJSON(join(instance, BATCH_FILE)), held = readLease({ productRoot }), boundary = readBoundary(instance);
     const ours = held.status === 'held' && held.lease.teamRoot === instance, open = boundary ? Object.values(boundary.wrappers).some(entry => entry.writePaths.length > 0) : false;
-    // A batch that after closed and commit cannot finish: its records are archived, nothing is committed.
+    // A batch that after claimed or closed and commit cannot finish: the boundary is closed and the lock released
+    // if after did not get that far, its records are archived, and nothing is committed.
     if (exists(join(instance, AFTER_FILE))) {
-      const closedRecord = readJSON(join(instance, BATCH_FILE)), id = typeof closedRecord?.runId === 'string' && RUN_ID.test(closedRecord.runId) && !exists(join(instance, ARCHIVE, closedRecord.runId)) ? closedRecord.runId : `unreadable-${Date.now()}`;
-      const stamp = new Date().toISOString(), note = { schemaVersion: 1, stage: 'batch-archived-without-commit', runId: id, archivedAt: stamp,
-        next: 'Nothing was committed by the kit. What the batch changed is still in the product work tree: commit it by hand on the working branch, or discard it.' };
-      appendFileSync(join(instance, LEDGER), `${stamp.slice(0, 10)} BATCH ${id} ARCHIVED WITHOUT COMMIT by rw-batch.mjs abort: the batch was closed by after and not committed by the kit. Its changes are still in the product work tree.\n`);
+      if (open) closeBoundary({ teamRoot: instance });
+      if (ours) { const released = releaseLease({ productRoot, lease: held.lease.digest }); need(!released.errors, `The lock could not be released: ${released.errors?.[0]?.reason}`); }
+      const id = typeof record?.runId === 'string' && RUN_ID.test(record.runId) && !exists(join(instance, ARCHIVE, record.runId)) ? record.runId : `unreadable-${Date.now()}`;
+      // Commits the kit already made for this batch are named: they are on the branch and stay there.
+      const made = (readJSON(join(instance, PROGRESS_FILE))?.commits ?? []).filter(commit => typeof commit?.ticket === 'string' && TICKET_ID.test(commit.ticket) && /^[a-f0-9]{40}$/.test(commit?.sha ?? '')).map(commit => `${commit.ticket} ${commit.sha.slice(0, 8)}`);
+      const work = made.length ? `${made.length} commit(s) were already made by the kit and stay on the branch (${made.join(', ')}); the rest of what the batch changed is still in the product work tree` : 'Nothing was committed by the kit; what the batch changed is still in the product work tree';
+      const stamp = new Date().toISOString(), note = { schemaVersion: 1, stage: 'batch-archived-without-commit', runId: id, archivedAt: stamp, commitsMade: made, boundary: boundary ? 'closed' : 'not-restored', lockReleased: ours,
+        next: `${work}: commit it by hand on the working branch, or discard it.${boundary ? '' : ' The write-boundary file is missing or was changed: a mode switch to specialist and back rebuilds it.'}` };
+      appendFileSync(join(instance, LEDGER), `${stamp.slice(0, 10)} BATCH ${id} ARCHIVED WITHOUT COMMIT by rw-batch.mjs abort: the batch was not finished by the kit. ${work}.\n`);
       archiveBatch(instance, id, { 'abandoned.json': { ...note, digest: digest(note) } }, { 'batch.json': BATCH_FILE, 'after.json': AFTER_FILE, 'commits.json': PROGRESS_FILE });
       return { ...note, digest: digest(note) };
     }

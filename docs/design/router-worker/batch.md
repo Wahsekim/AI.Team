@@ -123,7 +123,7 @@ opened.
    | `NESTED_REPOSITORY` | a worker created a Git repository inside the product; Git would commit a link to it, not its files | the folder is left uncommitted |
    | `PREEXISTING_PATH_CHANGED` | a path that was already changed when the batch started as is was changed again | not held; the path is never committed |
    | `LEDGER_NOT_WRITTEN` | `pm-decisions.md` could not be appended | not held |
-   | `HOOKS_PATH_CHANGED`, `HOOKS_WRITTEN` | the repository's commit hooks were moved, or a path under them was changed: a hook runs as the PM at the next commit | all held |
+   | `HOOKS_CHANGED` | the folder Git runs commit hooks from was moved, or a file in it was added, removed or changed since the batch opened | all held |
    | `BOUNDARY_CHANGED` | the write-boundary file is not the one the batch opened | all held |
    | `PRODUCT_HEAD_MOVED`, `PRODUCT_BRANCH_CHANGED` | someone committed or changed branch during the batch | all held |
    | `GUARDIAN_NOT_CLEAN` | the Guardian did not answer, or did not find the run clean | all held |
@@ -143,8 +143,11 @@ opened.
 
 The close is claimed before anything is changed. A second `after` on the same
 batch is refused while the first is under a minute old; an `after` that died is
-taken up by the next call, which recognises the boundary it already closed and
-the lock it already released.
+taken up by the next call, which recognises the boundary it already closed
+(the batch's own three workers, no write path) and the lock it already
+released. A claim with no readable time, or one from the future, counts as
+dead. The take-over is not exclusive: an `after` that runs for more than a
+minute could be taken over while it still runs.
 
 "All held" means the kit commits nothing of that batch: what ran is not what
 was frozen, and the PM or the owner judges it by hand.
@@ -156,7 +159,8 @@ tickets, then moves the batch's records to `batches/<run id>/` and appends one
 line to `pm-decisions.md`. It takes the lock for its length. It pushes nothing.
 
 - It refuses when the product is no longer on the batch's branch, when a Git
-  operation is in progress, when the commit hooks were moved, when the work
+  operation is in progress, when the commit hooks were changed or moved, when
+  an archive of this batch was already started, when the work
   tree is not exactly what `after` saw, or when the branch is not the batch's
   starting commit plus the commits this command itself made.
 - The plan is derived again from the tickets: a path is committed only inside
@@ -165,15 +169,18 @@ line to `pm-decisions.md`. It takes the lock for its length. It pushes nothing.
   exactly the ticket's paths. A commit hook that adds or drops paths stops the
   batch there; the commit is left as it is.
 - Paths are given to Git literally, on standard input: no pattern, no limit on
-  their number. Ambient `GIT_*` variables are ignored. Staged deletions and
-  renames made by a worker are committed.
+  their number. Staged deletions and renames made by a worker are committed.
 - A path that was changed before the batch (start as is) is never in a commit,
   staged or not.
 - The repository's own commit hooks run. If one refuses a commit, the commits
   already made stay, the batch stays open, and running `commit` again makes
   only what is missing. The commits made are recorded by their ids
   (`rw-batch-commits.json`), so a hook that rewrites messages does not confuse
-  the resume.
+  the resume. Each recorded commit is checked again to hold its ticket's paths.
+  A commit made just before the command died, and so never recorded, is taken
+  up when it is the next planned one.
+- A commit is made with the repository's identity, or the one given in
+  `GIT_AUTHOR_*` and `GIT_COMMITTER_*`. Every other `GIT_*` variable is ignored.
 - A `commit` that died after archiving the batch is finished by the next call.
 - What is not committed stays in the work tree and is listed (`left`): a ticket
   that did not pass, a path outside every ticket. The next "before" then
@@ -186,11 +193,28 @@ repository's Git identity ([ADR 0007](../../../decisions/0007-pm-only-commits.md
 
 A batch that `after` closed and `commit` refuses (all commits held, the branch
 moved, a hook changed a commit, the records were edited) is not stuck:
-`abort` archives its records under `batches/<run id>/` with a note, writes
-"ARCHIVED WITHOUT COMMIT" to `pm-decisions.md`, and commits nothing. What the
-batch changed is still in the product work tree; the PM or the owner commits it
-by hand on the working branch, or discards it. The next "before" then needs a
+`abort` closes the write boundary and releases the lock if `after` did not get
+that far, archives the records under `batches/<run id>/` with a note, writes
+"ARCHIVED WITHOUT COMMIT" to `pm-decisions.md`, and commits nothing. Commits
+the kit had already made for the batch stay on the branch and are named. The
+rest of what the batch changed is still in the product work tree; the PM or the
+owner commits it by hand on the working branch, or discards it. The next "before" then needs a
 clean repository or "start as is", as after any batch that left paths behind.
+
+## Commit hooks
+
+A commit runs the repository's hooks, as the PM's user. "Before" records where
+Git runs them from (links resolved) and a digest of the files there, and
+refuses a ticket that would write in that folder, in the folder a link to it
+points at, or beside husky's `_` stub folder. `after` holds every commit of a
+batch during which a hook file appeared, changed or was moved, also in
+`.git/hooks`, and `commit` checks again.
+
+This finds a hook that was written or moved. It does not find a hook that calls
+a script a worker edited (`npm test`, a lint script): such a hook runs the
+worker's code at commit time. Workers already run as the PM's user with no
+sandbox ([ADR 0010](../../../decisions/0010-router-worker-second-mode.md),
+decision 3), so this adds no access they did not have during the batch.
 
 ## What these commands trust
 

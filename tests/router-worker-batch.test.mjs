@@ -1,11 +1,11 @@
 // ADR 0010, decisions 8 to 12: the command a PM runs before a batch in a standing Router/Worker team.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, readFileSync, existsSync, mkdirSync, rmSync, appendFileSync, readdirSync, chmodSync } from 'node:fs';
+import { writeFileSync, readFileSync, existsSync, mkdirSync, rmSync, appendFileSync, readdirSync, chmodSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { beforeBatch, abortBatch, BATCH_FILE, AFTER_FILE } from '../src/router-worker/batch.mjs';
-import { afterBatch, commitBatch } from '../src/router-worker/batch-close.mjs';
+import { afterBatch, commitBatch, HOLD_ALL } from '../src/router-worker/batch-close.mjs';
 import { runWorkflow, makeAgentImpl } from '../scripts/lib/workflow-harness.mjs';
 import { readLease, acquireLease, releaseLease } from '../src/router-worker/lease.mjs';
 import { observeIsolation } from '../src/router-worker/isolation.mjs';
@@ -161,8 +161,11 @@ test('CLI: before prints the batch record with the preflight manifest chained in
 });
 
 // A batch run by the real engine with mock agents; `edits` is what the workers leave in the product.
-async function ran(t, { tickets, agents = {}, edits = {}, hook = true, extra = {} }) {
-  const f = live(t), open = await f.before(batchOf(...tickets), extra);
+async function ran(t, { tickets, agents = {}, edits = {}, hook = true, extra = {}, hooks = () => ({}) }) {
+  const f = live(t);
+  // Commit hooks the repository had before the batch; one written later is a finding.
+  for (const [name, script] of Object.entries(hooks(f))) writeFileSync(join(f.product, '.git/hooks', name), script, { mode: 0o755 });
+  const open = await f.before(batchOf(...tickets), extra);
   assert.equal(open.errors, undefined, JSON.stringify(open.errors));
   const { result } = await runWorkflow({ scriptPath: join(f.root, '.claude/workflows/run-n-rounds.js'), args: open.args, agentImpl: makeAgentImpl(agents) });
   for (const [path, text] of Object.entries(edits)) { mkdirSync(join(f.product, path, '..'), { recursive: true }); writeFileSync(join(f.product, path), text); }
@@ -238,15 +241,16 @@ test('after refuses a return that is not this batch\'s and changes nothing; find
 });
 
 test('commit refuses when the product changed after the batch was closed, keeps paths changed before the batch out of every commit, and resumes after a failure', async t => {
-  const f = await ran(t, { tickets: two, edits: { 'src/app.js': 'export const x = 2;\n', 'src/api/tags.js': 'tags\n' } });
+  const blocking = f => ({ 'pre-commit': `#!/bin/sh\n[ -e "${join(f.base, 'block')}" ] && git diff --cached --name-only | grep -q tags.js && exit 1\nexit 0\n` });
+  const f = await ran(t, { tickets: two, edits: { 'src/app.js': 'export const x = 2;\n', 'src/api/tags.js': 'tags\n' }, hooks: blocking });
   assert.equal(f.after().errors, undefined);
   writeFileSync(join(f.product, 'src/app.js'), 'export const x = 3;\n'); writeFileSync(join(f.product, 'src/late.js'), 'late\n');
   assert.match(refusal(f.commit()).reason, /changed since the batch was closed/); assert.deepEqual(f.log(), []); assert.equal(readLease({ productRoot: f.product }).status, 'free');
   rmSync(join(f.product, 'src/late.js'));
   // A commit hook that refuses the second commit: the first stays, and a second run makes only what is missing.
-  writeFileSync(join(f.product, '.git/hooks/pre-commit'), '#!/bin/sh\ngit diff --cached --name-only | grep -q tags.js && exit 1\nexit 0\n', { mode: 0o755 });
+  writeFileSync(join(f.base, 'block'), '');
   assert.match(refusal(f.commit()).reason, /git commit failed for ticket US-02 \(1 of 2 made\)/); assert.deepEqual(f.log(), ['US-01: Ticket US-01']); assert.ok(existsSync(join(f.root, BATCH_FILE)));
-  rmSync(join(f.product, '.git/hooks/pre-commit'));
+  rmSync(join(f.base, 'block'));
   const done = f.commit();
   assert.equal(done.errors, undefined, JSON.stringify(done.errors)); assert.deepEqual(f.log(), ['US-01: Ticket US-01', 'feat(api): tags endpoint']); assert.equal(done.commits.length, 2);
 
@@ -290,24 +294,36 @@ test('commit handles what a worker did through Git: a staged deletion, a staged 
   assert.match(names, /D\tlib\/one\.js/); assert.match(names, /D\tlib\/mv\.js/); assert.match(names, /A\tlib\/moved\.js/); assert.equal(names.trim().split('\n').length, 303);
 });
 
-test('commit never runs a hook a worker wrote, never carries another ticket\'s path, and never writes into another repository', async t => {
-  // Hooks kept in the work tree: no ticket may write there, and a batch that touched them is held.
+test('a commit hook written or moved during a batch holds it; a hook that stages more than the ticket is found out; another repository in the environment is ignored', async t => {
+  // Hooks kept in the work tree, in the layouts teams use: no ticket may write where they live.
   const husky = live(t); git(husky.product, 'config', 'core.hooksPath', '.husky');
   assert.match(refusal(await husky.before(batchOf(ticket('US-01', ['.husky/**'], { expectedPaths: ['.husky/pre-commit'] })))).reason, /commit hooks live in \.husky; no ticket writes there/);
-  const held = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n' } });
-  git(held.product, 'config', 'core.hooksPath', 'hooks'); const moved = held.after();
-  assert.ok(moved.findings.some(finding => finding.code === 'HOOKS_PATH_CHANGED')); assert.equal(moved.holdAll, true);
-  // A hook that stages more than the ticket's paths: the commit is found out and the batch stops there.
-  const greedy = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n', 'src/api/tags.js': 'tags\n' } });
+  const nine = live(t); mkdirSync(join(nine.product, '.husky/_'), { recursive: true }); git(nine.product, 'config', 'core.hooksPath', '.husky/_');
+  assert.match(refusal(await nine.before(batchOf(ticket('US-01', ['.husky/pre-commit'])))).reason, /no ticket writes there/, 'husky 9: the stub folder runs the scripts beside it');
+  const linked = live(t); mkdirSync(join(linked.product, 'tools/githooks'), { recursive: true }); symlinkSync('tools/githooks', join(linked.product, 'hooks')); git(linked.product, 'config', 'core.hooksPath', 'hooks');
+  git(linked.product, 'add', '-A'); git(linked.product, 'commit', '-q', '-m', 'hooks');
+  assert.match(refusal(await linked.before(batchOf(ticket('US-01', ['tools/githooks/**'], { expectedPaths: ['tools/githooks/pre-commit'] })))).reason, /no ticket writes there/, 'the folder the link points to');
+  // A hook that appears in .git/hooks during the batch, as a worker's shell could write it; and a hooks path that is moved.
+  const written = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n' } });
+  writeFileSync(join(written.product, '.git/hooks/pre-commit'), '#!/bin/sh\ntouch /tmp/never\n', { mode: 0o755 });
+  const caught = written.after(); assert.ok(caught.findings.some(finding => finding.code === 'HOOKS_CHANGED')); assert.equal(caught.holdAll, true); assert.deepEqual(caught.commits, []);
+  const moved = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n' } }); git(moved.product, 'config', 'core.hooksPath', 'hooks');
+  assert.ok(moved.after().findings.some(finding => finding.code === 'HOOKS_CHANGED'));
+  const late = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n' } }); assert.equal(late.after().status, 'clean');
+  writeFileSync(join(late.product, '.git/hooks/pre-commit'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  assert.match(refusal(late.commit()).reason, /commit hooks were changed or moved/); assert.deepEqual(late.log(), []);
+  // A hook the repository already had that stages more than the ticket's paths: the commit is found out and the batch stops there.
+  const greedy = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n', 'src/api/tags.js': 'tags\n' }, hooks: () => ({ 'pre-commit': '#!/bin/sh\ngit add -A\n' }) });
   assert.equal(greedy.after().errors, undefined);
-  writeFileSync(join(greedy.product, '.git/hooks/pre-commit'), '#!/bin/sh\ngit add -A\n', { mode: 0o755 });
   assert.match(refusal(greedy.commit()).reason, /does not hold exactly that ticket's paths.*rw-batch\.mjs abort/);
-  // An ambient GIT_DIR pointing elsewhere is ignored.
+  // An ambient GIT_DIR pointing elsewhere is ignored; an identity given in the environment is kept.
   const other = join(greedy.base, 'elsewhere'); mkdirSync(other); git(other, 'init', '-q'); git(other, 'commit', '-q', '--allow-empty', '-m', 'other');
   const env = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n' } }); assert.equal(env.after().errors, undefined);
-  process.env.GIT_DIR = join(other, '.git'); t.after(() => { delete process.env.GIT_DIR; });
-  const done = env.commit(); delete process.env.GIT_DIR;
+  Object.assign(process.env, { GIT_DIR: join(other, '.git'), GIT_AUTHOR_NAME: 'PM Session', GIT_AUTHOR_EMAIL: 'pm@example.invalid', GIT_COMMITTER_NAME: 'PM Session', GIT_COMMITTER_EMAIL: 'pm@example.invalid' });
+  const clear = () => { for (const key of ['GIT_DIR', 'GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL', 'GIT_COMMITTER_NAME', 'GIT_COMMITTER_EMAIL']) delete process.env[key]; }; t.after(clear);
+  const done = env.commit(); clear();
   assert.equal(done.errors, undefined, JSON.stringify(done.errors)); assert.deepEqual(env.log(), ['US-01: Ticket US-01']); assert.equal(git(other, 'log', '--format=%s').trim(), 'other');
+  assert.equal(git(env.product, 'log', '-1', '--format=%an <%ae>').trim(), 'PM Session <pm@example.invalid>');
 });
 
 test('after reports a repository created inside the product and a path from before the batch that was changed again', async t => {
@@ -327,11 +343,11 @@ test('after reports a repository created inside the product and a path from befo
 test('commit resumes by the commits it recorded, and refuses a branch that is not the batch\'s start plus those', async t => {
   assert.match(refusal(await live(t).before(batchOf(ticket('US-01', ['src/a.js'], { commitMessage: 'feat: x ' })))).reason, /no space at either end/);
   // A hook that rewrites the subject does not confuse the resume.
-  const f = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n', 'src/api/tags.js': 'tags\n' } }); assert.equal(f.after().errors, undefined);
-  writeFileSync(join(f.product, '.git/hooks/prepare-commit-msg'), '#!/bin/sh\nprintf "[auto] %s" "$(cat "$1")" > "$1"\n', { mode: 0o755 });
-  writeFileSync(join(f.product, '.git/hooks/pre-commit'), '#!/bin/sh\ngit diff --cached --name-only | grep -q tags.js && exit 1\nexit 0\n', { mode: 0o755 });
+  const f = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n', 'src/api/tags.js': 'tags\n' }, hooks: g => ({ 'prepare-commit-msg': '#!/bin/sh\nprintf "[auto] %s" "$(cat "$1")" > "$1"\n',
+    'pre-commit': `#!/bin/sh\n[ -e "${join(g.base, 'block')}" ] && git diff --cached --name-only | grep -q tags.js && exit 1\nexit 0\n` }) });
+  assert.equal(f.after().errors, undefined); writeFileSync(join(f.base, 'block'), '');
   assert.match(refusal(f.commit()).reason, /git commit failed for ticket US-02 \(1 of 2 made\)/);
-  rmSync(join(f.product, '.git/hooks/pre-commit'));
+  rmSync(join(f.base, 'block'));
   const done = f.commit(); assert.equal(done.errors, undefined, JSON.stringify(done.errors)); assert.deepEqual(f.log(), ['[auto] US-01: Ticket US-01', '[auto] feat(api): tags endpoint']);
   assert.deepEqual(readdirSync(join(f.root, 'batches', f.open.runId)).sort(), ['after.json', 'batch.json', 'commit.json', 'commits.json']);
   // The branch rewound between after and commit.
@@ -367,9 +383,10 @@ test('after is taken up again after a death, refuses a second caller, and is not
 
 test('a commit that died after archiving is finished by the next call; nothing in a record the PM can write reaches a path, the ledger or a commit unchecked', async t => {
   const f = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n' } }); assert.equal(f.after().errors, undefined);
-  const batch = readFileSync(join(f.root, BATCH_FILE), 'utf8'), done = f.commit(); assert.equal(done.errors, undefined);
-  writeFileSync(join(f.root, BATCH_FILE), batch);
-  assert.deepEqual(f.commit(), done, 'the archived result is returned'); assert.equal(existsSync(join(f.root, BATCH_FILE)), false); assert.deepEqual(f.log(), ['US-01: Ticket US-01']);
+  // The records leave the root one after another, the batch record first: a death in between leaves the after record.
+  const closedText = readFileSync(join(f.root, AFTER_FILE), 'utf8'), done = f.commit(); assert.equal(done.errors, undefined);
+  writeFileSync(join(f.root, AFTER_FILE), closedText);
+  assert.deepEqual(f.commit(), done, 'the archived result is returned'); assert.equal(existsSync(join(f.root, AFTER_FILE)), false); assert.deepEqual(f.log(), ['US-01: Ticket US-01']);
 
   // The engine return says "done" for a ticket whose own record says it failed.
   let checks = 0;
@@ -385,4 +402,65 @@ test('a commit that died after archiving is finished by the next call; nothing i
   const stray = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n', 'stray.txt': 's\n' } }), closed = stray.after();
   writeFileSync(join(stray.root, AFTER_FILE), JSON.stringify(sealAgain({ ...closed, commits: [{ ...closed.commits[0], paths: ['src/app.js', 'stray.txt'] }], left: [] })));
   assert.match(refusal(stray.commit()).reason, /plans a commit that is not a passed ticket's own paths/); assert.deepEqual(stray.log(), []);
+});
+
+test('each finding that questions the run holds every commit; each check of commit refuses on its own', async t => {
+  assert.deepEqual([...HOLD_ALL].sort(), ['BOUNDARY_CHANGED', 'GUARDIAN_NOT_CLEAN', 'HOOKS_CHANGED', 'PRODUCT_BRANCH_CHANGED', 'PRODUCT_HEAD_MOVED']);
+  const edits = { 'src/app.js': 'x\n' }, holds = (closed, code) => { assert.ok(closed.findings.some(finding => finding.code === code), `${code}: ${JSON.stringify(closed.findings)}`); assert.equal(closed.holdAll, true); assert.deepEqual(closed.commits, []); };
+  const boundary = await ran(t, { tickets: two, edits }), file = join(boundary.root, '.claude/rw-write-boundary.json'), body = (({ digest: _old, ...rest }) => rest)(JSON.parse(readFileSync(file, 'utf8')));
+  const widened = { ...body, wrappers: { ...body.wrappers, 'tag-list-fixture-worker-exec': { duty: 'exec', writePaths: ['**'] } } };
+  writeFileSync(file, JSON.stringify({ ...widened, digest: digest(widened) })); holds(boundary.after(), 'BOUNDARY_CHANGED');
+  const branch = await ran(t, { tickets: two, edits }); git(branch.product, 'checkout', '-q', '-b', 'elsewhere'); holds(branch.after(), 'PRODUCT_BRANCH_CHANGED');
+  const guard = await ran(t, { tickets: two, edits, agents: { guardian: () => ({ verdict: 'runaway', findings: ['the worker looped'], summary: 'not clean' }) } }); holds(guard.after(), 'GUARDIAN_NOT_CLEAN');
+  // A lock another team holds when the batch ends, and hook log lines from before the batch opened.
+  const stolen = await ran(t, { tickets: two, edits }); releaseLease({ productRoot: stolen.product, lease: stolen.open.lease }); acquireLease({ teamRoot: fixture(t).root, productRoot: stolen.product });
+  assert.ok(stolen.after().findings.some(finding => finding.code === 'LOCK_NOT_HELD_BY_THIS_BATCH'));
+  const old = live(t); appendFileSync(join(old.root, '.claude/rw-write-boundary.log.jsonl'), JSON.stringify({ at: '2020-01-01T00:00:00.000Z', tool: 'Edit', agentType: 'tag-list-fixture-worker-exec', decision: 'allow' }) + '\n');
+  const opened = await old.before(batchOf(...two)), { result } = await runWorkflow({ scriptPath: join(old.root, '.claude/workflows/run-n-rounds.js'), args: opened.args, agentImpl: makeAgentImpl({}) });
+  writeFileSync(join(old.product, 'src/app.js'), 'x\n');
+  assert.ok(afterBatch({ teamRoot: old.kit, instanceRoot: old.root, result }).findings.some(finding => finding.code === 'HOOK_SAW_NO_WORKER'), 'a line from an earlier batch does not count');
+  // A ticket that did not pass says why.
+  const failed = await ran(t, { tickets: two, edits, agents: { verifier: () => ({ pass: false, staticPass: false, e2ePass: false, summary: 'no', commandsRun: [{ command: 'npm test', exitCode: 1 }], failures: ['x'] }) } });
+  const first = failed.after().tickets[0]; assert.equal(first.status, 'not-passed'); assert.equal(first.verificationStatus, 'failed'); assert.equal(typeof first.workerStatus, 'string');
+
+  const onBranch = await ran(t, { tickets: two, edits }); assert.equal(onBranch.after().errors, undefined); git(onBranch.product, 'checkout', '-q', '-b', 'side');
+  assert.match(refusal(onBranch.commit()).reason, /no longer on the batch's branch/);
+  const busy = await ran(t, { tickets: two, edits }); assert.equal(busy.after().errors, undefined); writeFileSync(join(busy.product, '.git/MERGE_HEAD'), 'x\n');
+  assert.match(refusal(busy.commit()).reason, /Git operation is in progress/);
+  const edited = await ran(t, { tickets: two, edits }), closed = edited.after();
+  writeFileSync(join(edited.root, AFTER_FILE), JSON.stringify({ ...closed, holdAll: false, status: 'clean' }).replace('"review"', '"clean"').replace(closed.closedAt, '2020-01-01T00:00:00.000Z'));
+  assert.match(refusal(edited.commit()).reason, /was changed, or belongs to another batch/);
+});
+
+test('abort after a claimed or closed batch always frees the team; a forged archive never stands in for a commit', async t => {
+  // An after that died right after its claim, whatever the claim says about its time.
+  for (const claimedAt of [new Date().toISOString(), undefined, '2999-01-01T00:00:00.000Z']) {
+    const f = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n' } });
+    writeFileSync(join(f.root, AFTER_FILE), JSON.stringify({ stage: 'batch-closing', runId: f.open.runId, claimedAt }));
+    if (claimedAt === undefined || claimedAt.startsWith('2999')) { const resumed = f.after(); assert.equal(resumed.errors, undefined, `a claim with no usable time is taken up: ${JSON.stringify(resumed.errors)}`); continue; }
+    const out = abortBatch({ teamRoot: f.kit, instanceRoot: f.root });
+    assert.equal(out.stage, 'batch-archived-without-commit'); assert.equal(out.lockReleased, true); assert.equal(out.boundary, 'closed'); f.untouched();
+  }
+  // A stale claim does not excuse a boundary that names other workers.
+  const tampered = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n' } }), other = { schemaVersion: 1, productRoot: tampered.product, wrappers: { a: { duty: 'exec', writePaths: [] }, b: { duty: 'check', writePaths: [] }, c: { duty: 'guard', writePaths: [] } } };
+  writeFileSync(join(tampered.root, '.claude/rw-write-boundary.json'), JSON.stringify({ ...other, digest: digest(other) })); releaseLease({ productRoot: tampered.product, lease: tampered.open.lease });
+  writeFileSync(join(tampered.root, AFTER_FILE), JSON.stringify({ stage: 'batch-closing', runId: tampered.open.runId, claimedAt: '2020-01-01T00:00:00.000Z' }));
+  assert.ok(tampered.after().findings.some(finding => finding.code === 'BOUNDARY_CHANGED'));
+  // A commit.json planted under the run id of an open batch.
+  const forged = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n' } }), planted = { schemaVersion: 1, stage: 'batch-committed', runId: forged.open.runId, batchDigest: forged.open.digest, commits: [], left: [], pushed: false };
+  mkdirSync(join(forged.root, 'batches', forged.open.runId), { recursive: true }); writeFileSync(join(forged.root, 'batches', forged.open.runId, 'commit.json'), JSON.stringify({ ...planted, digest: digest(planted) }));
+  assert.match(refusal(forged.commit()).reason, /has not been closed/); assert.ok(existsSync(join(forged.root, BATCH_FILE))); assert.equal(readLease({ productRoot: forged.product }).status, 'held');
+  assert.equal(forged.after().errors, undefined); assert.match(refusal(forged.commit()).reason, /batches\/\S+ already exists/); assert.deepEqual(forged.log(), [], 'nothing is committed into a batch whose archive was started');
+  // A commit made just before the command died is taken up; a recorded commit that is not the ticket's is refused; abort names the commits made.
+  const died = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n', 'src/api/tags.js': 't\n' } }); assert.equal(died.after().errors, undefined);
+  git(died.product, 'add', 'src/app.js'); git(died.product, 'commit', '-q', '-m', 'US-01: Ticket US-01');
+  const taken = died.commit(); assert.equal(taken.errors, undefined, JSON.stringify(taken.errors)); assert.equal(taken.commits.length, 2); assert.equal(died.log().length, 2);
+  const fake = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n', 'src/api/tags.js': 't\n' } }); assert.equal(fake.after().errors, undefined);
+  writeFileSync(join(fake.product, 'zzz.js'), 'z\n'); git(fake.product, 'add', 'zzz.js', 'src/app.js'); git(fake.product, 'commit', '-q', '-m', 'by hand');
+  writeFileSync(join(fake.root, 'rw-batch-commits.json'), JSON.stringify({ commits: [{ ticket: 'US-01', sha: git(fake.product, 'rev-parse', 'HEAD').trim() }] }));
+  assert.match(refusal(fake.commit()).reason, /does not hold its ticket's paths/);
+  const partial = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n', 'src/api/tags.js': 't\n' }, hooks: g => ({ 'pre-commit': `#!/bin/sh\n[ -e "${join(g.base, 'block')}" ] && git diff --cached --name-only | grep -q tags.js && exit 1\nexit 0\n` }) });
+  assert.equal(partial.after().errors, undefined); writeFileSync(join(partial.base, 'block'), ''); assert.ok(partial.commit().errors);
+  const left = abortBatch({ teamRoot: partial.kit, instanceRoot: partial.root });
+  assert.equal(left.commitsMade.length, 1); assert.match(left.next, /1 commit\(s\) were already made by the kit and stay on the branch/); assert.match(partial.read('pm-decisions.md'), /ARCHIVED WITHOUT COMMIT.*1 commit\(s\) were already made/);
 });

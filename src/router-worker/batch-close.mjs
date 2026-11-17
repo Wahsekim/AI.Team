@@ -5,7 +5,7 @@ import { instanceOf } from './roots.mjs';
 import { git, gitRun, acquireLease, releaseLease, readLease } from './lease.mjs';
 import { accountRun } from './run-args.mjs';
 import { readBoundary, closeBoundary, within, LOG_FILE } from './write-boundary.mjs';
-import { BATCH_FILE, AFTER_FILE, PROGRESS_FILE, ARCHIVE, RUN_ID, TICKET_ID, oneLine, changedPaths, contentOf, hooksPathOf, archiveBatch, plain } from './batch.mjs';
+import { BATCH_FILE, AFTER_FILE, PROGRESS_FILE, ARCHIVE, RUN_ID, TICKET_ID, oneLine, changedPaths, contentOf, hooksOf, archiveBatch, plain } from './batch.mjs';
 
 // ADR 0010, decisions 12 and 13: what a PM runs when a batch ends in a standing Router/Worker team.
 // after: the engine's return is matched against what was frozen, the product is compared with the tickets'
@@ -13,7 +13,7 @@ import { BATCH_FILE, AFTER_FILE, PROGRESS_FILE, ARCHIVE, RUN_ID, TICKET_ID, oneL
 // commit: one commit per such ticket, on the batch's branch, then the batch is archived. Nothing is pushed.
 const LEDGER = 'pm-decisions.md', IN_PROGRESS = ['index.lock', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'BISECT_LOG', 'rebase-merge', 'rebase-apply'];
 // Findings after which no ticket of the batch is committed by the kit: what ran is not what was frozen.
-const HOLD_ALL = ['BOUNDARY_CHANGED', 'PRODUCT_HEAD_MOVED', 'PRODUCT_BRANCH_CHANGED', 'GUARDIAN_NOT_CLEAN', 'HOOKS_PATH_CHANGED', 'HOOKS_WRITTEN'];
+export const HOLD_ALL = ['BOUNDARY_CHANGED', 'PRODUCT_HEAD_MOVED', 'PRODUCT_BRANCH_CHANGED', 'GUARDIAN_NOT_CLEAN', 'HOOKS_CHANGED'];
 // An after that was claimed this recently is taken to be running; an older claim is one that died.
 const CLAIM_MS = 60000;
 const ABANDON = 'If the batch cannot be committed by the kit, archive it with: rw-batch.mjs abort --instance <instance-root>, then commit or discard its changes by hand';
@@ -55,8 +55,9 @@ function hookSeen(instance, wrappers, since) {
 // A ticket passed when the engine says it is done and nothing else in its own record says otherwise.
 function outcomeOf(outcome) {
   if (!outcome) return { status: 'not-run' };
+  // Every ticket of this mode ships code, so its verification must have passed, whatever the return says is required.
   const passed = outcome.done === true && outcome.needsFixRetest !== true && outcome.needsRecovery !== true && outcome.verifierPass !== false
-    && (outcome.verificationRequired !== true || outcome.verificationStatus === 'passed');
+    && outcome.verificationStatus === 'passed' && outcome.acceptanceStatus !== 'rejected';
   return passed ? { status: 'passed' } : { status: 'not-passed', workerStatus: plain(outcome.workerStatus ?? 'none'), verificationStatus: plain(outcome.verificationStatus ?? 'none') };
 }
 
@@ -69,9 +70,11 @@ export function afterBatch({ teamRoot, instanceRoot, result }) {
     // The close is claimed before anything is changed, so two calls never close the same batch together and
     // one that died is taken up again, not judged as if someone had tampered with the batch.
     const earlier = readJSON(afterPath), claim = () => ({ stage: 'batch-closing', runId: batch.runId, claimedAt: new Date().toISOString() });
-    need(!exists(afterPath) || earlier?.stage === 'batch-closing', 'This batch was already closed; finish it with: rw-batch.mjs commit --instance <instance-root>');
-    const resumed = earlier?.stage === 'batch-closing';
-    need(!resumed || Date.now() - Date.parse(earlier.claimedAt) > CLAIM_MS, 'Another after is closing this batch; if none is running, run the command again in a minute');
+    need(!exists(afterPath) || earlier?.stage === 'batch-closing' || earlier?.stage !== 'batch-closed', 'This batch was already closed; finish it with: rw-batch.mjs commit --instance <instance-root>');
+    need(!exists(afterPath) || earlier?.stage === 'batch-closing', `${AFTER_FILE} cannot be read. ${ABANDON}`);
+    const resumed = earlier?.stage === 'batch-closing', age = resumed ? Date.now() - Date.parse(earlier.claimedAt) : null;
+    // A claim with no readable time, or one from the future, is not a running after.
+    need(!resumed || !(age >= 0 && age <= CLAIM_MS), 'Another after is closing this batch; if none is running, run the command again in a minute');
     if (resumed) replace(afterPath, claim());
     else {
       try { writeFileSync(afterPath, JSON.stringify(claim()) + '\n', { flag: 'wx' }); }
@@ -80,11 +83,12 @@ export function afterBatch({ teamRoot, instanceRoot, result }) {
 
     const findings = [], boundary = readBoundary(instance);
     // A resumed close may find its own work done: the boundary already closed, the lock already released.
-    const ownClosed = resumed && boundary && boundary.productRoot === product && Object.values(boundary.wrappers).every(entry => entry.writePaths.length === 0);
+    const workers = [batch.args.plan[0].agentType, batch.args.plan[0].verifierAgentType, batch.args.guardianAgentType].sort();
+    const ownClosed = resumed && boundary && boundary.productRoot === product && digest(Object.keys(boundary.wrappers).sort()) === digest(workers) && Object.values(boundary.wrappers).every(entry => entry.writePaths.length === 0);
     if (boundary?.digest !== batch.boundaryDigest && !ownClosed) findings.push({ code: 'BOUNDARY_CHANGED' });
     if ((git(product, 'rev-parse', 'HEAD')?.trim() ?? null) !== batch.productHead) findings.push({ code: 'PRODUCT_HEAD_MOVED' });
     if ((git(product, 'symbolic-ref', '--short', '-q', 'HEAD')?.trim() ?? null) !== batch.branch) findings.push({ code: 'PRODUCT_BRANCH_CHANGED' });
-    if (hooksPathOf(product) !== (batch.hooksPath ?? null)) findings.push({ code: 'HOOKS_PATH_CHANGED' });
+    if (hooksOf(product).digest !== batch.hooks?.digest) findings.push({ code: 'HOOKS_CHANGED' });
     if (result.guardian?.status !== 'ok' || result.guardian?.verdict !== 'clean') findings.push({ code: 'GUARDIAN_NOT_CLEAN', status: plain(result.guardian?.status ?? 'none'), verdict: plain(result.guardian?.verdict ?? 'none') });
 
     // What the batch changed: everything the work tree holds now that was not already there when it opened.
@@ -92,8 +96,6 @@ export function afterBatch({ teamRoot, instanceRoot, result }) {
     // A changed path that is a directory is a repository of its own inside the product: Git would commit a link to it, not its files.
     const nested = changed.filter(path => path.endsWith('/')), files = changed.filter(path => !path.endsWith('/'));
     if (nested.length) findings.push({ code: 'NESTED_REPOSITORY', paths: nested });
-    const hooked = batch.hooksPath ? changed.filter(path => path === batch.hooksPath || path.startsWith(`${batch.hooksPath}/`)) : [];
-    if (hooked.length) findings.push({ code: 'HOOKS_WRITTEN', paths: hooked });
     const was = batch.preexistingContent ?? {}, is = contentOf(product, batch.preexisting);
     const rechanged = batch.preexisting.filter(path => Object.hasOwn(was, path) && was[path] !== is[path]);
     if (rechanged.length) findings.push({ code: 'PREEXISTING_PATH_CHANGED', paths: rechanged });
@@ -135,11 +137,13 @@ const said = result => plain(`${result.error?.code ?? ''} ${result.stderr ?? ''}
 export function commitBatch({ teamRoot, instanceRoot }) {
   let lease = null, product;
   try {
-    // A commit that archived the batch and died before it cleared the team's root is finished here.
+    // A commit that archived the batch and died before it cleared the team's root is finished here. The archive
+    // must be this batch's own: its record there, and a result that names the after record still in the root.
     try {
-      const root = instanceOf(resolve(teamRoot), instanceRoot), open = readJSON(join(root, BATCH_FILE)) ?? readJSON(join(root, AFTER_FILE));
-      const archived = typeof open?.runId === 'string' && RUN_ID.test(open.runId) ? readJSON(join(root, ARCHIVE, open.runId, 'commit.json')) : null;
-      if (intact(archived, 'batch-committed')) { for (const file of [BATCH_FILE, AFTER_FILE, PROGRESS_FILE]) rmSync(join(root, file), { force: true }); return archived; }
+      const root = instanceOf(resolve(teamRoot), instanceRoot), closed = readJSON(join(root, AFTER_FILE)), id = closed?.runId ?? readJSON(join(root, PROGRESS_FILE))?.runId;
+      const folder = typeof id === 'string' && RUN_ID.test(id) ? join(root, ARCHIVE, id) : null, archived = folder ? readJSON(join(folder, 'commit.json')) : null;
+      if (!exists(join(root, BATCH_FILE)) && intact(archived, 'batch-committed') && intact(readJSON(join(folder, 'batch.json')), 'batch-open') && archived.batchDigest === readJSON(join(folder, 'batch.json')).digest
+        && (!closed || closed.digest === archived.afterDigest)) { for (const file of [AFTER_FILE, PROGRESS_FILE]) rmSync(join(root, file), { force: true }); return archived; }
     } catch { /* judged below */ }
     const { instance, batch } = openBatch(teamRoot, instanceRoot), after = readJSON(join(instance, AFTER_FILE));
     need(exists(join(instance, AFTER_FILE)) && after?.stage !== 'batch-closing', 'This batch has not been closed; run: rw-batch.mjs after RESULT.json --instance <instance-root>');
@@ -159,13 +163,19 @@ export function commitBatch({ teamRoot, instanceRoot }) {
     need(git(product, 'symbolic-ref', '--short', '-q', 'HEAD')?.trim() === batch.branch, `The product repository is no longer on the batch's branch (${plain(batch.branch)}). ${ABANDON}`);
     const gitDir = git(product, 'rev-parse', '--absolute-git-dir')?.trim(), busy = IN_PROGRESS.filter(name => gitDir && exists(join(gitDir, name)));
     need(gitDir && !busy.length, `A Git operation is in progress in the product repository (${busy.join(', ')})`);
-    need(hooksPathOf(product) === (batch.hooksPath ?? null), `The repository's commit hooks were moved since the batch opened. ${ABANDON}`);
+    need(hooksOf(product).digest === batch.hooks?.digest, `The repository's commit hooks were changed or moved since the batch opened. ${ABANDON}`);
+    need(!exists(join(instance, ARCHIVE, batch.runId)), `batches/${batch.runId} already exists: an archive of this batch was started. ${ABANDON}`);
     // The commits this command already made, by their ids: the branch must be the batch's start plus exactly those.
     const progressPath = join(instance, PROGRESS_FILE), progress = exists(progressPath) ? readJSON(progressPath) : { commits: [] };
     need(Array.isArray(progress?.commits) && progress.commits.length <= after.commits.length && progress.commits.every((made, i) => made?.ticket === after.commits[i].ticket && /^[a-f0-9]{40}$/.test(made.sha ?? '')),
       `${PROGRESS_FILE} cannot be read. ${ABANDON}`);
-    const done = progress.commits, head = () => git(product, 'rev-parse', 'HEAD')?.trim();
-    need(head() === (done.length ? done.at(-1).sha : batch.productHead) && done.every((made, i) => git(product, 'rev-parse', `${made.sha}^`)?.trim() === (i ? done[i - 1].sha : batch.productHead)),
+    const done = progress.commits, head = () => git(product, 'rev-parse', 'HEAD')?.trim(), parentOf = sha => git(product, 'rev-parse', `${sha}^`)?.trim();
+    const holds = (sha, paths) => digest((git(product, 'diff-tree', '--no-commit-id', '--name-only', '--no-renames', '-r', '-z', sha) ?? '').split('\0').filter(Boolean).sort()) === digest([...paths].sort());
+    // A commit that was made just before this command died, and so was never recorded, is taken up when it is the next planned one.
+    const tip = done.length ? done.at(-1).sha : batch.productHead, upNext = after.commits[done.length];
+    if (upNext && head() !== tip && parentOf(head()) === tip && holds(head(), upNext.paths)) { done.push({ ticket: upNext.ticket, sha: head() }); replace(progressPath, { schemaVersion: 1, runId: batch.runId, commits: done }); }
+    need(done.every((made, i) => holds(made.sha, after.commits[i].paths)), `A commit recorded for this batch does not hold its ticket's paths. ${ABANDON}`);
+    need(head() === (done.length ? done.at(-1).sha : batch.productHead) && done.every((made, i) => parentOf(made.sha) === (i ? done[i - 1].sha : batch.productHead)),
       `The product branch is not the batch's start plus the commits this command made: someone committed, or moved the branch. ${ABANDON}`);
     const todo = after.commits.slice(done.length);
     // What is still to commit must be exactly what after saw: nothing was edited in between.
@@ -181,10 +191,9 @@ export function commitBatch({ teamRoot, instanceRoot }) {
       const parent = head(), committed = withPaths(product, ['commit', '-q', '-m', commit.message, '--only'], commit.paths, 600000);
       need(committed.status === 0 && !committed.error, `git commit failed for ticket ${commit.ticket} (${done.length} of ${after.commits.length} made): ${said(committed)}. Fix the cause and run commit again. ${ABANDON}`);
       const sha = head();
-      need(sha && sha !== parent && git(product, 'rev-parse', `${sha}^`)?.trim() === parent, `The commit of ticket ${commit.ticket} did not land on the product branch. ${ABANDON}`);
+      need(sha && sha !== parent && parentOf(sha) === parent, `The commit of ticket ${commit.ticket} did not land on the product branch. ${ABANDON}`);
       // A hook may have put other paths into the commit: what it holds must be the ticket's paths, nothing else.
-      const held = (git(product, 'diff-tree', '--no-commit-id', '--name-only', '--no-renames', '-r', '-z', sha) ?? '').split('\0').filter(Boolean).sort();
-      need(digest(held) === digest([...commit.paths].sort()), `The commit of ticket ${commit.ticket} (${sha.slice(0, 8)}) does not hold exactly that ticket's paths; a commit hook may have added or dropped some. It is left as it is. ${ABANDON}`);
+      need(holds(sha, commit.paths), `The commit of ticket ${commit.ticket} (${sha.slice(0, 8)}) does not hold exactly that ticket's paths; a commit hook may have added or dropped some. It is left as it is. ${ABANDON}`);
       done.push({ ticket: commit.ticket, sha });
       replace(progressPath, { schemaVersion: 1, runId: batch.runId, commits: done });
     }
