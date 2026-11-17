@@ -29,6 +29,7 @@ The command prints a proposal:
 |---|---|
 | `from`, `to` | the two modes |
 | `staffing` | model, effort, turn limit and tools of the three workers and of each staffed governance role; for a packed Router/Worker team, the staffing it was packed with |
+| `project`, `workflowsNotEnabled` | on a first switch: the project's name, slug, product repository and UI flag, and every workflow the request does not enable, with its status |
 | `limits` | attempts per ticket, output allowance per ticket, the Guardian's share, authorization per ticket; the ADR's defaults unless the request changes one; for a packed Router/Worker team, the limits it was packed with |
 | `dispatch` | `engine` |
 | `pack` | the files that go on holiday |
@@ -99,7 +100,10 @@ Limits: 1 attempt, 15,000 output tokens per ticket, 6,000 for the Guardian,
 ADR sets only the three workers. The owner sees all of it in the switch's
 proposal and may edit the file first. A profile that leaves the name, the slug,
 the product repository or a workflow's status unanswered refuses the request and
-names what is missing. A disabled workflow needs the digest of the owner's
+names what is missing. Only the profile's two YAML blocks (`project:` and
+`workflow_status:`) are read, each value double-quoted on one line; a status is
+`enabled`, `deferred`, `profile-bound` or `disabled`, alone or followed by
+` — reason`, `: reason` or ` (reason)`. A disabled workflow needs the digest of the owner's
 decision in its `decisionRef`, added by hand; the command prints a note.
 
 ## Changing the limits later
@@ -107,8 +111,9 @@ decision in its `decisionRef`, added by hand; the command prints a note.
 `limits LIMITS.json` (`{"outputAllowancePerTicket": 20000}`, any of the four)
 prints the limits before and after, and is confirmed like a switch: a code typed
 at an interactive terminal. It is refused when the team is not in Router/Worker
-mode, when nothing would change, when a switch was interrupted, or while a batch
-holds the lock. One line is appended to `pm-decisions.md`. The changed limits go
+mode, when nothing would change, when the authorization per ticket would fall
+below the output allowance, when a switch was interrupted, or while a batch
+holds the lock; it takes the lock for the write. One line is appended to `pm-decisions.md`. The changed limits go
 on holiday and come back with the team.
 
 ## Into Router/Worker mode
@@ -136,7 +141,7 @@ packed team exists is refused: move `holiday/router-worker` away first to draft
 a new team. The same holds for `limits`: a packed team comes back with the
 limits it was packed with, the proposal shows them, and a request that brings
 `limits` is refused. The limits of a live team are changed with the `limits`
-command (below).
+command (above).
 
 ## Back to specialist mode
 

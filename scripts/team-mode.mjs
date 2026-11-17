@@ -30,7 +30,7 @@ const flags = (rest, allowed, bare = []) => {
   const options = {};
   for (let i = 0; i < rest.length; i++) {
     const name = rest[i], value = bare.includes(name) ? true : rest[++i];
-    if (![...allowed, ...bare].includes(name) || Object.hasOwn(options, name) || !value) return null;
+    if (![...allowed, ...bare].includes(name) || Object.hasOwn(options, name) || !value || (value !== true && value.startsWith('--'))) return null;
     options[name] = value;
   }
   return options;
@@ -54,7 +54,7 @@ if (process.argv[2] === 'limits') {
   const [file, ...rest] = process.argv.slice(3), options = file ? flags(rest, ['--instance']) : null;
   if (!options?.['--instance']) { console.error('usage: node scripts/team-mode.mjs limits <LIMITS.json> --instance <instance-root>   (LIMITS.json: {"outputAllowancePerTicket"?: n, ...})'); process.exit(1); }
   const instanceRoot = resolve(options['--instance']), common = { teamRoot: join(instanceRoot, 'kit'), instanceRoot };
-  let limits; try { limits = JSON.parse(readFileSync(file, 'utf8')); } catch { limits = null; }
+  let limits; try { limits = JSON.parse(readFileSync(file, 'utf8')); } catch { finish({ errors: [{ code: 'LIMITS_REFUSED', field: 'limits', reason: `${file} is not readable JSON` }] }, false); }
   const proposal = proposeLimits({ ...common, limits });
   if (proposal.errors) finish(proposal, false);
   typedAtTerminal(proposal, 'change the limits of this team');
