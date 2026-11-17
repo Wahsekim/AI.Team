@@ -102,7 +102,7 @@ function recordedProduct(instance) {
   try { return realpathSync(resolve(instance, value)); } catch { return resolve(instance, value); }
 }
 
-function limitsOf(request) {
+export function limitsOf(request) {
   const given = request?.limits ?? {};
   need(given && typeof given === 'object' && !Array.isArray(given) && Object.keys(given).every(key => Object.hasOwn(DEFAULT_LIMITS, key))
     && Object.values(given).every(value => Number.isSafeInteger(value) && value >= 1) && (given.attemptsPerTicket ?? 1) <= 3, 'limits may only set the known limits to positive integers');

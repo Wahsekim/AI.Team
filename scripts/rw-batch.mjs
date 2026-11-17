@@ -5,20 +5,27 @@
 //   opens the write boundary. Prints the batch record; its `args` are the arguments of run-n-rounds.
 // BATCH.json: {"tickets": [{"id", "title", "goal", "acceptance": [...], "paths": [...], "estimate": {"execTokens", "checkTokens", "reworkTokens"}}],
 //              "verificationCommands": [...], "sensitivePaths": [...], "nextLifecycleNumber": n, "runId"?, "date"?}
-// No model or network. Exit 0 batch open, 2 refused, 1 usage.
+// abort --instance <instance-root>
+//   Clears a batch that will not be run, or what a "before" that died left behind.
+// No model or network. Exit 0 batch open / aborted, 2 refused, 1 usage.
 import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { beforeBatch } from '../src/router-worker/batch.mjs';
+import { beforeBatch, abortBatch } from '../src/router-worker/batch.mjs';
 
+const print = result => { if (result.errors) { console.error(JSON.stringify(result)); process.exitCode = 2; } else process.stdout.write(JSON.stringify(result, null, 2) + '\n'); };
+const USAGE = 'usage: node scripts/rw-batch.mjs before BATCH.json --instance <instance-root> [--start-as-is]\n       node scripts/rw-batch.mjs abort --instance <instance-root>';
+if (process.argv[2] === 'abort') {
+  const [flag, root, ...extra] = process.argv.slice(3);
+  if (flag !== '--instance' || !root || extra.length) { console.error(USAGE); process.exit(1); }
+  print(abortBatch({ teamRoot: join(resolve(root), 'kit'), instanceRoot: resolve(root) }));
+  process.exit();
+}
 const [command, file, ...rest] = process.argv.slice(2), at = rest.indexOf('--instance'), instance = at === -1 ? undefined : rest[at + 1];
 const others = rest.filter((_, i) => i !== at && i !== at + 1);
-if (command !== 'before' || !file || !instance || others.some(flag => flag !== '--start-as-is') || others.length > 1) {
-  console.error('usage: node scripts/rw-batch.mjs before BATCH.json --instance <instance-root> [--start-as-is]');
-  process.exit(1);
-}
+if (command !== 'before' || !file || !instance || others.some(flag => flag !== '--start-as-is') || others.length > 1) { console.error(USAGE); process.exit(1); }
 // The engine's static launch preflight, run on the frozen arguments; its digest goes into them.
 function manifest(args, { teamRoot, productRoot, allowDirty }) {
   const dir = mkdtempSync(join(tmpdir(), 'rw-batch-manifest-'));
@@ -35,4 +42,4 @@ let batch; try { batch = JSON.parse(readFileSync(file, 'utf8')); } catch { batch
 const instanceRoot = resolve(instance);
 const result = batch === undefined ? { errors: [{ code: 'BATCH_REFUSED', field: 'batch', reason: `${file} is not readable JSON` }] }
   : await beforeBatch({ teamRoot: join(instanceRoot, 'kit'), instanceRoot, batch, startAsIs: others.includes('--start-as-is'), manifest });
-if (result.errors) { console.error(JSON.stringify(result)); process.exitCode = 2; } else process.stdout.write(JSON.stringify(result, null, 2) + '\n');
+print(result);

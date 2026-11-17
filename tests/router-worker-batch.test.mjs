@@ -4,8 +4,9 @@ import assert from 'node:assert/strict';
 import { writeFileSync, readFileSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { beforeBatch, BATCH_FILE } from '../src/router-worker/batch.mjs';
-import { readLease } from '../src/router-worker/lease.mjs';
+import { beforeBatch, abortBatch, BATCH_FILE } from '../src/router-worker/batch.mjs';
+import { readLease, acquireLease } from '../src/router-worker/lease.mjs';
+import { observeIsolation } from '../src/router-worker/isolation.mjs';
 import { readBoundary, decideWrite } from '../src/router-worker/write-boundary.mjs';
 import { DEFAULT_LIMITS } from '../src/router-worker/switch.mjs';
 import { fixture, git } from './fixtures/router-worker/standing-team.mjs';
@@ -36,18 +37,64 @@ test('before freezes N tickets, computes the ceiling, takes the lock and opens t
   const boundary = readBoundary(f.root), write = (agent, path) => decideWrite({ boundary, input: { tool_name: 'Edit', agent_type: agent, cwd: f.product, tool_input: { file_path: path } } }).decision;
   assert.equal(write('tag-list-fixture-worker-exec', 'src/list/view.js'), 'allow'); assert.equal(write('tag-list-fixture-worker-exec', 'src/api/tags.js'), 'allow');
   assert.equal(write('tag-list-fixture-worker-exec', 'src/other.js'), 'deny'); assert.equal(write('tag-list-fixture-worker-check', 'src/app.js'), 'deny');
+  assert.deepEqual(record.sensitivePaths, ['src/auth/**']); assert.deepEqual(record.tickets[1], { id: 'US-02', paths: ['src/api/tags.js'], expectedPaths: ['src/api/tags.js'] });
   assert.match(refusal(await f.before(batchOf(ticket('US-03', ['src/x.js'])))).reason, /already open/);
+  assert.equal(readLease({ productRoot: f.product }).lease.digest, record.lease, 'the open batch keeps its lock'); assert.equal(write('tag-list-fixture-worker-exec', 'src/list/view.js'), 'allow');
+});
+
+test('abort clears a batch that will not run, and what a before that died left behind, so the next batch can open', async t => {
+  const f = live(t), abort = () => abortBatch({ teamRoot: f.kit, instanceRoot: f.root }), one = batchOf(ticket('US-01', ['src/a.js']));
+  assert.match(refusal(abort()).reason, /no batch to abort/);
+  const first = await f.before(one); assert.equal(first.errors, undefined, JSON.stringify(first.errors));
+  const aborted = abort();
+  assert.equal(aborted.errors, undefined, JSON.stringify(aborted.errors)); assert.equal(aborted.stage, 'batch-aborted'); assert.equal(aborted.runId, first.runId);
+  f.untouched(); assert.match(f.read('pm-decisions.md'), /BATCH \S+ ABORTED by rw-batch\.mjs abort/);
+  // A before that died after taking the lock: the next one names the state and the way out.
+  acquireLease({ teamRoot: f.root, productRoot: f.product });
+  assert.match(refusal(await f.before(one)).reason, /died half-way.*rw-batch\.mjs abort/);
+  assert.equal(abort().lockReleased, true); f.untouched();
+  const second = await f.before(one); assert.equal(second.errors, undefined, JSON.stringify(second.errors));
+  // The lock of another team is never released by this one.
+  assert.equal(abort().errors, undefined); const other = fixture(t);
+  acquireLease({ teamRoot: other.root, productRoot: f.product });
+  assert.match(refusal(abort()).reason, /no batch to abort/); assert.equal(readLease({ productRoot: f.product }).status, 'held');
+  assert.match(refusal(await f.before(one)).reason, /lock on the product repository could not be taken: /);
+});
+
+test('the isolation check accepts for a standing team only what the decisions accept', t => {
+  const f = live(t), observed = observeIsolation({ teamRoot: f.root, productRoot: f.product, dispatch: 'engine', standing: ['OWNERSHIP_NOT_HELD', 'PRODUCT_DIRTY', 'WRAPPER_MISSING'] });
+  assert.equal(observed.status, 'blocked'); assert.equal(observed.findings.find(finding => finding.code === 'OWNERSHIP_NOT_HELD').severity, 'blocked');
 });
 
 test('before refuses, and leaves the lock free and the boundary closed, when the batch or the repository is not fit', async t => {
   const f = live(t), refused = async (batch, pattern, extra) => { const result = await f.before(batch, extra); assert.match(refusal(result)?.reason ?? JSON.stringify(result).slice(0, 200), pattern); f.untouched(); };
   await refused(batchOf(ticket('US-01', ['src/a.js']), ticket('US-02', ['src/a.js'])), /US-01 and US-02 claim the same file \(src\/a\.js\)/);
-  await refused(batchOf(ticket('US-01', ['src/list/**']), ticket('US-02', ['src/list/view.js'])), /claim the same file/);
+  await refused(batchOf(ticket('US-01', ['src/list/**', 'src/x.js']), ticket('US-02', ['src/list/view.js'])), /claim the same file/);
+  await refused(batchOf(ticket('US-01', ['src/A.js']), ticket('US-02', ['src/a.js'])), /claim the same file/);
+  await refused(batchOf(ticket('US-01', ['src/a.js']), ticket('us-01', ['src/b.js'])), /appears twice/);
+  await refused(batchOf(ticket('US-01', ['src/list/**'])), /grants only folders; add "expectedPaths"/);
+  await refused(batchOf(ticket('US-01', ['.git/hooks/pre-commit', 'src/a.js'])), /no ticket writes under \.git or \.claude/);
+  await refused(batchOf(ticket('US-01', ['.claude/**'], { expectedPaths: ['.claude/x'] })), /no ticket writes under/);
+  // The worker is bounded by `paths`, so that is what the sensitive paths are judged against, whatever the plan says.
+  await refused(batchOf(ticket('US-01', ['src/**'], { expectedPaths: ['src/a.js'] })), /would be able to write a sensitive path \(src\/\*\*\)/);
+  await refused(batchOf(ticket('US-01', ['src/auth/login.js', 'src/a.js'], { expectedPaths: ['src/a.js'] })), /sensitive path \(src\/auth\/login\.js\)/);
+  await refused(batchOf(...Array.from({ length: 101 }, (_, i) => ticket(`T-${i}`, [`src/f${i}.js`]))), /at most 100 paths in all \(101 given\)/);
+  await refused(batchOf(ticket('US-01', ['src/a.js'], { estimate: { execTokens: 1, checkTokens: 1, reworkTokens: 1, bonus: 5 } })), /estimate must carry exactly/);
+  await refused({ ...batchOf(ticket('US-01', ['src/a.js'])), sensitivePaths: [] }, /sensitivePaths must list/);
   await refused(batchOf(ticket('US-01', ['src/a.js'], { acceptance: [] })), /US-01 is incomplete: acceptance missing/);
   await refused(batchOf(ticket('US-01', ['src/a.js'], { goal: undefined })), /incomplete: goal/);
   await refused({ ...batchOf(ticket('US-01', ['src/a.js'])), budgetCeilingTokens: 999999 }, /must carry/, undefined);
   await refused(batchOf(ticket('US-01', ['src/a.js'], { estimate: { execTokens: 150000, checkTokens: 60000, reworkTokens: 6000 } })), /cannot be frozen.*estimate/i);
-  await refused(batchOf(ticket('US-01', ['src/auth/login.js'])), /cannot be frozen/, undefined);
+  // Refusals that come after the lock was taken give it back.
+  await refused(batchOf(ticket('US-01', ['src/a.js'])), /injected preflight/, { manifest: () => ({ errors: [{ reason: 'injected preflight failure' }] }) });
+  await refused(batchOf(ticket('US-01', ['src/a.js'])), /could not be prepared: boom/, { manifest: () => { throw Error('boom'); } });
+  await refused(batchOf(ticket('US-01', ['src/a.js'])), /changed while the batch was being prepared/, { manifest: () => { writeFileSync(join(f.product, 'late.txt'), 'x'); return { digest: 'sha256:' + 'a'.repeat(64) }; }, startAsIs: true });
+  rmSync(join(f.product, 'late.txt'));
+  // The limits are the mode profile's, checked again where they are used.
+  const profilePath = join(f.root, 'profiles/team-mode.json'), profile = readFileSync(profilePath, 'utf8');
+  writeFileSync(profilePath, JSON.stringify({ ...JSON.parse(profile), limits: { ...DEFAULT_LIMITS, attemptsPerTicket: 9 } }));
+  await refused(batchOf(ticket('US-01', ['src/a.js'])), /limits in profiles\/team-mode\.json are not valid/);
+  writeFileSync(profilePath, profile);
   writeFileSync(join(f.product, 'notes.txt'), 'x\n');
   await refused(batchOf(ticket('US-01', ['src/a.js'])), /uncommitted changes \(notes\.txt\).*start as is/);
   rmSync(join(f.product, 'notes.txt')); writeFileSync(join(f.product, '.git/MERGE_HEAD'), 'x\n');
@@ -65,9 +112,14 @@ test('start as is: a repository that is not clean starts only on the explicit wo
   const f = live(t); writeFileSync(join(f.product, '.gitignore'), 'dist/\n'); git(f.product, 'add', '-A'); git(f.product, 'commit', '-q', '-m', 'ignore');
   mkdirSync(join(f.product, 'dist')); writeFileSync(join(f.product, 'dist/out.js'), 'built\n');
   writeFileSync(join(f.product, 'notes.txt'), 'x\n');
+  git(f.product, 'mv', 'src/app.js', 'src/app 2.js');
+  const ledger = f.read('pm-decisions.md');
+  assert.match(refusal(await f.before(batchOf(ticket('US-01', ['src/a.js'])), { startAsIs: true, manifest: () => ({ errors: [{ reason: 'injected' }] }) })).reason, /injected/);
+  assert.equal(f.read('pm-decisions.md'), ledger, 'a batch that did not open leaves no ledger line');
   const record = await f.before(batchOf(ticket('US-01', ['src/a.js'])), { startAsIs: true });
-  assert.equal(record.errors, undefined, JSON.stringify(record.errors)); assert.equal(record.startedAsIs, true); assert.deepEqual(record.preexisting, ['notes.txt']);
-  assert.match(f.read('pm-decisions.md'), /BATCH \S+ STARTED AS IS: 1 path\(s\) were already changed.*notes\.txt/);
+  assert.equal(record.errors, undefined, JSON.stringify(record.errors)); assert.equal(record.startedAsIs, true);
+  assert.deepEqual(record.preexisting, ['notes.txt', 'src/app 2.js', 'src/app.js'], 'plain paths, both sides of a rename');
+  assert.match(f.read('pm-decisions.md'), /BATCH \S+ STARTED AS IS: 3 path\(s\) were already changed.*notes\.txt/);
 });
 
 test('CLI: before prints the batch record with the preflight manifest chained into the arguments; exit 0 open, 2 refused, 1 usage', t => {
@@ -80,4 +132,6 @@ test('CLI: before prints the batch record with the preflight manifest chained in
   const again = run('before', file, '--instance', f.root);
   assert.equal(again.status, 2); assert.match(again.stderr, /already open/);
   assert.equal(run('before', join(f.base, 'absent.json'), '--instance', f.root).status, 2);
+  assert.equal(run('abort').status, 1); const cleared = run('abort', '--instance', f.root);
+  assert.equal(cleared.status, 0, cleared.stderr); assert.equal(JSON.parse(cleared.stdout).stage, 'batch-aborted'); assert.equal(run('abort', '--instance', f.root).status, 2);
 });
