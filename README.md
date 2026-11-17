@@ -220,6 +220,11 @@ mode's in place
 ([details](docs/design/router-worker/mode-switch.md)). Batches still run only in
 a throwaway copy of the team with a clone of the product, as described below.
 
+[ADR 0011](decisions/0011-router-worker-batch-review.md) adds a review to that
+mode: at the end of a batch the kit, not the PM, decides from a trigger list
+which tickets Security or Architect must review before they are committed.
+**None of it is built yet.**
+
 What exists today is offline tooling in `src/router-worker/`: a deterministic
 compiler (first-attempt `exec` and `check` previews only), local source/context
 preflight, inert deployment drafts, candidate/check-record binding and persisted
