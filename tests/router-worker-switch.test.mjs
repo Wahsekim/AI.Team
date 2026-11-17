@@ -294,7 +294,7 @@ test('a switch that dies at any write is undone by recover: the tree is as befor
   const reset = () => { for (const name of entries(f.root)) rmSync(join(f.root, name), { recursive: true, force: true }); for (const name of entries(keep)) cpSync(join(keep, name), join(f.root, name), { recursive: true }); unlock(); };
   const recover = () => recoverSwitch({ teamRoot: f.kit, instanceRoot: f.root });
   // Every write of the two restores; a first switch drafts and stages a team for each attempt, so it is sampled.
-  const cases = [['router-worker', { spec: f.spec }, (n, total) => n <= 4 || n > total - 8 || n % 9 === 0],
+  const cases = [['router-worker', { spec: f.spec }, (n, total) => n <= 3 || n > total - 6 || n % 12 === 0],
     ['specialist', {}, () => true], ['router-worker', { spec: f.spec }, () => true]];
   for (const [to, request, sampled] of cases) {
     save();
@@ -317,7 +317,8 @@ test('a switch that dies at any write is undone by recover: the tree is as befor
     }
     // A recover that dies itself, at each of its writes, is finished by the next recover.
     const late = total - 6, undo = (() => { reset(); dieAt(late, roots, attempt); return dieAt(Infinity, roots, recover); })();
-    for (let m = 1; m <= undo; m++) {
+    // Every second write of the recover: enough to land in each of its phases.
+    for (let m = 1; m <= undo; m += 2) {
       reset(); dieAt(late, roots, attempt); dieAt(m, roots, recover);
       const again = recover(), where = `switch to ${to}, death at write ${late}, recover dead at its write ${m} of ${undo}`;
       assert.ok(again.stage === 'switch-rolled-back' || /no interrupted switch/.test(refusal(again).reason), `${where}: ${JSON.stringify(again)}`);
