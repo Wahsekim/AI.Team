@@ -112,7 +112,8 @@ function acceptedUnknowns(team) {
   } catch { return []; }
 }
 
-export function observeIsolation({ teamRoot, productRoot, lease, dispatch }) {
+// `standing` names the findings a standing team's batch accepts by decision (ADR 0010, decisions 3 and 11).
+export function observeIsolation({ teamRoot, productRoot, lease, dispatch, standing = [] }) {
   try {
     const team = canonicalDirectory(teamRoot, 'Team root'), product = canonicalDirectory(productRoot, 'Product root');
     const findings = [], add = (code, severity, detail) => findings.push({ code, severity, detail });
@@ -125,7 +126,7 @@ export function observeIsolation({ teamRoot, productRoot, lease, dispatch }) {
     const ungated = dispatch === 'main-session' ? gateGap({ teamRoot: team }) : null;
     if (ungated) add('DISPATCH_GATE_NOT_ARMED', 'blocked', ungated);
     const accepted = acceptedUnknowns(team);
-    for (const finding of findings) if (finding.severity === 'unknown' && accepted.includes(finding.code)) finding.severity = 'accepted';
+    for (const finding of findings) if ((finding.severity === 'unknown' && accepted.includes(finding.code)) || standing.includes(finding.code)) finding.severity = 'accepted';
     findings.sort((a, b) => a.code.localeCompare(b.code) || a.detail.localeCompare(b.detail));
     const status = findings.some(f => f.severity === 'blocked') ? 'blocked' : findings.some(f => f.severity === 'unknown') ? 'unknown' : 'clear';
     const body = { schemaVersion: 1, gate: 'runtime-isolation', status, product: { root: product, head }, teamRoot: team, wrappers,

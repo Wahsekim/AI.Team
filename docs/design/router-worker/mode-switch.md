@@ -159,7 +159,7 @@ ADR 0010, decision 12. A switch into Router/Worker mode registers the
 write-boundary hook in the team's `.claude/settings.json` and writes
 `.claude/rw-write-boundary.json` in its "no batch open" form: the three workers
 are named and may write nothing. Any other agent of the team, a governance role
-for example, is not judged. A batch's "before" command (not built yet) replaces
+for example, is not judged. A batch's "before" command ([batch.md](batch.md)) replaces
 that file with the batch's own write paths.
 
 The three workers are named as the live roster names them. A roster that does
@@ -225,8 +225,7 @@ the two modes, and a file is moved back only where its place is empty.
   is the only sign that it did not finish.
 - A switch that died before it recorded its lock is recognised by the lock's
   team root and by its time, which is not earlier than the journal's. The batch
-  "before" command must therefore refuse to start while a journal exists; that
-  command is not built yet.
+  "before" command therefore refuses to start while a journal exists.
 - A death inside the lock's own release leaves the guard file
   `<product>/.git/rw-ownership-lease.json.release-lock`. Recover names it and
   stops; the operator removes that file and runs recover again.
