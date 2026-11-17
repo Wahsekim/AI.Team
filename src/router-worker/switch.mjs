@@ -103,7 +103,11 @@ function limitsOf(request) {
   const given = request?.limits ?? {};
   need(given && typeof given === 'object' && !Array.isArray(given) && Object.keys(given).every(key => Object.hasOwn(DEFAULT_LIMITS, key))
     && Object.values(given).every(value => Number.isSafeInteger(value) && value >= 1) && (given.attemptsPerTicket ?? 1) <= 3, 'limits may only set the known limits to positive integers');
-  return { ...DEFAULT_LIMITS, ...given };
+  return coherent({ ...DEFAULT_LIMITS, ...given });
+}
+function coherent(limits) {
+  need(limits.authorizationPerTicket >= limits.outputAllowancePerTicket, 'The authorization per ticket cannot be lower than the output allowance per ticket');
+  return limits;
 }
 
 // A packed team, checked: every file the manifest names may belong to that mode, is there, and is unchanged.
@@ -183,7 +187,9 @@ function plan({ to, request, teamRoot, instanceRoot, productRoot }) {
   const install = Object.keys(draft.files).filter(path => !present.includes(path)).sort(), foreign = install.filter(path => !safePath(path) || !installable(path));
   need(!foreign.length, `The draft would create files that are not Router/Worker files: ${foreign.slice(0, 5).join(', ')}`);
   return { kit, instance, live, kind: 'draft', draft, spec, limits,
-    body: { ...base, dispatch: 'engine', limits, staffing: { ...spec.profiles, ...(spec.governance ?? {}) }, install, kept: present, specDigest: digest(spec), draftDigest: draft.digest } };
+    body: { ...base, dispatch: 'engine', limits, staffing: { ...spec.profiles, ...(spec.governance ?? {}) }, project: spec.project,
+      // Workflows the request does not enable; every other one is enabled.
+      workflowsNotEnabled: Object.fromEntries(Object.entries(spec.workflowStates ?? {}).filter(([, state]) => state?.status !== 'enabled').map(([id, state]) => [id, state?.status])), install, kept: present, specDigest: digest(spec), draftDigest: draft.digest } };
 }
 
 export function proposeSwitch(options) {
@@ -315,4 +321,50 @@ export function switchMode({ confirm, validate, atTerminal, ...options }) {
   }
   const record = { schemaVersion: 1, stage: 'mode-switched', mode: to, from: live.name, proposalDigest, packed: body.pack, installed: body.install, kept: body.kept, leftInHoliday, validator: verdict, switchedAt: at };
   return { ...record, digest: digest(record) };
+}
+
+// The limits of a live Router/Worker team are set at the switch; this changes them afterwards, by the same confirmation.
+const limitsRefusal = error => ({ errors: [{ code: error instanceof Refusal ? error.code : 'LIMITS_REFUSED', field: 'limits', reason: error instanceof Refusal ? error.message : 'The limits could not be changed' }] });
+function planLimits({ teamRoot, instanceRoot, limits }) {
+  const no = reason => { throw new Refusal('LIMITS_REFUSED', reason); }, checked = (value, reason) => { try { return limitsOf({ limits: value }); } catch (error) { return no(`${reason}: ${error.message}`); } };
+  let instance;
+  try { instance = instanceOf(resolve(teamRoot), instanceRoot); } catch (error) { no(`The two-root layout is required (${error.message})`); }
+  if (!instance) no('An instance root is required');
+  if (exists(join(instance, JOURNAL))) no('A switch was interrupted; roll it back first with: team-mode.mjs switch recover --instance <instance-root>');
+  const live = currentMode(instance);
+  if (live.name !== 'router-worker') no('The team is not in Router/Worker mode; limits are set with the switch');
+  const stored = live.profile.limits;
+  if (!stored || typeof stored !== 'object' || Object.keys(DEFAULT_LIMITS).some(key => !Object.hasOwn(stored, key))) no('profiles/team-mode.json does not hold the four limits of this team');
+  const from = checked(stored, 'The limits in profiles/team-mode.json are not valid');
+  if (!limits || typeof limits !== 'object') no('The limits to change are required: {"outputAllowancePerTicket": 20000}');
+  checked(limits, 'The limits given are not valid');
+  const to = checked({ ...from, ...limits }, 'The limits would not be coherent'), changed = Object.keys(to).filter(key => to[key] !== from[key]);
+  if (!changed.length) no('These are the limits the team already has');
+  const productRoot = live.profile.spec?.project?.productRoot;
+  if (typeof productRoot !== 'string' || readLease({ productRoot }).status !== 'free') no('A batch holds the lock on the product repository, or its state cannot be read; close the batch first');
+  return { instance, profile: live.profile, productRoot, changed, body: { schemaVersion: 1, stage: 'limits-proposed', from, to } };
+}
+
+export function proposeLimits(options) {
+  try { const { body } = planLimits(options); return { ...body, digest: digest(body) }; } catch (error) { return limitsRefusal(error); }
+}
+
+export function changeLimits({ confirm, atTerminal, ...options }) {
+  let lock = null, productRoot;
+  try {
+    const { instance, profile, changed, body, ...planned } = planLimits(options); productRoot = planned.productRoot;
+    if (confirm !== digest(body)) throw new Refusal('LIMITS_NOT_CONFIRMED', 'A change of limits is confirmed by the digest of its proposal; this digest is not the current proposal');
+    // No batch and no switch can start while the profile is written.
+    lock = acquireLease({ teamRoot: instance, productRoot });
+    if (lock.errors) { lock = null; throw new Refusal('LIMITS_REFUSED', 'The lock on the product repository could not be taken; a batch may have started'); }
+    const path = join(instance, MODE_FILE), at = new Date().toISOString();
+    writeFileSync(`${path}.tmp`, JSON.stringify({ ...profile, limits: body.to }, null, 2) + '\n', { flag: 'wx' });
+    // The ledger line comes first: a change is never in force without its line.
+    try {
+      appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} LIMITS CHANGED: ${changed.map(key => `${key} ${body.from[key]} -> ${body.to[key]}`).join(', ')}; proposal ${confirm} was confirmed ${atTerminal === true ? 'by its code, typed at an interactive terminal' : 'by a program that called the change directly, not at a terminal'}.\n`);
+      renameSync(`${path}.tmp`, path);
+    } catch (error) { rmSync(`${path}.tmp`, { force: true }); throw error; }
+    const record = { schemaVersion: 1, stage: 'limits-changed', limits: body.to, changed, changedAt: at };
+    return { ...record, digest: digest(record) };
+  } catch (error) { return limitsRefusal(error); } finally { if (lock) releaseLease({ productRoot, lease: lock.lease.digest }); }
 }

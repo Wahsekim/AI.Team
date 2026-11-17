@@ -4,7 +4,62 @@ import { parseJSON } from '../src/loop/contracts.mjs';
 import { draftTeam, writeDraft, verifyDraft } from '../src/router-worker/draft.mjs';
 import { stageTeam } from '../src/router-worker/stage.mjs';
 
-import { proposeSwitch, switchMode, recoverSwitch } from '../src/router-worker/switch.mjs';
+import { proposeSwitch, switchMode, recoverSwitch, proposeLimits, changeLimits } from '../src/router-worker/switch.mjs';
+import { draftRequest } from '../src/router-worker/request.mjs';
+
+// Written synchronously: process.exit would cut a pending pipe write short.
+const finish = (result, done) => {
+  if (result.errors) { writeSync(2, JSON.stringify(result) + '\n'); process.exit(2); }
+  writeSync(1, JSON.stringify(result, null, 2) + '\n'); process.exit(done ? 0 : 2);
+};
+// A proposal is confirmed by a person: its code is typed at an interactive terminal. Anywhere else nothing changes.
+function typedAtTerminal(proposal, what) {
+  writeSync(1, JSON.stringify(proposal, null, 2) + '\n');
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    writeSync(2, 'Nothing was changed. This is confirmed by a person: run this command in an interactive terminal and type the code it asks for.\n');
+    process.exit(2);
+  }
+  const code = proposal.digest.slice(-8), typed = Buffer.alloc(256);
+  writeSync(1, `\nType ${code} to ${what}; anything else cancels: `);
+  let answer = '';
+  // Node's own stdin does not block on a terminal; the terminal is opened for the one line.
+  try { answer = typed.subarray(0, readSync(openSync('/dev/tty', 'r'), typed)).toString('utf8').trim(); } catch { /* no answer */ }
+  if (answer !== code) { writeSync(2, 'Cancelled; nothing was changed.\n'); process.exit(2); }
+}
+const flags = (rest, allowed, bare = []) => {
+  const options = {};
+  for (let i = 0; i < rest.length; i++) {
+    const name = rest[i], value = bare.includes(name) ? true : rest[++i];
+    if (![...allowed, ...bare].includes(name) || Object.hasOwn(options, name) || !value || (value !== true && value.startsWith('--'))) return null;
+    options[name] = value;
+  }
+  return options;
+};
+
+// request --instance <root> [--model <id>] [--ui]
+//   Prints a REQUEST.json for the switch, drafted from profiles/project.md with the ADR's staffing and limits.
+if (process.argv[2] === 'request') {
+  const options = flags(process.argv.slice(3), ['--instance', '--model'], ['--ui']);
+  if (!options?.['--instance']) { console.error('usage: node scripts/team-mode.mjs request --instance <instance-root> [--model <roster model id>] [--ui]'); process.exit(1); }
+  const instanceRoot = resolve(options['--instance']);
+  const drafted = draftRequest({ teamRoot: join(instanceRoot, 'kit'), instanceRoot, ...(options['--model'] ? { model: options['--model'] } : {}), ui: options['--ui'] === true });
+  if (drafted.errors) finish(drafted, false);
+  for (const note of drafted.notes) writeSync(2, `note: ${note}\n`);
+  finish(drafted.request, true);
+}
+
+// limits <LIMITS.json> --instance <root>
+//   Changes the limits of a live Router/Worker team; confirmed like a switch.
+if (process.argv[2] === 'limits') {
+  const [file, ...rest] = process.argv.slice(3), options = file ? flags(rest, ['--instance']) : null;
+  if (!options?.['--instance']) { console.error('usage: node scripts/team-mode.mjs limits <LIMITS.json> --instance <instance-root>   (LIMITS.json: {"outputAllowancePerTicket"?: n, ...})'); process.exit(1); }
+  const instanceRoot = resolve(options['--instance']), common = { teamRoot: join(instanceRoot, 'kit'), instanceRoot };
+  let limits; try { limits = JSON.parse(readFileSync(file, 'utf8')); } catch { finish({ errors: [{ code: 'LIMITS_REFUSED', field: 'limits', reason: `${file} is not readable JSON` }] }, false); }
+  const proposal = proposeLimits({ ...common, limits });
+  if (proposal.errors) finish(proposal, false);
+  typedAtTerminal(proposal, 'change the limits of this team');
+  finish(changeLimits({ ...common, limits, confirm: proposal.digest, atTerminal: true }), true);
+}
 
 // switch <specialist|router-worker> <REQUEST.json> --instance <root> --product-root <product>
 //   Prints the proposal. At an interactive terminal it then asks for the proposal's code and switches when it is
@@ -16,11 +71,6 @@ if (process.argv[2] === 'switch') {
   let wellFormed = rest.length % 2 === 0;
   for (let i = 0; i < rest.length; i += 2) { if (Object.hasOwn(options, rest[i]) || !rest[i + 1]) wellFormed = false; options[rest[i]] = rest[i + 1]; }
   const allowed = recover ? ['--instance'] : ['--instance', '--product-root'];
-  const finish = (result, done) => {
-    // Written synchronously: process.exit would cut a pending pipe write short.
-    if (result.errors) { writeSync(2, JSON.stringify(result) + '\n'); process.exit(2); }
-    writeSync(1, JSON.stringify(result, null, 2) + '\n'); process.exit(done ? 0 : 2);
-  };
   if (!wellFormed || !Object.keys(options).every(key => allowed.includes(key)) || !options['--instance'] || (!recover && (!['specialist', 'router-worker'].includes(to) || !file || !options['--product-root']))) {
     console.error('usage: node scripts/team-mode.mjs switch <specialist|router-worker> <REQUEST.json> --instance <instance-root> --product-root <product-root>   (REQUEST.json; confirmed by typing a code at an interactive terminal: {"spec"?: {...}, "limits"?: {...}})\n'
       + '       node scripts/team-mode.mjs switch recover --instance <instance-root>   (rolls back an interrupted switch)');
@@ -34,17 +84,7 @@ if (process.argv[2] === 'switch') {
   const result = request === null ? { errors: [{ code: 'SWITCH_REFUSED', field: 'switch', reason: 'REQUEST.json is not readable JSON' }] }
     : proposeSwitch(common);
   if (result.errors) finish(result, false);
-  writeSync(1, JSON.stringify(result, null, 2) + '\n');
-  if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    writeSync(2, 'Nothing was changed. A switch is confirmed by a person: run this command in an interactive terminal and type the code it asks for.\n');
-    process.exit(2);
-  }
-  const code = result.digest.slice(-8), typed = Buffer.alloc(256);
-  writeSync(1, `\nType ${code} to switch this team from ${result.from} to ${result.to}; anything else cancels: `);
-  let answer = '';
-  // Node's own stdin does not block on a terminal; the terminal is opened for the one line.
-  try { answer = typed.subarray(0, readSync(openSync('/dev/tty', 'r'), typed)).toString('utf8').trim(); } catch { /* no answer */ }
-  if (answer !== code) { writeSync(2, 'Cancelled; nothing was changed.\n'); process.exit(2); }
+  typedAtTerminal(result, `switch this team from ${result.from} to ${result.to}`);
   finish(switchMode({ ...common, confirm: result.digest, atTerminal: true }), true);
 }
 
