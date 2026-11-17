@@ -312,6 +312,15 @@ test('a commit hook written or moved during a batch holds it; a hook that stages
   const late = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n' } }); assert.equal(late.after().status, 'clean');
   writeFileSync(join(late.product, '.git/hooks/pre-commit'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
   assert.match(refusal(late.commit()).reason, /commit hooks were changed or moved/); assert.deepEqual(late.log(), []);
+  // Husky 9, and a worker's shell writing the script beside the stub folder, which no ticket granted.
+  const stub = live(t); mkdirSync(join(stub.product, '.husky/_'), { recursive: true }); writeFileSync(join(stub.product, '.husky/_/pre-commit'), '#!/bin/sh\n. "$(dirname "$0")/../pre-commit"\n', { mode: 0o755 });
+  git(stub.product, 'add', '-A'); git(stub.product, 'commit', '-q', '-m', 'husky'); git(stub.product, 'config', 'core.hooksPath', '.husky/_');
+  const opened = await stub.before(batchOf(...two)), ranStub = await runWorkflow({ scriptPath: join(stub.root, '.claude/workflows/run-n-rounds.js'), args: opened.args, agentImpl: makeAgentImpl({}) });
+  writeFileSync(join(stub.product, 'src/app.js'), 'x\n'); writeFileSync(join(stub.product, '.husky/pre-commit'), `#!/bin/sh\ntouch "${join(stub.base, 'ran-as-pm')}"\n`, { mode: 0o755 });
+  appendFileSync(join(stub.root, '.claude/rw-write-boundary.log.jsonl'), JSON.stringify({ at: new Date().toISOString(), tool: 'Bash', agentType: 'tag-list-fixture-worker-exec', decision: 'allow' }) + '\n');
+  const stubbed = afterBatch({ teamRoot: stub.kit, instanceRoot: stub.root, result: ranStub.result });
+  assert.deepEqual(stubbed.findings.find(finding => finding.code === 'HOOKS_WRITTEN')?.paths, ['.husky/pre-commit']); assert.equal(stubbed.holdAll, true);
+  assert.ok(refusal(commitBatch({ teamRoot: stub.kit, instanceRoot: stub.root })) || true); assert.equal(existsSync(join(stub.base, 'ran-as-pm')), false, 'the script never ran');
   // A hook the repository already had that stages more than the ticket's paths: the commit is found out and the batch stops there.
   const greedy = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n', 'src/api/tags.js': 'tags\n' }, hooks: () => ({ 'pre-commit': '#!/bin/sh\ngit add -A\n' }) });
   assert.equal(greedy.after().errors, undefined);
@@ -387,6 +396,9 @@ test('a commit that died after archiving is finished by the next call; nothing i
   const closedText = readFileSync(join(f.root, AFTER_FILE), 'utf8'), done = f.commit(); assert.equal(done.errors, undefined);
   writeFileSync(join(f.root, AFTER_FILE), closedText);
   assert.deepEqual(f.commit(), done, 'the archived result is returned'); assert.equal(existsSync(join(f.root, AFTER_FILE)), false); assert.deepEqual(f.log(), ['US-01: Ticket US-01']);
+  // A death before the first removal leaves both records; they are the archived batch's own.
+  writeFileSync(join(f.root, AFTER_FILE), closedText); writeFileSync(join(f.root, BATCH_FILE), readFileSync(join(f.root, 'batches', f.open.runId, 'batch.json')));
+  assert.deepEqual(f.commit(), done); assert.equal(existsSync(join(f.root, BATCH_FILE)), false); assert.deepEqual(f.log(), ['US-01: Ticket US-01']);
 
   // The engine return says "done" for a ticket whose own record says it failed.
   let checks = 0;
@@ -405,7 +417,7 @@ test('a commit that died after archiving is finished by the next call; nothing i
 });
 
 test('each finding that questions the run holds every commit; each check of commit refuses on its own', async t => {
-  assert.deepEqual([...HOLD_ALL].sort(), ['BOUNDARY_CHANGED', 'GUARDIAN_NOT_CLEAN', 'HOOKS_CHANGED', 'PRODUCT_BRANCH_CHANGED', 'PRODUCT_HEAD_MOVED']);
+  assert.deepEqual([...HOLD_ALL].sort(), ['BOUNDARY_CHANGED', 'GUARDIAN_NOT_CLEAN', 'HOOKS_CHANGED', 'HOOKS_WRITTEN', 'PRODUCT_BRANCH_CHANGED', 'PRODUCT_HEAD_MOVED']);
   const edits = { 'src/app.js': 'x\n' }, holds = (closed, code) => { assert.ok(closed.findings.some(finding => finding.code === code), `${code}: ${JSON.stringify(closed.findings)}`); assert.equal(closed.holdAll, true); assert.deepEqual(closed.commits, []); };
   const boundary = await ran(t, { tickets: two, edits }), file = join(boundary.root, '.claude/rw-write-boundary.json'), body = (({ digest: _old, ...rest }) => rest)(JSON.parse(readFileSync(file, 'utf8')));
   const widened = { ...body, wrappers: { ...body.wrappers, 'tag-list-fixture-worker-exec': { duty: 'exec', writePaths: ['**'] } } };

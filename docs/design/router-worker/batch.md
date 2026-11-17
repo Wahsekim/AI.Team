@@ -124,6 +124,7 @@ opened.
    | `PREEXISTING_PATH_CHANGED` | a path that was already changed when the batch started as is was changed again | not held; the path is never committed |
    | `LEDGER_NOT_WRITTEN` | `pm-decisions.md` could not be appended | not held |
    | `HOOKS_CHANGED` | the folder Git runs commit hooks from was moved, or a file in it was added, removed or changed since the batch opened | all held |
+   | `HOOKS_WRITTEN` | a path was changed where the hooks live or beside husky's stub folder, for instance through a worker's shell | all held |
    | `BOUNDARY_CHANGED` | the write-boundary file is not the one the batch opened | all held |
    | `PRODUCT_HEAD_MOVED`, `PRODUCT_BRANCH_CHANGED` | someone committed or changed branch during the batch | all held |
    | `GUARDIAN_NOT_CLEAN` | the Guardian did not answer, or did not find the run clean | all held |
@@ -178,7 +179,9 @@ line to `pm-decisions.md`. It takes the lock for its length. It pushes nothing.
   (`rw-batch-commits.json`), so a hook that rewrites messages does not confuse
   the resume. Each recorded commit is checked again to hold its ticket's paths.
   A commit made just before the command died, and so never recorded, is taken
-  up when it is the next planned one.
+  up when it is the next planned one: its parent is the expected commit and it
+  holds exactly that ticket's paths. A commit made by hand that fits the same
+  description is taken up too; the kit compares paths, not content.
 - A commit is made with the repository's identity, or the one given in
   `GIT_AUTHOR_*` and `GIT_COMMITTER_*`. Every other `GIT_*` variable is ignored.
 - A `commit` that died after archiving the batch is finished by the next call.
@@ -198,7 +201,9 @@ that far, archives the records under `batches/<run id>/` with a note, writes
 "ARCHIVED WITHOUT COMMIT" to `pm-decisions.md`, and commits nothing. Commits
 the kit had already made for the batch stay on the branch and are named. The
 rest of what the batch changed is still in the product work tree; the PM or the
-owner commits it by hand on the working branch, or discards it. The next "before" then needs a
+owner commits it by hand on the working branch, or discards it. `abort`
+releases any lock this team holds, so it must not be run while a `commit` of
+the same team is running. The next "before" then needs a
 clean repository or "start as is", as after any batch that left paths behind.
 
 ## Commit hooks
@@ -209,6 +214,11 @@ refuses a ticket that would write in that folder, in the folder a link to it
 points at, or beside husky's `_` stub folder. `after` holds every commit of a
 batch during which a hook file appeared, changed or was moved, also in
 `.git/hooks`, and `commit` checks again.
+
+A tool that installs hooks during a batch (husky's `prepare`, lefthook,
+git-lfs), or a stray file such as `.DS_Store` in the hooks folder, holds the
+whole batch for the same reason. Files in subfolders of the hooks folder are
+not compared.
 
 This finds a hook that was written or moved. It does not find a hook that calls
 a script a worker edited (`npm test`, a lint script): such a hook runs the

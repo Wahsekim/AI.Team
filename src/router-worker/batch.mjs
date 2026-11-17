@@ -57,8 +57,9 @@ export function changedPaths(product) {
 // digest of its files. Workers run as the PM's user: this finds a hook that was written or moved during a
 // batch; it cannot find a hook that calls a script the worker edited.
 export function hooksOf(product) {
-  const configured = git(product, 'config', '--get', 'core.hooksPath')?.trim(), gitDir = git(product, 'rev-parse', '--absolute-git-dir')?.trim();
-  let folder = configured ? (isAbsolute(configured) ? configured : resolve(product, configured)) : gitDir ? join(gitDir, 'hooks') : null;
+  // Git itself says where it runs hooks from: the configured path, or the repository's own folder, also for a linked work tree.
+  const configured = git(product, 'config', '--get', 'core.hooksPath')?.trim(), named = git(product, 'rev-parse', '--git-path', 'hooks')?.trim();
+  let folder = named ? resolve(product, named) : null;
   try { folder = folder && realpathSync(folder); } catch { /* a folder that does not exist holds no hook */ }
   const inside = path => { const rel = relative(product, path); return rel && !rel.startsWith('..') && !isAbsolute(rel) ? rel.split(sep).join('/') : null; };
   const guarded = folder ? [inside(folder), folder.endsWith(`${sep}_`) ? inside(resolve(folder, '..')) : null, configured && !isAbsolute(configured) ? configured.replace(/\/+$/, '') : null].filter(Boolean) : [];

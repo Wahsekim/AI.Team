@@ -13,7 +13,7 @@ import { BATCH_FILE, AFTER_FILE, PROGRESS_FILE, ARCHIVE, RUN_ID, TICKET_ID, oneL
 // commit: one commit per such ticket, on the batch's branch, then the batch is archived. Nothing is pushed.
 const LEDGER = 'pm-decisions.md', IN_PROGRESS = ['index.lock', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'BISECT_LOG', 'rebase-merge', 'rebase-apply'];
 // Findings after which no ticket of the batch is committed by the kit: what ran is not what was frozen.
-export const HOLD_ALL = ['BOUNDARY_CHANGED', 'PRODUCT_HEAD_MOVED', 'PRODUCT_BRANCH_CHANGED', 'GUARDIAN_NOT_CLEAN', 'HOOKS_CHANGED'];
+export const HOLD_ALL = ['BOUNDARY_CHANGED', 'PRODUCT_HEAD_MOVED', 'PRODUCT_BRANCH_CHANGED', 'GUARDIAN_NOT_CLEAN', 'HOOKS_CHANGED', 'HOOKS_WRITTEN'];
 // An after that was claimed this recently is taken to be running; an older claim is one that died.
 const CLAIM_MS = 60000;
 const ABANDON = 'If the batch cannot be committed by the kit, archive it with: rw-batch.mjs abort --instance <instance-root>, then commit or discard its changes by hand';
@@ -96,6 +96,9 @@ export function afterBatch({ teamRoot, instanceRoot, result }) {
     // A changed path that is a directory is a repository of its own inside the product: Git would commit a link to it, not its files.
     const nested = changed.filter(path => path.endsWith('/')), files = changed.filter(path => !path.endsWith('/'));
     if (nested.length) findings.push({ code: 'NESTED_REPOSITORY', paths: nested });
+    // A path changed where the hooks live, or beside husky's stub folder, through a worker's shell: it would run at the commit.
+    const hooked = changed.filter(path => (batch.hooks?.guarded ?? []).some(guard => path === guard || path.startsWith(`${guard}/`)));
+    if (hooked.length) findings.push({ code: 'HOOKS_WRITTEN', paths: hooked });
     const was = batch.preexistingContent ?? {}, is = contentOf(product, batch.preexisting);
     const rechanged = batch.preexisting.filter(path => Object.hasOwn(was, path) && was[path] !== is[path]);
     if (rechanged.length) findings.push({ code: 'PREEXISTING_PATH_CHANGED', paths: rechanged });
@@ -140,10 +143,11 @@ export function commitBatch({ teamRoot, instanceRoot }) {
     // A commit that archived the batch and died before it cleared the team's root is finished here. The archive
     // must be this batch's own: its record there, and a result that names the after record still in the root.
     try {
-      const root = instanceOf(resolve(teamRoot), instanceRoot), closed = readJSON(join(root, AFTER_FILE)), id = closed?.runId ?? readJSON(join(root, PROGRESS_FILE))?.runId;
+      const root = instanceOf(resolve(teamRoot), instanceRoot), closed = readJSON(join(root, AFTER_FILE)), id = closed?.runId ?? readJSON(join(root, PROGRESS_FILE))?.runId ?? readJSON(join(root, BATCH_FILE))?.runId;
       const folder = typeof id === 'string' && RUN_ID.test(id) ? join(root, ARCHIVE, id) : null, archived = folder ? readJSON(join(folder, 'commit.json')) : null;
-      if (!exists(join(root, BATCH_FILE)) && intact(archived, 'batch-committed') && intact(readJSON(join(folder, 'batch.json')), 'batch-open') && archived.batchDigest === readJSON(join(folder, 'batch.json')).digest
-        && (!closed || closed.digest === archived.afterDigest)) { for (const file of [AFTER_FILE, PROGRESS_FILE]) rmSync(join(root, file), { force: true }); return archived; }
+      const still = exists(join(root, BATCH_FILE)) ? readJSON(join(root, BATCH_FILE)) : null;
+      if ((!exists(join(root, BATCH_FILE)) || (intact(still, 'batch-open') && still.digest === archived?.batchDigest && closed)) && intact(archived, 'batch-committed') && intact(readJSON(join(folder, 'batch.json')), 'batch-open') && archived.batchDigest === readJSON(join(folder, 'batch.json')).digest
+        && (!closed || closed.digest === archived.afterDigest)) { for (const file of [BATCH_FILE, AFTER_FILE, PROGRESS_FILE]) rmSync(join(root, file), { force: true }); return archived; }
     } catch { /* judged below */ }
     const { instance, batch } = openBatch(teamRoot, instanceRoot), after = readJSON(join(instance, AFTER_FILE));
     need(exists(join(instance, AFTER_FILE)) && after?.stage !== 'batch-closing', 'This batch has not been closed; run: rw-batch.mjs after RESULT.json --instance <instance-root>');
