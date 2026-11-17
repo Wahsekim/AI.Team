@@ -174,15 +174,21 @@ changed, so a switch that fails or dies puts them back byte for byte.
 
 The switch is refused before anything moves when `.claude/settings.json` is a
 symbolic link, is not a JSON object with hooks in the documented shape, or when
-it or `settings.local.json` disables all hooks.
+it or `settings.local.json` disables all hooks (a team may always leave
+Router/Worker mode, whatever its hooks).
+
+A worker's wrapper file and the name in its frontmatter must be the same; the
+runtime knows the agent by that name.
 
 The runtime reads hooks and agents when a session starts: **start a new PM
 session after a switch.**
 
 - A session opened before a switch into Router/Worker mode has no hook: its
   workers are not bounded.
-- A session opened before a switch back still runs the hook. In a team with no
-  mode profile (`profiles/team-mode.json`) the hook refuses nothing.
+- A session opened before a switch back still runs the hook. With no boundary
+  file it refuses every agent's write until a new session is started. The hook
+  stays fail-closed on purpose: any exception to that rule can be reached by
+  hiding a file.
 - A hook that cannot load (a kit checkout without `src/`, an instance that was
   moved) exits with an error the runtime does not treat as a refusal: the
   writes go ahead. The after-run check of a batch counts the hook's log lines

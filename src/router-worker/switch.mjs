@@ -8,7 +8,7 @@ import { stageTeam } from './stage.mjs';
 import { makeLive } from './activate.mjs';
 import { instanceOf } from './roots.mjs';
 import { git, isRepositoryRoot, readLease, acquireLease, releaseLease } from './lease.mjs';
-import { standBoundary, dropBoundary, settingsGap, BOUNDARY_FILE } from './write-boundary.mjs';
+import { standBoundary, dropBoundary, settingsGap, hookGap, BOUNDARY_FILE } from './write-boundary.mjs';
 import { randomBytes } from 'node:crypto';
 
 // ADR 0010: a deployed team is switched between specialist and Router/Worker mode. The live mode's own
@@ -151,7 +151,8 @@ function plan({ to, request, teamRoot, instanceRoot, productRoot }) {
   const taken = exists(join(instance, HOLIDAY, live.name, MANIFEST)) ? [MANIFEST] : pack.filter(path => exists(join(instance, HOLIDAY, live.name, path)));
   need(!taken.length, `holiday/${live.name} already holds a packed team (${taken.slice(0, 5).join(', ')}); it is never overwritten. Move it away by hand if it is not needed`);
 
-  const gap = settingsGap(instance);
+  // Hooks must be able to run only where the team is going into Router/Worker mode.
+  const gap = settingsGap(instance, { hooksNeeded: to === 'router-worker' }) ?? (to === 'router-worker' ? hookGap(join(kit, HOOK)) : null);
   need(!gap, `${gap}; the switch changes the team's hooks and will not guess`);
 
   const packed = packedTeam(instance, to), base = { schemaVersion: 1, stage: 'switch-proposed', from: live.name, to, pack };
@@ -230,6 +231,9 @@ function workerWrappers(instance) {
   return Object.fromEntries(['exec', 'check', 'guard'].map(duty => {
     const name = /^\.claude\/agents\/([A-Za-z0-9._-]+)\.md$/.exec(rows.find(cells => cells[0] === `worker-${duty}`)?.[2] ?? '')?.[1];
     need(name && isFile(join(instance, REGISTRY, `${name}.md`)), `The roster does not name a wrapper file for worker-${duty}; the write limits could not name that worker`);
+    // The runtime knows an agent by the name in its frontmatter; the boundary must carry that same name.
+    const declared = /^---\n[\s\S]*?^name:\s*"?([^"\n]+?)"?\s*$[\s\S]*?^---$/m.exec(readFileSync(join(instance, REGISTRY, `${name}.md`), 'utf8'))?.[1];
+    need(declared === name, `${REGISTRY}/${name}.md declares the name ${declared ?? '(none)'}; a worker's wrapper file and its name must be the same`);
     return [duty, name];
   }));
 }
@@ -286,6 +290,9 @@ export function recoverSwitch({ teamRoot, instanceRoot }) {
     // The journal is obeyed only for files that may belong to the two modes; it never moves or deletes shared history.
     const foreign = [...journal.pack.filter(path => !OWN[journal.from](path)), ...journal.install.filter(path => !(journal.kind === 'draft' ? installable(path) : OWN[journal.to](path)))];
     need(!foreign.length, `The journal names files that are not a mode's own (${foreign.slice(0, 5).join(', ')}); restore the team by hand from holiday/`);
+    const copies = readdirSync(join(instance, HOLIDAY)).filter(name => name.startsWith('.switch-backup-'));
+    need(typeof journal.backup === 'string' && /^\.switch-backup-[a-f0-9]+$/.test(journal.backup) && copies.every(name => name === journal.backup),
+      'The journal does not name the copy of the settings the switch kept aside, or another copy is present; restore .claude/settings.json by hand from holiday/');
     rollBack(instance, journal);
     appendFileSync(join(instance, LEDGER), `${new Date().toISOString().slice(0, 10)} MODE SWITCH ROLLED BACK: the interrupted switch from ${journal.from} to ${journal.to} was undone by switch recover; the team is in ${journal.from} mode.\n`);
     const record = { schemaVersion: 1, stage: 'switch-rolled-back', mode: journal.from, abandoned: journal.to };

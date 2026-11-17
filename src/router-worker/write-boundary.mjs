@@ -61,7 +61,7 @@ export function armBoundary({ inputs, teamRoot, productRoot, hookPath, methodBun
 
 const oursHook = hook => /[\\/]rw-write-boundary\.mjs"$/.test(hook?.command ?? '');
 // Why the team's settings cannot carry the hook; null when they can. Checked before a switch touches anything.
-export function settingsGap(teamRoot) {
+export function settingsGap(teamRoot, { hooksNeeded = true } = {}) {
   const stat = lstatSync(join(teamRoot, SETTINGS), { throwIfNoEntry: false });
   if (stat) {
     if (!stat.isFile()) return `${SETTINGS} is not a regular file (a symbolic link is not followed)`;
@@ -71,26 +71,31 @@ export function settingsGap(teamRoot) {
       || (hooks?.PreToolUse ?? []).some(entry => !plain(entry) || (entry.hooks !== undefined && !Array.isArray(entry.hooks))))
       return `${SETTINGS} is not a JSON object with hooks in the documented shape`;
   }
-  for (const file of [SETTINGS, '.claude/settings.local.json']) {
+  if (hooksNeeded) for (const file of [SETTINGS, '.claude/settings.local.json']) {
     try { if (JSON.parse(readFileSync(join(teamRoot, file), 'utf8'))?.disableAllHooks) return `${file} disables all hooks; the write limits could not be enforced`; } catch { /* absent or unreadable: not this check */ }
   }
   return null;
 }
-function teamSettings(teamRoot) {
-  need(settingsGap(teamRoot) === null, settingsGap(teamRoot));
+function teamSettings(teamRoot, hooksNeeded) {
+  need(settingsGap(teamRoot, { hooksNeeded }) === null, settingsGap(teamRoot, { hooksNeeded }));
   const path = join(teamRoot, SETTINGS);
   return { path, settings: lstatSync(path, { throwIfNoEntry: false }) ? JSON.parse(readFileSync(path, 'utf8')) : {} };
 }
 // The team's PreToolUse entries without our hook. A hook that shares an entry with ours is kept.
-const withoutOurs = entries => entries.map(entry => Array.isArray(entry.hooks) && entry.hooks.some(oursHook) ? { ...entry, hooks: entry.hooks.filter(hook => !oursHook(hook)) } : entry)
-  .filter(entry => !Array.isArray(entry.hooks) || entry.hooks.length > 0);
+const holdsOurs = entry => Array.isArray(entry.hooks) && entry.hooks.some(oursHook);
+const withoutOurs = entries => entries.map(entry => holdsOurs(entry) ? { ...entry, hooks: entry.hooks.filter(hook => !oursHook(hook)) } : entry)
+  .filter((entry, i) => !holdsOurs(entries[i]) || entry.hooks.length > 0);
+
+// Why this hook file cannot be registered; null when it can.
+export const hookGap = hookPath => typeof hookPath === 'string' && isAbsolute(hookPath) && !/["$`\\]/.test(hookPath) && lstatSync(hookPath, { throwIfNoEntry: false })?.isFile()
+  ? null : 'The write-boundary hook is missing from the kit, or the kit\'s path holds a character that cannot be quoted in a hook command';
 
 // A standing team between batches: the hook is registered and the three workers may write nothing.
 // Any other agent of the team is not judged.
 export function standBoundary({ teamRoot, productRoot, wrappers, hookPath }) {
   need(DUTIES.every(duty => typeof wrappers?.[duty] === 'string' && wrappers[duty]) && new Set(DUTIES.map(duty => wrappers[duty])).size === DUTIES.length, 'One wrapper per duty is required');
-  need(typeof hookPath === 'string' && isAbsolute(hookPath) && !/["$`\\]/.test(hookPath) && lstatSync(hookPath, { throwIfNoEntry: false })?.isFile(), 'The write-boundary hook is missing from the kit, or its path cannot be quoted');
-  const { path, settings } = teamSettings(teamRoot), existing = settings.hooks?.PreToolUse ?? [];
+  need(hookGap(hookPath) === null, hookGap(hookPath));
+  const { path, settings } = teamSettings(teamRoot, true), existing = settings.hooks?.PreToolUse ?? [];
   const body = { schemaVersion: 1, productRoot, wrappers: Object.fromEntries(DUTIES.map(duty => [wrappers[duty], { duty, writePaths: [] }])) };
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(join(teamRoot, BOUNDARY_FILE), JSON.stringify({ ...body, digest: digest(body) }, null, 2) + '\n');
@@ -100,8 +105,8 @@ export function standBoundary({ teamRoot, productRoot, wrappers, hookPath }) {
 // The team leaves Router/Worker mode: the hook is unregistered and the boundary removed. Other settings stay.
 export function dropBoundary({ teamRoot }) {
   rmSync(join(teamRoot, BOUNDARY_FILE), { force: true });
-  const { path, settings } = teamSettings(teamRoot), existing = settings.hooks?.PreToolUse ?? [];
-  if (!existing.some(entry => Array.isArray(entry.hooks) && entry.hooks.some(oursHook))) return;
+  const { path, settings } = teamSettings(teamRoot, false), existing = settings.hooks?.PreToolUse ?? [];
+  if (!existing.some(holdsOurs)) return;
   const { PreToolUse, ...otherHooks } = settings.hooks, { hooks, ...rest } = settings, kept = withoutOurs(existing);
   const nextHooks = kept.length ? { ...otherHooks, PreToolUse: kept } : otherHooks, next = Object.keys(nextHooks).length ? { ...rest, hooks: nextHooks } : rest;
   // A settings file that held nothing but our hook is removed with it.
