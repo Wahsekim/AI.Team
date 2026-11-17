@@ -2,7 +2,7 @@
 // The live mode's own files go on holiday; shared history stays; the owner confirms the proposal.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs, { mkdirSync, writeFileSync, readFileSync, rmSync, cpSync, existsSync, readdirSync, appendFileSync } from 'node:fs';
+import fs, { mkdirSync, writeFileSync, readFileSync, rmSync, cpSync, existsSync, readdirSync, appendFileSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { syncBuiltinESMExports } from 'node:module';
 import { spawnSync } from 'node:child_process';
@@ -15,7 +15,8 @@ import { fixture, git, CLI } from './fixtures/router-worker/standing-team.mjs';
 const SHARED = ['charter.md', 'CLAUDE.md', 'agents/lifecycle.md', 'agents/lessons.md', 'memory/pm.md', 'profiles/project.md', 'profiles/stack.md', 'kit.lock'];
 
 const refusal = result => result.errors?.[0];
-const sansLedger = tree => tree.split('\n').filter(line => !line.endsWith('./pm-decisions.md') && !line.includes('./holiday/.switch-backup/')).join('\n');
+const sansLedger = tree => tree.split('\n').filter(line => !line.endsWith('./pm-decisions.md')).join('\n');
+const sansBackup = tree => tree.split('\n').filter(line => !line.includes('./holiday/.switch-backup-')).join('\n');
 const passes = () => ({ ok: true, verdict: 'DEPLOYMENT-STRUCTURALLY-COMPLETE (injected)' });
 const OWN_SPECIALIST = ['agents/roster.md', 'agents/backend.md', '.claude/agents/tag-list-fixture-backend.md'];
 
@@ -270,7 +271,7 @@ test('CLI: switch recover rolls an interrupted switch back', t => {
 });
 
 // The process "dies" at its nth write under `roots`: that write and every later one fail, so nothing after it reaches the disk.
-const WRITES = ['renameSync', 'writeFileSync', 'rmSync', 'mkdirSync', 'rmdirSync', 'appendFileSync', 'linkSync', 'unlinkSync'];
+const WRITES = ['renameSync', 'writeFileSync', 'rmSync', 'mkdirSync', 'rmdirSync', 'appendFileSync', 'linkSync', 'unlinkSync', 'copyFileSync'];
 function dieAt(n, roots, action) {
   const real = Object.fromEntries(WRITES.map(name => [name, fs[name]]));
   let seen = 0;
@@ -285,6 +286,8 @@ function dieAt(n, roots, action) {
 
 test('a switch that dies at any write is undone by recover: the tree is as before, the lock is free, the next switch is possible', t => {
   const f = fixture(t), roots = [f.root + '/', f.product + '/'], keep = join(f.base, 'snapshot');
+  // The team has settings of its own, so every rollback has a file to put back.
+  writeFileSync(join(f.root, '.claude/settings.json'), JSON.stringify({ env: { KEEP: '1' } }, null, 4) + '\n');
   const entries = dir => readdirSync(dir).filter(name => name !== 'kit');
   const save = () => { rmSync(keep, { recursive: true, force: true }); mkdirSync(keep); for (const name of entries(f.root)) cpSync(join(f.root, name), join(keep, name), { recursive: true }); };
   const unlock = () => { for (const name of readdirSync(join(f.product, '.git'))) if (name.startsWith('rw-ownership-lease')) rmSync(join(f.product, '.git', name)); };
@@ -308,12 +311,26 @@ test('a switch that dies at any write is undone by recover: the tree is as befor
       assert.ok(recovered.stage === 'switch-rolled-back' || /no interrupted switch/.test(refusal(recovered).reason), `${where}: ${JSON.stringify(recovered)}`);
       assert.equal(readLease({ productRoot: f.product }).status, 'free', where);
       // Once the journal is gone the switch is done; only the copy of the settings it kept aside may be left.
-      if (!recovered.stage && sansLedger(f.tree()) === switched) continue;
+      if (!recovered.stage && sansBackup(sansLedger(f.tree())) === switched) continue;
       assert.equal(sansLedger(f.tree()), before, where);
       assert.equal(f.propose(to, request).digest, confirm, `${where}: the same switch can be proposed again`);
     }
+    // A recover that dies itself, at each of its writes, is finished by the next recover.
+    const late = total - 6, undo = (() => { reset(); dieAt(late, roots, attempt); return dieAt(Infinity, roots, recover); })();
+    for (let m = 1; m <= undo; m++) {
+      reset(); dieAt(late, roots, attempt); dieAt(m, roots, recover);
+      const again = recover(), where = `switch to ${to}, death at write ${late}, recover dead at its write ${m} of ${undo}`;
+      assert.ok(again.stage === 'switch-rolled-back' || /no interrupted switch/.test(refusal(again).reason), `${where}: ${JSON.stringify(again)}`);
+      assert.equal(sansLedger(f.tree()), before, where); assert.equal(readLease({ productRoot: f.product }).status, 'free', where);
+    }
     reset(); assert.equal(attempt().errors, undefined);
   }
+  // A copy that lost a file is never read as "there was no file": recover stops instead of deleting the team's settings.
+  const last = () => f.apply('router-worker', { spec: f.spec }, undefined, { validate: passes });
+  reset(); const writes = dieAt(Infinity, roots, last); reset(); dieAt(writes - 6, roots, last);
+  const backup = readdirSync(join(f.root, 'holiday')).find(name => name.startsWith('.switch-backup-'));
+  assert.ok(backup, 'the death left the copy in place'); rmSync(join(f.root, 'holiday', backup, '0'));
+  assert.match(refusal(recover()).reason, /settings\.json kept aside by the switch is missing/); assert.ok(existsSync(join(f.root, '.claude/settings.json')));
 });
 
 test('the switch installs the write-limit hook: between batches no worker may write, a governance role is not judged; switching back removes it', t => {
@@ -329,13 +346,43 @@ test('the switch installs the write-limit hook: between batches no worker may wr
   assert.equal(write('tag-list-fixture-architect', join(f.root, 'decisions/0001.md')), 'allow', 'a governance role works between batches');
   const live = JSON.parse(readFileSync(settings, 'utf8'));
   assert.deepEqual(live.env, { KEEP: '1' }); assert.deepEqual(live.hooks.Stop, [other]); assert.deepEqual(live.hooks.PreToolUse[0], other); assert.equal(live.hooks.PreToolUse.length, 2);
-  assert.equal(existsSync(join(f.root, 'holiday/.switch-backup')), false);
+  assert.deepEqual(readdirSync(join(f.root, 'holiday')), ['specialist'], 'the copy kept aside is gone');
+  // The hook as registered, run as the runtime runs it.
+  const hook = (agent, path, root = f.root) => spawnSync('sh', ['-c', live.hooks.PreToolUse[1].hooks[0].command], { encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: root },
+    input: JSON.stringify({ tool_name: 'Write', ...(agent ? { agent_type: agent } : {}), cwd: f.product, tool_input: { file_path: path } }) });
+  assert.equal(hook('tag-list-fixture-worker-exec', 'src/app.js').status, 2, 'the registered hook loads and refuses a worker');
+  assert.equal(hook('tag-list-fixture-architect', 'src/app.js').status, 0); assert.equal(hook(null, 'src/app.js').status, 0, 'the main session is not judged');
   assert.equal(f.apply('specialist', {}).errors, undefined);
   assert.equal(readBoundary(f.root), null); assert.equal(existsSync(join(f.root, '.claude/rw-write-boundary.json')), false);
   assert.deepEqual(JSON.parse(readFileSync(settings, 'utf8')), JSON.parse(before), 'the team\'s other settings are as they were');
+  // A session opened before the switch back still runs the hook: in a team with no Router/Worker profile it refuses nothing.
+  assert.equal(hook('tag-list-fixture-backend', 'src/app.js').status, 0); assert.equal(hook('tag-list-fixture-worker-exec', 'src/app.js').status, 0);
   // A failed switch puts the settings back byte for byte.
+  const afterRoundTrip = readFileSync(settings, 'utf8');
   const failed = f.apply('router-worker', {}, undefined, { validate: () => ({ ok: false, verdict: 'injected' }) });
   assert.match(refusal(failed).reason, /injected/); assert.equal(readBoundary(f.root), null);
+  assert.equal(readFileSync(settings, 'utf8'), afterRoundTrip, 'byte for byte'); assert.deepEqual(readdirSync(join(f.root, 'holiday')), ['router-worker']);
+  // A hook of the team's that shares an entry with ours is kept, in and out.
+  const shared = fixture(t), ours = { type: 'command', command: 'node "/old/kit/scripts/hooks/rw-write-boundary.mjs"' }, audit = { type: 'command', command: 'echo USER-AUDIT' };
+  writeFileSync(join(shared.root, '.claude/settings.json'), JSON.stringify({ hooks: { PreToolUse: [{ matcher: 'Write|Edit|NotebookEdit|MultiEdit|Bash', hooks: [ours, audit] }] } }));
+  assert.equal(shared.apply().errors, undefined);
+  const kept = JSON.parse(shared.read('.claude/settings.json')).hooks.PreToolUse;
+  assert.deepEqual(kept[0].hooks, [audit]); assert.equal(kept.length, 2, 'the old registration is replaced, not doubled');
+  assert.equal(shared.apply('specialist', {}).errors, undefined); assert.deepEqual(JSON.parse(shared.read('.claude/settings.json')).hooks.PreToolUse[0].hooks, [audit]);
+  // A worker is named as the roster names it, not by a convention.
+  const renamed = fixture(t); assert.equal(renamed.apply().errors, undefined);
+  writeFileSync(join(renamed.root, 'agents/roster.md'), renamed.read('agents/roster.md').replace('.claude/agents/tag-list-fixture-worker-exec.md', '.claude/agents/tlf-exec.md'));
+  writeFileSync(join(renamed.root, '.claude/agents/tlf-exec.md'), renamed.read('.claude/agents/tag-list-fixture-worker-exec.md').replace('name: "tag-list-fixture-worker-exec"', 'name: "tlf-exec"'));
+  rmSync(join(renamed.root, '.claude/agents/tag-list-fixture-worker-exec.md'));
+  assert.equal(renamed.apply('specialist', {}).errors, undefined); assert.equal(renamed.apply('router-worker', {}, undefined, { validate: passes }).errors, undefined);
+  assert.ok(Object.hasOwn(readBoundary(renamed.root).wrappers, 'tlf-exec'), 'the renamed worker is bounded');
+  // Settings the switch cannot change safely stop it before anything moves.
+  for (const [content, pattern] of [['not json', /documented shape/], ['[]', /documented shape/], ['{"hooks":[]}', /documented shape/], ['{"hooks":{"PreToolUse":{}}}', /documented shape/], ['{"disableAllHooks":true}', /disables all hooks/]]) {
+    const odd = fixture(t); writeFileSync(join(odd.root, '.claude/settings.json'), content); const tree = odd.tree();
+    assert.match(refusal(odd.apply()).reason, pattern, content); assert.equal(odd.tree(), tree);
+  }
+  const linked = fixture(t); writeFileSync(join(linked.base, 'elsewhere.json'), '{}'); symlinkSync(join(linked.base, 'elsewhere.json'), join(linked.root, '.claude/settings.json'));
+  assert.match(refusal(linked.propose()).reason, /not a regular file/);
   // A team with no settings file gets one, and loses it again.
   const bare = fixture(t); assert.equal(bare.apply().errors, undefined); assert.ok(existsSync(join(bare.root, '.claude/settings.json')));
   assert.equal(bare.apply('specialist', {}).errors, undefined); assert.equal(existsSync(join(bare.root, '.claude/settings.json')), false);

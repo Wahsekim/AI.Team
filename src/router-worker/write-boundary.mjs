@@ -26,8 +26,8 @@ export function armBoundary({ inputs, teamRoot, productRoot, hookPath, methodBun
     need(canonicalDirectory(teamRoot) && canonicalDirectory(productRoot), 'Canonical existing team and product roots are required');
     let mode;
     try { mode = JSON.parse(readFileSync(join(teamRoot, 'profiles/team-mode.json'), 'utf8')); } catch { mode = null; }
-    // A disposable activated copy, or a standing team in Router/Worker mode (ADR 0010, decision 12).
-    need(mode?.status === 'activated-disposable-smoke' || (mode?.mode === 'router-worker' && mode.status === 'live'), 'The team root is neither an activated disposable copy nor a live Router/Worker team');
+    // Only a disposable activated copy is written; a standing instance keeps its settings.
+    need(mode?.status === 'activated-disposable-smoke', 'The team root is not an activated disposable copy');
     need(Array.isArray(inputs) && inputs.length >= 1 && inputs.length <= 300 && typeof hookPath === 'string' && isAbsolute(hookPath), 'inputs and an absolute hook path are required');
     const frozen = inputs.map(input => parseJSON(canonical(input))), failed = frozen.map(input => compile(input, methodBundle ? { methodBundle } : {})).find(preview => preview.errors);
     if (failed) return { errors: failed.errors };
@@ -59,34 +59,52 @@ export function armBoundary({ inputs, teamRoot, productRoot, hookPath, methodBun
   }
 }
 
-const ours = entry => entry?.matcher === MATCHER && Array.isArray(entry.hooks) && entry.hooks.some(hook => /[\\/]rw-write-boundary\.mjs"$/.test(hook?.command ?? ''));
-function teamSettings(teamRoot) {
-  const path = join(teamRoot, SETTINGS);
-  if (!lstatSync(path, { throwIfNoEntry: false })) return { path, settings: {} };
-  let settings; try { settings = JSON.parse(readFileSync(path, 'utf8')); } catch { settings = null; }
-  need(settings && typeof settings === 'object' && !Array.isArray(settings), `${SETTINGS} is not a JSON object`);
-  return { path, settings };
+const oursHook = hook => /[\\/]rw-write-boundary\.mjs"$/.test(hook?.command ?? '');
+// Why the team's settings cannot carry the hook; null when they can. Checked before a switch touches anything.
+export function settingsGap(teamRoot) {
+  const stat = lstatSync(join(teamRoot, SETTINGS), { throwIfNoEntry: false });
+  if (stat) {
+    if (!stat.isFile()) return `${SETTINGS} is not a regular file (a symbolic link is not followed)`;
+    let settings; try { settings = JSON.parse(readFileSync(join(teamRoot, SETTINGS), 'utf8')); } catch { settings = null; }
+    const plain = value => value && typeof value === 'object' && !Array.isArray(value), hooks = settings?.hooks;
+    if (!plain(settings) || (hooks !== undefined && !plain(hooks)) || (hooks?.PreToolUse !== undefined && !Array.isArray(hooks.PreToolUse))
+      || (hooks?.PreToolUse ?? []).some(entry => !plain(entry) || (entry.hooks !== undefined && !Array.isArray(entry.hooks))))
+      return `${SETTINGS} is not a JSON object with hooks in the documented shape`;
+  }
+  for (const file of [SETTINGS, '.claude/settings.local.json']) {
+    try { if (JSON.parse(readFileSync(join(teamRoot, file), 'utf8'))?.disableAllHooks) return `${file} disables all hooks; the write limits could not be enforced`; } catch { /* absent or unreadable: not this check */ }
+  }
+  return null;
 }
+function teamSettings(teamRoot) {
+  need(settingsGap(teamRoot) === null, settingsGap(teamRoot));
+  const path = join(teamRoot, SETTINGS);
+  return { path, settings: lstatSync(path, { throwIfNoEntry: false }) ? JSON.parse(readFileSync(path, 'utf8')) : {} };
+}
+// The team's PreToolUse entries without our hook. A hook that shares an entry with ours is kept.
+const withoutOurs = entries => entries.map(entry => Array.isArray(entry.hooks) && entry.hooks.some(oursHook) ? { ...entry, hooks: entry.hooks.filter(hook => !oursHook(hook)) } : entry)
+  .filter(entry => !Array.isArray(entry.hooks) || entry.hooks.length > 0);
 
 // A standing team between batches: the hook is registered and the three workers may write nothing.
 // Any other agent of the team is not judged.
 export function standBoundary({ teamRoot, productRoot, wrappers, hookPath }) {
   need(DUTIES.every(duty => typeof wrappers?.[duty] === 'string' && wrappers[duty]) && new Set(DUTIES.map(duty => wrappers[duty])).size === DUTIES.length, 'One wrapper per duty is required');
-  need(typeof hookPath === 'string' && isAbsolute(hookPath) && lstatSync(hookPath, { throwIfNoEntry: false })?.isFile(), 'The write-boundary hook is missing from the kit');
-  const { path, settings } = teamSettings(teamRoot), existing = Array.isArray(settings.hooks?.PreToolUse) ? settings.hooks.PreToolUse : [];
+  need(typeof hookPath === 'string' && isAbsolute(hookPath) && !/["$`\\]/.test(hookPath) && lstatSync(hookPath, { throwIfNoEntry: false })?.isFile(), 'The write-boundary hook is missing from the kit, or its path cannot be quoted');
+  const { path, settings } = teamSettings(teamRoot), existing = settings.hooks?.PreToolUse ?? [];
   const body = { schemaVersion: 1, productRoot, wrappers: Object.fromEntries(DUTIES.map(duty => [wrappers[duty], { duty, writePaths: [] }])) };
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(join(teamRoot, BOUNDARY_FILE), JSON.stringify({ ...body, digest: digest(body) }, null, 2) + '\n');
-  writeFileSync(path, JSON.stringify({ ...settings, hooks: { ...settings.hooks, PreToolUse: [...existing.filter(entry => !ours(entry)), { matcher: MATCHER, hooks: [{ type: 'command', command: `node "${hookPath}"` }] }] } }, null, 2) + '\n');
+  writeFileSync(path, JSON.stringify({ ...settings, hooks: { ...settings.hooks, PreToolUse: [...withoutOurs(existing), { matcher: MATCHER, hooks: [{ type: 'command', command: `node "${hookPath}"` }] }] } }, null, 2) + '\n');
 }
 
 // The team leaves Router/Worker mode: the hook is unregistered and the boundary removed. Other settings stay.
 export function dropBoundary({ teamRoot }) {
   rmSync(join(teamRoot, BOUNDARY_FILE), { force: true });
-  const { path, settings } = teamSettings(teamRoot), existing = Array.isArray(settings.hooks?.PreToolUse) ? settings.hooks.PreToolUse : [];
-  if (!existing.some(ours)) return;
-  const { PreToolUse, ...otherHooks } = settings.hooks, { hooks, ...rest } = settings, kept = existing.filter(entry => !ours(entry));
+  const { path, settings } = teamSettings(teamRoot), existing = settings.hooks?.PreToolUse ?? [];
+  if (!existing.some(entry => Array.isArray(entry.hooks) && entry.hooks.some(oursHook))) return;
+  const { PreToolUse, ...otherHooks } = settings.hooks, { hooks, ...rest } = settings, kept = withoutOurs(existing);
   const nextHooks = kept.length ? { ...otherHooks, PreToolUse: kept } : otherHooks, next = Object.keys(nextHooks).length ? { ...rest, hooks: nextHooks } : rest;
+  // A settings file that held nothing but our hook is removed with it.
   if (Object.keys(next).length) writeFileSync(path, JSON.stringify(next, null, 2) + '\n'); else rmSync(path);
 }
 

@@ -162,14 +162,31 @@ are named and may write nothing. Any other agent of the team, a governance role
 for example, is not judged. A batch's "before" command (not built yet) replaces
 that file with the batch's own write paths.
 
+The three workers are named as the live roster names them. A roster that does
+not name a wrapper file for one of them stops the switch.
+
 A switch back to specialist mode unregisters the hook and removes the boundary
-file. The team's other settings and hooks are kept in both directions. The two
-files are copied aside before they are changed, so a switch that fails or dies
-puts them back byte for byte.
+file. The team's other settings and hooks are kept in both directions, a hook
+that shares an entry with ours included; the file is written again, so key order
+and indentation may change, and a file that held nothing but our hook is removed.
+The two files are copied to `holiday/.switch-backup-<id>/` before they are
+changed, so a switch that fails or dies puts them back byte for byte.
+
+The switch is refused before anything moves when `.claude/settings.json` is a
+symbolic link, is not a JSON object with hooks in the documented shape, or when
+it or `settings.local.json` disables all hooks.
 
 The runtime reads hooks and agents when a session starts: **start a new PM
-session after a switch.** A session that was open during the switch still runs
-with the old agents and the old hooks.
+session after a switch.**
+
+- A session opened before a switch into Router/Worker mode has no hook: its
+  workers are not bounded.
+- A session opened before a switch back still runs the hook. In a team with no
+  mode profile (`profiles/team-mode.json`) the hook refuses nothing.
+- A hook that cannot load (a kit checkout without `src/`, an instance that was
+  moved) exits with an error the runtime does not treat as a refusal: the
+  writes go ahead. The after-run check of a batch counts the hook's log lines
+  and reports a batch the hook never saw.
 
 ## The product repository
 

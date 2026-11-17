@@ -20,7 +20,7 @@ export function fixture(t, { roles = 'backend' } = {}) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'rw-switch-'))), root = join(base, 'fixture.team'), kit = join(root, 'kit'), product = join(base, 'product');
   t.after(() => rmSync(base, { recursive: true, force: true }));
   const tracked = execFileSync('git', ['-C', ROOT, 'ls-files', '-co', '--exclude-standard'], { encoding: 'utf8' }).split('\n')
-    .filter(path => path && !/^(tests|src|docs\/design|\.github)\//.test(path));
+    .filter(path => path && !/^(tests|docs\/design|\.github)\//.test(path));
   for (const path of tracked) { mkdirSync(dirname(join(kit, path)), { recursive: true }); cpSync(join(ROOT, path), join(kit, path)); }
   mkdirSync(join(product, 'src'), { recursive: true }); writeFileSync(join(product, 'src/app.js'), 'export const x = 1;\n');
   git(product, 'init', '-q'); git(product, 'add', '-A'); git(product, 'commit', '-q', '-m', 'product');

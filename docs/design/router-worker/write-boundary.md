@@ -104,5 +104,6 @@ switch, not by a run, and a boundary file exists at all times:
 | batch open | the three workers, exec with the batch's write paths | exec inside its paths only | not judged |
 | file missing or edited | none readable | every write refused | every write refused |
 
-`armBoundary` accepts such a team as well as an activated throwaway copy. See
+`armBoundary` still accepts only an activated throwaway copy; the batch "before"
+command will open a standing team's boundary with its own checks. See
 [mode-switch.md](mode-switch.md).
