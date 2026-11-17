@@ -19,6 +19,10 @@ export function git(root, ...args) {
   const result = spawnSync('git', ['-C', root, ...args], { encoding: 'utf8', timeout: 20000, maxBuffer: 16 * 1024 * 1024, env: gitEnv() });
   return result.status === 0 && !result.error ? result.stdout : null;
 }
+// A Git command whose outcome matters, under the same scrubbed environment: {status, stdout, stderr, error}.
+export function gitRun(root, args, { input, timeout = 120000 } = {}) {
+  return spawnSync('git', ['-C', root, ...args], { encoding: 'utf8', timeout, maxBuffer: 64 * 1024 * 1024, env: gitEnv(), ...(input === undefined ? {} : { input }) });
+}
 export function canonicalDirectory(path, label) {
   requireValue(typeof path === 'string' && isAbsolute(path) && resolve(path) === path, `${label} must be a normalized absolute path`);
   requireValue(lstatSync(path, { throwIfNoEntry: false })?.isDirectory() && realpathSync(path) === path, `${label} must be a canonical existing directory`);

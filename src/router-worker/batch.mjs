@@ -1,6 +1,6 @@
-import { readFileSync, writeFileSync, appendFileSync, rmSync, lstatSync } from 'node:fs';
-import { join, resolve } from 'node:path';
-import { digest } from '../loop/contracts.mjs';
+import { readFileSync, writeFileSync, appendFileSync, rmSync, lstatSync, mkdirSync, renameSync, copyFileSync } from 'node:fs';
+import { join, resolve, relative, isAbsolute, sep } from 'node:path';
+import { digest, bytesDigest } from '../loop/contracts.mjs';
 import { instanceOf } from './roots.mjs';
 import { git, isRepositoryRoot, acquireLease, releaseLease, readLease } from './lease.mjs';
 import { freezeRun } from './run-args.mjs';
@@ -11,7 +11,9 @@ import { limitsOf } from './switch.mjs';
 // ADR 0010, decisions 8 to 12: the one command a PM runs before a batch in a standing Router/Worker team.
 // It builds the engine's inputs from the PM's tickets, checks the product repository, computes the ceiling,
 // takes the lock and opens the write boundary. A refusal leaves the team and the product as they were.
-export const BATCH_FILE = 'rw-batch.json', AFTER_FILE = 'rw-batch-after.json', ARCHIVE = 'batches';
+export const BATCH_FILE = 'rw-batch.json', AFTER_FILE = 'rw-batch-after.json', PROGRESS_FILE = 'rw-batch-commits.json', ARCHIVE = 'batches';
+export const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/, TICKET_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/;
+export const oneLine = text => typeof text === 'string' && text.length > 0 && text.length <= 200 && text === text.trim() && !/[\x00-\x1f\x7f]/.test(text);
 const MODE_FILE = 'profiles/team-mode.json', JOURNAL = 'holiday/.switch-in-progress.json', LEDGER = 'pm-decisions.md';
 const IN_PROGRESS = ['index.lock', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'BISECT_LOG', 'rebase-merge', 'rebase-apply'];
 const TICKET_FIELDS = ['id', 'title', 'goal', 'acceptance', 'paths', 'estimate'], TICKET_OPTIONAL = ['expectedPaths', 'commitMessage'], BATCH_FIELDS = ['tickets', 'verificationCommands', 'sensitivePaths', 'nextLifecycleNumber'];
@@ -50,6 +52,29 @@ export function changedPaths(product) {
   return [...new Set(paths)].sort();
 }
 
+// Where the repository's commit hooks live, as a path inside the product; null when they are in .git or outside it.
+// A worker that could write there would run code as the PM at the next commit.
+export function hooksPathOf(product) {
+  const configured = git(product, 'config', '--get', 'core.hooksPath')?.trim();
+  if (!configured) return null;
+  const inside = relative(product, isAbsolute(configured) ? configured : resolve(product, configured));
+  return inside && !inside.startsWith('..') && !isAbsolute(inside) ? inside.split(sep).join('/') : null;
+}
+// The content of each path as it stands: a digest for a file, null for anything else.
+export const contentOf = (product, paths) => Object.fromEntries(paths.map(path => {
+  const stat = lstatSync(join(product, path), { throwIfNoEntry: false });
+  return [path, stat?.isFile() ? bytesDigest(readFileSync(join(product, path))) : null];
+}));
+// The records of a batch leave the team's root in one move, so a batch is either open or archived.
+export function archiveBatch(instance, runId, records, sources) {
+  const final = join(instance, ARCHIVE, runId), staging = join(instance, ARCHIVE, `.${runId}.tmp`);
+  rmSync(staging, { recursive: true, force: true }); mkdirSync(staging, { recursive: true });
+  for (const [name, record] of Object.entries(records)) writeFileSync(join(staging, name), JSON.stringify(record, null, 2) + '\n');
+  for (const [name, file] of Object.entries(sources)) if (exists(join(instance, file))) copyFileSync(join(instance, file), join(staging, name));
+  renameSync(staging, final);
+  for (const file of Object.values(sources)) rmSync(join(instance, file), { recursive: true, force: true });
+}
+
 function checkProduct(product, startAsIs) {
   need(isRepositoryRoot(product), 'The product root is not the top of its own Git repository');
   const head = git(product, 'rev-parse', 'HEAD')?.trim(), branch = git(product, 'symbolic-ref', '--short', '-q', 'HEAD')?.trim();
@@ -74,11 +99,11 @@ function checkBatch(batch) {
     need(ticket && typeof ticket === 'object' && !Array.isArray(ticket), `Ticket ${i + 1} is not an object`);
     const missing = TICKET_FIELDS.filter(key => ticket[key] === undefined || ticket[key] === null || ticket[key] === '' || (Array.isArray(ticket[key]) && !ticket[key].length));
     need(!missing.length, `Ticket ${ticket.id ?? i + 1} is incomplete: ${missing.join(', ')} missing`);
-    need(typeof ticket.id === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/.test(ticket.id), `Ticket ${i + 1}: the id must be 1 to 40 letters, digits, dots, dashes or underscores`);
+    need(typeof ticket.id === 'string' && TICKET_ID.test(ticket.id), `Ticket ${i + 1}: the id must be 1 to 40 letters, digits, dots, dashes or underscores`);
     need(!ids.has(ticket.id.toLowerCase()), `Ticket ${ticket.id} appears twice`); ids.add(ticket.id.toLowerCase());
     need(Object.keys(ticket).every(key => [...TICKET_FIELDS, ...TICKET_OPTIONAL].includes(key)), `Ticket ${ticket.id} carries a field the batch does not know`);
     for (const key of ['title', ...(ticket.commitMessage === undefined ? [] : ['commitMessage'])])
-      need(typeof ticket[key] === 'string' && ticket[key].trim() && ticket[key].length <= 200 && !/[\x00-\x1f\x7f]/.test(ticket[key]), `Ticket ${ticket.id}: ${key} must be one line of at most 200 characters`);
+      need(oneLine(ticket[key]), `Ticket ${ticket.id}: ${key} must be one line of at most 200 characters, with no space at either end`);
     need(strings(ticket.paths), `Ticket ${ticket.id}: paths must be a list of files or folder grants ("src/x.ts", "src/list/**")`);
     need(ticket.estimate && typeof ticket.estimate === 'object' && Object.keys(ticket.estimate).sort().join() === [...ESTIMATE].sort().join(), `Ticket ${ticket.id}: the estimate must carry exactly ${ESTIMATE.join(', ')}`);
     const reserved = ticket.paths.filter(path => { const parts = path.toLowerCase().split('/'); return RESERVED.includes(parts[0]) || parts.includes('.git'); });
@@ -154,12 +179,14 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     const mixed = product.preexisting.filter(path => batch.tickets.some(ticket => ticket.paths.some(grant => covers(grant, path))));
     need(!mixed.length, `These paths are already changed and lie where a ticket of this batch writes (${mixed.slice(0, 5).map(plain).join(', ')}); they could not be kept out of its commit. Commit or discard them first`);
     const closed = readBoundary(instance);
-    need(closed && closed.productRoot === productRoot && Object.values(closed.wrappers).every(entry => entry.writePaths.length === 0),
-      'The team has no closed write boundary for this product: an earlier batch was not closed, or the boundary was changed. Clear it with: rw-batch.mjs abort --instance <instance-root>');
+    need(closed && closed.productRoot === productRoot, 'The write-boundary file is missing or was changed. It is rebuilt by a mode switch: team-mode.mjs switch specialist, then switch router-worker');
+    need(Object.values(closed.wrappers).every(entry => entry.writePaths.length === 0), 'The write boundary is open: an earlier batch was not closed. Clear it with: rw-batch.mjs abort --instance <instance-root>');
+    const hooksPath = hooksPathOf(productRoot), hooked = hooksPath ? batch.tickets.flatMap(ticket => ticket.paths.filter(path => overlap(path, hooksPath) || overlap(path, `${hooksPath}/**`))) : [];
+    need(!hooked.length, `The repository's commit hooks live in ${hooksPath}; no ticket writes there (${hooked.slice(0, 5).join(', ')}): a hook runs as the PM at the next commit`);
     const wrappers = Object.fromEntries(Object.entries(closed.wrappers).map(([name, entry]) => [entry.duty, name]));
 
     const runId = batch.runId ?? `rw-${product.head.slice(0, 8)}-L${batch.nextLifecycleNumber}`;
-    need(typeof runId === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(runId) && !exists(join(instance, ARCHIVE, runId)), `The run id ${plain(runId)} is not a plain identifier, or a batch of that id was already closed; give another "runId"`);
+    need(typeof runId === 'string' && RUN_ID.test(runId) && !exists(join(instance, ARCHIVE, runId)), `The run id ${plain(runId)} is not a plain identifier, or a batch of that id was already closed; give another "runId"`);
     // Decision 10: the ceiling is computed, never chosen. The engine stops dispatching at 80% of it.
     const ceiling = count * limits.outputAllowancePerTicket + limits.guardianOutputShare, allPaths = [...new Set(batch.tickets.flatMap(ticket => ticket.paths))].sort();
     const run = { rounds: count, date: batch.date ?? new Date().toISOString().slice(0, 10), nextLifecycleNumber: batch.nextLifecycleNumber, runId,
@@ -185,7 +212,7 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     opened = true;
     const at = new Date().toISOString();
     const body = { schemaVersion: 1, stage: 'batch-open', runId: frozen.args.runId, openedAt: at, productRoot, productHead: product.head, branch: product.branch,
-      startedAsIs: startAsIs === true, preexisting: product.preexisting, lease, boundaryDigest: boundary.digest, isolationDigest: isolation.digest,
+      startedAsIs: startAsIs === true, preexisting: product.preexisting, preexistingContent: contentOf(productRoot, product.preexisting), hooksPath, lease, boundaryDigest: boundary.digest, isolationDigest: isolation.digest,
       limits, ceiling: { outputTokens: ceiling, stopLine: Math.floor(ceiling * 4 / 5) },
       tickets: batch.tickets.map((ticket, i) => ({ id: ticket.id, title: ticket.title, commitMessage: ticket.commitMessage ?? `${ticket.id}: ${ticket.title}`, paths: ticket.paths, expectedPaths: inputs[i].proposal.expectedPaths })),
       sensitivePaths: batch.sensitivePaths, verificationCommands: batch.verificationCommands,
@@ -218,7 +245,15 @@ export function abortBatch({ teamRoot, instanceRoot }) {
     need(!exists(join(instance, JOURNAL)), 'A mode switch was interrupted; roll it back first with: team-mode.mjs switch recover --instance <instance-root>');
     const record = readJSON(join(instance, BATCH_FILE)), held = readLease({ productRoot }), boundary = readBoundary(instance);
     const ours = held.status === 'held' && held.lease.teamRoot === instance, open = boundary ? Object.values(boundary.wrappers).some(entry => entry.writePaths.length > 0) : false;
-    need(!exists(join(instance, AFTER_FILE)), 'This batch was already closed by after; finish it with: rw-batch.mjs commit --instance <instance-root>');
+    // A batch that after closed and commit cannot finish: its records are archived, nothing is committed.
+    if (exists(join(instance, AFTER_FILE))) {
+      const closedRecord = readJSON(join(instance, BATCH_FILE)), id = typeof closedRecord?.runId === 'string' && RUN_ID.test(closedRecord.runId) && !exists(join(instance, ARCHIVE, closedRecord.runId)) ? closedRecord.runId : `unreadable-${Date.now()}`;
+      const stamp = new Date().toISOString(), note = { schemaVersion: 1, stage: 'batch-archived-without-commit', runId: id, archivedAt: stamp,
+        next: 'Nothing was committed by the kit. What the batch changed is still in the product work tree: commit it by hand on the working branch, or discard it.' };
+      appendFileSync(join(instance, LEDGER), `${stamp.slice(0, 10)} BATCH ${id} ARCHIVED WITHOUT COMMIT by rw-batch.mjs abort: the batch was closed by after and not committed by the kit. Its changes are still in the product work tree.\n`);
+      archiveBatch(instance, id, { 'abandoned.json': { ...note, digest: digest(note) } }, { 'batch.json': BATCH_FILE, 'after.json': AFTER_FILE, 'commits.json': PROGRESS_FILE });
+      return { ...note, digest: digest(note) };
+    }
     need(exists(join(instance, BATCH_FILE)) || ours || open, 'There is no batch to abort');
     if (open) closeBoundary({ teamRoot: instance });
     if (ours) { const released = releaseLease({ productRoot, lease: held.lease.digest }); need(!released.errors, `The lock could not be released: ${released.errors?.[0]?.reason}`); }

@@ -120,6 +120,10 @@ opened.
    |---|---|---|
    | `WRITE_OUTSIDE_PATHS` | paths changed that no ticket covers, for instance through a worker's shell | the paths are left uncommitted; the tickets are still committed |
    | `HOOK_SAW_NO_WORKER` | files changed and the hook logged no worker call since the batch opened: the session did not load it, so the write limits were not enforced during the run | not held |
+   | `NESTED_REPOSITORY` | a worker created a Git repository inside the product; Git would commit a link to it, not its files | the folder is left uncommitted |
+   | `PREEXISTING_PATH_CHANGED` | a path that was already changed when the batch started as is was changed again | not held; the path is never committed |
+   | `LEDGER_NOT_WRITTEN` | `pm-decisions.md` could not be appended | not held |
+   | `HOOKS_PATH_CHANGED`, `HOOKS_WRITTEN` | the repository's commit hooks were moved, or a path under them was changed: a hook runs as the PM at the next commit | all held |
    | `BOUNDARY_CHANGED` | the write-boundary file is not the one the batch opened | all held |
    | `PRODUCT_HEAD_MOVED`, `PRODUCT_BRANCH_CHANGED` | someone committed or changed branch during the batch | all held |
    | `GUARDIAN_NOT_CLEAN` | the Guardian did not answer, or did not find the run clean | all held |
@@ -129,10 +133,18 @@ opened.
    findings: a lock must not outlive its batch.
 5. **The commit plan**: one commit for each ticket that passed and changed
    something, of that ticket's own paths. A ticket that did not pass, or was not
-   run because the batch halted, is not in the plan.
+   run because the batch halted, is not in the plan. A ticket passed when the
+   engine's record says it is done and nothing else in that record says
+   otherwise (a failed verification, a pending fix or recovery).
 6. **The record** `rw-batch-after.json` and one line in `pm-decisions.md`.
    `status` is `clean` when there is no finding and the engine reports no
-   blocker, otherwise `review`.
+   blocker, otherwise `review`. `next` says what the PM must do when something
+   is left or held.
+
+The close is claimed before anything is changed. A second `after` on the same
+batch is refused while the first is under a minute old; an `after` that died is
+taken up by the next call, which recognises the boundary it already closed and
+the lock it already released.
 
 "All held" means the kit commits nothing of that batch: what ran is not what
 was frozen, and the PM or the owner judges it by hand.
@@ -144,19 +156,52 @@ tickets, then moves the batch's records to `batches/<run id>/` and appends one
 line to `pm-decisions.md`. It takes the lock for its length. It pushes nothing.
 
 - It refuses when the product is no longer on the batch's branch, when a Git
-  operation is in progress, or when the work tree is not exactly what `after`
-  saw.
+  operation is in progress, when the commit hooks were moved, when the work
+  tree is not exactly what `after` saw, or when the branch is not the batch's
+  starting commit plus the commits this command itself made.
+- The plan is derived again from the tickets: a path is committed only inside
+  the paths of a ticket that passed.
+- After each commit it checks that the commit landed on the branch and holds
+  exactly the ticket's paths. A commit hook that adds or drops paths stops the
+  batch there; the commit is left as it is.
+- Paths are given to Git literally, on standard input: no pattern, no limit on
+  their number. Ambient `GIT_*` variables are ignored. Staged deletions and
+  renames made by a worker are committed.
 - A path that was changed before the batch (start as is) is never in a commit,
   staged or not.
 - The repository's own commit hooks run. If one refuses a commit, the commits
   already made stay, the batch stays open, and running `commit` again makes
-  only what is missing.
+  only what is missing. The commits made are recorded by their ids
+  (`rw-batch-commits.json`), so a hook that rewrites messages does not confuse
+  the resume.
+- A `commit` that died after archiving the batch is finished by the next call.
 - What is not committed stays in the work tree and is listed (`left`): a ticket
   that did not pass, a path outside every ticket. The next "before" then
   refuses until the PM commits or discards those paths, or starts as is.
 
 The commits are made by the PM's session running this command, with the
 repository's Git identity ([ADR 0007](../../../decisions/0007-pm-only-commits.md)).
+
+## When the kit will not commit a batch
+
+A batch that `after` closed and `commit` refuses (all commits held, the branch
+moved, a hook changed a commit, the records were edited) is not stuck:
+`abort` archives its records under `batches/<run id>/` with a note, writes
+"ARCHIVED WITHOUT COMMIT" to `pm-decisions.md`, and commits nothing. What the
+batch changed is still in the product work tree; the PM or the owner commits it
+by hand on the working branch, or discards it. The next "before" then needs a
+clean repository or "start as is", as after any batch that left paths behind.
+
+## What these commands trust
+
+`after` trusts the engine's return for what happened in the run; it checks that
+the return fits the frozen batch and that a ticket's own record is consistent,
+not that the checker really ran. The batch records carry digests that detect an
+accidental edit, not a deliberate one: a PM session can rewrite a record and
+its digest. What reaches a path, the ledger or a commit message is therefore
+checked again when it is read, and the commit plan is derived again from the
+tickets. A PM that edits the engine's return can still get a failed ticket
+committed.
 
 ## Abort
 
@@ -224,8 +269,11 @@ kept out of the tickets' commits by the "after" command.
   path is refused by "before".
 - **A ticket that did not pass keeps its changes in the work tree.** They are
   not saved aside and removed; ADR 0011 does that for a rejected ticket.
-- **`after` trusts the engine's return for which tickets passed.** It checks
-  that the return fits the frozen batch, not that the checker ran.
+- **Git-ignored files a worker wrote are invisible**, inside or outside the
+  tickets' paths. ADR 0010 tolerates ignored build output; nothing compares it
+  with the state before the batch.
+- **Not tried:** commit signing, LFS or clean filters, sparse checkout, linked
+  worktrees.
 - **The default branch is recognised by name**: every remote's default,
   `init.defaultBranch`, `main`, `master`. A repository with no remote whose
   default branch has another name (`develop`) is not recognised.

@@ -1,7 +1,7 @@
 // ADR 0010, decisions 8 to 12: the command a PM runs before a batch in a standing Router/Worker team.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, readFileSync, existsSync, mkdirSync, rmSync, appendFileSync, readdirSync } from 'node:fs';
+import { writeFileSync, readFileSync, existsSync, mkdirSync, rmSync, appendFileSync, readdirSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { beforeBatch, abortBatch, BATCH_FILE, AFTER_FILE } from '../src/router-worker/batch.mjs';
@@ -9,9 +9,10 @@ import { afterBatch, commitBatch } from '../src/router-worker/batch-close.mjs';
 import { runWorkflow, makeAgentImpl } from '../scripts/lib/workflow-harness.mjs';
 import { readLease, acquireLease, releaseLease } from '../src/router-worker/lease.mjs';
 import { observeIsolation } from '../src/router-worker/isolation.mjs';
-import { readBoundary, decideWrite } from '../src/router-worker/write-boundary.mjs';
+import { readBoundary, decideWrite, closeBoundary } from '../src/router-worker/write-boundary.mjs';
 import { DEFAULT_LIMITS } from '../src/router-worker/switch.mjs';
 import { fixture, git } from './fixtures/router-worker/standing-team.mjs';
+import { digest } from '../src/loop/contracts.mjs';
 
 const refusal = result => result.errors?.[0];
 const ticket = (id, paths, extra = {}) => ({ id, title: `Ticket ${id}`, goal: `Do ${id}`, acceptance: [`${id} works`], paths, estimate: { execTokens: 12000, checkTokens: 6000, reworkTokens: 6000 }, ...extra });
@@ -181,14 +182,13 @@ test('after matches the engine return, closes the boundary and frees the lock; c
   assert.deepEqual(closed.commits.map(entry => [entry.ticket, entry.message]), [['US-01', 'US-01: Ticket US-01'], ['US-02', 'feat(api): tags endpoint']]); assert.deepEqual(closed.left, []);
   assert.equal(readLease({ productRoot: f.product }).status, 'free'); assert.ok(Object.values(readBoundary(f.root).wrappers).every(entry => entry.writePaths.length === 0), 'no worker may write any more');
   assert.match(refusal(f.after()).reason, /already closed/); assert.match(refusal(await f.before(batchOf(ticket('US-09', ['src/z.js'])))).reason, /already open/);
-  assert.match(refusal(abortBatch({ teamRoot: f.kit, instanceRoot: f.root })).reason, /already closed by after/);
   assert.equal(git(f.product, 'rev-parse', 'HEAD').trim(), f.open.productHead, 'after commits nothing');
   const done = f.commit();
   assert.equal(done.errors, undefined, JSON.stringify(done.errors)); assert.equal(done.stage, 'batch-committed'); assert.equal(done.pushed, false);
   assert.deepEqual(f.log(), ['US-01: Ticket US-01', 'feat(api): tags endpoint']); assert.equal(f.status(), '', 'the product is clean again');
   assert.deepEqual(git(f.product, 'show', '--name-only', '--format=', 'HEAD~1').trim().split('\n').sort(), ['src/app.js', 'src/list/view.js'], 'each commit holds its ticket\'s files only');
   assert.equal(git(f.product, 'symbolic-ref', '--short', 'HEAD').trim(), 'work');
-  assert.deepEqual(readdirSync(join(f.root, 'batches', f.open.runId)).sort(), ['after.json', 'batch.json', 'commit.json']); assert.equal(existsSync(join(f.root, BATCH_FILE)), false); assert.equal(existsSync(join(f.root, AFTER_FILE)), false);
+  assert.deepEqual(readdirSync(join(f.root, 'batches', f.open.runId)).sort(), ['after.json', 'batch.json', 'commit.json', 'commits.json']); assert.equal(existsSync(join(f.root, BATCH_FILE)), false); assert.equal(existsSync(join(f.root, AFTER_FILE)), false);
   assert.match(f.read('pm-decisions.md'), /BATCH \S+ CLOSED \(clean\): 2 of 2 ticket\(s\) passed; 2 to commit, 0 changed path\(s\) left/); assert.match(f.read('pm-decisions.md'), /BATCH \S+ COMMITTED on work: 2 commit\(s\).*Nothing was pushed/);
   const next = await f.before(batchOf(ticket('US-03', ['src/b.js'])));
   assert.equal(next.errors, undefined, JSON.stringify(next.errors)); assert.notEqual(next.runId, f.open.runId);
@@ -222,7 +222,14 @@ test('after refuses a return that is not this batch\'s and changes nothing; find
   const closed = f.after();
   assert.equal(closed.status, 'review'); assert.ok(closed.findings.some(finding => finding.code === 'PRODUCT_HEAD_MOVED')); assert.equal(closed.holdAll, true); assert.deepEqual(closed.commits, []);
   assert.equal(readLease({ productRoot: f.product }).status, 'free', 'the lock does not outlive the batch');
-  assert.match(refusal(f.commit()).reason, /commits that are not this batch's/);
+  assert.match(refusal(f.commit()).reason, /not the batch's start plus the commits this command made.*rw-batch\.mjs abort/);
+  assert.match(closed.next.join(' '), /No ticket of this batch is committed by the kit.*rw-batch\.mjs abort/, 'the record says what to do');
+  // The way out of a closed batch the kit will not commit: its records are archived, the work stays in the tree.
+  const out = abortBatch({ teamRoot: f.kit, instanceRoot: f.root });
+  assert.equal(out.errors, undefined, JSON.stringify(out.errors)); assert.equal(out.stage, 'batch-archived-without-commit');
+  assert.deepEqual(readdirSync(join(f.root, 'batches', f.open.runId)).sort(), ['abandoned.json', 'after.json', 'batch.json']); assert.equal(existsSync(join(f.root, BATCH_FILE)), false);
+  assert.match(f.read('pm-decisions.md'), /ARCHIVED WITHOUT COMMIT by rw-batch\.mjs abort/); assert.ok(f.status().includes('src/app.js'), 'the work is still there');
+  assert.equal((await f.before(batchOf(ticket('US-07', ['src/q.js'])), { startAsIs: true })).errors, undefined, 'and the team can open its next batch');
   const noHook = await ran(t, { tickets: two, edits: { 'src/app.js': 'export const x = 2;\n' }, hook: false });
   assert.ok(noHook.after().findings.some(finding => finding.code === 'HOOK_SAW_NO_WORKER'), 'files changed and the hook logged no worker: the write limits were not enforced');
   const edited = await ran(t, { tickets: two, edits: { 'src/app.js': 'export const x = 2;\n' } });
@@ -263,4 +270,119 @@ test('CLI: after exits 0 clean and 2 in review; commit exits 0', async t => {
   assert.equal(closed.status, 2, 'a batch in review'); assert.equal(JSON.parse(closed.stdout).status, 'review');
   const done = run('commit', '--instance', f.root);
   assert.equal(done.status, 0, done.stderr); assert.equal(JSON.parse(done.stdout).commits.length, 1); assert.equal(run('commit', '--instance', f.root).status, 2);
+});
+
+const sealAgain = record => { const { digest: _old, ...body } = record; return { ...body, digest: digest(body) }; };
+
+test('commit handles what a worker did through Git: a staged deletion, a staged rename inside a ticket, and many paths', async t => {
+  const f = live(t); mkdirSync(join(f.product, 'lib')); for (const name of ['one.js', 'mv.js']) writeFileSync(join(f.product, 'lib', name), name + '\n');
+  git(f.product, 'add', '-A'); git(f.product, 'commit', '-q', '-m', 'seed');
+  const open = await f.before(batchOf(ticket('US-01', ['lib/**'], { expectedPaths: ['lib/one.js'] })));
+  assert.equal(open.errors, undefined, JSON.stringify(open.errors));
+  const { result } = await runWorkflow({ scriptPath: join(f.root, '.claude/workflows/run-n-rounds.js'), args: open.args, agentImpl: makeAgentImpl({}) });
+  git(f.product, 'rm', '-q', 'lib/one.js'); git(f.product, 'mv', 'lib/mv.js', 'lib/moved.js');
+  for (let i = 0; i < 300; i++) writeFileSync(join(f.product, 'lib', `gen ${i} é.js`), 'x\n');
+  appendFileSync(join(f.root, '.claude/rw-write-boundary.log.jsonl'), JSON.stringify({ at: new Date().toISOString(), tool: 'Bash', agentType: 'tag-list-fixture-worker-exec', decision: 'allow' }) + '\n');
+  assert.equal(afterBatch({ teamRoot: f.kit, instanceRoot: f.root, result }).status, 'clean');
+  const done = commitBatch({ teamRoot: f.kit, instanceRoot: f.root });
+  assert.equal(done.errors, undefined, JSON.stringify(done.errors)); assert.equal(git(f.product, 'status', '--porcelain').trim(), '');
+  const names = git(f.product, 'show', '--name-status', '--no-renames', '--format=', 'HEAD');
+  assert.match(names, /D\tlib\/one\.js/); assert.match(names, /D\tlib\/mv\.js/); assert.match(names, /A\tlib\/moved\.js/); assert.equal(names.trim().split('\n').length, 303);
+});
+
+test('commit never runs a hook a worker wrote, never carries another ticket\'s path, and never writes into another repository', async t => {
+  // Hooks kept in the work tree: no ticket may write there, and a batch that touched them is held.
+  const husky = live(t); git(husky.product, 'config', 'core.hooksPath', '.husky');
+  assert.match(refusal(await husky.before(batchOf(ticket('US-01', ['.husky/**'], { expectedPaths: ['.husky/pre-commit'] })))).reason, /commit hooks live in \.husky; no ticket writes there/);
+  const held = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n' } });
+  git(held.product, 'config', 'core.hooksPath', 'hooks'); const moved = held.after();
+  assert.ok(moved.findings.some(finding => finding.code === 'HOOKS_PATH_CHANGED')); assert.equal(moved.holdAll, true);
+  // A hook that stages more than the ticket's paths: the commit is found out and the batch stops there.
+  const greedy = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n', 'src/api/tags.js': 'tags\n' } });
+  assert.equal(greedy.after().errors, undefined);
+  writeFileSync(join(greedy.product, '.git/hooks/pre-commit'), '#!/bin/sh\ngit add -A\n', { mode: 0o755 });
+  assert.match(refusal(greedy.commit()).reason, /does not hold exactly that ticket's paths.*rw-batch\.mjs abort/);
+  // An ambient GIT_DIR pointing elsewhere is ignored.
+  const other = join(greedy.base, 'elsewhere'); mkdirSync(other); git(other, 'init', '-q'); git(other, 'commit', '-q', '--allow-empty', '-m', 'other');
+  const env = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n' } }); assert.equal(env.after().errors, undefined);
+  process.env.GIT_DIR = join(other, '.git'); t.after(() => { delete process.env.GIT_DIR; });
+  const done = env.commit(); delete process.env.GIT_DIR;
+  assert.equal(done.errors, undefined, JSON.stringify(done.errors)); assert.deepEqual(env.log(), ['US-01: Ticket US-01']); assert.equal(git(other, 'log', '--format=%s').trim(), 'other');
+});
+
+test('after reports a repository created inside the product and a path from before the batch that was changed again', async t => {
+  const f = live(t); writeFileSync(join(f.product, 'notes.txt'), 'mine\n');
+  const open = await f.before(batchOf(ticket('US-01', ['lib/**'], { expectedPaths: ['lib/a.js'] })), { startAsIs: true });
+  const { result } = await runWorkflow({ scriptPath: join(f.root, '.claude/workflows/run-n-rounds.js'), args: open.args, agentImpl: makeAgentImpl({}) });
+  mkdirSync(join(f.product, 'lib')); writeFileSync(join(f.product, 'lib/a.js'), 'a\n'); writeFileSync(join(f.product, 'notes.txt'), 'changed by a worker\n');
+  mkdirSync(join(f.product, 'lib/sub')); git(join(f.product, 'lib/sub'), 'init', '-q'); git(join(f.product, 'lib/sub'), 'commit', '-q', '--allow-empty', '-m', 'inner');
+  appendFileSync(join(f.root, '.claude/rw-write-boundary.log.jsonl'), JSON.stringify({ at: new Date().toISOString(), tool: 'Write', agentType: 'tag-list-fixture-worker-exec', decision: 'allow' }) + '\n');
+  const closed = afterBatch({ teamRoot: f.kit, instanceRoot: f.root, result });
+  assert.deepEqual(closed.findings.find(finding => finding.code === 'NESTED_REPOSITORY').paths, ['lib/sub/']); assert.deepEqual(closed.findings.find(finding => finding.code === 'PREEXISTING_PATH_CHANGED').paths, ['notes.txt']);
+  assert.deepEqual(closed.commits[0].paths, ['lib/a.js'], 'the nested repository is not in the commit'); assert.ok(closed.left.includes('lib/sub/'));
+  assert.equal(commitBatch({ teamRoot: f.kit, instanceRoot: f.root }).errors, undefined);
+  assert.deepEqual(git(f.product, 'show', '--name-only', '--format=', 'HEAD').trim().split('\n'), ['lib/a.js']);
+});
+
+test('commit resumes by the commits it recorded, and refuses a branch that is not the batch\'s start plus those', async t => {
+  assert.match(refusal(await live(t).before(batchOf(ticket('US-01', ['src/a.js'], { commitMessage: 'feat: x ' })))).reason, /no space at either end/);
+  // A hook that rewrites the subject does not confuse the resume.
+  const f = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n', 'src/api/tags.js': 'tags\n' } }); assert.equal(f.after().errors, undefined);
+  writeFileSync(join(f.product, '.git/hooks/prepare-commit-msg'), '#!/bin/sh\nprintf "[auto] %s" "$(cat "$1")" > "$1"\n', { mode: 0o755 });
+  writeFileSync(join(f.product, '.git/hooks/pre-commit'), '#!/bin/sh\ngit diff --cached --name-only | grep -q tags.js && exit 1\nexit 0\n', { mode: 0o755 });
+  assert.match(refusal(f.commit()).reason, /git commit failed for ticket US-02 \(1 of 2 made\)/);
+  rmSync(join(f.product, '.git/hooks/pre-commit'));
+  const done = f.commit(); assert.equal(done.errors, undefined, JSON.stringify(done.errors)); assert.deepEqual(f.log(), ['[auto] US-01: Ticket US-01', '[auto] feat(api): tags endpoint']);
+  assert.deepEqual(readdirSync(join(f.root, 'batches', f.open.runId)).sort(), ['after.json', 'batch.json', 'commit.json', 'commits.json']);
+  // The branch rewound between after and commit.
+  const rewound = live(t); git(rewound.product, 'commit', '-q', '--allow-empty', '-m', 'extra');
+  const open = await rewound.before(batchOf(ticket('US-01', ['src/new.js'])));
+  const { result } = await runWorkflow({ scriptPath: join(rewound.root, '.claude/workflows/run-n-rounds.js'), args: open.args, agentImpl: makeAgentImpl({}) });
+  writeFileSync(join(rewound.product, 'src/new.js'), 'n\n'); appendFileSync(join(rewound.root, '.claude/rw-write-boundary.log.jsonl'), JSON.stringify({ at: new Date().toISOString(), tool: 'Write', agentType: 'tag-list-fixture-worker-exec', decision: 'allow' }) + '\n');
+  assert.equal(afterBatch({ teamRoot: rewound.kit, instanceRoot: rewound.root, result }).errors, undefined);
+  git(rewound.product, 'reset', '-q', '--hard', 'HEAD~1'); writeFileSync(join(rewound.product, 'src/new.js'), 'n\n');
+  assert.match(refusal(commitBatch({ teamRoot: rewound.kit, instanceRoot: rewound.root })).reason, /not the batch's start plus the commits/);
+});
+
+test('after is taken up again after a death, refuses a second caller, and is not a refusal when only the ledger fails', async t => {
+  const f = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n' } }), afterPath = join(f.root, AFTER_FILE);
+  // An after that claimed the batch a moment ago is running.
+  writeFileSync(afterPath, JSON.stringify({ stage: 'batch-closing', runId: f.open.runId, claimedAt: new Date().toISOString() }));
+  assert.match(refusal(f.after()).reason, /Another after is closing this batch/); assert.match(refusal(f.commit()).reason, /has not been closed/);
+  // One that died after it closed the boundary and released the lock: the next call finishes it, with no false alarm.
+  closeBoundary({ teamRoot: f.root }); releaseLease({ productRoot: f.product, lease: f.open.lease });
+  writeFileSync(afterPath, JSON.stringify({ stage: 'batch-closing', runId: f.open.runId, claimedAt: new Date(Date.now() - 120000).toISOString() }));
+  const closed = f.after();
+  assert.equal(closed.errors, undefined, JSON.stringify(closed.errors)); assert.equal(closed.status, 'clean', JSON.stringify(closed.findings)); assert.equal(closed.commits.length, 1);
+  // The ledger cannot be written: the batch is closed all the same, and says so.
+  const mute = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n' } }); chmodSync(join(mute.root, 'pm-decisions.md'), 0o444);
+  const quiet = mute.after(); chmodSync(join(mute.root, 'pm-decisions.md'), 0o644);
+  assert.equal(quiet.errors, undefined, JSON.stringify(quiet.errors)); assert.ok(quiet.findings.some(finding => finding.code === 'LEDGER_NOT_WRITTEN')); assert.equal(readLease({ productRoot: mute.product }).status, 'free');
+  // A boundary that cannot be read: the record says how it is rebuilt, and so does the next before.
+  const broken = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n' } }); writeFileSync(join(broken.root, '.claude/rw-write-boundary.json'), '{}');
+  const record = broken.after(); assert.ok(record.findings.some(finding => finding.code === 'BOUNDARY_NOT_RESTORED')); assert.match(record.next.join(' '), /mode switch/);
+  assert.equal(abortBatch({ teamRoot: broken.kit, instanceRoot: broken.root }).stage, 'batch-archived-without-commit');
+  assert.match(refusal(await broken.before(batchOf(ticket('US-08', ['src/z.js'])), { startAsIs: true })).reason, /rebuilt by a mode switch/);
+});
+
+test('a commit that died after archiving is finished by the next call; nothing in a record the PM can write reaches a path, the ledger or a commit unchecked', async t => {
+  const f = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n' } }); assert.equal(f.after().errors, undefined);
+  const batch = readFileSync(join(f.root, BATCH_FILE), 'utf8'), done = f.commit(); assert.equal(done.errors, undefined);
+  writeFileSync(join(f.root, BATCH_FILE), batch);
+  assert.deepEqual(f.commit(), done, 'the archived result is returned'); assert.equal(existsSync(join(f.root, BATCH_FILE)), false); assert.deepEqual(f.log(), ['US-01: Ticket US-01']);
+
+  // The engine return says "done" for a ticket whose own record says it failed.
+  let checks = 0;
+  const lied = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n', 'src/api/tags.js': 't\n' }, agents: { verifier: () => ++checks === 1 ? { pass: true, staticPass: true, e2ePass: true, summary: 'ok', commandsRun: [{ command: 'npm test', exitCode: 0 }], failures: [] }
+    : { pass: false, staticPass: false, e2ePass: false, summary: 'broken', commandsRun: [{ command: 'npm test', exitCode: 1 }], failures: ['x'] } } });
+  const flipped = { ...lied.result, results: lied.result.results.map((entry, i) => i === 1 ? { ...entry, done: true } : entry) };
+  assert.deepEqual(afterBatch({ teamRoot: lied.kit, instanceRoot: lied.root, result: flipped }).tickets.map(entry => entry.status), ['passed', 'not-passed']);
+
+  // Records sealed again by hand.
+  const escaped = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n' } });
+  writeFileSync(join(escaped.root, BATCH_FILE), JSON.stringify(sealAgain({ ...escaped.open, runId: '../../escaped' })));
+  assert.match(refusal(escaped.after()).reason, /plain run id/); assert.equal(existsSync(join(escaped.base, 'escaped')), false);
+  const stray = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n', 'stray.txt': 's\n' } }), closed = stray.after();
+  writeFileSync(join(stray.root, AFTER_FILE), JSON.stringify(sealAgain({ ...closed, commits: [{ ...closed.commits[0], paths: ['src/app.js', 'stray.txt'] }], left: [] })));
+  assert.match(refusal(stray.commit()).reason, /plans a commit that is not a passed ticket's own paths/); assert.deepEqual(stray.log(), []);
 });
