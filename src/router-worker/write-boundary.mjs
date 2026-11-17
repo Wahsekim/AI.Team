@@ -102,6 +102,24 @@ export function standBoundary({ teamRoot, productRoot, wrappers, hookPath }) {
   writeFileSync(path, JSON.stringify({ ...settings, hooks: { ...settings.hooks, PreToolUse: [...withoutOurs(existing), { matcher: MATCHER, hooks: [{ type: 'command', command: `node "${hookPath}"` }] }] } }, null, 2) + '\n');
 }
 
+// A batch opens in a standing team: the closed boundary becomes the batch's, with the exec worker's write
+// paths. The wrappers and the product are the ones the closed boundary already names; nothing else is trusted.
+export function openBoundary({ teamRoot, productRoot, writePaths }) {
+  const closed = readBoundary(teamRoot);
+  need(closed && closed.productRoot === productRoot && Object.values(closed.wrappers).every(entry => entry.writePaths.length === 0), 'The team has no closed write boundary for this product; a batch may be open, or the boundary was changed');
+  need(Array.isArray(writePaths) && writePaths.length > 0 && writePaths.every(path => typeof path === 'string' && path), 'A batch needs at least one write path');
+  const body = { schemaVersion: 1, productRoot, wrappers: Object.fromEntries(Object.entries(closed.wrappers).map(([name, entry]) => [name, { duty: entry.duty, writePaths: entry.duty === 'exec' ? [...new Set(writePaths)].sort() : [] }])) };
+  writeFileSync(join(teamRoot, BOUNDARY_FILE), JSON.stringify({ ...body, digest: digest(body) }, null, 2) + '\n');
+  return { digest: digest(body), wrappers: Object.fromEntries(Object.entries(body.wrappers).map(([name, entry]) => [entry.duty, name])) };
+}
+// The batch is over, or could not start: no worker may write again.
+export function closeBoundary({ teamRoot }) {
+  const open = readBoundary(teamRoot);
+  need(open, 'The write boundary is missing or was changed');
+  const body = { schemaVersion: 1, productRoot: open.productRoot, wrappers: Object.fromEntries(Object.entries(open.wrappers).map(([name, entry]) => [name, { duty: entry.duty, writePaths: [] }])) };
+  writeFileSync(join(teamRoot, BOUNDARY_FILE), JSON.stringify({ ...body, digest: digest(body) }, null, 2) + '\n');
+}
+
 // The team leaves Router/Worker mode: the hook is unregistered and the boundary removed. Other settings stay.
 export function dropBoundary({ teamRoot }) {
   rmSync(join(teamRoot, BOUNDARY_FILE), { force: true });

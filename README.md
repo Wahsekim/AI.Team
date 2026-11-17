@@ -218,8 +218,12 @@ and, once a code is typed at an interactive terminal (a session without a
 terminal cannot confirm), packs the live mode's own files, puts the other
 mode's in place and installs the write-limit hook (between batches the three
 workers may write nothing)
-([details](docs/design/router-worker/mode-switch.md)). Batches still run only in
-a throwaway copy of the team with a clone of the product, as described below.
+([details](docs/design/router-worker/mode-switch.md)). `scripts/rw-batch.mjs before` opens a batch in such a team: it checks the
+tickets and the product repository, computes the ceiling, takes the lock and
+opens the write limits
+([details](docs/design/router-worker/batch.md)). `rw-batch.mjs abort` clears a batch that will not run. There is no "after"
+command yet, so batches with real agents still run only in a throwaway copy of the team
+with a clone of the product, as described below.
 
 What exists today is offline tooling in `src/router-worker/`: a deterministic
 compiler (first-attempt `exec` and `check` previews only), local source/context
