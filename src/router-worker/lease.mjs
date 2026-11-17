@@ -14,10 +14,15 @@ const DIGEST = /^sha256:[a-f0-9]{64}$/;
 export function requireValue(condition, message) { if (!condition) throw Error(message); }
 export const inside = (path, root) => path === root || path.startsWith(root + sep);
 // Ambient GIT_* variables could redirect discovery to another repository.
-const gitEnv = () => ({ ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_'))), LC_ALL: 'C' });
+// The identity a commit is made with may come from the environment and is kept.
+const gitEnv = () => ({ ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_') || /^GIT_(AUTHOR|COMMITTER)_/.test(key))), LC_ALL: 'C' });
 export function git(root, ...args) {
   const result = spawnSync('git', ['-C', root, ...args], { encoding: 'utf8', timeout: 20000, maxBuffer: 16 * 1024 * 1024, env: gitEnv() });
   return result.status === 0 && !result.error ? result.stdout : null;
+}
+// A Git command whose outcome matters, under the same scrubbed environment: {status, stdout, stderr, error}.
+export function gitRun(root, args, { input, timeout = 120000 } = {}) {
+  return spawnSync('git', ['-C', root, ...args], { encoding: 'utf8', timeout, maxBuffer: 64 * 1024 * 1024, env: gitEnv(), ...(input === undefined ? {} : { input }) });
 }
 export function canonicalDirectory(path, label) {
   requireValue(typeof path === 'string' && isAbsolute(path) && resolve(path) === path, `${label} must be a normalized absolute path`);

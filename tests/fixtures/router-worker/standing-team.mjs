@@ -23,7 +23,9 @@ export function fixture(t, { roles = 'backend' } = {}) {
     .filter(path => path && !/^(tests|docs\/design|\.github)\//.test(path));
   for (const path of tracked) { mkdirSync(dirname(join(kit, path)), { recursive: true }); cpSync(join(ROOT, path), join(kit, path)); }
   mkdirSync(join(product, 'src'), { recursive: true }); writeFileSync(join(product, 'src/app.js'), 'export const x = 1;\n');
-  git(product, 'init', '-q'); git(product, 'add', '-A'); git(product, 'commit', '-q', '-m', 'product');
+  git(product, 'init', '-q');
+  // The kit commits with the repository's own identity; a CI runner has none of its own.
+  git(product, 'config', 'user.name', 'Fixture PM'); git(product, 'config', 'user.email', 'pm@example.invalid'); git(product, 'add', '-A'); git(product, 'commit', '-q', '-m', 'product');
   const boot = spawnSync('bash', [join(kit, 'scripts/bootstrap-team.sh'), '--project-name', 'Tag List Fixture', '--product-repo', product, ...(roles ? ['--roles', roles] : []), root], { encoding: 'utf8' });
   assert.equal(boot.status, 0, boot.stdout + boot.stderr);
   for (const path of ['charter.md', 'profiles/project.md', 'profiles/stack.md', 'agents/_shared/verify-discipline.md', 'CLAUDE.md'])

@@ -7,20 +7,35 @@
 //              "verificationCommands": [...], "sensitivePaths": [...], "nextLifecycleNumber": n, "runId"?, "date"?}
 // abort --instance <instance-root>
 //   Clears a batch that will not be run, or what a "before" that died left behind.
-// No model or network. Exit 0 batch open / aborted, 2 refused, 1 usage.
+// after RESULT.json --instance <instance-root>
+//   RESULT.json is the engine's return. Matches it against the frozen batch, compares the product with the
+//   tickets' paths, closes the write boundary, releases the lock and plans the commits. Exit 2 when in review.
+// commit --instance <instance-root>
+//   One commit per ticket that passed, on the batch's branch, then archives the batch under batches/<run id>/.
+// No model or network. Exit 0 done and clean, 2 refused or in review, 1 usage.
 import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeBatch, abortBatch } from '../src/router-worker/batch.mjs';
+import { afterBatch, commitBatch } from '../src/router-worker/batch-close.mjs';
 
 const print = result => { if (result.errors) { console.error(JSON.stringify(result)); process.exitCode = 2; } else process.stdout.write(JSON.stringify(result, null, 2) + '\n'); };
-const USAGE = 'usage: node scripts/rw-batch.mjs before BATCH.json --instance <instance-root> [--start-as-is]\n       node scripts/rw-batch.mjs abort --instance <instance-root>';
-if (process.argv[2] === 'abort') {
+const USAGE = 'usage: node scripts/rw-batch.mjs before BATCH.json --instance <instance-root> [--start-as-is]\n       node scripts/rw-batch.mjs after RESULT.json --instance <instance-root>\n       node scripts/rw-batch.mjs commit --instance <instance-root>\n       node scripts/rw-batch.mjs abort --instance <instance-root>';
+if (['abort', 'commit'].includes(process.argv[2])) {
   const [flag, root, ...extra] = process.argv.slice(3);
   if (flag !== '--instance' || !root || extra.length) { console.error(USAGE); process.exit(1); }
-  print(abortBatch({ teamRoot: join(resolve(root), 'kit'), instanceRoot: resolve(root) }));
+  print((process.argv[2] === 'abort' ? abortBatch : commitBatch)({ teamRoot: join(resolve(root), 'kit'), instanceRoot: resolve(root) }));
+  process.exit();
+}
+if (process.argv[2] === 'after') {
+  const [resultFile, flag, root, ...extra] = process.argv.slice(3);
+  if (!resultFile || flag !== '--instance' || !root || extra.length) { console.error(USAGE); process.exit(1); }
+  let result; try { result = JSON.parse(readFileSync(resultFile, 'utf8')); } catch { result = undefined; }
+  const closed = afterBatch({ teamRoot: join(resolve(root), 'kit'), instanceRoot: resolve(root), result });
+  print(closed);
+  if (!closed.errors && closed.status !== 'clean') process.exitCode = 2;
   process.exit();
 }
 const [command, file, ...rest] = process.argv.slice(2), at = rest.indexOf('--instance'), instance = at === -1 ? undefined : rest[at + 1];
