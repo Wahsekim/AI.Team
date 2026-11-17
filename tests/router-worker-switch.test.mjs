@@ -8,13 +8,14 @@ import { syncBuiltinESMExports } from 'node:module';
 import { spawnSync } from 'node:child_process';
 import { proposeSwitch, switchMode, recoverSwitch, DEFAULT_LIMITS } from '../src/router-worker/switch.mjs';
 import { acquireLease, readLease } from '../src/router-worker/lease.mjs';
+import { readBoundary, decideWrite, boundaryGap } from '../src/router-worker/write-boundary.mjs';
 import { bytesDigest } from '../src/loop/contracts.mjs';
 import { fixture, git, CLI } from './fixtures/router-worker/standing-team.mjs';
 
 const SHARED = ['charter.md', 'CLAUDE.md', 'agents/lifecycle.md', 'agents/lessons.md', 'memory/pm.md', 'profiles/project.md', 'profiles/stack.md', 'kit.lock'];
 
 const refusal = result => result.errors?.[0];
-const sansLedger = tree => tree.split('\n').filter(line => !line.endsWith('./pm-decisions.md')).join('\n');
+const sansLedger = tree => tree.split('\n').filter(line => !line.endsWith('./pm-decisions.md') && !line.includes('./holiday/.switch-backup/')).join('\n');
 const passes = () => ({ ok: true, verdict: 'DEPLOYMENT-STRUCTURALLY-COMPLETE (injected)' });
 const OWN_SPECIALIST = ['agents/roster.md', 'agents/backend.md', '.claude/agents/tag-list-fixture-backend.md'];
 
@@ -295,7 +296,7 @@ test('a switch that dies at any write is undone by recover: the tree is as befor
   for (const [to, request, sampled] of cases) {
     save();
     const before = sansLedger(f.tree()), confirm = f.propose(to, request).digest, attempt = () => f.apply(to, request, confirm, { validate: passes });
-    const total = dieAt(Infinity, roots, attempt);
+    const total = dieAt(Infinity, roots, attempt), switched = sansLedger(f.tree());
     assert.ok(total > 20, `the switch to ${to} was made (${total} writes)`);
     for (let n = 1; n <= total; n++) {
       if (!sampled(n, total)) continue;
@@ -305,9 +306,37 @@ test('a switch that dies at any write is undone by recover: the tree is as befor
       if (/release-lock/.test(refusal(recovered)?.reason ?? '')) { rmSync(join(f.product, '.git/rw-ownership-lease.json.release-lock')); recovered = recover(); }
       const where = `switch to ${to}, death at write ${n} of ${total}`;
       assert.ok(recovered.stage === 'switch-rolled-back' || /no interrupted switch/.test(refusal(recovered).reason), `${where}: ${JSON.stringify(recovered)}`);
-      assert.equal(sansLedger(f.tree()), before, where); assert.equal(readLease({ productRoot: f.product }).status, 'free', where);
+      assert.equal(readLease({ productRoot: f.product }).status, 'free', where);
+      // Once the journal is gone the switch is done; only the copy of the settings it kept aside may be left.
+      if (!recovered.stage && sansLedger(f.tree()) === switched) continue;
+      assert.equal(sansLedger(f.tree()), before, where);
       assert.equal(f.propose(to, request).digest, confirm, `${where}: the same switch can be proposed again`);
     }
     reset(); assert.equal(attempt().errors, undefined);
   }
+});
+
+test('the switch installs the write-limit hook: between batches no worker may write, a governance role is not judged; switching back removes it', t => {
+  const f = fixture(t), settings = join(f.root, '.claude/settings.json'), other = { matcher: 'Bash', hooks: [{ type: 'command', command: 'echo watchdog' }] };
+  writeFileSync(settings, JSON.stringify({ env: { KEEP: '1' }, hooks: { PreToolUse: [other], Stop: [other] } }));
+  const before = readFileSync(settings, 'utf8');
+  assert.equal(f.apply().errors, undefined);
+  const boundary = readBoundary(f.root), wrappers = Object.fromEntries(['exec', 'check', 'guard'].map(duty => [duty, `tag-list-fixture-worker-${duty}`]));
+  assert.ok(boundary, 'a boundary exists as soon as the team is in Router/Worker mode'); assert.equal(boundary.productRoot, f.product);
+  assert.equal(boundaryGap({ teamRoot: f.root, productRoot: f.product, wrappers }), null, 'the hook is registered and its file exists');
+  const write = (agent, path) => decideWrite({ boundary, input: { tool_name: 'Write', agent_type: agent, cwd: f.product, tool_input: { file_path: path } } }).decision;
+  assert.equal(write('tag-list-fixture-worker-exec', 'src/app.js'), 'deny', 'no batch is open'); assert.equal(write('tag-list-fixture-worker-check', 'src/app.js'), 'deny');
+  assert.equal(write('tag-list-fixture-architect', join(f.root, 'decisions/0001.md')), 'allow', 'a governance role works between batches');
+  const live = JSON.parse(readFileSync(settings, 'utf8'));
+  assert.deepEqual(live.env, { KEEP: '1' }); assert.deepEqual(live.hooks.Stop, [other]); assert.deepEqual(live.hooks.PreToolUse[0], other); assert.equal(live.hooks.PreToolUse.length, 2);
+  assert.equal(existsSync(join(f.root, 'holiday/.switch-backup')), false);
+  assert.equal(f.apply('specialist', {}).errors, undefined);
+  assert.equal(readBoundary(f.root), null); assert.equal(existsSync(join(f.root, '.claude/rw-write-boundary.json')), false);
+  assert.deepEqual(JSON.parse(readFileSync(settings, 'utf8')), JSON.parse(before), 'the team\'s other settings are as they were');
+  // A failed switch puts the settings back byte for byte.
+  const failed = f.apply('router-worker', {}, undefined, { validate: () => ({ ok: false, verdict: 'injected' }) });
+  assert.match(refusal(failed).reason, /injected/); assert.equal(readBoundary(f.root), null);
+  // A team with no settings file gets one, and loses it again.
+  const bare = fixture(t); assert.equal(bare.apply().errors, undefined); assert.ok(existsSync(join(bare.root, '.claude/settings.json')));
+  assert.equal(bare.apply('specialist', {}).errors, undefined); assert.equal(existsSync(join(bare.root, '.claude/settings.json')), false);
 });

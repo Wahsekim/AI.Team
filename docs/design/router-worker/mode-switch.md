@@ -153,6 +153,24 @@ come back byte for byte, so the deployment validator is not run again.
 After a team is unpacked its holiday folder is removed. Anything else found in
 that folder is left where it is and reported (`leftInHoliday`).
 
+## The write-limit hook
+
+ADR 0010, decision 12. A switch into Router/Worker mode registers the
+write-boundary hook in the team's `.claude/settings.json` and writes
+`.claude/rw-write-boundary.json` in its "no batch open" form: the three workers
+are named and may write nothing. Any other agent of the team, a governance role
+for example, is not judged. A batch's "before" command (not built yet) replaces
+that file with the batch's own write paths.
+
+A switch back to specialist mode unregisters the hook and removes the boundary
+file. The team's other settings and hooks are kept in both directions. The two
+files are copied aside before they are changed, so a switch that fails or dies
+puts them back byte for byte.
+
+The runtime reads hooks and agents when a session starts: **start a new PM
+session after a switch.** A session that was open during the switch still runs
+with the old agents and the old hooks.
+
 ## The product repository
 
 The team is bound to the product repository its Router/Worker spec names; the
@@ -212,9 +230,6 @@ was, the lock is free and the same switch can be proposed again.
 
 ## Not covered
 
-- **The write-limit hook is not installed by the switch yet.** Today's hook
-  refuses every agent's write when no batch boundary exists, which would block
-  the governance roles between batches. It comes with the batch commands.
 - **A packed specialist team is not upgraded.** After a kit upgrade,
   `pin-kit.sh` lists the seeds to port for the files it finds in the instance;
   files under `holiday/specialist/` are not among them.

@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, appendFileSync, mkdirSync, mkdtempSync, renameSync, rmSync, rmdirSync, lstatSync, readdirSync, realpathSync } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync, mkdirSync, mkdtempSync, renameSync, rmSync, rmdirSync, lstatSync, readdirSync, realpathSync, copyFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join, dirname, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -8,6 +8,7 @@ import { stageTeam } from './stage.mjs';
 import { makeLive } from './activate.mjs';
 import { instanceOf } from './roots.mjs';
 import { git, isRepositoryRoot, readLease, acquireLease, releaseLease } from './lease.mjs';
+import { standBoundary, dropBoundary, BOUNDARY_FILE } from './write-boundary.mjs';
 
 // ADR 0010: a deployed team is switched between specialist and Router/Worker mode. The live mode's own
 // files (roster, delivery role files, wrappers, mode profile) are moved into holiday/<mode>/ and the
@@ -15,6 +16,7 @@ import { git, isRepositoryRoot, readLease, acquireLease, releaseLease } from './
 // Every move is announced in a journal first, so a switch that dies half-way can be rolled back.
 const MODES = ['specialist', 'router-worker'];
 const HOLIDAY = 'holiday', JOURNAL = `${HOLIDAY}/.switch-in-progress.json`, MANIFEST = 'manifest.json';
+const BACKUP = `${HOLIDAY}/.switch-backup`, GUARDED = ['.claude/settings.json', BOUNDARY_FILE], HOOK = 'scripts/hooks/rw-write-boundary.mjs';
 const MODE_FILE = 'profiles/team-mode.json', ROSTER = 'agents/roster.md', REGISTRY = '.claude/agents', LEDGER = 'pm-decisions.md';
 // Roles of the team in either mode, and the team's ledgers: their files under agents/ are shared, never packed.
 const SHARED_ROLES = ['pm', 'architect', 'coach', 'auditor', 'security', 'chaos'];
@@ -207,10 +209,32 @@ const prune = folder => { try { rmdirSync(folder); return true; } catch { return
 // Removes directories a move left empty, from the deepest up to (not including) `stop`.
 function pruneUp(from, stop) { for (let dir = dirname(from); dir.startsWith(stop) && dir !== stop && prune(dir); dir = dirname(dir)); }
 
+// ADR 0010, decision 12: the write-limit hook belongs to Router/Worker mode. The team's settings and the
+// boundary file are copied aside first, so a switch that fails or dies puts them back byte for byte.
+function setWriteLimits(instance, kit, to, productRoot) {
+  const backup = join(instance, BACKUP);
+  rmSync(backup, { recursive: true, force: true }); mkdirSync(backup, { recursive: true });
+  GUARDED.forEach((path, i) => { if (isFile(join(instance, path))) copyFileSync(join(instance, path), join(backup, String(i))); });
+  writeFileSync(join(backup, 'complete'), '');
+  if (to === 'specialist') return dropBoundary({ teamRoot: instance });
+  const slug = readJSON(join(instance, MODE_FILE))?.spec?.project?.slug;
+  need(typeof slug === 'string', 'The mode profile does not name the project');
+  standBoundary({ teamRoot: instance, productRoot, hookPath: join(kit, HOOK), wrappers: Object.fromEntries(['exec', 'check', 'guard'].map(duty => [duty, `${slug}-worker-${duty}`])) });
+}
+function restoreWriteLimits(instance) {
+  const backup = join(instance, BACKUP);
+  if (exists(join(backup, 'complete'))) GUARDED.forEach((path, i) => {
+    if (exists(join(backup, String(i)))) { mkdirSync(dirname(join(instance, path)), { recursive: true }); copyFileSync(join(backup, String(i)), join(instance, path)); }
+    else { rmSync(join(instance, path), { force: true }); pruneUp(join(instance, path), instance); }
+  });
+  rmSync(backup, { recursive: true, force: true });
+}
+
 // Undoes a journaled switch, whether it was this call's or one that died earlier. Only files the journal
 // announced are touched, and a file is moved back only where its place is empty.
 function rollBack(instance, journal) {
   const out = join(instance, HOLIDAY, journal.from), into = join(instance, HOLIDAY, journal.to);
+  restoreWriteLimits(instance);
   // What the switch put in place goes first. A path it also packed still holds the old file unless that file is on holiday.
   for (const path of journal.install) {
     const live = join(instance, path);
@@ -263,7 +287,7 @@ export function switchMode({ confirm, validate, atTerminal, ...options }) {
   const started = { schemaVersion: 1, from: live.name, to, kind, pack: body.pack, install: body.install, lease: null, productRoot, startedAt: new Date().toISOString(),
     ...(kind === 'restore' ? { restoreManifest: packed.manifest } : {}) };
   // The journal comes before the lock, so a switch that dies holding the lock can always be found and undone.
-  try { mkdirSync(join(instance, HOLIDAY), { recursive: true }); writeFileSync(journalPath, JSON.stringify(started, null, 2) + '\n', { flag: 'wx' }); }
+  try { mkdirSync(join(instance, HOLIDAY), { recursive: true }); rmSync(join(instance, BACKUP), { recursive: true, force: true }); writeFileSync(journalPath, JSON.stringify(started, null, 2) + '\n', { flag: 'wx' }); }
   catch (error) { prune(join(instance, HOLIDAY)); return refusal(new Refusal('SWITCH_REFUSED', `The switch could not be started: ${error?.code ?? error?.message}`)); }
   // The product is locked for the length of the switch, so no batch can start half-way through it.
   const lock = acquireLease({ teamRoot: instance, productRoot });
@@ -296,6 +320,8 @@ export function switchMode({ confirm, validate, atTerminal, ...options }) {
       writeFileSync(join(instance, MODE_FILE), JSON.stringify(mode, null, 2) + '\n');
     }
 
+    setWriteLimits(instance, kit, to, productRoot);
+
     // 3. A Router/Worker team must be a complete deployment where it stands; the kit may have changed since it
     // was packed. A specialist team comes back byte for byte as it was packed.
     if (to === 'router-worker') {
@@ -312,7 +338,7 @@ export function switchMode({ confirm, validate, atTerminal, ...options }) {
     // 5. The lock is given back and the ledger written while the journal still stands: a death here is found and undone.
     need(releaseLease({ productRoot, lease }).status === 'free', 'The lock on the product repository could not be released');
     appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} MODE SWITCH: from ${live.name} to ${to}; proposal ${proposalDigest} was confirmed ${atTerminal === true ? 'by its code, typed at an interactive terminal' : 'by a program that called the switch directly, not at a terminal'}. ${body.pack.length} file(s) packed under holiday/${live.name}.\n`);
-    rmSync(journalPath);
+    rmSync(journalPath); rmSync(join(instance, BACKUP), { recursive: true, force: true }); prune(join(instance, HOLIDAY));
   } catch (error) {
     try { rollBack(instance, journal); } catch (undo) {
       return { errors: [{ code: 'SWITCH_INTERRUPTED', field: 'switch', reason: `The switch failed (${error?.message}) and could not be rolled back (${undo?.message}); run: team-mode.mjs switch recover --instance <instance-root>` }] };
