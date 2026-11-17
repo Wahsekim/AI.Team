@@ -316,3 +316,39 @@ export function switchMode({ confirm, validate, atTerminal, ...options }) {
   const record = { schemaVersion: 1, stage: 'mode-switched', mode: to, from: live.name, proposalDigest, packed: body.pack, installed: body.install, kept: body.kept, leftInHoliday, validator: verdict, switchedAt: at };
   return { ...record, digest: digest(record) };
 }
+
+// The limits of a live Router/Worker team are set at the switch; this changes them afterwards, by the same confirmation.
+function planLimits({ teamRoot, instanceRoot, limits }) {
+  const no = reason => { throw new Refusal('LIMITS_REFUSED', reason); };
+  let instance;
+  try { instance = instanceOf(resolve(teamRoot), instanceRoot); } catch (error) { no(`The two-root layout is required (${error.message})`); }
+  if (!instance) no('An instance root is required');
+  if (exists(join(instance, JOURNAL))) no('A switch was interrupted; roll it back first with: team-mode.mjs switch recover --instance <instance-root>');
+  const live = currentMode(instance);
+  if (live.name !== 'router-worker') no('The team is not in Router/Worker mode; limits are set with the switch');
+  if (!limits || typeof limits !== 'object') no('The limits to change are required: {"outputAllowancePerTicket": 20000}');
+  try { limitsOf({ limits }); } catch (error) { no(error.message); }
+  const next = { ...live.profile.limits, ...limits };
+  const changed = Object.keys(next).filter(key => next[key] !== live.profile.limits?.[key]);
+  if (!changed.length) no('These are the limits the team already has');
+  const productRoot = live.profile.spec?.project?.productRoot;
+  if (typeof productRoot !== 'string' || readLease({ productRoot }).status !== 'free') no('A batch holds the lock on the product repository, or its state cannot be read; close the batch first');
+  return { instance, profile: live.profile, changed, body: { schemaVersion: 1, stage: 'limits-proposed', from: live.profile.limits, to: next } };
+}
+
+export function proposeLimits(options) {
+  try { const { body } = planLimits(options); return { ...body, digest: digest(body) }; } catch (error) { return { errors: [{ code: error.code ?? 'LIMITS_REFUSED', field: 'limits', reason: error.message }] }; }
+}
+
+export function changeLimits({ confirm, atTerminal, ...options }) {
+  try {
+    const { instance, profile, changed, body } = planLimits(options);
+    if (confirm !== digest(body)) throw new Refusal('LIMITS_NOT_CONFIRMED', 'A change of limits is confirmed by the digest of its proposal; this digest is not the current proposal');
+    const path = join(instance, MODE_FILE);
+    writeFileSync(`${path}.tmp`, JSON.stringify({ ...profile, limits: body.to }, null, 2) + '\n'); renameSync(`${path}.tmp`, path);
+    const at = new Date().toISOString();
+    appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} LIMITS CHANGED: ${changed.map(key => `${key} ${body.from?.[key]} -> ${body.to[key]}`).join(', ')}; proposal ${confirm} was confirmed ${atTerminal === true ? 'by its code, typed at an interactive terminal' : 'by a program that called the change directly, not at a terminal'}.\n`);
+    const record = { schemaVersion: 1, stage: 'limits-changed', limits: body.to, changed, changedAt: at };
+    return { ...record, digest: digest(record) };
+  } catch (error) { return { errors: [{ code: error.code ?? 'LIMITS_REFUSED', field: 'limits', reason: error.message }] }; }
+}

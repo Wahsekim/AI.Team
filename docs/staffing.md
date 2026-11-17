@@ -89,3 +89,27 @@ Every staffing change, both directions:
   exists; the verification gate is unconditional.
 - Fire/replace theater — improving a role's brief/overlay beats replacing the
   role (`agents/self-improvement.md` Anti-Pattern).
+
+## Router/Worker mode
+
+When the owner chose `router-worker` at the mode step
+([ADR 0010](../decisions/0010-router-worker-second-mode.md)), no delivery role
+is hired. After `scripts/validate-team.sh` exits 0 on the bootstrapped team:
+
+1. The PM drafts the request from the project profile:
+   `node kit/scripts/team-mode.mjs request --instance . > REQUEST.json`
+   (`--model <id>` for another model than `opus`, `--ui` for a UI project). It
+   carries the three workers and the four governance roles with their model,
+   effort, turn limit and tools, and the limits. It is refused while
+   `profiles/project.md` leaves the name, slug, product repository or a
+   workflow status unanswered.
+2. The PM shows the request to the owner and edits it as the owner asks.
+3. **The owner** runs the switch in a terminal and types the code it asks for:
+   `node kit/scripts/team-mode.mjs switch router-worker REQUEST.json --instance . --product-root <product>`.
+   A PM session cannot confirm it. The proposal on screen is what is confirmed:
+   staffing, limits, the files that move.
+
+The same switch command changes the mode of a team that already works
+(`docs/design/router-worker/mode-switch.md`). The limits of a Router/Worker
+team are changed later with `team-mode.mjs limits LIMITS.json --instance .`,
+confirmed the same way.

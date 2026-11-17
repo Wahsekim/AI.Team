@@ -211,7 +211,9 @@ deployed team works in specialist mode or in Router/Worker mode, chosen at
 bootstrap or by a switch that packs the inactive mode into `holiday/`. It works
 under "run N rounds" in the real product repository, through the count engine,
 with a lock, write limits and after-run checks. **Of that standing mode only the
-switch exists so far**: `team-mode.mjs switch` proposes the staffing and limits,
+choice of mode exists so far**: bootstrap asks for the mode
+(`docs/staffing.md`), `team-mode.mjs request` drafts the staffing and limits
+from the project profile, `team-mode.mjs switch` proposes them,
 and, once a code is typed at an interactive terminal (a session without a
 terminal cannot confirm), packs the live mode's own files and puts the other
 mode's in place

@@ -61,7 +61,17 @@ deployed instance").
    Profiles hold the VALUES; ADRs hold the WHY. Recording a choice only in a
    profile does not discharge this step. Never cite an ADR number that does
    not exist in `decisions/`.
-8. **HIRING STEP (before any wrapper is instantiated).** Run the staffing
+8. **MODE STEP (before hiring).** Ask the owner once which mode the team
+   works in: `specialist` (the default: delivery roles are hired in the next
+   step) or `router-worker` (three workers execute, check and guard every
+   ticket; no delivery role is hired —
+   [ADR 0010](../decisions/0010-router-worker-second-mode.md)). Record the
+   answer in the bootstrap ADR. For `specialist`, continue with the hiring
+   step. For `router-worker`, the hiring step covers the governance roles
+   only, and after the bootstrap gate the mode is put in place as described in
+   `docs/staffing.md` ("Router/Worker mode"). Router/Worker mode needs the
+   two-root layout.
+9. **HIRING STEP (before any wrapper is instantiated).** Run the staffing
    questionnaire in `docs/staffing.md` with the owner. Default = Minimum
    Viable Team (PM + 1 builder + 1 verifier); questionnaire answers promote
    additional roles to `active` NOW, everything else stays `dormant` /
@@ -71,12 +81,12 @@ deployed instance").
    `agents/roster.template.md`) with the Status column set per the hiring
    step, and one `agents/<role_id>.md` file per ACTIVE role (non-active
    roles get their role file at hire time).
-9. Resolve base agents: if a base-agent library exists at the
+10. Resolve base agents: if a base-agent library exists at the
    `{{BASE_AGENT_ROOT}}` the owner named, verify each path on THIS machine;
    if the library is absent, mark ALL roles `synthetic` (the role file +
    templates carry the persona) — synthetic is a first-class mode, not a
    degradation. Do not block on a missing library.
-10. **Instantiate the dispatch path (BLOCKING — dispatch is impossible without
+11. **Instantiate the dispatch path (BLOCKING — dispatch is impossible without
     it).** Default: create one `.claude/agents/<project>-<role>.md` wrapper
     for each ACTIVE roster row (only active rows get wrappers —
     `docs/staffing.md`) from `agents/_seeds/role-wrapper.template.md`,
@@ -89,7 +99,7 @@ deployed instance").
     One of the two MUST exist as real files before any dispatch. Fill the
     roster's wrapper column with the paths you actually created — never with
     paths that do not exist.
-11. **Instantiate the shared discipline files (BLOCKING once the stack is
+12. **Instantiate the shared discipline files (BLOCKING once the stack is
     locked).** Create `agents/_shared/verify-discipline.md` from its
     `.template.md`, filled from `profiles/stack.md` (env prefix — record
     `none` explicitly if the stack has none — ports, launch profiles, clean
@@ -97,23 +107,23 @@ deployed instance").
     `agents/_shared/browser-access.md` (tool, whitelist, viewports, smoke
     credential). `_shared/meta-rules.md` applies as-is from day 1. PM cycle
     step 6 (fold `_shared/` excerpts) is unexecutable until this is done.
-12. **Localize `CLAUDE.md`:** fill the project name into the start phrase,
+13. **Localize `CLAUDE.md`:** fill the project name into the start phrase,
     confirm every Authority Map filename now resolves to an instantiated file,
     and note the deployment date. A cold second session reads `CLAUDE.md`
     first — if it still describes the un-instantiated kit, every later step
     re-breaks.
-13. Initialize the rotation-regime surfaces from their seeds:
+14. Initialize the rotation-regime surfaces from their seeds:
     `agents/lifecycle.md` (counter at 001), `agents/lessons.md` (empty index),
     `pm-decisions.md`, `messages/`, and `memory/pm.md` — REPLACE the memory
     seed's placeholder block with a real dated cycle-001 block (real date,
     real open threads); never leave `YYYY-MM-DD` or already-resolved threads
     in place.
-14. If count-directed loops are expected, verify the workflow runtime can run
+15. If count-directed loops are expected, verify the workflow runtime can run
     `.claude/workflows/run-n-rounds.js` and read `docs/engine.md`.
-15. Record the bootstrap-validation result in `memory/pm.md` (bootstrap note):
+16. Record the bootstrap-validation result in `memory/pm.md` (bootstrap note):
     list the paths actually verified. Never write a "Verified" claim that
     points at a file or log that does not exist.
-16. Seed the backlog with 5-10 thin, ordered tickets.
+17. Seed the backlog with 5-10 thin, ordered tickets.
 
 ## Recommended First Tickets
 

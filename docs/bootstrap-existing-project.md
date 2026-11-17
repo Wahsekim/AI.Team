@@ -46,6 +46,13 @@ Create or update:
   charter rules that depend on a workflow, e.g. the hardening counter runs
   only while WF-18 is enabled)
 - `profiles/stack.md`
+- **MODE STEP (before hiring):** ask the owner once which mode the team works
+  in: `specialist` (the default) or `router-worker` (three workers execute,
+  check and guard every ticket; no delivery role is hired —
+  [ADR 0010](../decisions/0010-router-worker-second-mode.md)). Record the
+  answer in the attach ADR. For `router-worker` the hiring step covers the
+  governance roles only, and after the bootstrap gate the mode is put in place
+  as described in `docs/staffing.md` ("Router/Worker mode")
 - **HIRING STEP (before wrapper instantiation):** run the staffing
   questionnaire in `docs/staffing.md` with the owner (the codebase inventory
   answers most questions — UI? DB? auth/payments? toolchains?). Default =

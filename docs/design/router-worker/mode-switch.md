@@ -8,6 +8,8 @@ used on a real team. It changes which team is live; it does not run a batch.
 node kit/scripts/team-mode.mjs switch router-worker REQUEST.json --instance . --product-root <product>
 node kit/scripts/team-mode.mjs switch specialist    REQUEST.json --instance . --product-root <product>
 node kit/scripts/team-mode.mjs switch recover --instance .
+node kit/scripts/team-mode.mjs request --instance . [--model <id>] [--ui] > REQUEST.json
+node kit/scripts/team-mode.mjs limits LIMITS.json --instance .
 ```
 
 `REQUEST.json` is `{"spec"?, "limits"?}`: the Router/Worker team spec that
@@ -78,6 +80,37 @@ or a ledger, is refused, not obeyed.
 A folder under `holiday/` is outside `.claude/agents/`, so the runtime cannot
 dispatch a packed wrapper.
 
+## The request, drafted by the kit
+
+`request` prints a `REQUEST.json` drafted from `profiles/project.md`: the
+project's name, slug and product repository, one status per workflow from its
+"Workflow Status" section, and the ADR's defaults.
+
+| Role | Model | Effort | Turns | Tools |
+|---|---|---|---|---|
+| exec | `opus` (or `--model`) | high | 120 | read, search, bash, write, edit |
+| check | same | medium | 80 | read, search, bash |
+| guard | same | high | 40 | read, search |
+| architect, coach | same | medium | 40 | read, search, write, edit |
+| auditor, security | same | medium | 40 | read, search |
+
+Limits: 1 attempt, 15,000 output tokens per ticket, 6,000 for the Guardian,
+200,000 authorized per ticket. The governance rows are the kit's proposal; the
+ADR sets only the three workers. The owner sees all of it in the switch's
+proposal and may edit the file first. A profile that leaves the name, the slug,
+the product repository or a workflow's status unanswered refuses the request and
+names what is missing. A disabled workflow needs the digest of the owner's
+decision in its `decisionRef`, added by hand; the command prints a note.
+
+## Changing the limits later
+
+`limits LIMITS.json` (`{"outputAllowancePerTicket": 20000}`, any of the four)
+prints the limits before and after, and is confirmed like a switch: a code typed
+at an interactive terminal. It is refused when the team is not in Router/Worker
+mode, when nothing would change, when a switch was interrupted, or while a batch
+holds the lock. One line is appended to `pm-decisions.md`. The changed limits go
+on holiday and come back with the team.
+
 ## Into Router/Worker mode
 
 The first time, from a spec:
@@ -102,8 +135,8 @@ then handled as for any live team. A request that brings another spec while a
 packed team exists is refused: move `holiday/router-worker` away first to draft
 a new team. The same holds for `limits`: a packed team comes back with the
 limits it was packed with, the proposal shows them, and a request that brings
-`limits` is refused. There is no command yet to change the limits of a team
-that exists; that is an open point for the bootstrap step.
+`limits` is refused. The limits of a live team are changed with the `limits`
+command (below).
 
 ## Back to specialist mode
 
@@ -180,7 +213,9 @@ was, the lock is free and the same switch can be proposed again.
 - **A packed specialist team is not upgraded.** After a kit upgrade,
   `pin-kit.sh` lists the seeds to port for the files it finds in the instance;
   files under `holiday/specialist/` are not among them.
-- **Bootstrap does not offer the mode yet**, and the gate flag
-  (`dispatch: main-session`) cannot be set: both are later steps.
+- **The gate flag** (`dispatch: main-session`) cannot be set: a later step.
+- **Bootstrap asks for the mode in its documents** (`docs/bootstrap-*.md`,
+  `docs/staffing.md`); `bootstrap-team.sh` itself has no mode option. A team is
+  bootstrapped as today and then switched.
 - **The terminal check is not a proof of identity** (above). It needs a POSIX
   terminal (`/dev/tty`).
