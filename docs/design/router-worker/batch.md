@@ -1,17 +1,32 @@
 # A batch in a standing Router/Worker team
 
-Status: the "before" and "abort" commands are built and tested offline on a
-bootstrapped fixture. The "after" command is not built: a batch opened by
-"before" can today only be aborted, not checked and closed. Not yet used on a
-real team.
+Status: "before", "after", "commit" and "abort" are built and tested offline
+on a bootstrapped fixture, with the real engine run on mock agents. Usage is not
+settled per ticket yet, and the review of ADR 0011 is not built. Not yet used on
+a real team.
 [ADR 0010](../../../decisions/0010-router-worker-second-mode.md), decisions 8 to 12.
 
 ```sh
 node kit/scripts/rw-batch.mjs before BATCH.json --instance . [--start-as-is]
+node kit/scripts/rw-batch.mjs after RESULT.json --instance .
+node kit/scripts/rw-batch.mjs commit --instance .
 node kit/scripts/rw-batch.mjs abort --instance .
 ```
 
-Exit 0 batch open or aborted, 2 refused, 1 usage. No model, no network.
+Exit 0 done, 2 refused or (for `after`) a batch in review, 1 usage. No model,
+no network.
+
+## The order of a batch
+
+| Step | Who | What |
+|---|---|---|
+| 1 | PM | `before BATCH.json`: the batch is checked, frozen and opened |
+| 2 | PM | runs `run-n-rounds` with the `args` of the batch record |
+| 3 | PM | `after RESULT.json`, with the engine's return: the run is checked, the write limits close, the lock is released |
+| 4 | PM | `scripts/reconcile-run.mjs RESULT.json .`: lifecycle and message ledgers, as in specialist mode |
+| 5 | PM | `commit`: one commit per ticket that passed; the batch is archived |
+
+`abort` replaces steps 2 to 5 for a batch that will not be run.
 
 ## What the PM writes
 
@@ -37,6 +52,7 @@ Exit 0 batch open or aborted, 2 refused, 1 usage. No model, no network.
 | `expectedPaths` | The files the worker is expected to touch; by default the `paths` that are files. Required when a ticket grants only folders |
 | `estimate` | Input-side tokens for execution, check and rework; their sum may not exceed the authorization per ticket |
 | `sensitivePaths` | Paths no ticket of this batch may write. They are judged against `paths`, which is what bounds the worker, not against the plan: a ticket whose grant covers a sensitive path, or lies under one, is refused. An entry written as a bare folder (`src/auth`) guards everything under it. This lasts until the review of [ADR 0011](../../../decisions/0011-router-worker-batch-review.md) exists |
+| `commitMessage` (optional) | The message of the ticket's commit, one line; by default `<id>: <title>` |
 | `runId`, `date` (optional) | Default: `rw-<commit>-L<nextLifecycleNumber>` and today |
 
 The PM does not write a ceiling, a number of rounds, a wrapper name or a
@@ -85,6 +101,62 @@ budget per ticket. Those come from the team.
 
 Any refusal after step 4 releases the lock, and closes the boundary if it was
 opened.
+
+## After
+
+`after RESULT.json` takes the engine's return.
+
+1. **Is it this batch's return?** The return is matched against the frozen
+   arguments: run id, rounds, ceiling, attempts, the plan's tickets and workers
+   in order, the Guardian's record, the lifecycle count. A return that does not
+   match is refused and **nothing changes**: the lock stays held and the write
+   boundary stays open.
+2. **What the batch changed**: every path the work tree holds now that was not
+   already there when the batch opened. Each path belongs to the ticket whose
+   `paths` cover it, or to none.
+3. **Findings**:
+
+   | Finding | Meaning | Commits |
+   |---|---|---|
+   | `WRITE_OUTSIDE_PATHS` | paths changed that no ticket covers, for instance through a worker's shell | the paths are left uncommitted; the tickets are still committed |
+   | `HOOK_SAW_NO_WORKER` | files changed and the hook logged no worker call since the batch opened: the session did not load it, so the write limits were not enforced during the run | not held |
+   | `BOUNDARY_CHANGED` | the write-boundary file is not the one the batch opened | all held |
+   | `PRODUCT_HEAD_MOVED`, `PRODUCT_BRANCH_CHANGED` | someone committed or changed branch during the batch | all held |
+   | `GUARDIAN_NOT_CLEAN` | the Guardian did not answer, or did not find the run clean | all held |
+   | `BOUNDARY_NOT_RESTORED`, `LOCK_RELEASE_FAILED`, `LOCK_NOT_HELD_BY_THIS_BATCH` | the batch could not be closed completely | not held |
+
+4. **The write boundary closes and the lock is released**, whatever the
+   findings: a lock must not outlive its batch.
+5. **The commit plan**: one commit for each ticket that passed and changed
+   something, of that ticket's own paths. A ticket that did not pass, or was not
+   run because the batch halted, is not in the plan.
+6. **The record** `rw-batch-after.json` and one line in `pm-decisions.md`.
+   `status` is `clean` when there is no finding and the engine reports no
+   blocker, otherwise `review`.
+
+"All held" means the kit commits nothing of that batch: what ran is not what
+was frozen, and the PM or the owner judges it by hand.
+
+## Commit
+
+`commit` makes the planned commits on the batch's branch, in the order of the
+tickets, then moves the batch's records to `batches/<run id>/` and appends one
+line to `pm-decisions.md`. It takes the lock for its length. It pushes nothing.
+
+- It refuses when the product is no longer on the batch's branch, when a Git
+  operation is in progress, or when the work tree is not exactly what `after`
+  saw.
+- A path that was changed before the batch (start as is) is never in a commit,
+  staged or not.
+- The repository's own commit hooks run. If one refuses a commit, the commits
+  already made stay, the batch stays open, and running `commit` again makes
+  only what is missing.
+- What is not committed stays in the work tree and is listed (`left`): a ticket
+  that did not pass, a path outside every ticket. The next "before" then
+  refuses until the PM commits or discards those paths, or starts as is.
+
+The commits are made by the PM's session running this command, with the
+repository's Git identity ([ADR 0007](../../../decisions/0007-pm-only-commits.md)).
 
 ## Abort
 
@@ -143,8 +215,17 @@ kept out of the tickets' commits by the "after" command.
 
 ## Not covered
 
-- **There is no "after" command yet.** Until it exists a batch can be aborted,
-  not checked, settled and closed.
+- **Usage is not settled per ticket yet.** The engine's return carries the
+  output tokens it metered; matching each agent's measured usage against the
+  ticket's authorization is the next piece.
+- **The review of [ADR 0011](../../../decisions/0011-router-worker-batch-review.md)
+  is not built.** Until then a ticket that passed its check is committed with
+  no security or architecture review, and a ticket that could write a sensitive
+  path is refused by "before".
+- **A ticket that did not pass keeps its changes in the work tree.** They are
+  not saved aside and removed; ADR 0011 does that for a rejected ticket.
+- **`after` trusts the engine's return for which tickets passed.** It checks
+  that the return fits the frozen batch, not that the checker ran.
 - **The default branch is recognised by name**: every remote's default,
   `init.defaultBranch`, `main`, `master`. A repository with no remote whose
   default branch has another name (`develop`) is not recognised.

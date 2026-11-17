@@ -11,10 +11,10 @@ import { limitsOf } from './switch.mjs';
 // ADR 0010, decisions 8 to 12: the one command a PM runs before a batch in a standing Router/Worker team.
 // It builds the engine's inputs from the PM's tickets, checks the product repository, computes the ceiling,
 // takes the lock and opens the write boundary. A refusal leaves the team and the product as they were.
-export const BATCH_FILE = 'rw-batch.json';
+export const BATCH_FILE = 'rw-batch.json', AFTER_FILE = 'rw-batch-after.json', ARCHIVE = 'batches';
 const MODE_FILE = 'profiles/team-mode.json', JOURNAL = 'holiday/.switch-in-progress.json', LEDGER = 'pm-decisions.md';
 const IN_PROGRESS = ['index.lock', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'BISECT_LOG', 'rebase-merge', 'rebase-apply'];
-const TICKET_FIELDS = ['id', 'title', 'goal', 'acceptance', 'paths', 'estimate'], BATCH_FIELDS = ['tickets', 'verificationCommands', 'sensitivePaths', 'nextLifecycleNumber'];
+const TICKET_FIELDS = ['id', 'title', 'goal', 'acceptance', 'paths', 'estimate'], TICKET_OPTIONAL = ['expectedPaths', 'commitMessage'], BATCH_FIELDS = ['tickets', 'verificationCommands', 'sensitivePaths', 'nextLifecycleNumber'];
 const ESTIMATE = ['execTokens', 'checkTokens', 'reworkTokens'], MAX_PATHS = 100;
 const STOP = ['Owner stop', 'Required scope or permission change', 'Missing verification environment'];
 // What a standing team accepts by decision: no sandbox is required, and Git-ignored build output is tolerated.
@@ -29,11 +29,11 @@ const exists = path => Boolean(lstatSync(path, { throwIfNoEntry: false }));
 const readJSON = path => { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; } };
 const ref = (id, value) => ({ id, digest: digest(value) });
 // Compared without case: on a case-insensitive file system src/A.js and src/a.js are one file.
-const covers = (grant, other) => { const [g, o] = [grant.toLowerCase(), other.toLowerCase()]; return g.endsWith('/**') ? o === g || o.startsWith(g.slice(0, -2)) : o === g; };
+export const covers = (grant, other) => { const [g, o] = [grant.toLowerCase(), other.toLowerCase()]; return g.endsWith('/**') ? o === g || o.startsWith(g.slice(0, -2)) : o === g; };
 const overlap = (a, b) => covers(a, b) || covers(b, a);
 // A sensitive entry written as a bare folder guards everything under it.
 const guards = (guarded, path) => overlap(path, guarded) || (!guarded.endsWith('/**') && overlap(path, `${guarded}/**`));
-const plain = text => String(text).replace(/[\x00-\x1f\x7f]/g, '?');
+export const plain = text => String(text).replace(/[\x00-\x1f\x7f]/g, '?');
 const strings = (value, min = 1) => Array.isArray(value) && value.length >= min && value.every(entry => typeof entry === 'string' && entry);
 
 // The branches a batch never works on: every remote's default, the configured default, and the usual names.
@@ -42,7 +42,7 @@ function defaultBranches(product) {
   return [...new Set([...remotes, git(product, 'config', '--get', 'init.defaultBranch')?.trim(), 'main', 'master'].filter(Boolean))];
 }
 // Every path the work tree holds beyond HEAD, both sides of a rename, exactly as Git names them.
-function changedPaths(product) {
+export function changedPaths(product) {
   const status = git(product, 'status', '--porcelain', '-z', '--untracked-files=all');
   need(status !== null, 'The state of the product repository cannot be read');
   const fields = status.split('\0').filter(Boolean), paths = [];
@@ -76,7 +76,9 @@ function checkBatch(batch) {
     need(!missing.length, `Ticket ${ticket.id ?? i + 1} is incomplete: ${missing.join(', ')} missing`);
     need(typeof ticket.id === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/.test(ticket.id), `Ticket ${i + 1}: the id must be 1 to 40 letters, digits, dots, dashes or underscores`);
     need(!ids.has(ticket.id.toLowerCase()), `Ticket ${ticket.id} appears twice`); ids.add(ticket.id.toLowerCase());
-    need(Object.keys(ticket).every(key => [...TICKET_FIELDS, 'expectedPaths'].includes(key)), `Ticket ${ticket.id} carries a field the batch does not know`);
+    need(Object.keys(ticket).every(key => [...TICKET_FIELDS, ...TICKET_OPTIONAL].includes(key)), `Ticket ${ticket.id} carries a field the batch does not know`);
+    for (const key of ['title', ...(ticket.commitMessage === undefined ? [] : ['commitMessage'])])
+      need(typeof ticket[key] === 'string' && ticket[key].trim() && ticket[key].length <= 200 && !/[\x00-\x1f\x7f]/.test(ticket[key]), `Ticket ${ticket.id}: ${key} must be one line of at most 200 characters`);
     need(strings(ticket.paths), `Ticket ${ticket.id}: paths must be a list of files or folder grants ("src/x.ts", "src/list/**")`);
     need(ticket.estimate && typeof ticket.estimate === 'object' && Object.keys(ticket.estimate).sort().join() === [...ESTIMATE].sort().join(), `Ticket ${ticket.id}: the estimate must carry exactly ${ESTIMATE.join(', ')}`);
     const reserved = ticket.paths.filter(path => { const parts = path.toLowerCase().split('/'); return RESERVED.includes(parts[0]) || parts.includes('.git'); });
@@ -137,7 +139,7 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
   let lease = null, opened = false, instance, productRoot;
   try {
     ({ instance, productRoot } = liveTeam(teamRoot, instanceRoot));
-    need(!exists(join(instance, BATCH_FILE)), `A batch is already open (${BATCH_FILE}); close it before starting another`);
+    need(!exists(join(instance, BATCH_FILE)) && !exists(join(instance, AFTER_FILE)), `A batch is already open (${BATCH_FILE}); close it with after and commit, or abort it, before starting another`);
     checkBatch(batch);
     checkProduct(productRoot, startAsIs === true);
     const held = readLease({ productRoot });
@@ -148,14 +150,19 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     lease = taken.lease.digest;
     // With the lock held, no switch and no change of limits can run: what is read now is what the batch uses.
     const { profile, limits } = liveTeam(teamRoot, instanceRoot), product = checkProduct(productRoot, startAsIs === true), count = batch.tickets.length;
+    // Decision 11: paths already changed are kept out of the tickets' commits, so none may lie where a ticket writes.
+    const mixed = product.preexisting.filter(path => batch.tickets.some(ticket => ticket.paths.some(grant => covers(grant, path))));
+    need(!mixed.length, `These paths are already changed and lie where a ticket of this batch writes (${mixed.slice(0, 5).map(plain).join(', ')}); they could not be kept out of its commit. Commit or discard them first`);
     const closed = readBoundary(instance);
     need(closed && closed.productRoot === productRoot && Object.values(closed.wrappers).every(entry => entry.writePaths.length === 0),
       'The team has no closed write boundary for this product: an earlier batch was not closed, or the boundary was changed. Clear it with: rw-batch.mjs abort --instance <instance-root>');
     const wrappers = Object.fromEntries(Object.entries(closed.wrappers).map(([name, entry]) => [entry.duty, name]));
 
+    const runId = batch.runId ?? `rw-${product.head.slice(0, 8)}-L${batch.nextLifecycleNumber}`;
+    need(typeof runId === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(runId) && !exists(join(instance, ARCHIVE, runId)), `The run id ${plain(runId)} is not a plain identifier, or a batch of that id was already closed; give another "runId"`);
     // Decision 10: the ceiling is computed, never chosen. The engine stops dispatching at 80% of it.
     const ceiling = count * limits.outputAllowancePerTicket + limits.guardianOutputShare, allPaths = [...new Set(batch.tickets.flatMap(ticket => ticket.paths))].sort();
-    const run = { rounds: count, date: batch.date ?? new Date().toISOString().slice(0, 10), nextLifecycleNumber: batch.nextLifecycleNumber, runId: batch.runId ?? `rw-${product.head.slice(0, 8)}-L${batch.nextLifecycleNumber}`,
+    const run = { rounds: count, date: batch.date ?? new Date().toISOString().slice(0, 10), nextLifecycleNumber: batch.nextLifecycleNumber, runId,
       budgetCeilingTokens: ceiling, estimatedOutputTokens: Math.floor(ceiling / 2), guardianEstimateTokens: limits.authorizationPerTicket, maxAttemptsPerTicket: limits.attemptsPerTicket };
     const inputs = batch.tickets.map(ticket => inputOf(ticket, { batch, profile, wrappers, product, limits, allPaths }));
     let frozen = await freezeRun({ inputs, run, teamRoot: instance });
@@ -180,7 +187,7 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     const body = { schemaVersion: 1, stage: 'batch-open', runId: frozen.args.runId, openedAt: at, productRoot, productHead: product.head, branch: product.branch,
       startedAsIs: startAsIs === true, preexisting: product.preexisting, lease, boundaryDigest: boundary.digest, isolationDigest: isolation.digest,
       limits, ceiling: { outputTokens: ceiling, stopLine: Math.floor(ceiling * 4 / 5) },
-      tickets: batch.tickets.map((ticket, i) => ({ id: ticket.id, paths: ticket.paths, expectedPaths: inputs[i].proposal.expectedPaths })),
+      tickets: batch.tickets.map((ticket, i) => ({ id: ticket.id, title: ticket.title, commitMessage: ticket.commitMessage ?? `${ticket.id}: ${ticket.title}`, paths: ticket.paths, expectedPaths: inputs[i].proposal.expectedPaths })),
       sensitivePaths: batch.sensitivePaths, verificationCommands: batch.verificationCommands,
       launchManifest: manifest ? 'chained' : 'absent', runRecord: frozen.record, args: frozen.args };
     const record = { ...body, digest: digest(body) };
@@ -211,6 +218,7 @@ export function abortBatch({ teamRoot, instanceRoot }) {
     need(!exists(join(instance, JOURNAL)), 'A mode switch was interrupted; roll it back first with: team-mode.mjs switch recover --instance <instance-root>');
     const record = readJSON(join(instance, BATCH_FILE)), held = readLease({ productRoot }), boundary = readBoundary(instance);
     const ours = held.status === 'held' && held.lease.teamRoot === instance, open = boundary ? Object.values(boundary.wrappers).some(entry => entry.writePaths.length > 0) : false;
+    need(!exists(join(instance, AFTER_FILE)), 'This batch was already closed by after; finish it with: rw-batch.mjs commit --instance <instance-root>');
     need(exists(join(instance, BATCH_FILE)) || ours || open, 'There is no batch to abort');
     if (open) closeBoundary({ teamRoot: instance });
     if (ours) { const released = releaseLease({ productRoot, lease: held.lease.digest }); need(!released.errors, `The lock could not be released: ${released.errors?.[0]?.reason}`); }
