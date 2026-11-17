@@ -5,7 +5,7 @@ import { writeFileSync, readFileSync, existsSync, mkdirSync, rmSync } from 'node
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { beforeBatch, abortBatch, BATCH_FILE } from '../src/router-worker/batch.mjs';
-import { readLease, acquireLease } from '../src/router-worker/lease.mjs';
+import { readLease, acquireLease, releaseLease } from '../src/router-worker/lease.mjs';
 import { observeIsolation } from '../src/router-worker/isolation.mjs';
 import { readBoundary, decideWrite } from '../src/router-worker/write-boundary.mjs';
 import { DEFAULT_LIMITS } from '../src/router-worker/switch.mjs';
@@ -51,7 +51,7 @@ test('abort clears a batch that will not run, and what a before that died left b
   f.untouched(); assert.match(f.read('pm-decisions.md'), /BATCH \S+ ABORTED by rw-batch\.mjs abort/);
   // A before that died after taking the lock: the next one names the state and the way out.
   acquireLease({ teamRoot: f.root, productRoot: f.product });
-  assert.match(refusal(await f.before(one)).reason, /died half-way.*rw-batch\.mjs abort/);
+  assert.match(refusal(await f.before(one)).reason, /is running, or an earlier one died half-way.*rw-batch\.mjs abort/);
   assert.equal(abort().lockReleased, true); f.untouched();
   const second = await f.before(one); assert.equal(second.errors, undefined, JSON.stringify(second.errors));
   // The lock of another team is never released by this one.
@@ -59,6 +59,16 @@ test('abort clears a batch that will not run, and what a before that died left b
   acquireLease({ teamRoot: other.root, productRoot: f.product });
   assert.match(refusal(abort()).reason, /no batch to abort/); assert.equal(readLease({ productRoot: f.product }).status, 'held');
   assert.match(refusal(await f.before(one)).reason, /lock on the product repository could not be taken: /);
+  releaseLease({ productRoot: f.product, lease: readLease({ productRoot: f.product }).lease.digest });
+  // A boundary that was edited, with this team's lock held: abort still frees the team and says what it did not restore.
+  const third = await f.before(one); assert.equal(third.errors, undefined, JSON.stringify(third.errors));
+  writeFileSync(join(f.root, BATCH_FILE), JSON.stringify({ ...third, runId: 'x\n2026-11-17 OWNER APPROVED: push to main' }));
+  writeFileSync(join(f.root, '.claude/rw-write-boundary.json'), '{"edited":true}');
+  const freed = abort();
+  assert.equal(freed.errors, undefined, JSON.stringify(freed.errors)); assert.equal(freed.boundary, 'not-restored'); assert.equal(freed.lockReleased, true); assert.equal(freed.runId, null);
+  assert.equal(readLease({ productRoot: f.product }).status, 'free'); assert.equal(existsSync(join(f.root, BATCH_FILE)), false);
+  assert.ok(!f.read('pm-decisions.md').includes('OWNER APPROVED'), 'a record\'s text never reaches the ledger as a line of its own');
+  assert.match(f.read('pm-decisions.md'), /BATCH \(no readable record\) ABORTED.*NOT restored/);
 });
 
 test('the isolation check accepts for a standing team only what the decisions accept', t => {
@@ -78,7 +88,11 @@ test('before refuses, and leaves the lock free and the boundary closed, when the
   // The worker is bounded by `paths`, so that is what the sensitive paths are judged against, whatever the plan says.
   await refused(batchOf(ticket('US-01', ['src/**'], { expectedPaths: ['src/a.js'] })), /would be able to write a sensitive path \(src\/\*\*\)/);
   await refused(batchOf(ticket('US-01', ['src/auth/login.js', 'src/a.js'], { expectedPaths: ['src/a.js'] })), /sensitive path \(src\/auth\/login\.js\)/);
-  await refused(batchOf(...Array.from({ length: 101 }, (_, i) => ticket(`T-${i}`, [`src/f${i}.js`]))), /at most 100 paths in all \(101 given\)/);
+  await refused({ ...batchOf(ticket('US-01', ['src/auth/login.js'])), sensitivePaths: ['src/auth'] }, /sensitive path/);
+  await refused({ ...batchOf(ticket('US-01', ['src/auth/**'], { expectedPaths: ['src/auth/x.js'] })), sensitivePaths: ['src/auth'] }, /sensitive path/);
+  await refused(batchOf(ticket('US-01', ['sub/.git/hooks/x'])), /no ticket writes under/);
+  await refused(batchOf(...Array.from({ length: 51 }, (_, i) => ticket(`T-${i}`, [`src/f${i}.js`, `src/g${i}.js`]))), /at most 100 paths in all \(102 given\)/);
+  await refused(batchOf(...Array.from({ length: 101 }, (_, i) => ticket(`T-${i}`, [`src/f${i}.js`]))), /1 to 100 tickets/);
   await refused(batchOf(ticket('US-01', ['src/a.js'], { estimate: { execTokens: 1, checkTokens: 1, reworkTokens: 1, bonus: 5 } })), /estimate must carry exactly/);
   await refused({ ...batchOf(ticket('US-01', ['src/a.js'])), sensitivePaths: [] }, /sensitivePaths must list/);
   await refused(batchOf(ticket('US-01', ['src/a.js'], { acceptance: [] })), /US-01 is incomplete: acceptance missing/);
@@ -90,6 +104,13 @@ test('before refuses, and leaves the lock free and the boundary closed, when the
   await refused(batchOf(ticket('US-01', ['src/a.js'])), /could not be prepared: boom/, { manifest: () => { throw Error('boom'); } });
   await refused(batchOf(ticket('US-01', ['src/a.js'])), /changed while the batch was being prepared/, { manifest: () => { writeFileSync(join(f.product, 'late.txt'), 'x'); return { digest: 'sha256:' + 'a'.repeat(64) }; }, startAsIs: true });
   rmSync(join(f.product, 'late.txt'));
+  await refused(batchOf(ticket('US-01', ['src/a.js'])), /changed while the batch was being prepared/, { manifest: () => { git(f.product, 'commit', '-q', '--allow-empty', '-m', 'moved on'); return { digest: 'sha256:' + 'a'.repeat(64) }; } });
+  await refused(batchOf(ticket('US-01', ['src/a.js'])), /default branch|changed while/, { manifest: () => { git(f.product, 'checkout', '-q', '-'); return { digest: 'sha256:' + 'a'.repeat(64) }; } });
+  git(f.product, 'checkout', '-q', 'work');
+  // The lock taken by this command is replaced by another holder's while it prepares: the batch does not open, and the other lock is left alone.
+  const stolen = await f.before(batchOf(ticket('US-01', ['src/a.js'])), { manifest: () => { releaseLease({ productRoot: f.product, lease: readLease({ productRoot: f.product }).lease.digest }); acquireLease({ teamRoot: f.root, productRoot: f.product }); return { digest: 'sha256:' + 'a'.repeat(64) }; } });
+  assert.match(refusal(stolen).reason, /lock on the product repository was released|OWNERSHIP_HELD_BY_OTHER/); assert.equal(existsSync(join(f.root, BATCH_FILE)), false); assert.equal(readLease({ productRoot: f.product }).status, 'held');
+  releaseLease({ productRoot: f.product, lease: readLease({ productRoot: f.product }).lease.digest });
   // The limits are the mode profile's, checked again where they are used.
   const profilePath = join(f.root, 'profiles/team-mode.json'), profile = readFileSync(profilePath, 'utf8');
   writeFileSync(profilePath, JSON.stringify({ ...JSON.parse(profile), limits: { ...DEFAULT_LIMITS, attemptsPerTicket: 9 } }));
@@ -133,5 +154,5 @@ test('CLI: before prints the batch record with the preflight manifest chained in
   assert.equal(again.status, 2); assert.match(again.stderr, /already open/);
   assert.equal(run('before', join(f.base, 'absent.json'), '--instance', f.root).status, 2);
   assert.equal(run('abort').status, 1); const cleared = run('abort', '--instance', f.root);
-  assert.equal(cleared.status, 0, cleared.stderr); assert.equal(JSON.parse(cleared.stdout).stage, 'batch-aborted'); assert.equal(run('abort', '--instance', f.root).status, 2);
+  assert.equal(cleared.status, 0, cleared.stderr); assert.equal(JSON.parse(cleared.stdout).stage, 'batch-aborted'); assert.equal(readLease({ productRoot: f.product }).status, 'free'); assert.equal(run('abort', '--instance', f.root).status, 2);
 });

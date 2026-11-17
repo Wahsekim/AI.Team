@@ -31,6 +31,9 @@ const ref = (id, value) => ({ id, digest: digest(value) });
 // Compared without case: on a case-insensitive file system src/A.js and src/a.js are one file.
 const covers = (grant, other) => { const [g, o] = [grant.toLowerCase(), other.toLowerCase()]; return g.endsWith('/**') ? o === g || o.startsWith(g.slice(0, -2)) : o === g; };
 const overlap = (a, b) => covers(a, b) || covers(b, a);
+// A sensitive entry written as a bare folder guards everything under it.
+const guards = (guarded, path) => overlap(path, guarded) || (!guarded.endsWith('/**') && overlap(path, `${guarded}/**`));
+const plain = text => String(text).replace(/[\x00-\x1f\x7f]/g, '?');
 const strings = (value, min = 1) => Array.isArray(value) && value.length >= min && value.every(entry => typeof entry === 'string' && entry);
 
 // The branches a batch never works on: every remote's default, the configured default, and the usual names.
@@ -63,7 +66,7 @@ function checkProduct(product, startAsIs) {
 function checkBatch(batch) {
   need(batch && typeof batch === 'object' && !Array.isArray(batch) && BATCH_FIELDS.every(key => Object.hasOwn(batch, key))
     && Object.keys(batch).every(key => [...BATCH_FIELDS, 'runId', 'date'].includes(key)), `The batch must carry ${BATCH_FIELDS.join(', ')} and optionally runId, date`);
-  need(Array.isArray(batch.tickets) && batch.tickets.length >= 1 && batch.tickets.length <= 300, 'The batch must list 1 to 300 tickets');
+  need(Array.isArray(batch.tickets) && batch.tickets.length >= 1 && batch.tickets.length <= MAX_PATHS, `The batch must list 1 to ${MAX_PATHS} tickets`);
   need(strings(batch.sensitivePaths) && batch.sensitivePaths.length <= MAX_PATHS, `sensitivePaths must list 1 to ${MAX_PATHS} paths no ticket of this batch may write`);
   need(strings(batch.verificationCommands) && batch.verificationCommands.length <= MAX_PATHS, `verificationCommands must list 1 to ${MAX_PATHS} commands`);
   const ids = new Set();
@@ -76,10 +79,10 @@ function checkBatch(batch) {
     need(Object.keys(ticket).every(key => [...TICKET_FIELDS, 'expectedPaths'].includes(key)), `Ticket ${ticket.id} carries a field the batch does not know`);
     need(strings(ticket.paths), `Ticket ${ticket.id}: paths must be a list of files or folder grants ("src/x.ts", "src/list/**")`);
     need(ticket.estimate && typeof ticket.estimate === 'object' && Object.keys(ticket.estimate).sort().join() === [...ESTIMATE].sort().join(), `Ticket ${ticket.id}: the estimate must carry exactly ${ESTIMATE.join(', ')}`);
-    const reserved = ticket.paths.filter(path => RESERVED.includes(path.split('/')[0].toLowerCase()));
+    const reserved = ticket.paths.filter(path => { const parts = path.toLowerCase().split('/'); return RESERVED.includes(parts[0]) || parts.includes('.git'); });
     need(!reserved.length, `Ticket ${ticket.id} claims ${reserved.join(', ')}; no ticket writes under ${RESERVED.join(' or ')}`);
     // Decision 12 bounds the worker by `paths`, so the sensitive paths are judged against `paths`, not against the plan.
-    const sensitive = ticket.paths.filter(path => batch.sensitivePaths.some(guarded => overlap(path, guarded)));
+    const sensitive = ticket.paths.filter(path => batch.sensitivePaths.some(guarded => guards(guarded, path)));
     need(!sensitive.length, `Ticket ${ticket.id} would be able to write a sensitive path (${sensitive.slice(0, 5).join(', ')}); such a ticket needs a security review, which is not built yet`);
     const files = ticket.paths.filter(path => !path.endsWith('/**'));
     need(ticket.expectedPaths === undefined ? files.length > 0 : strings(ticket.expectedPaths), `Ticket ${ticket.id} grants only folders; add "expectedPaths" with at least one file the worker is expected to touch`);
@@ -138,7 +141,7 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     checkBatch(batch);
     checkProduct(productRoot, startAsIs === true);
     const held = readLease({ productRoot });
-    need(!(held.status === 'held' && held.lease.teamRoot === instance), 'This team holds the lock on the product repository but has no open batch: an earlier "before" died half-way. Clear it with: rw-batch.mjs abort --instance <instance-root>');
+    need(!(held.status === 'held' && held.lease.teamRoot === instance), 'This team holds the lock on the product repository but has no open batch: another "before" or a change of limits is running, or an earlier one died half-way. If nothing is running, clear it with: rw-batch.mjs abort --instance <instance-root>');
 
     const taken = acquireLease({ teamRoot: instance, productRoot });
     need(!taken.errors, `The lock on the product repository could not be taken: ${taken.errors?.[0]?.reason}`);
@@ -166,7 +169,9 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     const isolation = observeIsolation({ teamRoot: instance, productRoot, lease, dispatch: 'engine', standing: [...STANDING, ...(startAsIs === true ? ['PRODUCT_DIRTY'] : [])] });
     need(!isolation.errors && isolation.status === 'clear', `The team or the product is not in a state to run a batch: ${isolation.errors?.[0]?.reason ?? isolation.findings.filter(f => f.severity !== 'accepted').map(f => `${f.code} (${f.detail})`).join('; ')}`);
     // Nothing may have appeared in the product since it was read: what is there now is what the record says was there.
-    need(digest(changedPaths(productRoot)) === digest(product.preexisting), 'The product repository changed while the batch was being prepared; run the command again');
+    const now = checkProduct(productRoot, startAsIs === true);
+    need(now.head === product.head && now.branch === product.branch && digest(now.preexisting) === digest(product.preexisting), 'The product repository changed while the batch was being prepared; run the command again');
+    need(readLease({ productRoot }).lease?.digest === lease, 'The lock on the product repository was released while the batch was being prepared; run the command again');
 
     // The write boundary opens last, once nothing can refuse the batch any more but the record itself.
     const boundary = openBoundary({ teamRoot: instance, productRoot, writePaths: allPaths });
@@ -182,7 +187,7 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     writeFileSync(join(instance, BATCH_FILE), JSON.stringify(record, null, 2) + '\n', { flag: 'wx' });
     // Decision 11: starting on a repository that is not clean is the PM's explicit choice, and it is logged.
     if (record.startedAsIs && product.preexisting.length) {
-      try { appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} BATCH ${record.runId} STARTED AS IS: ${product.preexisting.length} path(s) were already changed and are kept out of the tickets' commits (${product.preexisting.slice(0, 10).join(', ')}${product.preexisting.length > 10 ? ', ...' : ''}).\n`); }
+      try { appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} BATCH ${record.runId} STARTED AS IS: ${product.preexisting.length} path(s) were already changed and are kept out of the tickets' commits (${product.preexisting.slice(0, 10).map(plain).join(', ')}${product.preexisting.length > 10 ? ', ...' : ''}).\n`); }
       catch (error) { rmSync(join(instance, BATCH_FILE), { force: true }); throw error; }
     }
     lease = null; opened = false;
@@ -206,14 +211,16 @@ export function abortBatch({ teamRoot, instanceRoot }) {
     need(!exists(join(instance, JOURNAL)), 'A mode switch was interrupted; roll it back first with: team-mode.mjs switch recover --instance <instance-root>');
     const record = readJSON(join(instance, BATCH_FILE)), held = readLease({ productRoot }), boundary = readBoundary(instance);
     const ours = held.status === 'held' && held.lease.teamRoot === instance, open = boundary ? Object.values(boundary.wrappers).some(entry => entry.writePaths.length > 0) : false;
-    need(boundary, 'The write boundary is missing or was changed; it is restored by a mode switch, not by this command');
     need(exists(join(instance, BATCH_FILE)) || ours || open, 'There is no batch to abort');
     if (open) closeBoundary({ teamRoot: instance });
     if (ours) { const released = releaseLease({ productRoot, lease: held.lease.digest }); need(!released.errors, `The lock could not be released: ${released.errors?.[0]?.reason}`); }
-    const at = new Date().toISOString();
-    appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} BATCH ${record?.runId ?? '(no record)'} ABORTED by rw-batch.mjs abort: the write boundary is closed${ours ? ', the lock released' : ''}. Nothing about the work was checked.\n`);
-    rmSync(join(instance, BATCH_FILE), { force: true });
-    const body = { schemaVersion: 1, stage: 'batch-aborted', runId: record?.runId ?? null, boundaryClosed: open, lockReleased: ours, abortedAt: at };
+    // The record is a file the PM can write; only a well-formed id reaches the ledger.
+    const at = new Date().toISOString(), runId = typeof record?.runId === 'string' && /^[A-Za-z0-9._-]{1,64}$/.test(record.runId) ? record.runId : null;
+    // A boundary that is missing or was changed refuses every agent's write. This command cannot rebuild it; a mode switch does.
+    appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} BATCH ${runId ?? '(no readable record)'} ABORTED by rw-batch.mjs abort: ${boundary ? 'the write boundary is closed' : 'the write boundary is missing or was changed and was NOT restored'}${ours ? ', the lock released' : ''}. Nothing about the work was checked.\n`);
+    rmSync(join(instance, BATCH_FILE), { recursive: true, force: true });
+    const body = { schemaVersion: 1, stage: 'batch-aborted', runId, boundary: boundary ? 'closed' : 'not-restored', lockReleased: ours, abortedAt: at,
+      ...(boundary ? {} : { next: 'The write boundary is missing or was changed: every agent write is refused until a mode switch to specialist and back rebuilds it' }) };
     return { ...body, digest: digest(body) };
   } catch (error) {
     return refuse(error instanceof Refusal || error?.code === 'BOUNDARY_REFUSED' ? error.message : `The batch could not be aborted: ${error?.code ?? error?.message}`);

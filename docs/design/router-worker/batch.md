@@ -36,7 +36,7 @@ Exit 0 batch open or aborted, 2 refused, 1 usage. No model, no network.
 | `paths` | What the ticket's worker may write: a file, or a folder grant ending in `/**`. Never under `.git` or `.claude`. At most 100 paths over the whole batch |
 | `expectedPaths` | The files the worker is expected to touch; by default the `paths` that are files. Required when a ticket grants only folders |
 | `estimate` | Input-side tokens for execution, check and rework; their sum may not exceed the authorization per ticket |
-| `sensitivePaths` | Paths no ticket of this batch may write. They are judged against `paths`, which is what bounds the worker, not against the plan: a ticket whose grant covers a sensitive path, or lies under one, is refused. This lasts until the review of [ADR 0011](../../../decisions/0011-router-worker-batch-review.md) exists |
+| `sensitivePaths` | Paths no ticket of this batch may write. They are judged against `paths`, which is what bounds the worker, not against the plan: a ticket whose grant covers a sensitive path, or lies under one, is refused. An entry written as a bare folder (`src/auth`) guards everything under it. This lasts until the review of [ADR 0011](../../../decisions/0011-router-worker-batch-review.md) exists |
 | `runId`, `date` (optional) | Default: `rw-<commit>-L<nextLifecycleNumber>` and today |
 
 The PM does not write a ceiling, a number of rounds, a wrapper name or a
@@ -92,7 +92,13 @@ opened.
 left behind: it closes the write boundary, releases the lock if this team holds
 it, removes the batch record and appends one line to `pm-decisions.md`. It
 checks nothing about the work; that is the "after" command. It never releases
-another team's lock.
+another team's lock. It does not know whether the engine is running: aborting a
+batch that is being run takes its lock and its write paths away mid-run.
+
+When the write-boundary file is missing or was changed, abort still releases
+the lock and removes the record, and says the boundary was not restored: every
+agent write is then refused until a mode switch to specialist and back rebuilds
+it.
 
 A "before" that finds this team's lock with no batch record, or a boundary
 that is not closed, refuses and names `abort`.
