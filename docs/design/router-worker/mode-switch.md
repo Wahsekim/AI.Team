@@ -153,6 +153,47 @@ come back byte for byte, so the deployment validator is not run again.
 After a team is unpacked its holiday folder is removed. Anything else found in
 that folder is left where it is and reported (`leftInHoliday`).
 
+## The write-limit hook
+
+ADR 0010, decision 12. A switch into Router/Worker mode registers the
+write-boundary hook in the team's `.claude/settings.json` and writes
+`.claude/rw-write-boundary.json` in its "no batch open" form: the three workers
+are named and may write nothing. Any other agent of the team, a governance role
+for example, is not judged. A batch's "before" command (not built yet) replaces
+that file with the batch's own write paths.
+
+The three workers are named as the live roster names them. A roster that does
+not name a wrapper file for one of them stops the switch.
+
+A switch back to specialist mode unregisters the hook and removes the boundary
+file. The team's other settings and hooks are kept in both directions, a hook
+that shares an entry with ours included; the file is written again, so key order
+and indentation may change, and a file that held nothing but our hook is removed.
+The two files are copied to `holiday/.switch-backup-<id>/` before they are
+changed, so a switch that fails or dies puts them back byte for byte.
+
+The switch is refused before anything moves when `.claude/settings.json` is a
+symbolic link, is not a JSON object with hooks in the documented shape, or when
+it or `settings.local.json` disables all hooks (a team may always leave
+Router/Worker mode, whatever its hooks).
+
+A worker's wrapper file and the name in its frontmatter must be the same; the
+runtime knows the agent by that name.
+
+The runtime reads hooks and agents when a session starts: **start a new PM
+session after a switch.**
+
+- A session opened before a switch into Router/Worker mode has no hook: its
+  workers are not bounded.
+- A session opened before a switch back still runs the hook. With no boundary
+  file it refuses every agent's write until a new session is started. The hook
+  stays fail-closed on purpose: any exception to that rule can be reached by
+  hiding a file.
+- A hook that cannot load (a kit checkout without `src/`, an instance that was
+  moved) exits with an error the runtime does not treat as a refusal: the
+  writes go ahead. The after-run check of a batch counts the hook's log lines
+  and reports a batch the hook never saw.
+
 ## The product repository
 
 The team is bound to the product repository its Router/Worker spec names; the
@@ -212,9 +253,6 @@ was, the lock is free and the same switch can be proposed again.
 
 ## Not covered
 
-- **The write-limit hook is not installed by the switch yet.** Today's hook
-  refuses every agent's write when no batch boundary exists, which would block
-  the governance roles between batches. It comes with the batch commands.
 - **A packed specialist team is not upgraded.** After a kit upgrade,
   `pin-kit.sh` lists the seeds to port for the files it finds in the instance;
   files under `holiday/specialist/` are not among them.

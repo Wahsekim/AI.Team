@@ -92,3 +92,18 @@ The log tells apart three ways a forbidden write can get through:
   than the roster, when the hook is not registered or its file is missing, or
   when `disableAllHooks` is set in the team root. Arm before observing the gate;
   the [launch host](launch-host.md) does both in order.
+
+## A standing team (ADR 0010, decision 12)
+
+In a team that is live in Router/Worker mode the hook is registered by the mode
+switch, not by a run, and a boundary file exists at all times:
+
+| State | Boundary file | Workers | Other agents |
+|---|---|---|---|
+| no batch open | the three workers, no write path | every write refused | not judged |
+| batch open | the three workers, exec with the batch's write paths | exec inside its paths only | not judged |
+| file missing or edited | none readable | every write refused | every write refused |
+
+`armBoundary` still accepts only an activated throwaway copy; the batch "before"
+command will open a standing team's boundary with its own checks. See
+[mode-switch.md](mode-switch.md).

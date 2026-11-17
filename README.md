@@ -215,8 +215,9 @@ choice of mode exists so far**: bootstrap asks for the mode
 (`docs/staffing.md`), `team-mode.mjs request` drafts the staffing and limits
 from the project profile, `team-mode.mjs switch` proposes them,
 and, once a code is typed at an interactive terminal (a session without a
-terminal cannot confirm), packs the live mode's own files and puts the other
-mode's in place
+terminal cannot confirm), packs the live mode's own files, puts the other
+mode's in place and installs the write-limit hook (between batches the three
+workers may write nothing)
 ([details](docs/design/router-worker/mode-switch.md)). Batches still run only in
 a throwaway copy of the team with a clone of the product, as described below.
 
