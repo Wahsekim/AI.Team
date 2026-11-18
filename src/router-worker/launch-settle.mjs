@@ -23,36 +23,38 @@ const selfDigested = (value, stage) => {
 };
 const readRecord = (teamRoot, file) => { try { return JSON.parse(readFileSync(join(teamRoot, file), 'utf8')); } catch { return null; } };
 
-// The runtime relays a brief with every line indented by two spaces.
+const userTexts = transcript => transcript.split('\n').map(line => {
+  let entry;
+  try { entry = JSON.parse(line); } catch { return null; }
+  if (entry?.type !== 'user') return null;
+  const content = entry.message?.content;
+  return typeof content === 'string' ? content : Array.isArray(content) ? content.map(part => part?.text ?? '').join('\n') : '';
+}).filter(text => text !== null);
+
+// The runtime relays a brief with every line indented by two spaces; the Agent tool passes the prompt as it is.
 function carriesBrief(transcript, brief) {
   const relayed = brief.split('\n').map(line => '  ' + line).join('\n');
-  return transcript.split('\n').some(line => {
-    let entry;
-    try { entry = JSON.parse(line); } catch { return false; }
-    if (entry?.type !== 'user') return false;
-    const content = entry.message?.content;
-    const text = typeof content === 'string' ? content : Array.isArray(content) ? content.map(part => part?.text ?? '').join('\n') : '';
-    // The engine relays a brief indented; the Agent tool passes the prompt as it is.
-    return text.includes(relayed) || text.includes(brief);
-  });
+  return userTexts(transcript).some(text => text.includes(relayed) || text.includes(brief));
 }
 
-// The engine starts its agents one after another; the workflow journal keeps that order. One session can
-// hold several engine runs: each is returned on its own, in the order of its journal.
-function meteredRuns(meter, wrappers) {
+// One session holds the engine runs of every batch it ran. The engine names the run in the Guardian's brief
+// ("Loop config: runId=<id>, ..."): the run settled is the one whose Guardian transcript names this run.
+// The engine starts its agents one after another; the workflow journal keeps that order.
+function meteredRun(meter, wrappers, guardType, runId) {
   const rows = (Array.isArray(meter?.subagents) ? meter.subagents : []).filter(row => row?.workflowRunId && wrappers.includes(row.agentType) && typeof row.file === 'string');
   need(rows.length, 'The meter holds no agents of an engine run');
-  const runs = [...new Set(rows.map(row => row.workflowRunId))].map(id => {
-    const own = rows.filter(row => row.workflowRunId === id);
-    let order;
-    try {
-      order = readFileSync(join(dirname(own[0].file), 'journal.jsonl'), 'utf8').split('\n').filter(Boolean)
-        .map(line => { try { return JSON.parse(line); } catch { return null; } }).filter(entry => entry?.type === 'started').map(entry => entry.agentId);
-    } catch { order = null; }
-    return order && own.every(row => order.includes(row.agentId)) ? [...own].sort((a, b) => order.indexOf(a.agentId) - order.indexOf(b.agentId)) : null;
-  }).filter(Boolean);
-  need(runs.length, 'The workflow journal of the metered run does not list its agents');
-  return runs;
+  const names = row => { try { return userTexts(readFileSync(row.file, 'utf8')).some(text => text.includes(`Loop config: runId=${runId}, `)); } catch { return false; } };
+  const named = [...new Set(rows.filter(row => row.agentType === guardType && names(row)).map(row => row.workflowRunId))];
+  need(named.length > 0, `No metered run is run ${runId}: no Guardian transcript names it`);
+  need(named.length === 1, `More than one metered run is named ${runId}; they cannot be told apart`);
+  const own = rows.filter(row => row.workflowRunId === named[0]);
+  let order;
+  try {
+    order = readFileSync(join(dirname(own[0].file), 'journal.jsonl'), 'utf8').split('\n').filter(Boolean)
+      .map(line => { try { return JSON.parse(line); } catch { return null; } }).filter(entry => entry?.type === 'started').map(entry => entry.agentId);
+  } catch { order = null; }
+  need(order && own.every(row => order.includes(row.agentId)), 'The workflow journal of the metered run does not list its agents');
+  return [...own].sort((a, b) => order.indexOf(a.agentId) - order.indexOf(b.agentId));
 }
 
 // `attempts` is one {exec, check} pair of meter rows per attempt; `check` is null when the engine dispatched none.
@@ -149,24 +151,14 @@ export function settleEngineRun({ launch, close, result, meter, rules }) {
   need(account.status === 'accounted' && digest(account) === digest(close.account), 'The engine return is not the return this run was closed with');
 
   const plan = launch.args.plan, guardType = launch.args.guardianAgentType;
-  const runs = meteredRuns(meter, [...new Set([guardType, ...plan.flatMap(item => [item.agentType, item.verifierAgentType])])].filter(Boolean));
+  const rows = meteredRun(meter, [...new Set([guardType, ...plan.flatMap(item => [item.agentType, item.verifierAgentType])])].filter(Boolean), guardType, result.runId);
   const expected = [];
   for (let i = 0; i < account.calls.tickets; i++) for (let k = 1; k <= account.attempts[i]; k++) {
     expected.push({ index: i, attempt: k, duty: 'exec', agentType: plan[i].agentType });
     if (k < account.attempts[i] || result.results[i].estimates.verifier !== null) expected.push({ index: i, attempt: k, duty: 'check', agentType: plan[i].verifierAgentType });
   }
   expected.push({ index: null, attempt: null, duty: 'guard', agentType: guardType });
-  const fits = runs.filter(run => run.length === expected.length && run.every((row, i) => row.agentType === expected[i].agentType));
-  need(fits.length, 'The metered agents are not the calls of this run, in order');
-  // Among the runs of the session that have this shape, this run is the one whose transcripts carry its frozen briefs.
-  const briefs = expected.map(call => call.duty === 'exec' ? plan[call.index].brief : call.duty === 'check' ? plan[call.index].verifierBrief : null);
-  let rows = fits[0];
-  if (briefs.some(brief => typeof brief === 'string')) {
-    const carried = fits.map(run => run.filter((row, i) => typeof briefs[i] === 'string' && carriesBrief(readFileSync(row.file, 'utf8'), briefs[i])).length), most = Math.max(...carried);
-    need(most > 0, 'No metered run carries a brief of this run; the meter is not of its session');
-    need(carried.filter(count => count === most).length === 1, 'More than one metered run carries the briefs of this run; they cannot be told apart');
-    rows = fits[carried.indexOf(most)];
-  } else need(fits.length === 1, 'More than one metered run has the calls of this run; they cannot be told apart');
+  need(rows.length === expected.length && rows.every((row, i) => row.agentType === expected[i].agentType), 'The metered agents are not the calls of this run, in order');
 
   const findings = [], row = (index, attempt, duty) => rows[expected.findIndex(call => call.index === index && call.attempt === attempt && call.duty === duty)] ?? null;
   const ticketRecords = launch.runRecord.items.slice(0, account.calls.tickets).map((item, index) => settleTicket({ item, planItem: plan[index], outcome: result.results[index],

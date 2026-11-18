@@ -228,8 +228,8 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
       sensitivePaths: batch.sensitivePaths, verificationCommands: batch.verificationCommands,
       launchManifest: manifest ? 'chained' : 'absent', runRecord: frozen.record, args: frozen.args };
     const record = { ...body, digest: digest(body) };
-    // A return or a settlement still in the root belongs to no open batch; it must not be archived with this one.
-    for (const file of [RETURN_FILE, SETTLE_FILE]) rmSync(join(instance, file), { force: true });
+    // No batch is open: a record of an earlier one still in the root must not be read or archived as this one's.
+    for (const file of [PROGRESS_FILE, RETURN_FILE, SETTLE_FILE]) rmSync(join(instance, file), { force: true });
     writeFileSync(join(instance, BATCH_FILE), JSON.stringify(record, null, 2) + '\n', { flag: 'wx' });
     // Decision 11: starting on a repository that is not clean is the PM's explicit choice, and it is logged.
     if (record.startedAsIs && product.preexisting.length) {

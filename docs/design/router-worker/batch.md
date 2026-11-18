@@ -164,14 +164,17 @@ session's transcripts: one row per agent, with its tokens.
 1. The engine's return, kept by `after` (`rw-batch-return.json`), must still
    be the return the batch was closed with: its digest is in the record of
    `after`.
-2. The metered agents must be the calls of the batch, in the engine's order:
-   execute and check for each ticket that ran, then the Guardian. A session
-   holds the runs of every batch it ran: the run settled is the one whose
-   transcripts carry the briefs frozen for this batch. A meter in which no run
-   carries one, or two runs carry them equally, is refused.
-3. A call of that run whose transcript does not carry its brief is a finding
-   (`BRIEF_NOT_FOUND`).
-4. Per ticket: tokens spent, tokens authorized, and a gate that is `blocked`
+2. A session holds the engine runs of every batch it ran. The engine names
+   the run in the Guardian's brief (`Loop config: runId=<run id>`): the run
+   settled is the one whose Guardian transcript names this batch's run id. A
+   meter in which no run is named so, or two are, is refused. Two batches of
+   the same tickets have the same briefs; the id is what tells them apart.
+3. The metered agents of that run must be the calls of the batch, in the
+   engine's order: execute and check for each ticket that ran, then the
+   Guardian.
+4. A call whose transcript does not carry the brief frozen for it is a
+   finding (`BRIEF_NOT_FOUND`).
+5. Per ticket: tokens spent, tokens authorized, and a gate that is `blocked`
    when the authorization is used up. The Guardian's usage is compared with its
    own figure.
 
@@ -179,11 +182,12 @@ The record is `rw-batch-settlement.json`, archived with the batch
 (`settlement.json`); one line goes to `pm-decisions.md`. `status` is `clear`
 or `review`; exit 2 on review. A batch is settled once.
 
-Before the commit, `settle` holds the lock on the product repository while it
-works, as `commit` does, so a batch is not archived under a settlement that is
-being written. With `--run`, it settles an archived batch, committed or
-abandoned. A return or a settlement still in the team's root when the next
-batch opens belongs to no batch and is removed by `before`.
+`settle` takes no lock. With `--run` it settles an archived batch, committed
+or abandoned; without it, a batch whose archive already exists is settled in
+its archive. If `commit` or `abort` archives the batch while it is being
+settled, the settlement is moved into the archive. A record of an earlier
+batch still in the team's root when the next batch opens (commits made,
+return, settlement) belongs to no batch and is removed by `before`.
 
 Settlement reports cost. It does not hold or undo a commit: a ticket that went
 over its authorization and passed its check is still committed. The
@@ -335,10 +339,14 @@ kept out of the tickets' commits by the "after" command.
   batch was ever settled.
 - **The meter is trusted.** `settle` checks that the transcripts carry the
   frozen briefs and are in the engine's order, not that they are the real ones.
-  The Guardian's transcript is matched by its agent type only.
-- **Two runs with the same briefs in one session** cannot be told apart, and
-  `settle` refuses: a batch run again unchanged in the same session is settled
-  from a meter that holds one of the two runs.
+  The run is told by the id in the Guardian's brief, which is the engine's
+  own wording: an engine that words it differently makes `settle` refuse, and
+  the tests read that wording from the real engine.
+- **The same batch record run twice in one session** gives two runs of one
+  id, and `settle` refuses them.
+- **`settle` at the same moment as `commit` or `abort`** can lose its record
+  in the instant the archive is made; the ledger line is then the only trace,
+  and `settle --run <run id>` writes it again.
 - **The authorizations are those of the batch record**, which `before` froze
   from the team's limits. `settle` does not read the limits again.
 - **No allow-list.** Running a batch without permission prompts needs
