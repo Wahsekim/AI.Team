@@ -172,6 +172,7 @@ their shell:
 | Call | Decision |
 |---|---|
 | exec worker or checker, `cd "<product root>" && <command>` with a command of the batch | approved: no permission prompt |
+| the same with the product root unquoted, when its path needs no quotes | approved |
 | the same command alone, when the shell is at the product root | approved |
 | any other text: an argument added, two commands joined, a pipe, another folder, a command of the team's list that is not this batch's | refused, and the refusal names the commands that run |
 | a confirmed command asked to run outside the sandbox | refused |

@@ -55,7 +55,7 @@ The hook appends one line per call to `.claude/rw-write-boundary.log.jsonl` in
 the activated copy: time, tool name, the agent name the runtime passed (or
 `null`), whether the call was judged against the boundary, and the decision. It
 holds no path and no command. In a disposable copy Bash is matched only so that
-its calls are logged, and is never judged. In a standing team the workers'
+its calls are logged, and is not judged while the boundary file is intact. In a standing team the workers'
 shell is judged against the commands of the open batch
 ([details](batch.md#the-workers-shell)): the decision logged is then `approve`
 or `deny`. A log that cannot be written does not change the decision.
