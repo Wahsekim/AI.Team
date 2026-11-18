@@ -15,6 +15,7 @@ ADRs are numbered and append-only. Use `0000-template.md` for new decisions.
 | [0008](0008-router-worker-topology.md) | 2026-11-09 | Accepted (topology/retry mapping only; live activation gated) | Optional Router/Worker topology |
 | [0009](0009-kit-instance-separation.md) | 2026-11-12 | Accepted (owner ratification 2026-11-12) | Separate the kit root from the project instance root |
 | [0010](0010-router-worker-second-mode.md) | 2026-11-16 | Accepted (owner, 2026-11-16) | Router/Worker as the kit's second mode |
+| [0011](0011-router-worker-batch-review.md) | 2026-11-17 | Accepted (owner, 2026-11-17) | Security and architecture review of a Router/Worker batch |
 
 ## When To Write An ADR
 
