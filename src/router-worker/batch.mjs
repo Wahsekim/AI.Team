@@ -6,7 +6,7 @@ import { git, isRepositoryRoot, acquireLease, releaseLease, readLease } from './
 import { freezeRun } from './run-args.mjs';
 import { openBoundary, closeBoundary, readBoundary } from './write-boundary.mjs';
 import { observeIsolation } from './isolation.mjs';
-import { limitsOf } from './switch.mjs';
+import { limitsOf, COUNT_LIMITS } from './switch.mjs';
 
 // ADR 0010, decisions 8 to 12: the one command a PM runs before a batch in a standing Router/Worker team.
 // It builds the engine's inputs from the PM's tickets, checks the product repository, computes the ceiling,
@@ -166,7 +166,7 @@ function liveTeam(teamRoot, instanceRoot) {
   need(typeof productRoot === 'string', 'The mode profile does not name the product repository');
   let limits;
   try { limits = limitsOf({ limits: profile.limits }); } catch (error) { need(false, `The limits in ${MODE_FILE} are not valid (${error.message}); set them with: team-mode.mjs limits`); }
-  need(Object.keys(limits).every(key => Object.hasOwn(profile.limits ?? {}, key)), `${MODE_FILE} does not hold the four limits of this team`);
+  need(COUNT_LIMITS.every(key => Object.hasOwn(profile.limits ?? {}, key)), `${MODE_FILE} does not hold the four limits of this team`);
   return { instance, profile, productRoot, limits };
 }
 
@@ -185,6 +185,9 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     lease = taken.lease.digest;
     // With the lock held, no switch and no change of limits can run: what is read now is what the batch uses.
     const { profile, limits } = liveTeam(teamRoot, instanceRoot), product = checkProduct(productRoot, startAsIs === true), count = batch.tickets.length;
+    // In a batch a worker's shell runs the commands the owner confirmed for the team, and no other.
+    const unconfirmed = batch.verificationCommands.filter(command => !limits.allowedCommands.includes(command));
+    need(!unconfirmed.length, `These verification commands are not among the commands the owner confirmed for this team (${unconfirmed.slice(0, 5).map(plain).join(' | ')}); the workers could not run them. The owner adds them with: team-mode.mjs limits <LIMITS.json> --instance <instance-root>   (LIMITS.json: {"allowedCommands": [...]}, the whole list)`);
     // Decision 11: paths already changed are kept out of the tickets' commits, so none may lie where a ticket writes.
     const mixed = product.preexisting.filter(path => batch.tickets.some(ticket => ticket.paths.some(grant => covers(grant, path))));
     need(!mixed.length, `These paths are already changed and lie where a ticket of this batch writes (${mixed.slice(0, 5).map(plain).join(', ')}); they could not be kept out of its commit. Commit or discard them first`);
@@ -219,7 +222,7 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     need(readLease({ productRoot }).lease?.digest === lease, 'The lock on the product repository was released while the batch was being prepared; run the command again');
 
     // The write boundary opens last, once nothing can refuse the batch any more but the record itself.
-    const boundary = openBoundary({ teamRoot: instance, productRoot, writePaths: allPaths });
+    const boundary = openBoundary({ teamRoot: instance, productRoot, writePaths: allPaths, commands: batch.verificationCommands });
     opened = true;
     const at = new Date().toISOString();
     const body = { schemaVersion: 1, stage: 'batch-open', runId: frozen.args.runId, openedAt: at, productRoot, productHead: product.head, branch: product.branch,

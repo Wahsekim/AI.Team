@@ -30,7 +30,7 @@ The command prints a proposal:
 | `from`, `to` | the two modes |
 | `staffing` | model, effort, turn limit and tools of the three workers and of each staffed governance role; for a packed Router/Worker team, the staffing it was packed with |
 | `project`, `workflowsNotEnabled` | on a first switch: the project's name, slug, product repository and UI flag, and every workflow the request does not enable, with its status |
-| `limits` | attempts per ticket, output allowance per ticket, the Guardian's share, authorization per ticket; the ADR's defaults unless the request changes one; for a packed Router/Worker team, the limits it was packed with |
+| `limits` | attempts per ticket, output allowance per ticket, the Guardian's share, authorization per ticket; the ADR's defaults unless the request changes one; `allowedCommands`, the commands a worker's shell may run in a batch, which `request` proposes from the required gates of `profiles/stack.md` (empty when it gives none); for a packed Router/Worker team, the limits it was packed with |
 | `dispatch` | `engine` |
 | `pack` | the files that go on holiday |
 | `install` | the files that are put in place |
@@ -108,7 +108,8 @@ decision in its `decisionRef`, added by hand; the command prints a note.
 
 ## Changing the limits later
 
-`limits LIMITS.json` (`{"outputAllowancePerTicket": 20000}`, any of the four)
+`limits LIMITS.json` (`{"outputAllowancePerTicket": 20000}`, any of the four,
+or `{"allowedCommands": [...]}`, the whole list)
 prints the limits before and after, and is confirmed like a switch: a code typed
 at an interactive terminal. It is refused when the team is not in Router/Worker
 mode, when nothing would change, when the authorization per ticket would fall

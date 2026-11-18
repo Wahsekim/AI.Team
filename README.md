@@ -217,7 +217,8 @@ from the project profile, `team-mode.mjs switch` proposes them,
 and, once a code is typed at an interactive terminal (a session without a
 terminal cannot confirm), packs the live mode's own files, puts the other
 mode's in place and installs the write-limit hook (between batches the three
-workers may write nothing)
+workers may write nothing and run no command; in a batch their shell runs only
+the verification commands the owner confirmed with the limits)
 ([details](docs/design/router-worker/mode-switch.md)). `scripts/rw-batch.mjs` runs a batch in such a team: `before` checks the
 tickets and the product repository, computes the ceiling, takes the lock and
 opens the write limits; `after` matches the engine's return against what was

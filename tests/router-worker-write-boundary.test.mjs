@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { armBoundary, decideWrite } from '../src/router-worker/write-boundary.mjs';
+import { armBoundary, decideCall } from '../src/router-worker/write-boundary.mjs';
 import { digest } from '../src/loop/contracts.mjs';
 import { inputFixture } from './fixtures/router-worker/input.mjs';
 
@@ -69,7 +69,7 @@ test('arming keeps existing settings and refuses a team root that is not an acti
 test('the exec wrapper may write only inside the frozen product paths; read-only duties may not write at all', t => {
   const f = fixture(t); arm(f);
   const boundary = JSON.parse(readFileSync(join(f.team, '.claude/rw-write-boundary.json'), 'utf8'));
-  const verdict = (agent, tool, path, extra) => decideWrite({ input: call(f, agent, tool, path, extra), boundary }).decision;
+  const verdict = (agent, tool, path, extra) => decideCall({ input: call(f, agent, tool, path, extra), boundary }).decision;
   assert.equal(verdict('sample-worker-exec', 'Write', join(f.product, 'src/tag-list/view.ts')), 'allow');
   assert.equal(verdict('sample-worker-exec', 'Edit', 'src/api/tags.ts'), 'allow', 'a relative path resolves against the call cwd');
   assert.equal(verdict('sample-worker-exec', 'Edit', join(f.product, 'src/auth/session.ts')), 'deny');

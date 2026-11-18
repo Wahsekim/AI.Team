@@ -179,3 +179,29 @@ Nothing touches the real UHF team or repository before step 9.
 
 - Completing the gate path, and when.
 - A second project. The fixture test stands in for it until one exists.
+
+## Amendments
+
+### 2026-11-18: the workers' shell in a batch
+
+Decision 7 says the workers use an allow-list for the project's verification
+commands. The owner decided in session on 2026-11-18 how it is confirmed and
+what happens to every other command ("您在切换时确认" for the first question,
+"按你的建议来" for the second, the recommendation being refusal):
+
+- The list is one of the team's limits (`allowedCommands`). The kit proposes it
+  from the required gates of `profiles/stack.md`; the owner confirms it with
+  the switch proposal, and changes it later by the same confirmation as the
+  other limits.
+- "before" refuses a batch that names a verification command the list does not
+  hold.
+- While a batch is open, the exec worker and the checker run those commands
+  without a permission prompt, as written and from the product root. Any other
+  shell command of the three workers is refused by the hook, in a batch and
+  between batches.
+
+This narrows the consequence stated above: without a sandbox, a worker's
+shell no longer runs arbitrary commands, only the confirmed ones; what those
+commands write is still not bounded. Merging the pull request that adds this
+amendment ratifies it.
+

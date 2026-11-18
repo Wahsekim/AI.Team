@@ -54,9 +54,11 @@ names the wrapper and the product-relative path, never a host path.
 The hook appends one line per call to `.claude/rw-write-boundary.log.jsonl` in
 the activated copy: time, tool name, the agent name the runtime passed (or
 `null`), whether the call was judged against the boundary, and the decision. It
-holds no path and no command. Bash is matched only so that its calls are logged;
-a Bash call is never judged and never refused. A log that cannot be written does
-not change the decision.
+holds no path and no command. In a disposable copy Bash is matched only so that
+its calls are logged, and is never judged. In a standing team the workers'
+shell is judged against the commands of the open batch
+([details](batch.md#the-workers-shell)): the decision logged is then `approve`
+or `deny`. A log that cannot be written does not change the decision.
 
 The log tells apart three ways a forbidden write can get through:
 
@@ -70,8 +72,8 @@ The log tells apart three ways a forbidden write can get through:
 
 ## Limits
 
-- **Bash is not covered.** A wrapper with Bash can still write anywhere through
-  the shell. `BASH_NOT_SANDBOXED` stays an accepted unknown; closing it needs
+- **Bash is not covered in a disposable copy.** A wrapper with Bash can still write anywhere through
+  the shell; in a standing team it runs only the confirmed verification commands, and what those write is not bounded. `BASH_NOT_SANDBOXED` stays an accepted unknown; closing it needs
   the Claude Code sandbox (`sandbox.filesystem`), which also has to admit the
   build tool's own caches.
 - **Observed live once.** In the third disposable smoke run (2026-11-13, Claude

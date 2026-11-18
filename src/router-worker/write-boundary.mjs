@@ -5,12 +5,14 @@ import { compile } from './compile.mjs';
 
 // Runtime write boundary of one Router/Worker run. Arming freezes, per wrapper,
 // the product paths its file tools may write; the PreToolUse hook judges each
-// call against that file. Bash writes are outside this boundary.
+// call against that file. Bash writes are outside this boundary. A batch of a
+// standing team also freezes the verification commands its workers run without
+// a permission prompt.
 export const BOUNDARY_FILE = '.claude/rw-write-boundary.json';
 const SETTINGS = '.claude/settings.json';
 export const LOG_FILE = '.claude/rw-write-boundary.log.jsonl';
 const WRITE_TOOLS = ['Write', 'Edit', 'NotebookEdit', 'MultiEdit'];
-// Bash is matched so that its calls are logged; it is never judged.
+// Bash is matched so that its calls are logged and, for the workers of a standing team, judged against the batch's commands.
 const MATCHER = [...WRITE_TOOLS, 'Bash'].join('|');
 const DUTIES = ['exec', 'check', 'guard'];
 const UNRESOLVED = ['bash-writes', 'deny-under-non-default-permission-modes'];
@@ -96,7 +98,7 @@ export function standBoundary({ teamRoot, productRoot, wrappers, hookPath }) {
   need(DUTIES.every(duty => typeof wrappers?.[duty] === 'string' && wrappers[duty]) && new Set(DUTIES.map(duty => wrappers[duty])).size === DUTIES.length, 'One wrapper per duty is required');
   need(hookGap(hookPath) === null, hookGap(hookPath));
   const { path, settings } = teamSettings(teamRoot, true), existing = settings.hooks?.PreToolUse ?? [];
-  const body = { schemaVersion: 1, productRoot, wrappers: Object.fromEntries(DUTIES.map(duty => [wrappers[duty], { duty, writePaths: [] }])) };
+  const body = { schemaVersion: 1, productRoot, wrappers: Object.fromEntries(DUTIES.map(duty => [wrappers[duty], { duty, writePaths: [], commands: [] }])) };
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(join(teamRoot, BOUNDARY_FILE), JSON.stringify({ ...body, digest: digest(body) }, null, 2) + '\n');
   writeFileSync(path, JSON.stringify({ ...settings, hooks: { ...settings.hooks, PreToolUse: [...withoutOurs(existing), { matcher: MATCHER, hooks: [{ type: 'command', command: `node "${hookPath}"` }] }] } }, null, 2) + '\n');
@@ -104,11 +106,14 @@ export function standBoundary({ teamRoot, productRoot, wrappers, hookPath }) {
 
 // A batch opens in a standing team: the closed boundary becomes the batch's, with the exec worker's write
 // paths. The wrappers and the product are the ones the closed boundary already names; nothing else is trusted.
-export function openBoundary({ teamRoot, productRoot, writePaths }) {
+export function openBoundary({ teamRoot, productRoot, writePaths, commands = [] }) {
   const closed = readBoundary(teamRoot);
   need(closed && closed.productRoot === productRoot && Object.values(closed.wrappers).every(entry => entry.writePaths.length === 0), 'The team has no closed write boundary for this product; a batch may be open, or the boundary was changed');
   need(Array.isArray(writePaths) && writePaths.length > 0 && writePaths.every(path => typeof path === 'string' && path), 'A batch needs at least one write path');
-  const body = { schemaVersion: 1, productRoot, wrappers: Object.fromEntries(Object.entries(closed.wrappers).map(([name, entry]) => [name, { duty: entry.duty, writePaths: entry.duty === 'exec' ? [...new Set(writePaths)].sort() : [] }])) };
+  need(Array.isArray(commands) && commands.every(command => typeof command === 'string' && command), 'The commands of a batch must be a list of commands');
+  // The Guardian reads; the two workers that run the verification commands are approved for them.
+  const body = { schemaVersion: 1, productRoot, wrappers: Object.fromEntries(Object.entries(closed.wrappers).map(([name, entry]) => [name, { duty: entry.duty, writePaths: entry.duty === 'exec' ? [...new Set(writePaths)].sort() : [],
+    commands: entry.duty === 'guard' ? [] : [...new Set(commands)].sort() }])) };
   writeFileSync(join(teamRoot, BOUNDARY_FILE), JSON.stringify({ ...body, digest: digest(body) }, null, 2) + '\n');
   return { digest: digest(body), wrappers: Object.fromEntries(Object.entries(body.wrappers).map(([name, entry]) => [entry.duty, name])) };
 }
@@ -116,7 +121,7 @@ export function openBoundary({ teamRoot, productRoot, writePaths }) {
 export function closeBoundary({ teamRoot }) {
   const open = readBoundary(teamRoot);
   need(open, 'The write boundary is missing or was changed');
-  const body = { schemaVersion: 1, productRoot: open.productRoot, wrappers: Object.fromEntries(Object.entries(open.wrappers).map(([name, entry]) => [name, { duty: entry.duty, writePaths: [] }])) };
+  const body = { schemaVersion: 1, productRoot: open.productRoot, wrappers: Object.fromEntries(Object.entries(open.wrappers).map(([name, entry]) => [name, { duty: entry.duty, writePaths: [], commands: [] }])) };
   writeFileSync(join(teamRoot, BOUNDARY_FILE), JSON.stringify({ ...body, digest: digest(body) }, null, 2) + '\n');
 }
 
@@ -174,9 +179,11 @@ export function logEntry({ input, boundary, decision, at }) {
   return { at, tool, agentType, judged: WRITE_TOOLS.includes(tool) && agentType !== null && (!boundary || Object.hasOwn(boundary.wrappers, agentType)), decision };
 }
 
-// `boundary` is null when the file is missing, unreadable or edited.
-export function decideWrite({ input, boundary }) {
+// `boundary` is null when the file is missing, unreadable or edited. 'allow' leaves the call to the session's own
+// permissions; 'approve' answers the permission prompt for it; 'deny' refuses it.
+export function decideCall({ input, boundary }) {
   const allow = { decision: 'allow' }, deny = reason => ({ decision: 'deny', reason });
+  if (input?.tool_name === 'Bash') return decideCommand({ input, boundary, allow, deny });
   if (!WRITE_TOOLS.includes(input?.tool_name) || typeof input.agent_type !== 'string') return allow;
   if (!boundary) return deny('The write boundary of this run is missing or was changed; no subagent write is allowed');
   const entry = Object.hasOwn(boundary.wrappers, input.agent_type) ? boundary.wrappers[input.agent_type] : null;
@@ -188,3 +195,18 @@ export function decideWrite({ input, boundary }) {
   const path = inside.split(sep).join('/');
   return within(path, entry.writePaths) ? allow : deny(`${input.agent_type}: ${path} is outside the write boundary of this run`);
 }
+
+// The shell of a standing team's worker. In a batch it runs the verification commands the owner confirmed and the
+// batch froze, from the product root, and nothing else: a command with anything added is another command. A wrapper
+// whose boundary carries no command list (a disposable launch, a boundary written before the list existed) is not judged.
+function decideCommand({ input, boundary, allow, deny }) {
+  const entry = boundary && typeof input.agent_type === 'string' && Object.hasOwn(boundary.wrappers, input.agent_type) ? boundary.wrappers[input.agent_type] : null;
+  if (!entry || !Array.isArray(entry.commands)) return allow;
+  const root = boundary.productRoot, text = typeof input.tool_input?.command === 'string' ? input.tool_input.command.trim() : '';
+  const inProduct = typeof input.cwd === 'string' && (input.cwd === root || input.cwd.startsWith(root + sep));
+  if (entry.commands.some(command => (inProduct && text === command) || text === `cd "${root}" && ${command}` || text === `cd ${root} && ${command}`)) return { decision: 'approve' };
+  return deny(entry.commands.length
+    ? `${input.agent_type}: in a batch the shell runs only the verification commands confirmed for this team, from the product root, each exactly as written: ${entry.commands.map(command => `cd "${root}" && ${command}`).join('  |  ')}`
+    : `${input.agent_type}: no batch is open, or this worker runs no command in it; the shell is closed`);
+}
+

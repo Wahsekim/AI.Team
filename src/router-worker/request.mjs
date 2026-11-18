@@ -2,6 +2,7 @@ import { readFileSync, realpathSync, lstatSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { instanceOf } from './roots.mjs';
 import { DEFAULT_LIMITS } from './switch.mjs';
+import { readStackSource } from './stack-source.mjs';
 
 // ADR 0010, decision 7: the kit proposes the staffing and the limits of a Router/Worker team. The request is
 // drafted from what the bootstrap interview recorded in profiles/project.md; the owner confirms it at the switch.
@@ -51,5 +52,8 @@ export function draftRequest({ teamRoot, instanceRoot, model = 'opus', ui = fals
   const spec = { schemaVersion: 1, mode: 'router-worker', project: { name: answers.name, slug: answers.slug, productRoot, ui: ui === true },
     profiles: { exec: worker('high', 120, [...READ, 'Bash', 'Write', 'Edit']), check: worker('medium', 80, [...READ, 'Bash']), guard: worker('high', 40, READ) },
     governance: { architect: writes, coach: writes, auditor: reads, security: reads }, workflowStates };
-  return { request: { spec, limits: { ...DEFAULT_LIMITS } }, notes };
+  // The commands a worker runs without a permission prompt are proposed from the project's own stack profile.
+  const stack = readStackSource({ root: instance });
+  if (stack.errors) notes.push(`profiles/stack.md gives no verification commands (${stack.errors[0].reason}); allowedCommands is empty, and no batch can start until it lists them`);
+  return { request: { spec, limits: { ...DEFAULT_LIMITS, allowedCommands: stack.errors ? [] : stack.verificationCommands } }, notes };
 }
