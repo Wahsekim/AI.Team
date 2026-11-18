@@ -360,6 +360,7 @@ test('settle refuses a meter that is not the calls of this run, an unclosed laun
   assert.match(refusal(settle(f, metered(f))).reason, /closed/);
   f.close();
   assert.match(refusal(settle(f, metered(f, { order: ['check1', 'exec1', 'guard1'] }))).reason, /calls of this run/);
+  assert.match(refusal(settle(f, metered(f, { extra: { guard1: ['sample-worker-guard', 'Audit this run.'] } }))).reason, /no Guardian transcript names it/);
   const partial = metered(f); partial.subagents = partial.subagents.filter(row => row.agentId !== 'guard1');
   assert.equal(refusal(settle(f, partial)).code, 'LAUNCH_REFUSED');
   assert.equal(refusal(settle(f, metered(f), { result: { ...f.result, runId: 'another' } })).code, 'LAUNCH_REFUSED');

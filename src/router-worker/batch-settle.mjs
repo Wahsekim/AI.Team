@@ -35,6 +35,9 @@ export function settleBatch({ teamRoot, instanceRoot, meter, rules, runId }) {
     const { names, folder } = recordsOf(instance, runId), at = name => join(folder, names[name]);
     const batch = readJSON(at('batch')), after = readJSON(at('after')), result = readJSON(at('result'));
     need(intact(batch, 'batch-open') && intact(after, 'batch-closed') && after.batchDigest === batch.digest, 'The batch has not been closed by after, or its records were changed');
+    // The run id reaches the ledger and a path: it is checked again here, whatever the digests say.
+    need(typeof batch.runId === 'string' && RUN_ID.test(batch.runId) && after.runId === batch.runId && (folder === instance || folder === join(instance, ARCHIVE, batch.runId)),
+      'The batch record does not hold the plain run id it was closed and archived under');
     need(result && digest(result) === after.returnDigest, 'The engine return kept for this batch is missing or was changed; it cannot be settled');
     need(!exists(at('settlement')), 'This batch was already settled');
     need(batch.runRecord.items.every(item => Number.isSafeInteger(item.authorizedTokens)), 'The batch record carries no ticket authorizations');

@@ -13,7 +13,7 @@ node kit/scripts/rw-batch.mjs commit --instance .
 node kit/scripts/rw-batch.mjs abort --instance .
 ```
 
-Exit 0 done, 2 refused or (for `after`) a batch in review, 1 usage. No model,
+Exit 0 done, 2 refused or (for `after` and `settle`) a batch in review, 1 usage. No model,
 no network.
 
 ## The order of a batch
@@ -55,7 +55,7 @@ also come after `commit`, with `--run <run id>`, for an archived batch.
 | `estimate` | Input-side tokens for execution, check and rework; their sum may not exceed the authorization per ticket |
 | `sensitivePaths` | Paths no ticket of this batch may write. They are judged against `paths`, which is what bounds the worker, not against the plan: a ticket whose grant covers a sensitive path, or lies under one, is refused. An entry written as a bare folder (`src/auth`) guards everything under it. This lasts until the review of [ADR 0011](../../../decisions/0011-router-worker-batch-review.md) exists |
 | `commitMessage` (optional) | The message of the ticket's commit, one line; by default `<id>: <title>` |
-| `runId`, `date` (optional) | Default: `rw-<commit>-L<nextLifecycleNumber>` and today |
+| `runId`, `date` (optional) | Default: `rw-<commit>-L<nextLifecycleNumber>-<time>`, new at every `before`, and today |
 
 The PM does not write a ceiling, a number of rounds, a wrapper name or a
 budget per ticket. Those come from the team.
@@ -342,8 +342,11 @@ kept out of the tickets' commits by the "after" command.
   The run is told by the id in the Guardian's brief, which is the engine's
   own wording: an engine that words it differently makes `settle` refuse, and
   the tests read that wording from the real engine.
-- **The same batch record run twice in one session** gives two runs of one
-  id, and `settle` refuses them.
+- **Two runs of one id in one session** are refused by `settle`: the same
+  batch record run twice, or a `runId` written in BATCH.json and used again
+  after an `abort` that made no archive.
+- **A run whose Guardian left no transcript** cannot be settled: nothing names
+  it.
 - **`settle` at the same moment as `commit` or `abort`** can lose its record
   in the instant the archive is made; the ledger line is then the only trace,
   and `settle --run <run id>` writes it again.
