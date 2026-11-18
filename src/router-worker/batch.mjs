@@ -11,7 +11,9 @@ import { limitsOf } from './switch.mjs';
 // ADR 0010, decisions 8 to 12: the one command a PM runs before a batch in a standing Router/Worker team.
 // It builds the engine's inputs from the PM's tickets, checks the product repository, computes the ceiling,
 // takes the lock and opens the write boundary. A refusal leaves the team and the product as they were.
-export const BATCH_FILE = 'rw-batch.json', AFTER_FILE = 'rw-batch-after.json', PROGRESS_FILE = 'rw-batch-commits.json', ARCHIVE = 'batches';
+export const BATCH_FILE = 'rw-batch.json', AFTER_FILE = 'rw-batch-after.json', PROGRESS_FILE = 'rw-batch-commits.json', RETURN_FILE = 'rw-batch-return.json', SETTLE_FILE = 'rw-batch-settlement.json', ARCHIVE = 'batches';
+// What a batch leaves in the team's root, by the name it takes in the archive.
+export const RECORDS = { 'batch.json': BATCH_FILE, 'after.json': AFTER_FILE, 'commits.json': PROGRESS_FILE, 'return.json': RETURN_FILE, 'settlement.json': SETTLE_FILE };
 export const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/, TICKET_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/;
 export const oneLine = text => typeof text === 'string' && text.length > 0 && text.length <= 200 && text === text.trim() && !/[\x00-\x1f\x7f]/.test(text);
 const MODE_FILE = 'profiles/team-mode.json', JOURNAL = 'holiday/.switch-in-progress.json', LEDGER = 'pm-decisions.md';
@@ -264,7 +266,7 @@ export function abortBatch({ teamRoot, instanceRoot }) {
       const stamp = new Date().toISOString(), note = { schemaVersion: 1, stage: 'batch-archived-without-commit', runId: id, archivedAt: stamp, commitsMade: made, boundary: boundary ? 'closed' : 'not-restored', lockReleased: ours,
         next: `${work}: commit it by hand on the working branch, or discard it.${boundary ? '' : ' The write-boundary file is missing or was changed: a mode switch to specialist and back rebuilds it.'}` };
       appendFileSync(join(instance, LEDGER), `${stamp.slice(0, 10)} BATCH ${id} ARCHIVED WITHOUT COMMIT by rw-batch.mjs abort: the batch was not finished by the kit. ${work}.\n`);
-      archiveBatch(instance, id, { 'abandoned.json': { ...note, digest: digest(note) } }, { 'batch.json': BATCH_FILE, 'after.json': AFTER_FILE, 'commits.json': PROGRESS_FILE });
+      archiveBatch(instance, id, { 'abandoned.json': { ...note, digest: digest(note) } }, RECORDS);
       return { ...note, digest: digest(note) };
     }
     need(exists(join(instance, BATCH_FILE)) || ours || open, 'There is no batch to abort');

@@ -223,8 +223,9 @@ tickets and the product repository, computes the ceiling, takes the lock and
 opens the write limits; `after` matches the engine's return against what was
 frozen, finds what was written outside the tickets' paths and closes the batch;
 `commit` makes one commit per ticket that passed; `abort` clears a batch that
-will not run ([details](docs/design/router-worker/batch.md)). Usage is not
-settled per ticket yet and nothing has run on a real team, so batches with real
+will not run; `settle` sets each ticket's measured usage against its
+authorization ([details](docs/design/router-worker/batch.md)). Nothing has run
+on a real team, so batches with real
 agents still run only in a throwaway copy of the team
 with a clone of the product, as described below.
 

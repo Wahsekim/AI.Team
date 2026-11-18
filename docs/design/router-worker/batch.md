@@ -1,14 +1,14 @@
 # A batch in a standing Router/Worker team
 
 Status: "before", "after", "commit" and "abort" are built and tested offline
-on a bootstrapped fixture, with the real engine run on mock agents. Usage is not
-settled per ticket yet, and the review of ADR 0011 is not built. Not yet used on
-a real team.
+on a bootstrapped fixture, with the real engine run on mock agents; so is
+"settle". The review of ADR 0011 is not built. Not yet used on a real team.
 [ADR 0010](../../../decisions/0010-router-worker-second-mode.md), decisions 8 to 12.
 
 ```sh
 node kit/scripts/rw-batch.mjs before BATCH.json --instance . [--start-as-is]
 node kit/scripts/rw-batch.mjs after RESULT.json --instance .
+node kit/scripts/rw-batch.mjs settle METER.json --instance . [--run <run id>]
 node kit/scripts/rw-batch.mjs commit --instance .
 node kit/scripts/rw-batch.mjs abort --instance .
 ```
@@ -24,9 +24,11 @@ no network.
 | 2 | PM | runs `run-n-rounds` with the `args` of the batch record |
 | 3 | PM | `after RESULT.json`, with the engine's return: the run is checked, the write limits close, the lock is released |
 | 4 | PM | `scripts/reconcile-run.mjs RESULT.json .`: lifecycle and message ledgers, as in specialist mode |
-| 5 | PM | `commit`: one commit per ticket that passed; the batch is archived |
+| 5 | PM | `scripts/measure-spawn.mjs <session-dir> --json > METER.json`, then `settle METER.json`: usage per ticket |
+| 6 | PM | `commit`: one commit per ticket that passed; the batch is archived |
 
-`abort` replaces steps 2 to 5 for a batch that will not be run.
+`abort` replaces steps 2 to 6 for a batch that will not be run. `settle` may
+also come after `commit`, with `--run <run id>`, for an archived batch.
 
 ## What the PM writes
 
@@ -152,6 +154,32 @@ minute could be taken over while it still runs.
 
 "All held" means the kit commits nothing of that batch: what ran is not what
 was frozen, and the PM or the owner judges it by hand.
+
+## Settle
+
+`settle METER.json` sets each ticket's measured usage against its
+authorization. `METER.json` is what `scripts/measure-spawn.mjs` reads from the
+session's transcripts: one row per agent, with its tokens.
+
+1. The engine's return, kept by `after` (`rw-batch-return.json`), must still
+   be the return the batch was closed with: its digest is in the record of
+   `after`.
+2. The metered agents must be the calls of the batch, in the engine's order:
+   execute and check for each ticket that ran, then the Guardian.
+3. Each call's transcript must carry the brief that was frozen for it
+   (`BRIEF_NOT_FOUND` otherwise).
+4. Per ticket: tokens spent, tokens authorized, and a gate that is `blocked`
+   when the authorization is used up. The Guardian's usage is compared with its
+   own figure.
+
+The record is `rw-batch-settlement.json`, archived with the batch
+(`settlement.json`); one line goes to `pm-decisions.md`. `status` is `clear`
+or `review`; exit 2 on review.
+
+Settlement reports cost. It does not hold or undo a commit: a ticket that went
+over its authorization and passed its check is still committed. The
+authorization is a limit judged afterwards, as ADR 0010 says; what a batch over
+it should cost the team is the PM's and the owner's to decide.
 
 ## Commit
 
@@ -294,9 +322,13 @@ kept out of the tickets' commits by the "after" command.
 
 ## Not covered
 
-- **Usage is not settled per ticket yet.** The engine's return carries the
-  output tokens it metered; matching each agent's measured usage against the
-  ticket's authorization is the next piece.
+- **Settlement is not required before `commit`**, and nothing checks that a
+  batch was ever settled.
+- **The meter is trusted.** `settle` checks that the transcripts carry the
+  frozen briefs and are in the engine's order, not that they are the real ones.
+- **No allow-list.** Running a batch without permission prompts needs
+  permission rules in the team's settings; the kit does not propose or check
+  them yet.
 - **The review of [ADR 0011](../../../decisions/0011-router-worker-batch-review.md)
   is not built.** Until then a ticket that passed its check is committed with
   no security or architecture review, and a ticket that could write a sensitive
