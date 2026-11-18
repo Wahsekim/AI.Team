@@ -195,7 +195,8 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     need(!hooked.length, `The repository's commit hooks live in ${hooks.guarded.join(', ')}; no ticket writes there (${hooked.slice(0, 5).join(', ')}): a hook runs as the PM at the next commit`);
     const wrappers = Object.fromEntries(Object.entries(closed.wrappers).map(([name, entry]) => [entry.duty, name]));
 
-    const runId = batch.runId ?? `rw-${product.head.slice(0, 8)}-L${batch.nextLifecycleNumber}`;
+    // The default id is new at every "before": the same tickets prepared again are another run, and a run is told by its id.
+    const runId = batch.runId ?? `rw-${product.head.slice(0, 8)}-L${batch.nextLifecycleNumber}-${Date.now().toString(36)}`;
     need(typeof runId === 'string' && RUN_ID.test(runId) && !exists(join(instance, ARCHIVE, runId)), `The run id ${plain(runId)} is not a plain identifier, or a batch of that id was already closed; give another "runId"`);
     // Decision 10: the ceiling is computed, never chosen. The engine stops dispatching at 80% of it.
     const ceiling = count * limits.outputAllowancePerTicket + limits.guardianOutputShare, allPaths = [...new Set(batch.tickets.flatMap(ticket => ticket.paths))].sort();

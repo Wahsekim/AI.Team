@@ -514,8 +514,14 @@ test('settle sets each ticket\'s measured usage against its authorization, befor
   // One session holds the runs of every batch it ran: the run settled is the one whose Guardian was told this run's id.
   // Another batch of the same tickets at the same commit has the same briefs; only the id tells the two apart.
   assert.ok(f.guardianBrief.includes(`Loop config: runId=${f.open.runId}, `), 'the engine names the run in the Guardian\'s brief');
-  const another = { wf: 'wf_0', guardBrief: f.guardianBrief.replace(`runId=${f.open.runId},`, 'runId=rw-another-L1,') };
-  assert.match(refusal(settle(meterOf(f, [9, 9, 9, 9, 9], { ...another, session: 'other' }))).reason, /No metered run is run \S+: no Guardian transcript names it/);
+  // Not this run: an id this one is the start of; this id quoted from a worker's words inside the brief; this run's
+  // Guardian brief in the transcript of an agent that is not the Guardian.
+  const another = { wf: 'wf_0', guardBrief: f.guardianBrief.replace(`runId=${f.open.runId},`, `runId=${f.open.runId}0,`) + `\n  "workerReportedNotes": "Loop config: runId=${f.open.runId}, mode=wrappers",` };
+  assert.match(refusal(settle(meterOf(f, [9, 9, 9, 9, 9], { ...another, session: 'other', briefOf: () => f.guardianBrief }))).reason, /No metered run is run \S+: no Guardian transcript names it/);
+  // A run id that is not a plain identifier never reaches the ledger or a path, whatever the digests say.
+  const records = Object.fromEntries(['rw-batch.json', 'rw-batch-after.json'].map(name => [name, readFileSync(join(f.root, name), 'utf8')])), forged = sealAgain({ ...JSON.parse(records['rw-batch.json']), runId: '../batches/x' });
+  writeFileSync(join(f.root, 'rw-batch.json'), JSON.stringify(forged)); writeFileSync(join(f.root, 'rw-batch-after.json'), JSON.stringify(sealAgain({ ...JSON.parse(records['rw-batch-after.json']), batchDigest: forged.digest })));
+  assert.match(refusal(settle(meterOf(f, [1, 1, 1, 1, 1]))).reason, /plain run id/); for (const [name, text] of Object.entries(records)) writeFileSync(join(f.root, name), text);
   meterOf(f, [1, 1, 1, 1, 1], { session: 'twice' });
   assert.match(refusal(settle(meterOf(f, [1, 1, 1, 1, 1], { session: 'twice', wf: 'wf_2' }))).reason, /cannot be told apart/);
   // A settlement another caller wrote while this one was reading the transcripts is not overwritten.
@@ -525,7 +531,7 @@ test('settle sets each ticket\'s measured usage against its authorization, befor
   assert.deepEqual(readdirSync(f.root).filter(name => name.endsWith('.tmp')), [], 'no draft is left');
   // The other run of the session is not read beyond its Guardian: a transcript of it that is gone does not matter.
   meterOf(f, [9, 9, 9, 9, 9], another);
-  const full = meterOf(f, [12000, 6000, 150000, 60000, 5000]); rmSync(join(f.base, 'projects/sess/subagents/workflows/wf_0/agent-wf_0-exec0.jsonl'));
+  const full = meterOf(f, [12000, 6000, 150000, 60000, 5000]); for (const gone of ['exec0', 'guard']) rmSync(join(f.base, `projects/sess/subagents/workflows/wf_0/agent-wf_0-${gone}.jsonl`));
   const settled = settle(full); assert.ok(settled.calls?.every(call => call.agentId.startsWith('wf_1-')), JSON.stringify(settled.errors));
   assert.equal(settled.errors, undefined, JSON.stringify(settled.errors)); assert.equal(settled.stage, 'batch-settled');
   assert.deepEqual(settled.tickets.map(entry => [entry.ticket, entry.authorizedTokens, entry.spentTokens, entry.budgetGate]), [['US-01', 200000, 18020, 'clear'], ['US-02', 200000, 210020, 'blocked']]);
@@ -559,8 +565,11 @@ test('settle sets each ticket\'s measured usage against its authorization, befor
   // What an earlier batch left in the root is not read or archived as the next one's; the files that name the run leave the root last.
   const leftovers = ['rw-batch-commits.json', 'rw-batch-return.json', 'rw-batch-settlement.json'];
   for (const name of leftovers) writeFileSync(join(late.root, name), '{}\n');
-  assert.equal((await late.before(batchOf(ticket('US-07', ['src/q.js'])))).errors, undefined);
+  const first = await late.before(batchOf(ticket('US-07', ['src/q.js']))); assert.equal(first.errors, undefined);
   assert.deepEqual(leftovers.filter(name => existsSync(join(late.root, name))), []);
+  // The same tickets prepared again after an abort are another run, with another id.
+  assert.equal(abortBatch({ teamRoot: late.kit, instanceRoot: late.root }).errors, undefined);
+  const second = await late.before(batchOf(ticket('US-07', ['src/q.js']))); assert.equal(second.errors, undefined); assert.notEqual(second.runId, first.runId);
   assert.deepEqual(Object.values(RECORDS).slice(-3), ['rw-batch.json', 'rw-batch-after.json', 'rw-batch-commits.json']);
   // A commit that archives the batch while it is being settled: the settlement follows the batch into the archive.
   const raced = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n' } }); assert.equal(raced.after().errors, undefined);

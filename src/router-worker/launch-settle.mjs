@@ -37,13 +37,14 @@ function carriesBrief(transcript, brief) {
   return userTexts(transcript).some(text => text.includes(relayed) || text.includes(brief));
 }
 
-// One session holds the engine runs of every batch it ran. The engine names the run in the Guardian's brief
-// ("Loop config: runId=<id>, ..."): the run settled is the one whose Guardian transcript names this run.
+// One session holds the engine runs of every batch it ran. The engine names the run in the Guardian's brief,
+// on a line of its own ("Loop config: runId=<id>, ..."): the run settled is the one whose Guardian transcript
+// has that line. What the engine quotes of a worker's words into the brief is never the start of a line.
 // The engine starts its agents one after another; the workflow journal keeps that order.
 function meteredRun(meter, wrappers, guardType, runId) {
   const rows = (Array.isArray(meter?.subagents) ? meter.subagents : []).filter(row => row?.workflowRunId && wrappers.includes(row.agentType) && typeof row.file === 'string');
   need(rows.length, 'The meter holds no agents of an engine run');
-  const names = row => { try { return userTexts(readFileSync(row.file, 'utf8')).some(text => text.includes(`Loop config: runId=${runId}, `)); } catch { return false; } };
+  const names = row => { try { return userTexts(readFileSync(row.file, 'utf8')).some(text => text.split('\n').some(line => line.trimStart().startsWith(`Loop config: runId=${runId}, `))); } catch { return false; } };
   const named = [...new Set(rows.filter(row => row.agentType === guardType && names(row)).map(row => row.workflowRunId))];
   need(named.length > 0, `No metered run is run ${runId}: no Guardian transcript names it`);
   need(named.length === 1, `More than one metered run is named ${runId}; they cannot be told apart`);
