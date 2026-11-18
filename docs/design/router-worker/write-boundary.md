@@ -38,8 +38,8 @@ inside subagents and names the subagent in `agent_type`.
 
 | Call | Decision |
 |---|---|
-| not a write tool, or no `agent_type` (the main session) | allowed |
-| a subagent, and the boundary file is missing, unreadable or does not match its digest | denied |
+| neither a write tool nor Bash, or no `agent_type` (the main session) | allowed |
+| a subagent, and the boundary file is missing, unreadable or does not match its digest | denied, for a write and for a shell command |
 | a subagent that is not a wrapper of the run (governance roles) | allowed |
 | a wrapper of the run, target inside the product and inside its paths | allowed |
 | a wrapper of the run, any other target | denied (exit 2, reason on stderr) |

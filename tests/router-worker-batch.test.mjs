@@ -22,7 +22,7 @@ const ticket = (id, paths, extra = {}) => ({ id, title: `Ticket ${id}`, goal: `D
 const batchOf = (...tickets) => ({ tickets, verificationCommands: ['npm test'], sensitivePaths: ['src/auth/**'], nextLifecycleNumber: 1 });
 // A live Router/Worker team whose product is on a working branch.
 function live(t) {
-  const f = fixture(t); assert.equal(f.apply('router-worker', { spec: f.spec, limits: { allowedCommands: ['npm test'] } }).errors, undefined); git(f.product, 'checkout', '-q', '-b', 'work');
+  const f = fixture(t); assert.equal(f.apply('router-worker', { spec: f.spec, limits: { allowedCommands: ['npm test', 'npm run lint'] } }).errors, undefined); git(f.product, 'checkout', '-q', '-b', 'work');
   const before = (batch, extra = {}) => beforeBatch({ teamRoot: f.kit, instanceRoot: f.root, batch, ...extra });
   const untouched = () => { assert.equal(readLease({ productRoot: f.product }).status, 'free'); assert.equal(existsSync(join(f.root, BATCH_FILE)), false);
     assert.ok(Object.values(readBoundary(f.root).wrappers).every(entry => entry.writePaths.length === 0), 'the boundary is closed'); };
@@ -53,12 +53,18 @@ test('in a batch a worker\'s shell runs the confirmed verification commands from
   // A command the owner did not confirm for the team stops the batch before anything is taken.
   assert.match(refusal(await f.before({ ...one, verificationCommands: ['npm test', 'npm run e2e'] })).reason, /not among the commands the owner confirmed for this team \(npm run e2e\).*team-mode\.mjs limits/); f.untouched();
   assert.equal((await f.before(one)).errors, undefined);
-  const shell = (agent, command, cwd = f.root) => decideCall({ boundary: readBoundary(f.root), input: { tool_name: 'Bash', ...(agent ? { agent_type: agent } : {}), cwd, tool_input: { command } } });
+  const shell = (agent, command, cwd = f.root, extra = {}) => decideCall({ boundary: readBoundary(f.root), input: { tool_name: 'Bash', ...(agent ? { agent_type: agent } : {}), cwd, tool_input: { command, ...extra } } });
   assert.equal(shell(exec, `cd "${f.product}" && npm test`).decision, 'approve'); assert.equal(shell(check, `cd ${f.product} && npm test`).decision, 'approve');
-  assert.equal(shell(check, 'npm test', join(f.product, 'src')).decision, 'approve', 'already inside the product');
-  assert.equal(shell(exec, 'npm test').decision, 'deny', 'the same words run in the team folder are another command');
-  for (const other of [`cd "${f.product}" && npm test && rm -rf src`, `cd "${f.product}" && npm test -- --watch`, `cd "${f.product}"; npm test`, 'npm test; ls', 'ls', 'git status', '', `cd "${f.product}x" && npm test`])
-    assert.equal(shell(exec, other, f.product).decision, 'deny', other);
+  assert.equal(shell(check, 'npm test', f.product).decision, 'approve', 'already at the product root'); assert.equal(shell(exec, ` cd "${f.product}" && npm test \n`, f.root, { run_in_background: true, timeout: 600000 }).decision, 'approve');
+  // The same words run somewhere else are another command: the team folder, a folder of the product, a folder beside it.
+  for (const elsewhere of [f.root, join(f.product, 'src'), `${f.product}x`, `${f.product}/../product`]) assert.equal(shell(exec, 'npm test', elsewhere).decision, 'deny', elsewhere);
+  for (const other of [`cd "${f.product}" && npm test && rm -rf src`, `cd "${f.product}" && npm test -- --watch`, `cd "${f.product}"; npm test`, 'npm test; ls', 'ls', 'git status', '', `cd "${f.product}x" && npm test`,
+    `cd "${f.product}" && npm test\u00a0`, `cd "${f.product}" && npm test\r`, `cd "${f.product}" && npm run lint`])
+    assert.equal(shell(exec, other, f.product).decision, 'deny', JSON.stringify(other));
+  assert.equal(shell(exec, `cd "${f.product}" && npm test`, f.root, { dangerouslyDisableSandbox: true }).decision, 'deny', 'not outside a sandbox');
+  // A product path a shell would read differently: only a form that means that folder is approved.
+  const at = root => command => decideCall({ boundary: { productRoot: root, wrappers: { [exec]: { duty: 'exec', writePaths: [], commands: ['npm test'] } } }, input: { tool_name: 'Bash', agent_type: exec, cwd: '/t', tool_input: { command } } }).decision;
+  assert.deepEqual([at('/x/My Project')('cd "/x/My Project" && npm test'), at('/x/My Project')('cd /x/My Project && npm test'), at('/x/p[1]')('cd /x/p[1] && npm test'), at('/x/a$b')('cd "/x/a$b" && npm test')], ['approve', 'deny', 'deny', 'deny']);
   assert.match(shell(exec, 'ls').reason, new RegExp(`only the verification commands confirmed for this team.*cd "${f.product}" && npm test`), 'the refusal says what does run');
   assert.equal(shell('tag-list-fixture-worker-guard', `cd "${f.product}" && npm test`).decision, 'deny', 'the Guardian runs no command');
   assert.equal(shell('tag-list-fixture-architect', 'ls').decision, 'allow'); assert.equal(shell(null, 'ls').decision, 'allow');
@@ -69,19 +75,34 @@ test('in a batch a worker\'s shell runs the confirmed verification commands from
   assert.equal(approved.status, 0, approved.stderr); assert.deepEqual(JSON.parse(approved.stdout).hookSpecificOutput, { hookEventName: 'PreToolUse', permissionDecision: 'allow', permissionDecisionReason: 'A verification command the owner confirmed for this team' });
   const refused = hook(exec, 'curl example.invalid'); assert.equal(refused.status, 2); assert.equal(refused.stdout, ''); assert.match(refused.stderr, /only the verification commands confirmed for this team/);
   const unjudged = hook('tag-list-fixture-architect', 'ls'); assert.equal(unjudged.status, 0); assert.equal(unjudged.stdout, '', 'no decision is given for an agent that is not a worker');
-  assert.deepEqual(f.read('.claude/rw-write-boundary.log.jsonl').trim().split('\n').map(line => JSON.parse(line).decision), ['approve', 'deny', 'allow']);
+  assert.deepEqual(f.read('.claude/rw-write-boundary.log.jsonl').trim().split('\n').map(line => JSON.parse(line)).map(line => [line.decision, line.judged]), [['approve', true], ['deny', true], ['allow', false]]);
   // When the batch is over the shell is closed again.
   assert.equal(abortBatch({ teamRoot: f.kit, instanceRoot: f.root }).errors, undefined);
   assert.match(shell(exec, `cd "${f.product}" && npm test`).reason, /no batch is open/);
+  // A "before" that fails after it opened the boundary takes the commands back.
+  writeFileSync(join(f.product, 'stray.txt'), 'x\n'); const ledger = f.read('pm-decisions.md'); rmSync(join(f.root, 'pm-decisions.md')); mkdirSync(join(f.root, 'pm-decisions.md'));
+  assert.equal(refusal(await f.before(one, { startAsIs: true })).code, 'BATCH_REFUSED'); rmSync(join(f.root, 'pm-decisions.md'), { recursive: true }); writeFileSync(join(f.root, 'pm-decisions.md'), ledger); rmSync(join(f.product, 'stray.txt'));
+  f.untouched(); assert.match(shell(exec, `cd "${f.product}" && npm test`).reason, /no batch is open/);
+  // With no readable boundary nobody knows who the workers are: no subagent's shell runs, and the main session is not judged.
+  const lost = (agent, command) => decideCall({ boundary: null, input: { tool_name: 'Bash', ...(agent ? { agent_type: agent } : {}), cwd: f.root, tool_input: { command } } });
+  assert.match(lost(exec, `cd "${f.product}" && npm test`).reason, /missing or was changed; no subagent runs a shell command/); assert.equal(lost('tag-list-fixture-architect', 'ls').decision, 'deny'); assert.equal(lost(null, 'ls').decision, 'allow');
+  const boundaryText = f.read('.claude/rw-write-boundary.json'); writeFileSync(join(f.root, '.claude/rw-write-boundary.json'), boundaryText.replace('"exec"', '"check"'));
+  assert.equal(hook(exec, 'ls').status, 2, 'an edited boundary file'); rmSync(join(f.root, '.claude/rw-write-boundary.json')); assert.equal(hook(exec, 'ls').status, 2, 'no boundary file'); writeFileSync(join(f.root, '.claude/rw-write-boundary.json'), boundaryText);
   // A boundary that carries no command list (a disposable launch) does not judge the shell.
   assert.equal(decideCall({ boundary: { productRoot: f.product, wrappers: { [exec]: { duty: 'exec', writePaths: [] } } }, input: { tool_name: 'Bash', agent_type: exec, cwd: f.root, tool_input: { command: 'ls' } } }).decision, 'allow');
   // A team that went live before the list existed holds none in its limits: no batch opens until the owner confirms one.
   const old = live(t), profile = JSON.parse(old.read('profiles/team-mode.json')), { allowedCommands: _none, ...counts } = profile.limits;
   writeFileSync(join(old.root, 'profiles/team-mode.json'), JSON.stringify({ ...profile, limits: counts }));
   assert.match(refusal(await old.before(one)).reason, /not among the commands the owner confirmed/);
+  // Its boundary carries no command list either, so its workers' shell is not judged until the owner confirms one.
+  const stood = readBoundary(old.root), bare = sealAgain({ schemaVersion: 1, productRoot: stood.productRoot, wrappers: Object.fromEntries(Object.entries(stood.wrappers).map(([name, entry]) => [name, { duty: entry.duty, writePaths: [] }])) });
+  writeFileSync(join(old.root, '.claude/rw-write-boundary.json'), JSON.stringify(bare));
+  const oldShell = () => decideCall({ boundary: readBoundary(old.root), input: { tool_name: 'Bash', agent_type: exec, cwd: old.root, tool_input: { command: 'ls' } } }).decision;
+  assert.equal(oldShell(), 'allow');
   const added = proposeLimits({ teamRoot: old.kit, instanceRoot: old.root, limits: { allowedCommands: ['npm test'] } });
   assert.equal(added.errors, undefined, JSON.stringify(added.errors)); assert.deepEqual([added.from.allowedCommands, added.to.allowedCommands], [[], ['npm test']]);
   assert.equal(changeLimits({ teamRoot: old.kit, instanceRoot: old.root, limits: { allowedCommands: ['npm test'] }, confirm: added.digest }).errors, undefined);
+  assert.equal(oldShell(), 'deny', 'the change of limits closes the shell of a team that had no list');
   assert.match(old.read('pm-decisions.md'), /LIMITS CHANGED: allowedCommands \[\] -> \["npm test"\];/); assert.equal((await old.before(one)).errors, undefined);
 });
 

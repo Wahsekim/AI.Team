@@ -28,7 +28,7 @@ test('a proposal names the staffing, the limits and the files that move, and cha
   assert.deepEqual(DEFAULT_LIMITS, { attemptsPerTicket: 1, outputAllowancePerTicket: 15000, guardianOutputShare: 6000, authorizationPerTicket: 200000, allowedCommands: [] });
   // The commands a worker's shell runs in a batch are in the proposal the owner confirms, as written.
   assert.deepEqual(f.propose('router-worker', { spec: f.spec, limits: { allowedCommands: ['npm test', 'npm run lint -- --max-warnings 0'] } }).limits.allowedCommands, ['npm test', 'npm run lint -- --max-warnings 0']);
-  for (const bad of ['npm test', ['npm test', 'npm test'], ['npm test\nrm -rf x'], [' npm test'], [''], [7], Array.from({ length: 51 }, (_, i) => `make t${i}`)])
+  for (const bad of [null, 'npm test', ['npm test', 'npm test'], ['npm test\nrm -rf x'], [' npm test'], [''], [7], ['npm  test'], ['npm test\u202e'], ['npm\u00a0test'], ['x'.repeat(301)], Array.from({ length: 51 }, (_, i) => `make t${i}`)])
     assert.match(refusal(f.propose('router-worker', { spec: f.spec, limits: { allowedCommands: bad } })).reason, /allowedCommands must list at most 50 distinct commands, each on one line/, JSON.stringify(bad).slice(0, 60));
   assert.deepEqual(proposal.staffing.exec, f.spec.profiles.exec); assert.deepEqual(proposal.staffing.security, f.spec.governance.security);
   assert.deepEqual(proposal.pack, [...OWN_SPECIALIST].sort());
