@@ -12,8 +12,9 @@ import { limitsOf } from './switch.mjs';
 // It builds the engine's inputs from the PM's tickets, checks the product repository, computes the ceiling,
 // takes the lock and opens the write boundary. A refusal leaves the team and the product as they were.
 export const BATCH_FILE = 'rw-batch.json', AFTER_FILE = 'rw-batch-after.json', PROGRESS_FILE = 'rw-batch-commits.json', RETURN_FILE = 'rw-batch-return.json', SETTLE_FILE = 'rw-batch-settlement.json', ARCHIVE = 'batches';
-// What a batch leaves in the team's root, by the name it takes in the archive.
-export const RECORDS = { 'batch.json': BATCH_FILE, 'after.json': AFTER_FILE, 'commits.json': PROGRESS_FILE, 'return.json': RETURN_FILE, 'settlement.json': SETTLE_FILE };
+// What a batch leaves in the team's root, by the name it takes in the archive. The root is cleared in this
+// order: the files that name the run go last, so a clearing that died is finished by the next commit.
+export const RECORDS = { 'return.json': RETURN_FILE, 'settlement.json': SETTLE_FILE, 'batch.json': BATCH_FILE, 'after.json': AFTER_FILE, 'commits.json': PROGRESS_FILE };
 export const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/, TICKET_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/;
 export const oneLine = text => typeof text === 'string' && text.length > 0 && text.length <= 200 && text === text.trim() && !/[\x00-\x1f\x7f]/.test(text);
 const MODE_FILE = 'profiles/team-mode.json', JOURNAL = 'holiday/.switch-in-progress.json', LEDGER = 'pm-decisions.md';
@@ -227,6 +228,8 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
       sensitivePaths: batch.sensitivePaths, verificationCommands: batch.verificationCommands,
       launchManifest: manifest ? 'chained' : 'absent', runRecord: frozen.record, args: frozen.args };
     const record = { ...body, digest: digest(body) };
+    // A return or a settlement still in the root belongs to no open batch; it must not be archived with this one.
+    for (const file of [RETURN_FILE, SETTLE_FILE]) rmSync(join(instance, file), { force: true });
     writeFileSync(join(instance, BATCH_FILE), JSON.stringify(record, null, 2) + '\n', { flag: 'wx' });
     // Decision 11: starting on a repository that is not clean is the PM's explicit choice, and it is logged.
     if (record.startedAsIs && product.preexisting.length) {

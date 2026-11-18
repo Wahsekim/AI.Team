@@ -37,7 +37,7 @@ if (['abort', 'commit'].includes(process.argv[2])) {
 if (process.argv[2] === 'settle') {
   const [meterFile, flag, root, runFlag, runId, ...extra] = process.argv.slice(3);
   if (!meterFile || flag !== '--instance' || !root || (runFlag !== undefined && (runFlag !== '--run' || !runId)) || extra.length) { console.error(USAGE); process.exit(1); }
-  let meter, rules; try { meter = JSON.parse(readFileSync(meterFile, 'utf8')); } catch { meter = undefined; }
+  let meter, rules; try { meter = JSON.parse(readFileSync(meterFile, 'utf8')); } catch { print({ errors: [{ code: 'BATCH_REFUSED', field: 'batch', reason: `${meterFile} is not readable JSON` }] }); process.exit(); }
   // The retry rules are the team's own charter, read through the kit that serves this command.
   try { rules = loadRetryRules({ instanceRoot: resolve(root) }); } catch (error) { print({ errors: [{ code: 'BATCH_REFUSED', field: 'batch', reason: `The retry rules of the team could not be read: ${error?.message}` }] }); process.exit(); }
   const settled = settleBatch({ teamRoot: join(resolve(root), 'kit'), instanceRoot: resolve(root), meter, rules, ...(runId ? { runId } : {}) });

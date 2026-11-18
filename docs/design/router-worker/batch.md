@@ -165,16 +165,25 @@ session's transcripts: one row per agent, with its tokens.
    be the return the batch was closed with: its digest is in the record of
    `after`.
 2. The metered agents must be the calls of the batch, in the engine's order:
-   execute and check for each ticket that ran, then the Guardian.
-3. Each call's transcript must carry the brief that was frozen for it
-   (`BRIEF_NOT_FOUND` otherwise).
+   execute and check for each ticket that ran, then the Guardian. A session
+   holds the runs of every batch it ran: the run settled is the one whose
+   transcripts carry the briefs frozen for this batch. A meter in which no run
+   carries one, or two runs carry them equally, is refused.
+3. A call of that run whose transcript does not carry its brief is a finding
+   (`BRIEF_NOT_FOUND`).
 4. Per ticket: tokens spent, tokens authorized, and a gate that is `blocked`
    when the authorization is used up. The Guardian's usage is compared with its
    own figure.
 
 The record is `rw-batch-settlement.json`, archived with the batch
 (`settlement.json`); one line goes to `pm-decisions.md`. `status` is `clear`
-or `review`; exit 2 on review.
+or `review`; exit 2 on review. A batch is settled once.
+
+Before the commit, `settle` holds the lock on the product repository while it
+works, as `commit` does, so a batch is not archived under a settlement that is
+being written. With `--run`, it settles an archived batch, committed or
+abandoned. A return or a settlement still in the team's root when the next
+batch opens belongs to no batch and is removed by `before`.
 
 Settlement reports cost. It does not hold or undo a commit: a ticket that went
 over its authorization and passed its check is still committed. The
@@ -326,6 +335,12 @@ kept out of the tickets' commits by the "after" command.
   batch was ever settled.
 - **The meter is trusted.** `settle` checks that the transcripts carry the
   frozen briefs and are in the engine's order, not that they are the real ones.
+  The Guardian's transcript is matched by its agent type only.
+- **Two runs with the same briefs in one session** cannot be told apart, and
+  `settle` refuses: a batch run again unchanged in the same session is settled
+  from a meter that holds one of the two runs.
+- **The authorizations are those of the batch record**, which `before` froze
+  from the team's limits. `settle` does not read the limits again.
 - **No allow-list.** Running a batch without permission prompts needs
   permission rules in the team's settings; the kit does not propose or check
   them yet.
