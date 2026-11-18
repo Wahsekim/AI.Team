@@ -185,8 +185,9 @@ test('CLI prepares from RUN.json, exits 2 on refusal and 1 on usage', t => {
 // A prepared copy and the return of the real engine for its arguments (mock agents, no model).
 async function ran(t, agents = {}, overrides = {}, options = {}) {
   const f = fixture(t, options), launch = await f.prepare(overrides);
-  const { result } = await runWorkflow({ scriptPath: join(f.team, '.claude/workflows/run-n-rounds.js'), args: launch.args, agentImpl: makeAgentImpl(agents) });
-  return { ...f, launch, result, close: (overrides = {}) => closeLaunch({ teamRoot: f.team, result, ...overrides }), closeFile: join(f.team, CLOSE_FILE) };
+  let guardianBrief = null; const mock = makeAgentImpl(agents), agentImpl = (prompt, opts, index) => { if (opts?.schema?.required?.includes('runawayDetected')) guardianBrief = prompt; return mock(prompt, opts, index); };
+  const { result } = await runWorkflow({ scriptPath: join(f.team, '.claude/workflows/run-n-rounds.js'), args: launch.args, agentImpl });
+  return { ...f, launch, result, guardianBrief, close: (overrides = {}) => closeLaunch({ teamRoot: f.team, result, ...overrides }), closeFile: join(f.team, CLOSE_FILE) };
 }
 
 test('close accounts the engine return against the launch record, lists the product changes and releases the lease', async t => {
@@ -276,7 +277,7 @@ const usageRow = (id, agentId, create) => ({ type: 'assistant', isSidechain: Boo
 const relayed = text => ({ type: 'user', message: { role: 'user', content: `The computed task text follows:\n${text.split('\n').map(line => '  ' + line).join('\n')}\n  ` } });
 function metered(f, { execBrief, order = ['exec1', 'check1', 'guard1'], tokens = { exec1: 12000, check1: 6000, guard1: 5000 }, extra = {} } = {}) {
   const plan = f.launch.args.plan[0], dir = join(f.base, 'projects'), wf = join(dir, 'sess/subagents/workflows/wf_1');
-  const agents = { exec1: ['sample-worker-exec', execBrief ?? plan.brief], check1: ['sample-worker-check', plan.verifierBrief], guard1: ['sample-worker-guard', 'Audit this run.'], ...extra };
+  const agents = { exec1: ['sample-worker-exec', execBrief ?? plan.brief], check1: ['sample-worker-check', plan.verifierBrief], guard1: ['sample-worker-guard', f.guardianBrief], ...extra };
   mkdirSync(wf, { recursive: true }); writeFileSync(join(dir, 'sess.jsonl'), jsonl([usageRow('main', undefined, 7000)]));
   for (const [id, [agentType, brief]] of Object.entries(agents)) {
     writeFileSync(join(wf, `agent-${id}.jsonl`), jsonl([{ type: 'user', message: { role: 'user', content: 'harness preamble' } }, relayed(brief), usageRow(id, id, tokens[id])]));

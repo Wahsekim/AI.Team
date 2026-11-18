@@ -10,6 +10,9 @@
 // after RESULT.json --instance <instance-root>
 //   RESULT.json is the engine's return. Matches it against the frozen batch, compares the product with the
 //   tickets' paths, closes the write boundary, releases the lock and plans the commits. Exit 2 when in review.
+// settle METER.json --instance <instance-root> [--run <run id>]
+//   METER.json is `measure-spawn.mjs <session-dir> --json`. Sets each ticket's measured usage against its
+//   authorization, for the batch that after closed or for an archived one. Exit 2 when it is in review.
 // commit --instance <instance-root>
 //   One commit per ticket that passed, on the batch's branch, then archives the batch under batches/<run id>/.
 // No model or network. Exit 0 done and clean, 2 refused or in review, 1 usage.
@@ -20,13 +23,26 @@ import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeBatch, abortBatch } from '../src/router-worker/batch.mjs';
 import { afterBatch, commitBatch } from '../src/router-worker/batch-close.mjs';
+import { settleBatch } from '../src/router-worker/batch-settle.mjs';
+import { loadRetryRules } from '../src/router-worker/retries.mjs';
 
 const print = result => { if (result.errors) { console.error(JSON.stringify(result)); process.exitCode = 2; } else process.stdout.write(JSON.stringify(result, null, 2) + '\n'); };
-const USAGE = 'usage: node scripts/rw-batch.mjs before BATCH.json --instance <instance-root> [--start-as-is]\n       node scripts/rw-batch.mjs after RESULT.json --instance <instance-root>\n       node scripts/rw-batch.mjs commit --instance <instance-root>\n       node scripts/rw-batch.mjs abort --instance <instance-root>';
+const USAGE = 'usage: node scripts/rw-batch.mjs before BATCH.json --instance <instance-root> [--start-as-is]\n       node scripts/rw-batch.mjs after RESULT.json --instance <instance-root>\n       node scripts/rw-batch.mjs settle METER.json --instance <instance-root> [--run <run id>]\n       node scripts/rw-batch.mjs commit --instance <instance-root>\n       node scripts/rw-batch.mjs abort --instance <instance-root>';
 if (['abort', 'commit'].includes(process.argv[2])) {
   const [flag, root, ...extra] = process.argv.slice(3);
   if (flag !== '--instance' || !root || extra.length) { console.error(USAGE); process.exit(1); }
   print((process.argv[2] === 'abort' ? abortBatch : commitBatch)({ teamRoot: join(resolve(root), 'kit'), instanceRoot: resolve(root) }));
+  process.exit();
+}
+if (process.argv[2] === 'settle') {
+  const [meterFile, flag, root, runFlag, runId, ...extra] = process.argv.slice(3);
+  if (!meterFile || flag !== '--instance' || !root || (runFlag !== undefined && (runFlag !== '--run' || !runId)) || extra.length) { console.error(USAGE); process.exit(1); }
+  let meter, rules; try { meter = JSON.parse(readFileSync(meterFile, 'utf8')); } catch { print({ errors: [{ code: 'BATCH_REFUSED', field: 'batch', reason: `${meterFile} is not readable JSON` }] }); process.exit(); }
+  // The retry rules are the team's own charter, read through the kit that serves this command.
+  try { rules = loadRetryRules({ instanceRoot: resolve(root) }); } catch (error) { print({ errors: [{ code: 'BATCH_REFUSED', field: 'batch', reason: `The retry rules of the team could not be read: ${error?.message}` }] }); process.exit(); }
+  const settled = settleBatch({ teamRoot: join(resolve(root), 'kit'), instanceRoot: resolve(root), meter, rules, ...(runId ? { runId } : {}) });
+  print(settled);
+  if (!settled.errors && settled.status !== 'clear') process.exitCode = 2;
   process.exit();
 }
 if (process.argv[2] === 'after') {

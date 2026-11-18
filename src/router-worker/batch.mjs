@@ -11,7 +11,10 @@ import { limitsOf } from './switch.mjs';
 // ADR 0010, decisions 8 to 12: the one command a PM runs before a batch in a standing Router/Worker team.
 // It builds the engine's inputs from the PM's tickets, checks the product repository, computes the ceiling,
 // takes the lock and opens the write boundary. A refusal leaves the team and the product as they were.
-export const BATCH_FILE = 'rw-batch.json', AFTER_FILE = 'rw-batch-after.json', PROGRESS_FILE = 'rw-batch-commits.json', ARCHIVE = 'batches';
+export const BATCH_FILE = 'rw-batch.json', AFTER_FILE = 'rw-batch-after.json', PROGRESS_FILE = 'rw-batch-commits.json', RETURN_FILE = 'rw-batch-return.json', SETTLE_FILE = 'rw-batch-settlement.json', ARCHIVE = 'batches';
+// What a batch leaves in the team's root, by the name it takes in the archive. The root is cleared in this
+// order: the files that name the run go last, so a clearing that died is finished by the next commit.
+export const RECORDS = { 'return.json': RETURN_FILE, 'settlement.json': SETTLE_FILE, 'batch.json': BATCH_FILE, 'after.json': AFTER_FILE, 'commits.json': PROGRESS_FILE };
 export const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/, TICKET_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/;
 export const oneLine = text => typeof text === 'string' && text.length > 0 && text.length <= 200 && text === text.trim() && !/[\x00-\x1f\x7f]/.test(text);
 const MODE_FILE = 'profiles/team-mode.json', JOURNAL = 'holiday/.switch-in-progress.json', LEDGER = 'pm-decisions.md';
@@ -225,6 +228,8 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
       sensitivePaths: batch.sensitivePaths, verificationCommands: batch.verificationCommands,
       launchManifest: manifest ? 'chained' : 'absent', runRecord: frozen.record, args: frozen.args };
     const record = { ...body, digest: digest(body) };
+    // No batch is open: a record of an earlier one still in the root must not be read or archived as this one's.
+    for (const file of [PROGRESS_FILE, RETURN_FILE, SETTLE_FILE]) rmSync(join(instance, file), { force: true });
     writeFileSync(join(instance, BATCH_FILE), JSON.stringify(record, null, 2) + '\n', { flag: 'wx' });
     // Decision 11: starting on a repository that is not clean is the PM's explicit choice, and it is logged.
     if (record.startedAsIs && product.preexisting.length) {
@@ -264,7 +269,7 @@ export function abortBatch({ teamRoot, instanceRoot }) {
       const stamp = new Date().toISOString(), note = { schemaVersion: 1, stage: 'batch-archived-without-commit', runId: id, archivedAt: stamp, commitsMade: made, boundary: boundary ? 'closed' : 'not-restored', lockReleased: ours,
         next: `${work}: commit it by hand on the working branch, or discard it.${boundary ? '' : ' The write-boundary file is missing or was changed: a mode switch to specialist and back rebuilds it.'}` };
       appendFileSync(join(instance, LEDGER), `${stamp.slice(0, 10)} BATCH ${id} ARCHIVED WITHOUT COMMIT by rw-batch.mjs abort: the batch was not finished by the kit. ${work}.\n`);
-      archiveBatch(instance, id, { 'abandoned.json': { ...note, digest: digest(note) } }, { 'batch.json': BATCH_FILE, 'after.json': AFTER_FILE, 'commits.json': PROGRESS_FILE });
+      archiveBatch(instance, id, { 'abandoned.json': { ...note, digest: digest(note) } }, RECORDS);
       return { ...note, digest: digest(note) };
     }
     need(exists(join(instance, BATCH_FILE)) || ours || open, 'There is no batch to abort');

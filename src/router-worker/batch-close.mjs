@@ -5,7 +5,7 @@ import { instanceOf } from './roots.mjs';
 import { git, gitRun, acquireLease, releaseLease, readLease } from './lease.mjs';
 import { accountRun } from './run-args.mjs';
 import { readBoundary, closeBoundary, within, LOG_FILE } from './write-boundary.mjs';
-import { BATCH_FILE, AFTER_FILE, PROGRESS_FILE, ARCHIVE, RUN_ID, TICKET_ID, oneLine, changedPaths, contentOf, hooksOf, archiveBatch, plain } from './batch.mjs';
+import { BATCH_FILE, AFTER_FILE, PROGRESS_FILE, RETURN_FILE, RECORDS, ARCHIVE, RUN_ID, TICKET_ID, oneLine, changedPaths, contentOf, hooksOf, archiveBatch, plain } from './batch.mjs';
 
 // ADR 0010, decisions 12 and 13: what a PM runs when a batch ends in a standing Router/Worker team.
 // after: the engine's return is matched against what was frozen, the product is compared with the tickets'
@@ -126,8 +126,11 @@ export function afterBatch({ teamRoot, instanceRoot, result }) {
     const status = () => findings.length || account.blockers.length ? 'review' : 'clean';
     try { appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} BATCH ${batch.runId} CLOSED (${status()}): ${passed} of ${tickets.length} ticket(s) passed; ${commits.length} to commit, ${left.length} changed path(s) left${findings.length ? `; findings: ${findings.map(finding => finding.code).join(', ')}` : ''}.\n`); }
     catch { findings.push({ code: 'LEDGER_NOT_WRITTEN' }); }
+    // The engine's return is kept beside the record, which carries its digest: the settlement of usage needs it, and so does anyone who audits the batch.
+    const kept = JSON.parse(JSON.stringify(result));
     const record = sealed({ schemaVersion: 1, stage: 'batch-closed', runId: batch.runId, batchDigest: batch.digest, closedAt: at, status: status(),
-      account, tickets, commits, left, holdAll, hook, findings, boundaryClosed, leaseReleased, next });
+      account, returnDigest: digest(kept), tickets, commits, left, holdAll, hook, findings, boundaryClosed, leaseReleased, next });
+    replace(join(instance, RETURN_FILE), kept);
     replace(afterPath, record);
     return record;
   } catch (error) { return refuse(error); }
@@ -147,7 +150,7 @@ export function commitBatch({ teamRoot, instanceRoot }) {
       const folder = typeof id === 'string' && RUN_ID.test(id) ? join(root, ARCHIVE, id) : null, archived = folder ? readJSON(join(folder, 'commit.json')) : null;
       const still = exists(join(root, BATCH_FILE)) ? readJSON(join(root, BATCH_FILE)) : null;
       if ((!exists(join(root, BATCH_FILE)) || (intact(still, 'batch-open') && still.digest === archived?.batchDigest && closed)) && intact(archived, 'batch-committed') && intact(readJSON(join(folder, 'batch.json')), 'batch-open') && archived.batchDigest === readJSON(join(folder, 'batch.json')).digest
-        && (!closed || closed.digest === archived.afterDigest)) { for (const file of [BATCH_FILE, AFTER_FILE, PROGRESS_FILE]) rmSync(join(root, file), { force: true }); return archived; }
+        && (!closed || closed.digest === archived.afterDigest)) { for (const file of Object.values(RECORDS)) rmSync(join(root, file), { force: true }); return archived; }
     } catch { /* judged below */ }
     const { instance, batch } = openBatch(teamRoot, instanceRoot), after = readJSON(join(instance, AFTER_FILE));
     need(exists(join(instance, AFTER_FILE)) && after?.stage !== 'batch-closing', 'This batch has not been closed; run: rw-batch.mjs after RESULT.json --instance <instance-root>');
@@ -206,7 +209,7 @@ export function commitBatch({ teamRoot, instanceRoot }) {
     let ledgerWritten = true;
     try { appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} BATCH ${batch.runId} COMMITTED on ${plain(batch.branch)}: ${done.length} commit(s)${done.length ? ` (${done.map(commit => `${commit.ticket} ${commit.sha.slice(0, 8)}`).join(', ')})` : ''}; ${left.length} changed path(s) left uncommitted${left.length ? ` (${left.slice(0, 10).map(plain).join(', ')}${left.length > 10 ? ', ...' : ''})` : ''}. Nothing was pushed.\n`); }
     catch { ledgerWritten = false; }
-    archiveBatch(instance, batch.runId, { 'commit.json': record }, { 'batch.json': BATCH_FILE, 'after.json': AFTER_FILE, 'commits.json': PROGRESS_FILE });
+    archiveBatch(instance, batch.runId, { 'commit.json': record }, RECORDS);
     return ledgerWritten ? record : { ...record, warning: `${LEDGER} could not be written; add the COMMITTED line by hand` };
   } catch (error) { return refuse(error); } finally { if (lease) releaseLease({ productRoot: product, lease }); }
 }

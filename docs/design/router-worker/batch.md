@@ -1,14 +1,14 @@
 # A batch in a standing Router/Worker team
 
 Status: "before", "after", "commit" and "abort" are built and tested offline
-on a bootstrapped fixture, with the real engine run on mock agents. Usage is not
-settled per ticket yet, and the review of ADR 0011 is not built. Not yet used on
-a real team.
+on a bootstrapped fixture, with the real engine run on mock agents; so is
+"settle". The review of ADR 0011 is not built. Not yet used on a real team.
 [ADR 0010](../../../decisions/0010-router-worker-second-mode.md), decisions 8 to 12.
 
 ```sh
 node kit/scripts/rw-batch.mjs before BATCH.json --instance . [--start-as-is]
 node kit/scripts/rw-batch.mjs after RESULT.json --instance .
+node kit/scripts/rw-batch.mjs settle METER.json --instance . [--run <run id>]
 node kit/scripts/rw-batch.mjs commit --instance .
 node kit/scripts/rw-batch.mjs abort --instance .
 ```
@@ -24,9 +24,11 @@ no network.
 | 2 | PM | runs `run-n-rounds` with the `args` of the batch record |
 | 3 | PM | `after RESULT.json`, with the engine's return: the run is checked, the write limits close, the lock is released |
 | 4 | PM | `scripts/reconcile-run.mjs RESULT.json .`: lifecycle and message ledgers, as in specialist mode |
-| 5 | PM | `commit`: one commit per ticket that passed; the batch is archived |
+| 5 | PM | `scripts/measure-spawn.mjs <session-dir> --json > METER.json`, then `settle METER.json`: usage per ticket |
+| 6 | PM | `commit`: one commit per ticket that passed; the batch is archived |
 
-`abort` replaces steps 2 to 5 for a batch that will not be run.
+`abort` replaces steps 2 to 6 for a batch that will not be run. `settle` may
+also come after `commit`, with `--run <run id>`, for an archived batch.
 
 ## What the PM writes
 
@@ -152,6 +154,45 @@ minute could be taken over while it still runs.
 
 "All held" means the kit commits nothing of that batch: what ran is not what
 was frozen, and the PM or the owner judges it by hand.
+
+## Settle
+
+`settle METER.json` sets each ticket's measured usage against its
+authorization. `METER.json` is what `scripts/measure-spawn.mjs` reads from the
+session's transcripts: one row per agent, with its tokens.
+
+1. The engine's return, kept by `after` (`rw-batch-return.json`), must still
+   be the return the batch was closed with: its digest is in the record of
+   `after`.
+2. A session holds the engine runs of every batch it ran. The engine names
+   the run in the Guardian's brief (`Loop config: runId=<run id>`): the run
+   settled is the one whose Guardian transcript names this batch's run id. A
+   meter in which no run is named so, or two are, is refused. Two batches of
+   the same tickets have the same briefs; the id is what tells them apart.
+3. The metered agents of that run must be the calls of the batch, in the
+   engine's order: execute and check for each ticket that ran, then the
+   Guardian.
+4. A call whose transcript does not carry the brief frozen for it is a
+   finding (`BRIEF_NOT_FOUND`).
+5. Per ticket: tokens spent, tokens authorized, and a gate that is `blocked`
+   when the authorization is used up. The Guardian's usage is compared with its
+   own figure.
+
+The record is `rw-batch-settlement.json`, archived with the batch
+(`settlement.json`); one line goes to `pm-decisions.md`. `status` is `clear`
+or `review`; exit 2 on review. A batch is settled once.
+
+`settle` takes no lock. With `--run` it settles an archived batch, committed
+or abandoned; without it, a batch whose archive already exists is settled in
+its archive. If `commit` or `abort` archives the batch while it is being
+settled, the settlement is moved into the archive. A record of an earlier
+batch still in the team's root when the next batch opens (commits made,
+return, settlement) belongs to no batch and is removed by `before`.
+
+Settlement reports cost. It does not hold or undo a commit: a ticket that went
+over its authorization and passed its check is still committed. The
+authorization is a limit judged afterwards, as ADR 0010 says; what a batch over
+it should cost the team is the PM's and the owner's to decide.
 
 ## Commit
 
@@ -294,9 +335,23 @@ kept out of the tickets' commits by the "after" command.
 
 ## Not covered
 
-- **Usage is not settled per ticket yet.** The engine's return carries the
-  output tokens it metered; matching each agent's measured usage against the
-  ticket's authorization is the next piece.
+- **Settlement is not required before `commit`**, and nothing checks that a
+  batch was ever settled.
+- **The meter is trusted.** `settle` checks that the transcripts carry the
+  frozen briefs and are in the engine's order, not that they are the real ones.
+  The run is told by the id in the Guardian's brief, which is the engine's
+  own wording: an engine that words it differently makes `settle` refuse, and
+  the tests read that wording from the real engine.
+- **The same batch record run twice in one session** gives two runs of one
+  id, and `settle` refuses them.
+- **`settle` at the same moment as `commit` or `abort`** can lose its record
+  in the instant the archive is made; the ledger line is then the only trace,
+  and `settle --run <run id>` writes it again.
+- **The authorizations are those of the batch record**, which `before` froze
+  from the team's limits. `settle` does not read the limits again.
+- **No allow-list.** Running a batch without permission prompts needs
+  permission rules in the team's settings; the kit does not propose or check
+  them yet.
 - **The review of [ADR 0011](../../../decisions/0011-router-worker-batch-review.md)
   is not built.** Until then a ticket that passed its check is committed with
   no security or architecture review, and a ticket that could write a sensitive

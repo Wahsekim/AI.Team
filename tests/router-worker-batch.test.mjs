@@ -4,8 +4,11 @@ import assert from 'node:assert/strict';
 import { writeFileSync, readFileSync, existsSync, mkdirSync, rmSync, appendFileSync, readdirSync, chmodSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { beforeBatch, abortBatch, BATCH_FILE, AFTER_FILE } from '../src/router-worker/batch.mjs';
+import { beforeBatch, abortBatch, BATCH_FILE, AFTER_FILE, RECORDS } from '../src/router-worker/batch.mjs';
 import { afterBatch, commitBatch, HOLD_ALL } from '../src/router-worker/batch-close.mjs';
+import { settleBatch } from '../src/router-worker/batch-settle.mjs';
+import { loadRetryRules } from '../src/router-worker/retries.mjs';
+import { fileURLToPath } from 'node:url';
 import { runWorkflow, makeAgentImpl } from '../scripts/lib/workflow-harness.mjs';
 import { readLease, acquireLease, releaseLease } from '../src/router-worker/lease.mjs';
 import { observeIsolation } from '../src/router-worker/isolation.mjs';
@@ -167,12 +170,14 @@ async function ran(t, { tickets, agents = {}, edits = {}, hook = true, extra = {
   for (const [name, script] of Object.entries(hooks(f))) writeFileSync(join(f.product, '.git/hooks', name), script, { mode: 0o755 });
   const open = await f.before(batchOf(...tickets), extra);
   assert.equal(open.errors, undefined, JSON.stringify(open.errors));
-  const { result } = await runWorkflow({ scriptPath: join(f.root, '.claude/workflows/run-n-rounds.js'), args: open.args, agentImpl: makeAgentImpl(agents) });
+  // The Guardian's brief is kept as the engine wrote it: it names the run, and the settlement reads that.
+  let guardianBrief = null; const mock = makeAgentImpl(agents), agentImpl = (prompt, opts, index) => { if (opts?.schema?.required?.includes('runawayDetected')) guardianBrief = prompt; return mock(prompt, opts, index); };
+  const { result } = await runWorkflow({ scriptPath: join(f.root, '.claude/workflows/run-n-rounds.js'), args: open.args, agentImpl });
   for (const [path, text] of Object.entries(edits)) { mkdirSync(join(f.product, path, '..'), { recursive: true }); writeFileSync(join(f.product, path), text); }
   if (hook) appendFileSync(join(f.root, '.claude/rw-write-boundary.log.jsonl'), JSON.stringify({ at: new Date().toISOString(), tool: 'Edit', agentType: 'tag-list-fixture-worker-exec', judged: true, decision: 'allow' }) + '\n');
   const after = () => afterBatch({ teamRoot: f.kit, instanceRoot: f.root, result }), commit = () => commitBatch({ teamRoot: f.kit, instanceRoot: f.root });
   const log = () => git(f.product, 'log', '--format=%s', `${open.productHead}..HEAD`).trim().split('\n').filter(Boolean).reverse();
-  return { ...f, open, result, after, commit, log, status: () => git(f.product, 'status', '--porcelain').trim() };
+  return { ...f, open, result, guardianBrief, after, commit, log, status: () => git(f.product, 'status', '--porcelain').trim() };
 }
 const two = [ticket('US-01', ['src/list/**', 'src/app.js'], { expectedPaths: ['src/app.js'] }), ticket('US-02', ['src/api/tags.js'], { commitMessage: 'feat(api): tags endpoint' })];
 
@@ -191,7 +196,7 @@ test('after matches the engine return, closes the boundary and frees the lock; c
   assert.deepEqual(f.log(), ['US-01: Ticket US-01', 'feat(api): tags endpoint']); assert.equal(f.status(), '', 'the product is clean again');
   assert.deepEqual(git(f.product, 'show', '--name-only', '--format=', 'HEAD~1').trim().split('\n').sort(), ['src/app.js', 'src/list/view.js'], 'each commit holds its ticket\'s files only');
   assert.equal(git(f.product, 'symbolic-ref', '--short', 'HEAD').trim(), 'work');
-  assert.deepEqual(readdirSync(join(f.root, 'batches', f.open.runId)).sort(), ['after.json', 'batch.json', 'commit.json', 'commits.json']); assert.equal(existsSync(join(f.root, BATCH_FILE)), false); assert.equal(existsSync(join(f.root, AFTER_FILE)), false);
+  assert.deepEqual(readdirSync(join(f.root, 'batches', f.open.runId)).sort(), ['after.json', 'batch.json', 'commit.json', 'commits.json', 'return.json']); assert.equal(existsSync(join(f.root, BATCH_FILE)), false); assert.equal(existsSync(join(f.root, AFTER_FILE)), false);
   assert.match(f.read('pm-decisions.md'), /BATCH \S+ CLOSED \(clean\): 2 of 2 ticket\(s\) passed; 2 to commit, 0 changed path\(s\) left/); assert.match(f.read('pm-decisions.md'), /BATCH \S+ COMMITTED on work: 2 commit\(s\).*Nothing was pushed/);
   const next = await f.before(batchOf(ticket('US-03', ['src/b.js'])));
   assert.equal(next.errors, undefined, JSON.stringify(next.errors)); assert.notEqual(next.runId, f.open.runId);
@@ -230,7 +235,7 @@ test('after refuses a return that is not this batch\'s and changes nothing; find
   // The way out of a closed batch the kit will not commit: its records are archived, the work stays in the tree.
   const out = abortBatch({ teamRoot: f.kit, instanceRoot: f.root });
   assert.equal(out.errors, undefined, JSON.stringify(out.errors)); assert.equal(out.stage, 'batch-archived-without-commit');
-  assert.deepEqual(readdirSync(join(f.root, 'batches', f.open.runId)).sort(), ['abandoned.json', 'after.json', 'batch.json']); assert.equal(existsSync(join(f.root, BATCH_FILE)), false);
+  assert.deepEqual(readdirSync(join(f.root, 'batches', f.open.runId)).sort(), ['abandoned.json', 'after.json', 'batch.json', 'return.json']); assert.equal(existsSync(join(f.root, BATCH_FILE)), false);
   assert.match(f.read('pm-decisions.md'), /ARCHIVED WITHOUT COMMIT by rw-batch\.mjs abort/); assert.ok(f.status().includes('src/app.js'), 'the work is still there');
   assert.equal((await f.before(batchOf(ticket('US-07', ['src/q.js'])), { startAsIs: true })).errors, undefined, 'and the team can open its next batch');
   const noHook = await ran(t, { tickets: two, edits: { 'src/app.js': 'export const x = 2;\n' }, hook: false });
@@ -358,7 +363,7 @@ test('commit resumes by the commits it recorded, and refuses a branch that is no
   assert.match(refusal(f.commit()).reason, /git commit failed for ticket US-02 \(1 of 2 made\)/);
   rmSync(join(f.base, 'block'));
   const done = f.commit(); assert.equal(done.errors, undefined, JSON.stringify(done.errors)); assert.deepEqual(f.log(), ['[auto] US-01: Ticket US-01', '[auto] feat(api): tags endpoint']);
-  assert.deepEqual(readdirSync(join(f.root, 'batches', f.open.runId)).sort(), ['after.json', 'batch.json', 'commit.json', 'commits.json']);
+  assert.deepEqual(readdirSync(join(f.root, 'batches', f.open.runId)).sort(), ['after.json', 'batch.json', 'commit.json', 'commits.json', 'return.json']);
   // The branch rewound between after and commit.
   const rewound = live(t); git(rewound.product, 'commit', '-q', '--allow-empty', '-m', 'extra');
   const open = await rewound.before(batchOf(ticket('US-01', ['src/new.js'])));
@@ -475,4 +480,116 @@ test('abort after a claimed or closed batch always frees the team; a forged arch
   assert.equal(partial.after().errors, undefined); writeFileSync(join(partial.base, 'block'), ''); assert.ok(partial.commit().errors);
   const left = abortBatch({ teamRoot: partial.kit, instanceRoot: partial.root });
   assert.equal(left.commitsMade.length, 1); assert.match(left.next, /1 commit\(s\) were already made by the kit and stay on the branch/); assert.match(partial.read('pm-decisions.md'), /ARCHIVED WITHOUT COMMIT.*1 commit\(s\) were already made/);
+});
+
+// The session's transcripts as the runtime leaves them, read by the kit's meter: one agent per call, in the engine's order.
+const METER = fileURLToPath(new URL('../scripts/measure-spawn.mjs', import.meta.url));
+function meterOf(f, tokens, { briefOf = brief => brief, guardBrief = f.guardianBrief, session = 'sess', wf = 'wf_1', ticketsRun = f.open.args.plan.length } = {}) {
+  const jsonl = rows => rows.map(row => JSON.stringify(row)).join('\n') + '\n', dir = join(f.base, 'projects'), folder = join(dir, `${session}/subagents/workflows/${wf}`);
+  const usage = (id, agentId, create) => ({ type: 'assistant', isSidechain: Boolean(agentId), agentId, requestId: `req_${id}`, message: { id: `msg_${id}`, model: 'm', role: 'assistant', content: [],
+    usage: { input_tokens: 10, cache_creation_input_tokens: create, cache_read_input_tokens: 0, output_tokens: 100 } } });
+  const relayed = text => ({ type: 'user', message: { role: 'user', content: `The computed task text follows:\n${text.split('\n').map(line => '  ' + line).join('\n')}\n  ` } });
+  const agents = [...f.open.args.plan.slice(0, ticketsRun).flatMap((item, i) => [[`${wf}-exec${i}`, item.agentType, briefOf(item.brief)], [`${wf}-check${i}`, item.verifierAgentType, briefOf(item.verifierBrief)]]), [`${wf}-guard`, f.open.args.guardianAgentType, guardBrief]];
+  mkdirSync(folder, { recursive: true }); writeFileSync(join(dir, `${session}.jsonl`), jsonl([usage('main', undefined, 7000)]));
+  agents.forEach(([id, agentType, brief], i) => {
+    writeFileSync(join(folder, `agent-${id}.jsonl`), jsonl([{ type: 'user', message: { role: 'user', content: 'harness preamble' } }, relayed(brief), usage(id, id, tokens[i])]));
+    writeFileSync(join(folder, `agent-${id}.meta.json`), JSON.stringify({ agentType, description: id }));
+  });
+  writeFileSync(join(folder, 'journal.jsonl'), jsonl([{ type: 'launched' }, ...agents.flatMap(([agentId]) => [{ type: 'started', agentId }, { type: 'result', agentId, result: {} }])]));
+  const run = spawnSync(process.execPath, [METER, join(dir, session), '--json'], { encoding: 'utf8' });
+  assert.equal(run.status, 0, run.stderr);
+  return JSON.parse(run.stdout);
+}
+
+test('settle sets each ticket\'s measured usage against its authorization, before or after the commit, and reports a ticket over it', async t => {
+  const f = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n', 'src/api/tags.js': 't\n' } }), rules = loadRetryRules({ teamRoot: f.kit, instanceRoot: f.root });
+  const settle = (meter, extra = {}) => settleBatch({ teamRoot: f.kit, instanceRoot: f.root, meter, rules, ...extra });
+  assert.match(refusal(settle(meterOf(f, [1, 1, 1, 1, 1]))).reason, /No closed batch is waiting/);
+  assert.equal(f.after().errors, undefined);
+  assert.match(refusal(settle({ subagents: [] })).reason, /meter/i, 'a meter that does not hold the run');
+  const returnPath = join(f.root, 'rw-batch-return.json'), kept = readFileSync(returnPath, 'utf8'), edited = JSON.parse(kept);
+  edited.results[1].verificationStatus = 'failed'; writeFileSync(returnPath, JSON.stringify(edited));
+  assert.match(refusal(settle(meterOf(f, [1, 1, 1, 1, 1]))).reason, /missing or was changed/, 'a return edited after the batch was closed');
+  writeFileSync(returnPath, kept);
+  // One session holds the runs of every batch it ran: the run settled is the one whose Guardian was told this run's id.
+  // Another batch of the same tickets at the same commit has the same briefs; only the id tells the two apart.
+  assert.ok(f.guardianBrief.includes(`Loop config: runId=${f.open.runId}, `), 'the engine names the run in the Guardian\'s brief');
+  const another = { wf: 'wf_0', guardBrief: f.guardianBrief.replace(`runId=${f.open.runId},`, 'runId=rw-another-L1,') };
+  assert.match(refusal(settle(meterOf(f, [9, 9, 9, 9, 9], { ...another, session: 'other' }))).reason, /No metered run is run \S+: no Guardian transcript names it/);
+  meterOf(f, [1, 1, 1, 1, 1], { session: 'twice' });
+  assert.match(refusal(settle(meterOf(f, [1, 1, 1, 1, 1], { session: 'twice', wf: 'wf_2' }))).reason, /cannot be told apart/);
+  // A settlement another caller wrote while this one was reading the transcripts is not overwritten.
+  const settlementPath = join(f.root, 'rw-batch-settlement.json'), racing = meterOf(f, [1, 1, 1, 1, 1]), rows = racing.subagents; let reads = 0;
+  Object.defineProperty(racing, 'subagents', { get() { if (!reads++) writeFileSync(settlementPath, 'another caller\n'); return rows; } });
+  assert.match(refusal(settle(racing)).reason, /already settled/); assert.equal(readFileSync(settlementPath, 'utf8'), 'another caller\n'); rmSync(settlementPath);
+  assert.deepEqual(readdirSync(f.root).filter(name => name.endsWith('.tmp')), [], 'no draft is left');
+  // The other run of the session is not read beyond its Guardian: a transcript of it that is gone does not matter.
+  meterOf(f, [9, 9, 9, 9, 9], another);
+  const full = meterOf(f, [12000, 6000, 150000, 60000, 5000]); rmSync(join(f.base, 'projects/sess/subagents/workflows/wf_0/agent-wf_0-exec0.jsonl'));
+  const settled = settle(full); assert.ok(settled.calls?.every(call => call.agentId.startsWith('wf_1-')), JSON.stringify(settled.errors));
+  assert.equal(settled.errors, undefined, JSON.stringify(settled.errors)); assert.equal(settled.stage, 'batch-settled');
+  assert.deepEqual(settled.tickets.map(entry => [entry.ticket, entry.authorizedTokens, entry.spentTokens, entry.budgetGate]), [['US-01', 200000, 18020, 'clear'], ['US-02', 200000, 210020, 'blocked']]);
+  assert.equal(settled.status, 'review', 'a ticket over its authorization puts the batch in review'); assert.equal(settled.calls.length, 5); assert.equal(settled.mainSessionTokens, 7010);
+  assert.match(refusal(settle(meterOf(f, [1, 1, 1, 1, 1]))).reason, /already settled/);
+  assert.match(f.read('pm-decisions.md'), /BATCH \S+ SETTLED \(review\): 228040 token\(s\) on 2 ticket\(s\) of 400000 authorized, Guardian 5010/);
+  // Cost is reported, not enforced: the commits are made, and the settlement is archived with the batch.
+  assert.equal(f.commit().errors, undefined); assert.equal(f.log().length, 2);
+  assert.ok(readdirSync(join(f.root, 'batches', f.open.runId)).includes('settlement.json'));
+
+  // An archived batch is settled by its id; a transcript that does not carry the frozen brief is a finding.
+  const late = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n' } }), lateRules = loadRetryRules({ teamRoot: late.kit, instanceRoot: late.root });
+  assert.equal(late.after().errors, undefined);
+  // A commit that archived the batch and died before it cleared the root: the settlement goes to the archive.
+  const root = Object.fromEntries(['rw-batch.json', 'rw-batch-after.json', 'rw-batch-return.json'].map(name => [name, readFileSync(join(late.root, name), 'utf8')]));
+  assert.equal(late.commit().errors, undefined);
+  for (const [name, text] of Object.entries(root)) writeFileSync(join(late.root, name), text);
+  const settleLate = (meter, extra = {}) => settleBatch({ teamRoot: late.kit, instanceRoot: late.root, meter, rules: lateRules, ...extra });
+  // This batch's run lost one brief; an earlier run of the same tickets kept them all. The run is still told by its id.
+  meterOf(late, [9, 9, 9, 9, 9], { wf: 'wf_0', guardBrief: late.guardianBrief.replace(`runId=${late.open.runId},`, 'runId=rw-another-L1,') });
+  const lateMeter = meterOf(late, [12000, 6000, 12000, 6000, 5000], { briefOf: brief => brief.replace('Ticket US-01', 'Another task') });
+  const journal = join(late.base, 'projects/sess/subagents/workflows/wf_1/journal.jsonl'), order = readFileSync(journal, 'utf8'); rmSync(journal);
+  assert.match(refusal(settleLate(lateMeter)).reason, /workflow journal of the metered run/, 'the other run does not stand in for a run whose journal is gone'); writeFileSync(journal, order);
+  const archived = settleLate(lateMeter);
+  assert.equal(archived.errors, undefined, JSON.stringify(archived.errors)); assert.ok(archived.findings.some(finding => finding.code === 'BRIEF_NOT_FOUND' && finding.ticket === 'US-01'));
+  assert.ok(archived.calls.every(call => call.agentId.startsWith('wf_1-'))); assert.equal(archived.tickets[0].spentTokens, 18020);
+  assert.ok(existsSync(join(late.root, 'batches', late.open.runId, 'settlement.json'))); assert.equal(existsSync(join(late.root, 'rw-batch-settlement.json')), false);
+  assert.equal(late.commit().errors, undefined); assert.equal(existsSync(join(late.root, 'rw-batch-return.json')), false);
+  assert.match(refusal(settleLate(lateMeter, { runId: late.open.runId })).reason, /already settled/);
+  assert.match(refusal(settleLate({}, { runId: '../x' })).reason, /No archived batch/);
+  // What an earlier batch left in the root is not read or archived as the next one's; the files that name the run leave the root last.
+  const leftovers = ['rw-batch-commits.json', 'rw-batch-return.json', 'rw-batch-settlement.json'];
+  for (const name of leftovers) writeFileSync(join(late.root, name), '{}\n');
+  assert.equal((await late.before(batchOf(ticket('US-07', ['src/q.js'])))).errors, undefined);
+  assert.deepEqual(leftovers.filter(name => existsSync(join(late.root, name))), []);
+  assert.deepEqual(Object.values(RECORDS).slice(-3), ['rw-batch.json', 'rw-batch-after.json', 'rw-batch-commits.json']);
+  // A commit that archives the batch while it is being settled: the settlement follows the batch into the archive.
+  const raced = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n' } }); assert.equal(raced.after().errors, undefined);
+  const during = meterOf(raced, [12000, 6000, 12000, 6000, 5000]), list = during.subagents; let seen = 0;
+  Object.defineProperty(during, 'subagents', { get() { if (!seen++) assert.equal(raced.commit().errors, undefined); return list; } });
+  const moved = settleBatch({ teamRoot: raced.kit, instanceRoot: raced.root, meter: during, rules: loadRetryRules({ teamRoot: raced.kit, instanceRoot: raced.root }) });
+  assert.equal(moved.errors, undefined, JSON.stringify(moved.errors)); assert.equal(existsSync(join(raced.root, 'rw-batch-settlement.json')), false);
+  assert.equal(JSON.parse(readFileSync(join(raced.root, 'batches', raced.open.runId, 'settlement.json'), 'utf8')).digest, moved.digest);
+  // CLI
+  const cli = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n' } }); assert.equal(cli.after().errors, undefined);
+  const meterFile = join(cli.base, 'meter.json'); writeFileSync(meterFile, JSON.stringify(meterOf(cli, [12000, 6000, 12000, 6000, 5000])));
+  const run = (...argv) => spawnSync(process.execPath, [join(cli.kit, 'scripts/rw-batch.mjs'), ...argv], { encoding: 'utf8' });
+  assert.equal(run('settle', meterFile).status, 1); assert.equal(run('settle', meterFile, '--instance', cli.root, '--run').status, 1);
+  const unread = run('settle', join(cli.base, 'absent.json'), '--instance', cli.root);
+  assert.equal(unread.status, 2); assert.match(unread.stderr, /absent\.json is not readable JSON/);
+  const done = run('settle', meterFile, '--instance', cli.root);
+  assert.equal(done.status, 0, done.stdout + done.stderr); assert.equal(JSON.parse(done.stdout).status, 'clear');
+  const again = run('settle', meterFile, '--instance', cli.root); assert.equal(again.status, 2); assert.match(again.stderr, /already settled/);
+});
+
+test('settle after a run that halted: only the ticket that ran is settled, by the id of the archived batch, and exit 2 says it is in review', async t => {
+  const failed = { pass: false, staticPass: false, e2ePass: false, summary: 'broken', commandsRun: [{ command: 'npm test', exitCode: 1 }], failures: ['the test fails'] };
+  const f = await ran(t, { tickets: two, agents: { verifier: () => failed } });
+  assert.equal(f.result.results.length, 1, 'the engine stopped at the first ticket'); assert.equal(f.after().errors, undefined); assert.equal(f.commit().errors, undefined);
+  const meterFile = join(f.base, 'meter.json'); writeFileSync(meterFile, JSON.stringify(meterOf(f, [250000, 6000, 5000], { ticketsRun: 1 })));
+  const done = spawnSync(process.execPath, [join(f.kit, 'scripts/rw-batch.mjs'), 'settle', meterFile, '--instance', f.root, '--run', f.open.runId], { encoding: 'utf8' });
+  assert.equal(done.status, 2, done.stdout + done.stderr); const record = JSON.parse(done.stdout);
+  assert.equal(record.status, 'review'); assert.deepEqual(record.tickets.map(entry => [entry.ticket, entry.authorizedTokens, entry.budgetGate]), [['US-01', 200000, 'blocked']]);
+  assert.deepEqual(record.calls.map(call => call.duty), ['exec', 'check', 'guard']);
+  assert.match(f.read('pm-decisions.md'), /SETTLED \(review\): 256020 token\(s\) on 1 ticket\(s\) of 200000 authorized/);
+  assert.ok(existsSync(join(f.root, 'batches', f.open.runId, 'settlement.json')));
 });

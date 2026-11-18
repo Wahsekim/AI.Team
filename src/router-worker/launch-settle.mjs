@@ -14,7 +14,7 @@ export const SETTLE_FILE = 'rw-settlement.json';
 const GATES = ['owner', 'budget', 'security', 'global-progress', 'round-trip', 'governance', 'lifecycle', 'count-guardian', 'runtime-isolation'];
 const UNRESOLVED = ['retry-journal-kept-live', 'meter-read-authenticity', 'governance-usage', 'main-session-usage-not-estimated'];
 
-class Refusal extends Error {}
+export class Refusal extends Error {}
 const need = (condition, reason) => { if (!condition) throw new Refusal(reason); };
 const selfDigested = (value, stage) => {
   if (!value || typeof value !== 'object') return false;
@@ -23,31 +23,38 @@ const selfDigested = (value, stage) => {
 };
 const readRecord = (teamRoot, file) => { try { return JSON.parse(readFileSync(join(teamRoot, file), 'utf8')); } catch { return null; } };
 
-// The runtime relays a brief with every line indented by two spaces.
+const userTexts = transcript => transcript.split('\n').map(line => {
+  let entry;
+  try { entry = JSON.parse(line); } catch { return null; }
+  if (entry?.type !== 'user') return null;
+  const content = entry.message?.content;
+  return typeof content === 'string' ? content : Array.isArray(content) ? content.map(part => part?.text ?? '').join('\n') : '';
+}).filter(text => text !== null);
+
+// The runtime relays a brief with every line indented by two spaces; the Agent tool passes the prompt as it is.
 function carriesBrief(transcript, brief) {
   const relayed = brief.split('\n').map(line => '  ' + line).join('\n');
-  return transcript.split('\n').some(line => {
-    let entry;
-    try { entry = JSON.parse(line); } catch { return false; }
-    if (entry?.type !== 'user') return false;
-    const content = entry.message?.content;
-    const text = typeof content === 'string' ? content : Array.isArray(content) ? content.map(part => part?.text ?? '').join('\n') : '';
-    // The engine relays a brief indented; the Agent tool passes the prompt as it is.
-    return text.includes(relayed) || text.includes(brief);
-  });
+  return userTexts(transcript).some(text => text.includes(relayed) || text.includes(brief));
 }
 
+// One session holds the engine runs of every batch it ran. The engine names the run in the Guardian's brief
+// ("Loop config: runId=<id>, ..."): the run settled is the one whose Guardian transcript names this run.
 // The engine starts its agents one after another; the workflow journal keeps that order.
-function metered(meter, wrappers) {
+function meteredRun(meter, wrappers, guardType, runId) {
   const rows = (Array.isArray(meter?.subagents) ? meter.subagents : []).filter(row => row?.workflowRunId && wrappers.includes(row.agentType) && typeof row.file === 'string');
-  need(rows.length && rows.every(row => row.workflowRunId === rows[0].workflowRunId), 'The meter does not hold the agents of exactly one engine run');
+  need(rows.length, 'The meter holds no agents of an engine run');
+  const names = row => { try { return userTexts(readFileSync(row.file, 'utf8')).some(text => text.includes(`Loop config: runId=${runId}, `)); } catch { return false; } };
+  const named = [...new Set(rows.filter(row => row.agentType === guardType && names(row)).map(row => row.workflowRunId))];
+  need(named.length > 0, `No metered run is run ${runId}: no Guardian transcript names it`);
+  need(named.length === 1, `More than one metered run is named ${runId}; they cannot be told apart`);
+  const own = rows.filter(row => row.workflowRunId === named[0]);
   let order;
   try {
-    order = readFileSync(join(dirname(rows[0].file), 'journal.jsonl'), 'utf8').split('\n').filter(Boolean)
+    order = readFileSync(join(dirname(own[0].file), 'journal.jsonl'), 'utf8').split('\n').filter(Boolean)
       .map(line => { try { return JSON.parse(line); } catch { return null; } }).filter(entry => entry?.type === 'started').map(entry => entry.agentId);
   } catch { order = null; }
-  need(order && rows.every(row => order.includes(row.agentId)), 'The workflow journal of the metered run does not list its agents');
-  return [...rows].sort((a, b) => order.indexOf(a.agentId) - order.indexOf(b.agentId));
+  need(order && own.every(row => order.includes(row.agentId)), 'The workflow journal of the metered run does not list its agents');
+  return [...own].sort((a, b) => order.indexOf(a.agentId) - order.indexOf(b.agentId));
 }
 
 // `attempts` is one {exec, check} pair of meter rows per attempt; `check` is null when the engine dispatched none.
@@ -135,6 +142,33 @@ function settleDispatched({ launch, close, meter, rules, events }) {
   return { calls, findings, ticketRecords, run: settleRun({ record: launch.runRecord, account: close.account, tickets: ticketRecords.map(entry => entry.settlement), guardian: null }) };
 }
 
+// An engine run, settled: the metered agents are matched to the calls of the run in order, each call's
+// transcript is checked for its frozen brief, and the tickets and the run are settled. `launch` carries
+// {digest, productHead, args, runRecord}; `close` carries {digest, account, productHead, changedPaths, candidate?}.
+// Throws a Refusal when the return or the meter is not this run's.
+export function settleEngineRun({ launch, close, result, meter, rules }) {
+  const account = accountRun({ args: launch.args, record: launch.runRecord, result });
+  need(account.status === 'accounted' && digest(account) === digest(close.account), 'The engine return is not the return this run was closed with');
+
+  const plan = launch.args.plan, guardType = launch.args.guardianAgentType;
+  const rows = meteredRun(meter, [...new Set([guardType, ...plan.flatMap(item => [item.agentType, item.verifierAgentType])])].filter(Boolean), guardType, result.runId);
+  const expected = [];
+  for (let i = 0; i < account.calls.tickets; i++) for (let k = 1; k <= account.attempts[i]; k++) {
+    expected.push({ index: i, attempt: k, duty: 'exec', agentType: plan[i].agentType });
+    if (k < account.attempts[i] || result.results[i].estimates.verifier !== null) expected.push({ index: i, attempt: k, duty: 'check', agentType: plan[i].verifierAgentType });
+  }
+  expected.push({ index: null, attempt: null, duty: 'guard', agentType: guardType });
+  need(rows.length === expected.length && rows.every((row, i) => row.agentType === expected[i].agentType), 'The metered agents are not the calls of this run, in order');
+
+  const findings = [], row = (index, attempt, duty) => rows[expected.findIndex(call => call.index === index && call.attempt === attempt && call.duty === duty)] ?? null;
+  const ticketRecords = launch.runRecord.items.slice(0, account.calls.tickets).map((item, index) => settleTicket({ item, planItem: plan[index], outcome: result.results[index],
+    attempts: Array.from({ length: account.attempts[index] }, (_, at) => ({ exec: row(index, at + 1, 'exec'), check: row(index, at + 1, 'check') })), launch, close, rules, findings }));
+  const guard = rows.at(-1), run = settleRun({ record: launch.runRecord, account, tickets: ticketRecords.map(entry => entry.settlement), guardian: guard });
+  return { status: run.runGate === 'clear' && !findings.length ? 'clear' : 'review',
+    calls: expected.map((call, i) => ({ ticket: call.index === null ? null : plan[call.index].ticket, duty: call.duty, attempt: call.attempt, agentId: rows[i].agentId, tokens: rows[i].harnessEq, finished: rows[i].finished })),
+    findings, run, ticketRecords };
+}
+
 export function settleLaunch({ teamRoot, result, meter, rules }) {
   try {
     need(typeof teamRoot === 'string', 'The team root is required');
@@ -159,26 +193,9 @@ export function settleLaunch({ teamRoot, result, meter, rules }) {
       return write({ ...head, status: settled.run.runGate === 'clear' && !settled.findings.length ? 'clear' : 'review', calls: settled.calls, mainSessionTokens,
         findings: settled.findings, run: settled.run, ticketRecords: settled.ticketRecords, journalSource: 'reconstructed-after-run', unresolved: UNRESOLVED });
     }
-    const account = accountRun({ args: launch.args, record: launch.runRecord, result });
-    need(account.status === 'accounted' && digest(account) === digest(close.account), 'The engine return is not the return this launch was closed with');
-
-    const plan = launch.args.plan, guardType = launch.args.guardianAgentType;
-    const rows = metered(meter, [...new Set([guardType, ...plan.flatMap(item => [item.agentType, item.verifierAgentType])])].filter(Boolean));
-    const expected = [];
-    for (let i = 0; i < account.calls.tickets; i++) for (let k = 1; k <= account.attempts[i]; k++) {
-      expected.push({ index: i, attempt: k, duty: 'exec', agentType: plan[i].agentType });
-      if (k < account.attempts[i] || result.results[i].estimates.verifier !== null) expected.push({ index: i, attempt: k, duty: 'check', agentType: plan[i].verifierAgentType });
-    }
-    expected.push({ index: null, attempt: null, duty: 'guard', agentType: guardType });
-    need(rows.length === expected.length && rows.every((row, i) => row.agentType === expected[i].agentType), 'The metered agents are not the calls of this run, in order');
-
-    const findings = [], row = (index, attempt, duty) => rows[expected.findIndex(call => call.index === index && call.attempt === attempt && call.duty === duty)] ?? null;
-    const ticketRecords = launch.runRecord.items.slice(0, account.calls.tickets).map((item, index) => settleTicket({ item, planItem: plan[index], outcome: result.results[index],
-      attempts: Array.from({ length: account.attempts[index] }, (_, at) => ({ exec: row(index, at + 1, 'exec'), check: row(index, at + 1, 'check') })), launch, close, rules, findings }));
-    const guard = rows.at(-1), run = settleRun({ record: launch.runRecord, account, tickets: ticketRecords.map(entry => entry.settlement), guardian: guard });
-    return write({ ...head, status: run.runGate === 'clear' && !findings.length ? 'clear' : 'review',
-      calls: expected.map((call, i) => ({ ticket: call.index === null ? null : plan[call.index].ticket, duty: call.duty, attempt: call.attempt, agentId: rows[i].agentId, tokens: rows[i].harnessEq, finished: rows[i].finished })),
-      mainSessionTokens, findings, run, ticketRecords, journalSource: 'reconstructed-after-run', unresolved: UNRESOLVED });
+    const settled = settleEngineRun({ launch, close, result, meter, rules });
+    return write({ ...head, status: settled.status, calls: settled.calls, mainSessionTokens, findings: settled.findings, run: settled.run, ticketRecords: settled.ticketRecords,
+      journalSource: 'reconstructed-after-run', unresolved: UNRESOLVED });
   } catch (error) {
     const reason = error instanceof Refusal ? error.message : `Settlement failed: ${error?.code ?? 'the return, the meter or a transcript could not be read'}`;
     return { errors: [{ code: 'LAUNCH_REFUSED', field: 'launch', reason }] };

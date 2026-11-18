@@ -142,7 +142,10 @@ Exit 0 settled clear, 2 refused or settled with something to review, 1 usage.
 Settle needs the launch record and the close record, and the same engine return
 the launch was closed with. It runs once.
 
-1. **Calls.** The metered workflow agents of the run's wrappers are put in the
+1. **Calls.** A session can hold several engine runs: the run settled is the
+   one whose Guardian transcript names the run id (the engine writes
+   `Loop config: runId=<run id>` in the Guardian's brief); none, or two, is
+   refused. Its workflow agents of the run's wrappers are put in the
    order the workflow journal started them. They must be exactly the calls the
    engine return reports: per dispatched ticket and attempt the exec call, then
    the check call if the engine dispatched one, and the Guardian last. Anything else is
