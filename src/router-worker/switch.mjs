@@ -8,7 +8,7 @@ import { stageTeam } from './stage.mjs';
 import { makeLive } from './activate.mjs';
 import { instanceOf } from './roots.mjs';
 import { git, isRepositoryRoot, readLease, acquireLease, releaseLease } from './lease.mjs';
-import { standBoundary, dropBoundary, settingsGap, hookGap, BOUNDARY_FILE } from './write-boundary.mjs';
+import { standBoundary, dropBoundary, closeBoundary, readBoundary, settingsGap, hookGap, BOUNDARY_FILE } from './write-boundary.mjs';
 import { randomBytes } from 'node:crypto';
 
 // ADR 0010: a deployed team is switched between specialist and Router/Worker mode. The live mode's own
@@ -23,7 +23,13 @@ const MODE_FILE = 'profiles/team-mode.json', ROSTER = 'agents/roster.md', REGIST
 const SHARED_ROLES = ['pm', 'architect', 'coach', 'auditor', 'security', 'chaos'];
 const SHARED_AGENT_FILES = [...SHARED_ROLES, 'lessons', 'lifecycle', 'self-improvement', 'templates'].map(name => `agents/${name}.md`);
 const IN_PROGRESS = ['index.lock', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'BISECT_LOG', 'rebase-merge', 'rebase-apply'];
-export const DEFAULT_LIMITS = { attemptsPerTicket: 1, outputAllowancePerTicket: 15000, guardianOutputShare: 6000, authorizationPerTicket: 200000 };
+export const DEFAULT_LIMITS = { attemptsPerTicket: 1, outputAllowancePerTicket: 15000, guardianOutputShare: 6000, authorizationPerTicket: 200000, allowedCommands: [] };
+// The four limits that are counts. `allowedCommands` is the list of verification commands a worker of a batch
+// runs without a permission prompt; it is confirmed and changed like the counts.
+export const COUNT_LIMITS = ['attemptsPerTicket', 'outputAllowancePerTicket', 'guardianOutputShare', 'authorizationPerTicket'];
+// As the owner reads it in the proposal, so it runs: printable ASCII on one line, no space at either end, no run of spaces to hide a tail.
+const MAX_COMMANDS = 50;
+export const oneCommand = value => typeof value === 'string' && /^[\x21-\x7e]+( [\x21-\x7e]+)*$/.test(value) && value.length <= 300;
 const LIVE = { active: 'Live: Router/Worker mode of this team, confirmed by the owner at the switch', description: 'standing mode',
   roster: 'the specialist roster is packed under holiday/specialist.' };
 
@@ -105,8 +111,11 @@ function recordedProduct(instance) {
 export function limitsOf(request) {
   const given = request?.limits ?? {};
   need(given && typeof given === 'object' && !Array.isArray(given) && Object.keys(given).every(key => Object.hasOwn(DEFAULT_LIMITS, key))
-    && Object.values(given).every(value => Number.isSafeInteger(value) && value >= 1) && (given.attemptsPerTicket ?? 1) <= 3, 'limits may only set the known limits to positive integers');
-  return coherent({ ...DEFAULT_LIMITS, ...given });
+    && COUNT_LIMITS.every(key => given[key] === undefined || (Number.isSafeInteger(given[key]) && given[key] >= 1)) && (given.attemptsPerTicket ?? 1) <= 3, 'limits may only set the known limits to positive integers');
+  const commands = given.allowedCommands === undefined ? [] : given.allowedCommands;
+  need(Array.isArray(commands) && commands.length <= MAX_COMMANDS && commands.every(oneCommand) && new Set(commands).size === commands.length,
+    `allowedCommands must list at most ${MAX_COMMANDS} distinct commands, each on one line of at most 300 printable ASCII characters with single spaces`);
+  return coherent({ ...DEFAULT_LIMITS, ...given, allowedCommands: [...commands] });
 }
 function coherent(limits) {
   need(limits.authorizationPerTicket >= limits.outputAllowancePerTicket, 'The authorization per ticket cannot be lower than the output allowance per ticket');
@@ -385,11 +394,11 @@ function planLimits({ teamRoot, instanceRoot, limits }) {
   const live = currentMode(instance);
   if (live.name !== 'router-worker') no('The team is not in Router/Worker mode; limits are set with the switch');
   const stored = live.profile.limits;
-  if (!stored || typeof stored !== 'object' || Object.keys(DEFAULT_LIMITS).some(key => !Object.hasOwn(stored, key))) no('profiles/team-mode.json does not hold the four limits of this team');
+  if (!stored || typeof stored !== 'object' || COUNT_LIMITS.some(key => !Object.hasOwn(stored, key))) no('profiles/team-mode.json does not hold the four limits of this team');
   const from = checked(stored, 'The limits in profiles/team-mode.json are not valid');
   if (!limits || typeof limits !== 'object') no('The limits to change are required: {"outputAllowancePerTicket": 20000}');
   checked(limits, 'The limits given are not valid');
-  const to = checked({ ...from, ...limits }, 'The limits would not be coherent'), changed = Object.keys(to).filter(key => to[key] !== from[key]);
+  const to = checked({ ...from, ...limits }, 'The limits would not be coherent'), changed = Object.keys(to).filter(key => JSON.stringify(to[key]) !== JSON.stringify(from[key]));
   if (!changed.length) no('These are the limits the team already has');
   const productRoot = live.profile.spec?.project?.productRoot;
   if (typeof productRoot !== 'string' || readLease({ productRoot }).status !== 'free') no('A batch holds the lock on the product repository, or its state cannot be read; close the batch first');
@@ -412,9 +421,12 @@ export function changeLimits({ confirm, atTerminal, ...options }) {
     writeFileSync(`${path}.tmp`, JSON.stringify({ ...profile, limits: body.to }, null, 2) + '\n', { flag: 'wx' });
     // The ledger line comes first: a change is never in force without its line.
     try {
-      appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} LIMITS CHANGED: ${changed.map(key => `${key} ${body.from[key]} -> ${body.to[key]}`).join(', ')}; proposal ${confirm} was confirmed ${atTerminal === true ? 'by its code, typed at an interactive terminal' : 'by a program that called the change directly, not at a terminal'}.\n`);
+      appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} LIMITS CHANGED: ${changed.map(key => `${key} ${JSON.stringify(body.from[key])} -> ${JSON.stringify(body.to[key])}`).join(', ')}; proposal ${confirm} was confirmed ${atTerminal === true ? 'by its code, typed at an interactive terminal' : 'by a program that called the change directly, not at a terminal'}.\n`);
       renameSync(`${path}.tmp`, path);
     } catch (error) { rmSync(`${path}.tmp`, { force: true }); throw error; }
+    // A team that went live before the command list existed has a boundary without one, which does not judge its workers' shell.
+    const boundary = readBoundary(instance);
+    if (boundary && Object.values(boundary.wrappers).some(entry => !Array.isArray(entry.commands))) closeBoundary({ teamRoot: instance });
     const record = { schemaVersion: 1, stage: 'limits-changed', limits: body.to, changed, changedAt: at };
     return { ...record, digest: digest(record) };
   } catch (error) { return limitsRefusal(error); } finally { if (lock) releaseLease({ productRoot, lease: lock.lease.digest }); }

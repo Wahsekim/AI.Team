@@ -29,7 +29,15 @@ test('the request is drafted from the team\'s own profile with the ADR\'s staffi
   assert.deepEqual(spec.profiles.guard, { model: 'opus', effort: 'high', maxTurns: 40, tools: ['Read', 'Grep', 'Glob'] });
   const writes = { model: 'opus', effort: 'medium', maxTurns: 40, tools: ['Read', 'Grep', 'Glob', 'Write', 'Edit'] }, reads = { ...writes, tools: ['Read', 'Grep', 'Glob'] };
   assert.deepEqual(spec.governance, { architect: writes, coach: writes, auditor: reads, security: reads });
-  assert.deepEqual(limits, DEFAULT_LIMITS);
+  assert.deepEqual(limits, DEFAULT_LIMITS); assert.ok(drafted.notes.some(note => /profiles\/stack\.md gives no verification commands/.test(note)), 'a stack profile that is not filled in proposes no command, and says so');
+  // The commands a worker may run in a batch are proposed from the project's own required gates.
+  writeFileSync(join(f.root, 'profiles/stack.md'), '# Stack\n\n```yaml\nverification:\n  code_shipping:\n    required:\n      - npm run lint\n      - "npm test"\n```\n');
+  const proposed = draftRequest({ teamRoot: f.kit, instanceRoot: f.root });
+  assert.deepEqual(proposed.request.limits.allowedCommands, ['npm run lint', 'npm test']); assert.ok(!proposed.notes.some(note => /stack\.md/.test(note)));
+  // A gate the switch would refuse as it is written is left out, and named: the request that is printed is one the switch accepts.
+  writeFileSync(join(f.root, 'profiles/stack.md'), '# Stack\n\n```yaml\nverification:\n  code_shipping:\n    required:\n      - npm run lint\n      - npm test  # the suite\n```\n');
+  const partly = draftRequest({ teamRoot: f.kit, instanceRoot: f.root });
+  assert.deepEqual(partly.request.limits.allowedCommands, ['npm run lint']); assert.ok(partly.notes.some(note => /1 gate\(s\) that cannot be confirmed as they are written.*npm test  # the suite/.test(note)));
   assert.deepEqual(spec.workflowStates['WF-16'], { status: 'deferred', reason: 'first release is serial', decisionRef: null });
   assert.deepEqual(spec.workflowStates['WF-00'], { status: 'enabled', reason: 'As recorded in profiles/project.md', decisionRef: null });
   // A team bootstrapped with no delivery role goes straight into Router/Worker mode with this request.

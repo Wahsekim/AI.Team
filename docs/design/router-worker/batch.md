@@ -64,7 +64,8 @@ budget per ticket. Those come from the team.
 
 1. **The team**: two-root layout, live in Router/Worker mode, dispatch by the
    engine, no interrupted mode switch, no batch already open, limits that are
-   valid.
+   valid. Every verification command of the batch is one of the commands the
+   owner confirmed for the team (`allowedCommands` in its limits).
 2. **The tickets**: each is complete, and no two tickets claim the same file. A
    folder grant claims every file under it; paths are compared without case.
 3. **The product repository**: on a branch that is not a default branch, no Git
@@ -94,7 +95,8 @@ budget per ticket. Those come from the team.
    other finding.
 7. **The product is read once more**: what is there must be what step 3 found.
 8. **The write boundary opens**, last: the exec worker may write the tickets'
-   paths, the checker and the Guardian nothing.
+   paths, the checker and the Guardian nothing. The exec worker and the checker
+   may run the batch's verification commands; see "The workers' shell".
 9. **The batch record** `rw-batch.json` is written in the team's folder and
    printed. Its `args` are the arguments the PM passes to `run-n-rounds`. It
    also holds what "after" will need: the branch and commit, the paths that
@@ -154,6 +156,45 @@ minute could be taken over while it still runs.
 
 "All held" means the kit commits nothing of that batch: what ran is not what
 was frozen, and the PM or the owner judges it by hand.
+
+## The workers' shell
+
+Nobody answers a permission prompt in a batch the owner does not attend
+([ADR 0010](../../../decisions/0010-router-worker-second-mode.md), amendment of
+2026-11-18). The team's limits hold the list of commands a worker may run,
+`allowedCommands`: proposed from the required gates of `profiles/stack.md`,
+shown in the switch proposal and confirmed by the owner with it, changed later
+with `team-mode.mjs limits` and the same confirmation.
+
+While a batch is open, the hook that bounds the workers' writes also judges
+their shell:
+
+| Call | Decision |
+|---|---|
+| exec worker or checker, `cd "<product root>" && <command>` with a command of the batch | approved: no permission prompt |
+| the same with the product root unquoted, when its path needs no quotes | approved |
+| the same command alone, when the shell is at the product root | approved |
+| any other text: an argument added, two commands joined, a pipe, another folder, a command of the team's list that is not this batch's | refused, and the refusal names the commands that run |
+| a confirmed command asked to run outside the sandbox | refused |
+| the Guardian, any command | refused |
+| any worker when no batch is open | refused |
+| any subagent when the boundary file is missing or was changed | refused |
+| the PM's session; a governance role while the boundary file is intact | not judged |
+
+The text must be the confirmed command exactly; only spaces and line breaks
+around it are ignored. A worker reads files with its file tools; it has no
+`ls`, `cat` or `git` in a batch. A command a ticket needs and the list lacks is
+the owner's to add, before the batch.
+
+A command is confirmed as one line of at most 300 printable ASCII characters
+with single spaces, so that what the owner reads in the proposal is all there
+is. `before` refuses a product repository whose path cannot be written inside a
+quoted shell command.
+
+A team that went live before the list existed has an empty one, and a boundary
+that does not judge its workers' shell. `before` refuses its batches until the
+owner confirms the commands with `team-mode.mjs limits`, which also closes
+that shell.
 
 ## Settle
 
@@ -352,9 +393,29 @@ kept out of the tickets' commits by the "after" command.
   and `settle --run <run id>` writes it again.
 - **The authorizations are those of the batch record**, which `before` froze
   from the team's limits. `settle` does not read the limits again.
-- **No allow-list.** Running a batch without permission prompts needs
-  permission rules in the team's settings; the kit does not propose or check
-  them yet.
+- **What a confirmed command does is not bounded.** The list bounds which
+  commands a worker starts, not what they write: a test runner writes its
+  caches, and a script named in the list does whatever it holds. A worker that
+  may write a file the command runs can change what the command does; the
+  after-run check and the commit plan still judge every changed path.
+- **The approval has not run with real agents.** That the runtime skips the
+  permission prompt on the hook's decision is taken from Claude Code's
+  documentation, which also says a `deny` or `ask` rule in the settings still
+  applies, and that no decision approves "actions no mode auto-approves". It
+  is first exercised in the attended run on the real team.
+- **A hook that cannot run decides nothing.** If the hook's file is missing or
+  fails to load, the runtime sends the call to the session's own permissions.
+- **The list is as protected as the other limits.** A change through the kit
+  is confirmed and logged. An edit of `profiles/team-mode.json` or of the
+  boundary file by hand is not prevented; an edited boundary is refused by the
+  hook and reported by `after` only if its digest was not recomputed. Who may
+  edit the limits is an open decision of the owner, and it now covers commands
+  that run without a prompt.
+- **The briefs and the shared disciplines still speak of a free shell**: an
+  environment prefix before a command, `git diff` to report a change. Those
+  calls are refused in a batch.
+- **Only the three workers are bounded.** The PM's session and the governance
+  roles keep the shell their own permissions give them.
 - **The review of [ADR 0011](../../../decisions/0011-router-worker-batch-review.md)
   is not built.** Until then a ticket that passed its check is committed with
   no security or architecture review, and a ticket that could write a sensitive

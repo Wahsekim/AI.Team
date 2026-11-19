@@ -8,7 +8,7 @@ import { syncBuiltinESMExports } from 'node:module';
 import { spawnSync } from 'node:child_process';
 import { proposeSwitch, switchMode, recoverSwitch, DEFAULT_LIMITS } from '../src/router-worker/switch.mjs';
 import { acquireLease, readLease } from '../src/router-worker/lease.mjs';
-import { readBoundary, decideWrite, boundaryGap } from '../src/router-worker/write-boundary.mjs';
+import { readBoundary, decideCall, boundaryGap } from '../src/router-worker/write-boundary.mjs';
 import { bytesDigest } from '../src/loop/contracts.mjs';
 import { fixture, git, CLI } from './fixtures/router-worker/standing-team.mjs';
 
@@ -25,7 +25,11 @@ test('a proposal names the staffing, the limits and the files that move, and cha
   assert.equal(proposal.errors, undefined, JSON.stringify(proposal.errors));
   assert.equal(proposal.from, 'specialist'); assert.equal(proposal.to, 'router-worker'); assert.equal(proposal.dispatch, 'engine');
   assert.deepEqual(proposal.limits, DEFAULT_LIMITS);
-  assert.deepEqual(DEFAULT_LIMITS, { attemptsPerTicket: 1, outputAllowancePerTicket: 15000, guardianOutputShare: 6000, authorizationPerTicket: 200000 });
+  assert.deepEqual(DEFAULT_LIMITS, { attemptsPerTicket: 1, outputAllowancePerTicket: 15000, guardianOutputShare: 6000, authorizationPerTicket: 200000, allowedCommands: [] });
+  // The commands a worker's shell runs in a batch are in the proposal the owner confirms, as written.
+  assert.deepEqual(f.propose('router-worker', { spec: f.spec, limits: { allowedCommands: ['npm test', 'npm run lint -- --max-warnings 0'] } }).limits.allowedCommands, ['npm test', 'npm run lint -- --max-warnings 0']);
+  for (const bad of [null, 'npm test', ['npm test', 'npm test'], ['npm test\nrm -rf x'], [' npm test'], [''], [7], ['npm  test'], ['npm test\u202e'], ['npm\u00a0test'], ['x'.repeat(301)], Array.from({ length: 51 }, (_, i) => `make t${i}`)])
+    assert.match(refusal(f.propose('router-worker', { spec: f.spec, limits: { allowedCommands: bad } })).reason, /allowedCommands must list at most 50 distinct commands, each on one line/, JSON.stringify(bad).slice(0, 60));
   assert.deepEqual(proposal.staffing.exec, f.spec.profiles.exec); assert.deepEqual(proposal.staffing.security, f.spec.governance.security);
   assert.deepEqual(proposal.pack, [...OWN_SPECIALIST].sort());
   assert.ok(proposal.install.includes('.claude/agents/tag-list-fixture-worker-exec.md') && proposal.install.includes('agents/roster.md') && proposal.install.includes('profiles/team-mode.json'));
@@ -348,9 +352,13 @@ test('the switch installs the write-limit hook: between batches no worker may wr
   const boundary = readBoundary(f.root), wrappers = Object.fromEntries(['exec', 'check', 'guard'].map(duty => [duty, `tag-list-fixture-worker-${duty}`]));
   assert.ok(boundary, 'a boundary exists as soon as the team is in Router/Worker mode'); assert.equal(boundary.productRoot, f.product);
   assert.equal(boundaryGap({ teamRoot: f.root, productRoot: f.product, wrappers }), null, 'the hook is registered and its file exists');
-  const write = (agent, path) => decideWrite({ boundary, input: { tool_name: 'Write', agent_type: agent, cwd: f.product, tool_input: { file_path: path } } }).decision;
+  const write = (agent, path) => decideCall({ boundary, input: { tool_name: 'Write', agent_type: agent, cwd: f.product, tool_input: { file_path: path } } }).decision;
   assert.equal(write('tag-list-fixture-worker-exec', 'src/app.js'), 'deny', 'no batch is open'); assert.equal(write('tag-list-fixture-worker-check', 'src/app.js'), 'deny');
   assert.equal(write('tag-list-fixture-architect', join(f.root, 'decisions/0001.md')), 'allow', 'a governance role works between batches');
+  // Between batches the workers' shell is closed; the shell of any other agent is not judged.
+  const shell = (agent, command) => decideCall({ boundary, input: { tool_name: 'Bash', ...(agent ? { agent_type: agent } : {}), cwd: f.product, tool_input: { command } } });
+  assert.equal(shell('tag-list-fixture-worker-exec', 'npm test').decision, 'deny'); assert.match(shell('tag-list-fixture-worker-check', 'ls').reason, /no batch is open/);
+  assert.equal(shell('tag-list-fixture-architect', 'ls').decision, 'allow'); assert.equal(shell(null, 'git status').decision, 'allow', 'the main session is not judged');
   const live = JSON.parse(readFileSync(settings, 'utf8'));
   assert.deepEqual(live.env, { KEEP: '1' }); assert.deepEqual(live.hooks.Stop, [other]); assert.deepEqual(live.hooks.PreToolUse[0], other); assert.equal(live.hooks.PreToolUse.length, 2);
   assert.deepEqual(readdirSync(join(f.root, 'holiday')), ['specialist'], 'the copy kept aside is gone');
