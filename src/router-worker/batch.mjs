@@ -7,6 +7,7 @@ import { freezeRun } from './run-args.mjs';
 import { openBoundary, closeBoundary, readBoundary, quotable } from './write-boundary.mjs';
 import { observeIsolation } from './isolation.mjs';
 import { limitsOf, COUNT_LIMITS, boundLimits } from './switch.mjs';
+import { loadReview, isReviewListError, triggerChanges, recordFrozen } from './review-triggers.mjs';
 
 // ADR 0010, decisions 8 to 12: the one command a PM runs before a batch in a standing Router/Worker team.
 // It builds the engine's inputs from the PM's tickets, checks the product repository, computes the ceiling,
@@ -19,7 +20,7 @@ export const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/, TICKET_ID = /^[A-Za-z
 export const oneLine = text => typeof text === 'string' && text.length > 0 && text.length <= 200 && text === text.trim() && !/[\x00-\x1f\x7f]/.test(text);
 const MODE_FILE = 'profiles/team-mode.json', JOURNAL = 'holiday/.switch-in-progress.json', LEDGER = 'pm-decisions.md';
 const IN_PROGRESS = ['index.lock', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'BISECT_LOG', 'rebase-merge', 'rebase-apply'];
-const TICKET_FIELDS = ['id', 'title', 'goal', 'acceptance', 'paths', 'estimate'], TICKET_OPTIONAL = ['expectedPaths', 'commitMessage'], BATCH_FIELDS = ['tickets', 'verificationCommands', 'sensitivePaths', 'nextLifecycleNumber'];
+const TICKET_FIELDS = ['id', 'title', 'goal', 'acceptance', 'paths', 'estimate'], TICKET_OPTIONAL = ['expectedPaths', 'commitMessage', 'dependsOn'], BATCH_FIELDS = ['tickets', 'verificationCommands', 'sensitivePaths', 'nextLifecycleNumber'];
 const ESTIMATE = ['execTokens', 'checkTokens', 'reworkTokens'], MAX_PATHS = 100;
 const STOP = ['Owner stop', 'Required scope or permission change', 'Missing verification environment'];
 // What a standing team accepts by decision: no sandbox is required, and Git-ignored build output is tolerated.
@@ -100,7 +101,8 @@ function checkProduct(product, startAsIs) {
   return { head, branch, preexisting: changed };
 }
 
-function checkBatch(batch) {
+// `known` holds the ids of the tickets of archived batches.
+function checkBatch(batch, known) {
   need(batch && typeof batch === 'object' && !Array.isArray(batch) && BATCH_FIELDS.every(key => Object.hasOwn(batch, key))
     && Object.keys(batch).every(key => [...BATCH_FIELDS, 'runId', 'date'].includes(key)), `The batch must carry ${BATCH_FIELDS.join(', ')} and optionally runId, date`);
   need(Array.isArray(batch.tickets) && batch.tickets.length >= 1 && batch.tickets.length <= MAX_PATHS, `The batch must list 1 to ${MAX_PATHS} tickets`);
@@ -125,6 +127,14 @@ function checkBatch(batch) {
     need(!sensitive.length, `Ticket ${ticket.id} would be able to write a sensitive path (${sensitive.slice(0, 5).join(', ')}); such a ticket needs a security review, which is not built yet`);
     const files = ticket.paths.filter(path => !path.endsWith('/**'));
     need(ticket.expectedPaths === undefined ? files.length > 0 : strings(ticket.expectedPaths), `Ticket ${ticket.id} grants only folders; add "expectedPaths" with at least one file the worker is expected to touch`);
+    if (ticket.dependsOn === undefined) return;
+    need(Array.isArray(ticket.dependsOn) && ticket.dependsOn.length <= MAX_PATHS && ticket.dependsOn.every(id => typeof id === 'string' && TICKET_ID.test(id)) && new Set(ticket.dependsOn).size === ticket.dependsOn.length,
+      `Ticket ${ticket.id}: dependsOn must be a list of ticket ids, each named once`);
+    // The tickets of a batch run in order: a ticket can wait only on one that runs before it.
+    const later = ticket.dependsOn.find(id => batch.tickets.slice(i).some(other => String(other?.id).toLowerCase() === id.toLowerCase()));
+    need(!later, `Ticket ${ticket.id} depends on ${later}, which does not run before it in this batch`);
+    const unknown = ticket.dependsOn.find(id => !ids.has(id.toLowerCase()) && !known.has(id.toLowerCase()));
+    need(!unknown, `Ticket ${ticket.id} depends on ${unknown}, which is not a ticket of this batch or of an archived batch`);
   });
   // Decision 8: two tickets may not claim the same file, so each can be committed on its own.
   for (let i = 0; i < batch.tickets.length; i++) for (let j = i + 1; j < batch.tickets.length; j++) {
@@ -182,7 +192,10 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     let archives; try { archives = readdirSync(join(instance, ARCHIVE)); } catch { archives = []; }
     const unsettled = archives.filter(id => !id.startsWith('.') && exists(join(instance, ARCHIVE, id, 'after.json')) && !exists(join(instance, ARCHIVE, id, 'settlement.json'))).sort();
     need(!unsettled.length, `The usage of ${unsettled.length === 1 ? 'batch' : 'batches'} ${unsettled.slice(0, 5).map(plain).join(', ')} was not settled. Settle it first: rw-batch.mjs settle METER.json --instance <instance-root> --run ${plain(unsettled[0])}; if it cannot be measured: rw-batch.mjs settle --not-metered "<reason>" --instance <instance-root> --run ${plain(unsettled[0])}`);
-    checkBatch(batch);
+    checkBatch(batch, new Set(archives.filter(id => !id.startsWith('.')).flatMap(id => readJSON(join(instance, ARCHIVE, id, 'batch.json'))?.tickets ?? []).map(entry => entry?.id).filter(id => typeof id === 'string').map(id => id.toLowerCase())));
+    // ADR 0011, decision 10: the trigger list is frozen into the batch; a change since the last batch is logged once it opens.
+    let review;
+    try { review = loadReview({ instance }); } catch (error) { if (isReviewListError(error)) need(false, `${error.message}. Nothing was started`); throw error; }
     checkProduct(productRoot, startAsIs === true);
     const held = readLease({ productRoot });
     need(!(held.status === 'held' && held.lease.teamRoot === instance), 'This team holds the lock on the product repository but has no open batch: another "before" or a change of limits is running, or an earlier one died half-way. If nothing is running, clear it with: rw-batch.mjs abort --instance <instance-root>');
@@ -236,8 +249,8 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     const body = { schemaVersion: 1, stage: 'batch-open', runId: frozen.args.runId, openedAt: at, productRoot, productHead: product.head, branch: product.branch,
       startedAsIs: startAsIs === true, preexisting: product.preexisting, preexistingContent: contentOf(productRoot, product.preexisting), hooks, lease, boundaryDigest: boundary.digest, isolationDigest: isolation.digest,
       limits, ceiling: { outputTokens: ceiling, stopLine: Math.floor(ceiling * 4 / 5) },
-      tickets: batch.tickets.map((ticket, i) => ({ id: ticket.id, title: ticket.title, commitMessage: ticket.commitMessage ?? `${ticket.id}: ${ticket.title}`, paths: ticket.paths, expectedPaths: inputs[i].proposal.expectedPaths })),
-      sensitivePaths: batch.sensitivePaths, verificationCommands: batch.verificationCommands,
+      tickets: batch.tickets.map((ticket, i) => ({ id: ticket.id, title: ticket.title, commitMessage: ticket.commitMessage ?? `${ticket.id}: ${ticket.title}`, paths: ticket.paths, expectedPaths: inputs[i].proposal.expectedPaths, dependsOn: ticket.dependsOn ?? [] })),
+      sensitivePaths: batch.sensitivePaths, verificationCommands: batch.verificationCommands, review, triggerChanges: triggerChanges(instance, review),
       launchManifest: manifest ? 'chained' : 'absent', runRecord: frozen.record, args: frozen.args };
     const record = { ...body, digest: digest(body) };
     // No batch is open: a record of an earlier one still in the root must not be read or archived as this one's.
@@ -248,6 +261,8 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
       try { appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} BATCH ${record.runId} STARTED AS IS: ${product.preexisting.length} path(s) were already changed and are kept out of the tickets' commits (${product.preexisting.slice(0, 10).map(plain).join(', ')}${product.preexisting.length > 10 ? ', ...' : ''}).\n`); }
       catch (error) { rmSync(join(instance, BATCH_FILE), { force: true }); throw error; }
     }
+    try { recordFrozen({ instance, review, changes: record.triggerChanges, runId: record.runId, at }); }
+    catch (error) { rmSync(join(instance, BATCH_FILE), { force: true }); throw error; }
     lease = null; opened = false;
     return record;
   } catch (error) {

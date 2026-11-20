@@ -839,6 +839,29 @@ else
   pass "registry-seeds" "no seeds or placeholder agent names in .claude/agents/"
 fi
 
+# ------------- check 8: review trigger lists (ADR 0011, Router/Worker batch review)
+# The kit's general list plus the project's own part, merged and checked by the
+# same code a batch's "before" runs. Kit mode checks the kit list with the seed.
+RT_SRC="src/router-worker/review-triggers.mjs"
+if [ "$DEPLOYED" = 1 ]; then RT_KIT="$KIT"; RT_PROJECT="$ROOT/profiles/review.json"; else RT_KIT="$ROOT"; RT_PROJECT="$ROOT/profiles/review.template.json"; fi
+if [ "$DEPLOYED" = 1 ] && [ "$TWO_ROOT" = 0 ]; then
+  skip "review-triggers" "single-root deployment — Router/Worker review needs a two-root instance"
+elif [ ! -f "$RT_KIT/$RT_SRC" ]; then
+  skip "review-triggers" "the kit has no review trigger code ($RT_SRC)"
+elif ! command -v node >/dev/null 2>&1; then
+  skip "review-triggers" "node not found — the trigger lists were not checked"
+elif [ ! -f "$RT_PROJECT" ]; then
+  if [ "$DEPLOYED" = 1 ]; then
+    warn "review-triggers" "profiles/review.json missing — a Router/Worker batch refuses to start without it; cp kit/profiles/review.template.json profiles/review.json, then Security and Architect propose the project's triggers for the owner to confirm"
+  else
+    fail "review-triggers" "profiles/review.template.json missing — broken kit checkout"
+  fi
+elif RT_OUT=$(node --input-type=module -e 'const [src, kit, projectFile] = process.argv.slice(1); const { loadReview } = await import(src); try { const review = loadReview({ kit, projectFile }); console.log(`${review.triggers.length} trigger(s), ${review.rules.length} rule(s)`); } catch (error) { console.log(error.message); process.exit(1); }' "$RT_KIT/$RT_SRC" "$RT_KIT" "$RT_PROJECT" 2>&1); then
+  pass "review-triggers" "kit and project lists valid: $RT_OUT"
+else
+  fail "review-triggers" "$(printf '%s' "$RT_OUT" | head -1 | cut -c1-400)"
+fi
+
 # ---------------------------------------------------------------------- summary
 if [ "$FAILURES" -gt 0 ]; then
   if [ "$DEPLOYED" = 1 ]; then

@@ -25,6 +25,7 @@ operational name and fills placeholders:
 | `charter.template.md` | `charter.md` |
 | `profiles/project.template.md` | `profiles/project.md` |
 | `profiles/stack.template.md` | `profiles/stack.md` |
+| `profiles/review.template.json` | `profiles/review.json` (Router/Worker review triggers, project part) |
 | `agents/roster.template.md` | `agents/roster.md` |
 | `agents/_shared/verify-discipline.template.md` | `agents/_shared/verify-discipline.md` |
 | `agents/lifecycle.template.md`, `agents/lessons.template.md`, `memory/pm.template.md`, `pm-decisions.template.md` | the same names without `.template` (ledgers; never tracked in the kit) |

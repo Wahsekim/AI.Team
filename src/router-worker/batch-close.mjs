@@ -5,6 +5,7 @@ import { instanceOf } from './roots.mjs';
 import { git, gitRun, acquireLease, releaseLease, readLease } from './lease.mjs';
 import { accountRun } from './run-args.mjs';
 import { readBoundary, closeBoundary, within, LOG_FILE } from './write-boundary.mjs';
+import { flagPaths } from './review-triggers.mjs';
 import { BATCH_FILE, AFTER_FILE, PROGRESS_FILE, RETURN_FILE, RECORDS, ARCHIVE, RUN_ID, TICKET_ID, oneLine, changedPaths, contentOf, hooksOf, archiveBatch, plain, proposedTokens } from './batch.mjs';
 
 // ADR 0010, decisions 12 and 13: what a PM runs when a batch ends in a standing Router/Worker team.
@@ -85,6 +86,7 @@ export function afterBatch({ teamRoot, instanceRoot, result }) {
     // A return that is not this batch's return changes nothing: the lock stays held and the boundary open.
     const account = accountRun({ args: batch.args, record: batch.runRecord, result });
     need(account.status === 'accounted', `The engine return is not the return of this batch: ${account.findings.join(', ')}`);
+    need(Array.isArray(batch.review?.triggers) && Array.isArray(batch.review.reviewers), `${BATCH_FILE} holds no frozen review trigger list: an earlier kit opened it. ${ABANDON}`);
     // The close is claimed before anything is changed, so two calls never close the same batch together and
     // one that died is taken up again, not judged as if someone had tampered with the batch.
     const earlier = readJSON(afterPath), claim = () => ({ stage: 'batch-closing', runId: batch.runId, claimedAt: new Date().toISOString() });
@@ -121,6 +123,12 @@ export function afterBatch({ teamRoot, instanceRoot, result }) {
     const rechanged = batch.preexisting.filter(path => Object.hasOwn(was, path) && was[path] !== is[path]);
     if (rechanged.length) findings.push({ code: 'PREEXISTING_PATH_CHANGED', paths: rechanged });
     const tickets = batch.tickets.map((ticket, i) => ({ id: ticket.id, ...outcomeOf(result.results[i]), changedPaths: files.filter(path => within(path, ticket.paths)) }));
+    // ADR 0011, decision 3: the reviewers each passed ticket's changes require, by the list frozen at "before". Not a gate yet.
+    for (const ticket of tickets.filter(entry => entry.status === 'passed' && entry.changedPaths.length)) {
+      const flags = flagPaths(batch.review, ticket.changedPaths);
+      ticket.review = { ...flags, content: contentOf(product, flags.flaggedFiles) };
+    }
+    const reviews = Object.fromEntries(batch.review.reviewers.map(name => [name, { tickets: tickets.filter(ticket => ticket.review?.required.includes(name)).map(ticket => ticket.id) }]).filter(([, entry]) => entry.tickets.length));
     const outside = files.filter(path => !batch.tickets.some(ticket => within(path, ticket.paths)));
     if (outside.length) findings.push({ code: 'WRITE_OUTSIDE_PATHS', paths: outside });
     const { refused, ...hook } = hookSeen(instance, batch.args.allowedAgentTypes, batch.openedAt);
@@ -147,7 +155,7 @@ export function afterBatch({ teamRoot, instanceRoot, result }) {
     // The engine's return is kept beside the record, which carries its digest: the settlement of usage needs it, and so does anyone who audits the batch.
     const kept = JSON.parse(JSON.stringify(result));
     const record = sealed({ schemaVersion: 1, stage: 'batch-closed', runId: batch.runId, batchDigest: batch.digest, closedAt: at, status: status(),
-      account, returnDigest: digest(kept), tickets, commits, left, holdAll, hook, findings, limits: limitsReached(batch.limits, result, refused), boundaryClosed, leaseReleased, next });
+      account, returnDigest: digest(kept), tickets, reviews, commits, left, holdAll, hook, findings, limits: limitsReached(batch.limits, result, refused), boundaryClosed, leaseReleased, next });
     replace(join(instance, RETURN_FILE), kept);
     replace(afterPath, record);
     return record;

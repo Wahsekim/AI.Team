@@ -22,6 +22,7 @@ const KIT = {
   'agents/_shared/verify-discipline.template.md': '# Verify\n',
   'CLAUDE.instance.template.md': 'start {{PROJECT_NAME | localized at bootstrap}}\n',
   '.claude/workflows/run-n-rounds.js': '// engine v1\n',
+  'profiles/review.template.json': '{}\n',
   'agents/lifecycle.template.md': '# Lifecycle\n',
   'agents/lessons.template.md': '# Lessons\n',
   'memory/pm.template.md': '# PM Memory\n',

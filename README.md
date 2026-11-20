@@ -238,7 +238,7 @@ with a clone of the product, as described below.
 [ADR 0011](decisions/0011-router-worker-batch-review.md) adds a review to that
 mode: at the end of a batch the kit, not the PM, decides from a trigger list
 which tickets Security or Architect must review before they are committed.
-**None of it is built yet.**
+Built so far: the trigger list (`kit/config/router-worker/review.json` plus the team's `profiles/review.json`), frozen by `before` and flagged per ticket by `after`; it does not gate a commit yet.
 
 What exists today is offline tooling in `src/router-worker/`: a deterministic
 compiler (first-attempt `exec` and `check` previews only), local source/context

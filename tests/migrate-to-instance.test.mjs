@@ -24,6 +24,7 @@ const KIT = {
   'CLAUDE.md': 'Kit primer. start {{PROJECT_NAME | localized at bootstrap}}\n',
   'CLAUDE.instance.template.md': 'Instance primer. start {{PROJECT_NAME | localized at bootstrap}}\n',
   '.claude/workflows/run-n-rounds.js': '// engine\n',
+  'profiles/review.template.json': '{}\n',
   'agents/lifecycle.template.md': '# Lifecycle\n', 'agents/lessons.template.md': '# Lessons\n',
   'memory/pm.template.md': '# PM Memory\n', 'pm-decisions.template.md': '# PM Decisions\n',
   // An older kit tracked its live ledgers; the legacy deployment edits them in place.

@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "reviewers": ["security", "architect"],
+  "triggers": [
+    { "id": "kit.dependency-manifest", "reviewers": ["security", "architect"],
+      "match": { "glob": ["**/package.json", "**/*.lock", "**/package-lock.json", "**/go.mod", "**/requirements*.txt", "**/pyproject.toml", "**/Cargo.toml", "**/*.csproj"] } },
+    { "id": "kit.sensitive-word", "reviewers": ["security"],
+      "match": { "contains": ["auth", "session", "token", "crypto", "secret"] } },
+    { "id": "kit.migration", "reviewers": ["architect", "security"],
+      "match": { "glob": ["**/migrations/**", "**/*.sql"] } },
+    { "id": "kit.ci-deploy", "reviewers": ["security"],
+      "match": { "glob": [".github/**", ".gitlab-ci.yml", "**/Dockerfile*", "**/docker-compose*", "deploy/**", "**/*.tf"] } },
+    { "id": "kit.lint-test-config", "reviewers": ["architect"],
+      "match": { "glob": ["**/eslint*", "**/.eslintrc*", "**/tsconfig*.json", "**/jest.config.*", "**/vitest.config.*", "**/.semgrep*"] } }
+  ],
+  "rules": [
+    { "id": "kit.sec.secret-in-code", "reviewer": "security", "text": "No secret, key, token or password is written in code, configuration or test data; secrets come from the environment or a secret store." },
+    { "id": "kit.sec.untrusted-input", "reviewer": "security", "text": "Input from outside the process is validated before use and never reaches a shell, a query or HTML without parameters or escaping." },
+    { "id": "kit.sec.access-check", "reviewer": "security", "text": "Every new or changed entry point checks who the caller is and what it may do before it acts." },
+    { "id": "kit.sec.dependency", "reviewer": "security", "text": "A new or upgraded dependency is named by the ticket, pinned, and comes from the package's official registry." },
+    { "id": "kit.arch.adr", "reviewer": "architect", "text": "The change follows the ADRs of this checklist; a departure is named in the report with an ADR draft." },
+    { "id": "kit.arch.boundaries", "reviewer": "architect", "text": "A module reaches another only through that module's public interface, and the change adds no dependency cycle between modules." },
+    { "id": "kit.arch.migration", "reviewer": "architect", "text": "A database migration applies to the existing data and can be rolled back, or the ticket says why not." },
+    { "id": "kit.arch.control-kept", "reviewer": "architect", "text": "Lint, test and type-check configuration is not weakened: no rule disabled, threshold lowered or test skipped unless the ticket asks for it." }
+  ],
+  "adrs": []
+}
