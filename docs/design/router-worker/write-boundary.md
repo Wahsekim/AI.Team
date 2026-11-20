@@ -41,7 +41,9 @@ inside subagents and names the subagent in `agent_type`.
 | a write tool on the team's `profiles/team-mode.json`, from any session, the main session included | denied: only the owner changes the limits, with `team-mode.mjs limits` ([batch.md](batch.md#what-decides-the-limits)) |
 | neither a write tool nor Bash, or no `agent_type` (the main session) | allowed |
 | a subagent, and the boundary file is missing, unreadable or does not match its digest | denied, for a write and for a shell command |
-| a subagent that is not a wrapper of the run (governance roles) | allowed |
+| a subagent that is not a wrapper of the run (governance roles outside a review) | allowed |
+| a reviewer of a batch in review (`duty: "review"`), a write tool | allowed only inside its `teamWritePaths` in the team folder (the Architect: `decisions/drafts/**`); every product write and every other team write denied |
+| a reviewer of a batch in review, Bash | denied: the kit runs the verification commands for the brief |
 | a wrapper of the run, target inside the product and inside its paths | allowed |
 | a wrapper of the run, any other target | denied (exit 2, reason on stderr) |
 
@@ -103,11 +105,18 @@ The log tells apart three ways a forbidden write can get through:
 In a team that is live in Router/Worker mode the hook is registered by the mode
 switch, not by a run, and a boundary file exists at all times:
 
-| State | Boundary file | Workers | Other agents |
-|---|---|---|---|
-| no batch open | the three workers, no write path | every write refused | not judged |
-| batch open | the three workers, exec with the batch's write paths | exec inside its paths only | not judged |
-| file missing or edited | none readable | every write refused | every write refused |
+| State (`state`) | Boundary file | Workers | Reviewers | Other agents |
+|---|---|---|---|---|
+| no batch open (`closed`) | the three workers, no write path | every write and command refused | not judged | not judged |
+| batch open (`batch`) | the three workers, exec with the batch's write paths | exec inside its paths only; the confirmed commands | not judged | not judged |
+| batch in review (`review`, ADR 0011) | the three workers with nothing, each reviewer's wrapper with `duty: "review"`, the run id and the team root | every write and command refused | no product write, no shell; the Architect writes `decisions/drafts/**` of the team folder only | not judged |
+| file missing or edited | none readable | every write refused | every write refused | every write refused |
+
+A file written before `state` existed is read as `batch` when a worker has a
+write path, otherwise `closed`. "after" moves `batch` to `review` when a ticket
+is flagged for a reviewer, otherwise to `closed`; `abort` moves any state to
+`closed` and drops the reviewers. "before", a mode switch and a change of
+limits are refused in `review`.
 
 `armBoundary` still accepts only an activated throwaway copy. In a standing
 team the batch "before" command opens the boundary (`openBoundary`): it starts

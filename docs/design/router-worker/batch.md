@@ -2,14 +2,16 @@
 
 Status: "before", "after", "commit" and "abort" are built and tested offline
 on a bootstrapped fixture, with the real engine run on mock agents; so is
-"settle". Of the review of ADR 0011 only the trigger list and the flags are
-built ("Review triggers"); nothing is gated by them yet. Not yet used on a real team.
+"settle". Of the review of ADR 0011 the trigger list, the flags, the review
+state and the reviewer's brief are built ("Review triggers", "Review state and
+brief"); no commit is gated by them yet. Not yet used on a real team.
 [ADR 0010](../../../decisions/0010-router-worker-second-mode.md), decisions 8 to 12.
 
 ```sh
 node kit/scripts/rw-batch.mjs before BATCH.json --instance . [--start-as-is]
 node kit/scripts/rw-batch.mjs after RESULT.json --instance .
 node kit/scripts/rw-batch.mjs settle METER.json --instance . [--run <run id>]
+node kit/scripts/rw-batch.mjs review-brief --reviewer <security|architect> --instance . [--ticket <id> ...]
 node kit/scripts/rw-batch.mjs commit --instance .
 node kit/scripts/rw-batch.mjs abort --instance .
 ```
@@ -69,7 +71,10 @@ budget per ticket. Those come from the team.
    engine, no interrupted mode switch, no batch already open, every archived
    batch that ran settled or marked as not metered, limits that are
    valid and are the ones the last ledger line binds (see "What decides the
-   limits"), a valid review trigger list (see "Review triggers"). Every verification command of the batch is one of the commands the
+   limits"), a valid review trigger list (see "Review triggers"), no batch in
+   review, and both reviewers staffed: the roster names a wrapper for
+   `security` and for `architect` whose file declares that same name (owner
+   decision of 2026-11-20). Every verification command of the batch is one of the commands the
    owner confirmed for the team (`allowedCommands` in its limits).
 2. **The tickets**: each is complete, and no two tickets claim the same file. A
    folder grant claims every file under it; paths are compared without case.
@@ -140,15 +145,17 @@ opened.
    | `BOUNDARY_NOT_RESTORED`, `LOCK_RELEASE_FAILED`, `LOCK_NOT_HELD_BY_THIS_BATCH` | the batch could not be closed completely | not held |
 
 4. **The write boundary closes and the lock is released**, whatever the
-   findings: a lock must not outlive its batch.
+   findings: a lock must not outlive its batch. When a ticket is flagged for a
+   reviewer the boundary goes to the review state instead of closed (see
+   "Review state and brief").
 5. **The commit plan**: one commit for each ticket that passed and changed
    something, of that ticket's own paths. A ticket that did not pass, or was not
    run because the batch halted, is not in the plan. A ticket passed when the
    engine's record says it is done and nothing else in that record says
    otherwise (a failed verification, a pending fix or recovery).
 6. **The record** `rw-batch-after.json` and one line in `pm-decisions.md`.
-   `status` is `clean` when there is no finding and the engine reports no
-   blocker, otherwise `review`. `next` says what the PM must do when something
+   `status` is `clean` when there is no finding, the engine reports no
+   blocker and no ticket is flagged for a reviewer, otherwise `review`. `next` says what the PM must do when something
    is left or held. `limits` lists each limit that stopped work, for the owner
    (see "What decides the limits"): the engine halted on its output ceiling
    (`outputAllowancePerTicket`, observed as the output metered per ticket
@@ -348,6 +355,52 @@ configuration (Architect).
   `review`: `required` (reviewers, in the kit's order), `because` (reviewer,
   trigger, path), `flaggedFiles` and `content` (a digest of each flagged file
   as after saw it). `reviews` lists, per reviewer, the tickets it must review.
+
+## Review state and brief
+
+[ADR 0011](../../../decisions/0011-router-worker-batch-review.md), decisions 4,
+11 and 12. Built and tested offline; the judging of the reviewer's report and
+the commit gate come next.
+
+- **"before"** records the reviewers' wrappers in the batch record
+  (`reviewWrappers`, reviewer to wrapper name), read from the roster like the
+  workers'.
+- **"after"**, when any ticket is flagged, writes the write boundary in the
+  `review` state instead of closed (see
+  [write-boundary.md](write-boundary.md#a-standing-team-adr-0010-decision-12)).
+  The lock is still released. `status` is `review`, the ledger line names the
+  reviewers, and `next` names `review-brief` for each.
+- **While a batch is in review** "before", a mode switch and a change of limits
+  are refused. `abort` closes the review state, before or after the commit. A
+  commit is not gated yet and does not end the review state.
+- **`review-brief --reviewer R`** prints the brief the PM gives reviewer R's
+  wrapper, and appends it, sealed, to `rw-batch-review-R.json` (one entry per
+  attempt: run, reviewer, wrapper, attempt, `briefDigest`, the tickets with
+  their goal, acceptance, changed and flagged paths and content digests, the
+  rule ids, the ADRs, each verification command's exit and output digest). The
+  brief holds, for each ticket R must review: the goal and acceptance, the
+  reason it was flagged, and the flagged files as absolute paths to open with
+  the Read tool; the diff of those tickets from the batch's start, untracked
+  files included (inline up to 60,000 characters, otherwise the reviewer opens
+  each changed path); R's rules as `id: text`; the ADRs as absolute paths; the
+  output tail of each verification command; the batch-review protocol
+  (`agents/router-worker-review.md`); and the report schema, to be returned as
+  the last fenced json block. It never holds a worker's report, the checker's
+  verdict or another reviewer's report.
+- **The kit runs the verification commands** for the brief
+  (`src/router-worker/run-commands.mjs`): only a command both frozen in the
+  batch and in the team's bound `allowedCommands`, with `/bin/sh -c` from the
+  product root, 15 minutes each, as the PM's user; the last 4,000 characters of
+  its output are kept with a digest of all of it. A frozen command the owner no
+  longer confirms is named as not run.
+- **`--ticket ID`** adds an elective review of a ticket that passed with
+  changes; it binds like a required one, is recorded as `elective`, and stays in
+  every later brief of that reviewer. Its flagged files are all its changed
+  paths.
+- **Refused**: no batch in review; a reviewer the kit does not name, or one
+  with no ticket; a flagged file whose content differs from what "after"
+  recorded, before or after the verification commands ran; a brief record that
+  was edited.
   `validate-team.sh` checks both parts with the same code.
 
 ## When the kit will not commit a batch
@@ -398,7 +451,7 @@ committed.
 ## Abort
 
 `abort` clears a batch that will not be run, and what a "before" that died
-left behind: it closes the write boundary, releases the lock if this team holds
+left behind: it closes the write boundary (also from the review state), releases the lock if this team holds
 it, removes the batch record and appends one line to `pm-decisions.md`. It
 checks nothing about the work; that is the "after" command. It never releases
 another team's lock. It does not know whether the engine is running: aborting a
@@ -521,9 +574,14 @@ The limits not being the ones the ledger binds is refused with its own code,
 - **Only the three workers are bounded.** The PM's session and the governance
   roles keep the shell their own permissions give them.
 - **The review of [ADR 0011](../../../decisions/0011-router-worker-batch-review.md)
-  is not built** beyond its triggers. Until then a ticket that passed its check
-  is committed with no security or architecture review, even when flagged, and
-  a ticket that could write a sensitive path is refused by "before".
+  is not built** beyond its triggers, review state and brief. Until then a
+  ticket that passed its check is committed with no security or architecture
+  review, even when flagged, and a ticket that could write a sensitive path is
+  refused by "before".
+- **The brief's verification runs without the lock.** Nothing else starts while
+  the batch is in review, but the PM's own session can still change the product.
+- **An elective ticket's unflagged files** have no digest from "after"; the
+  brief records them as they are when it is made.
 - **A ticket that did not pass keeps its changes in the work tree.** They are
   not saved aside and removed; ADR 0011 does that for a rejected ticket.
 - **Git-ignored files a worker wrote are invisible**, inside or outside the

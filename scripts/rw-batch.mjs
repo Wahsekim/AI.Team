@@ -6,7 +6,7 @@
 // BATCH.json: {"tickets": [{"id", "title", "goal", "acceptance": [...], "paths": [...], "estimate": {"execTokens", "checkTokens", "reworkTokens"}}],
 //              "verificationCommands": [...], "sensitivePaths": [...], "nextLifecycleNumber": n, "runId"?, "date"?}
 // abort --instance <instance-root>
-//   Clears a batch that will not be run, or what a "before" that died left behind.
+//   Clears a batch that will not be run, or what a "before" that died left behind. Also ends a review.
 // after RESULT.json --instance <instance-root>
 //   RESULT.json is the engine's return. Matches it against the frozen batch, compares the product with the
 //   tickets' paths, closes the write boundary, releases the lock and plans the commits. Exit 2 when in review.
@@ -16,6 +16,9 @@
 //   The next "before" is refused until the batch is settled.
 // settle --not-metered "<reason>" --instance <instance-root> [--run <run id>]
 //   Marks a batch whose usage cannot be measured, with the reason, in the place of its settlement.
+// review-brief --reviewer <security|architect> --instance <instance-root> [--ticket <id> ...]
+//   For a batch in review: runs the confirmed verification commands, prints the reviewer's brief and records it,
+//   sealed, in rw-batch-review-<reviewer>.json. --ticket adds an elective review, which binds like a required one.
 // commit --instance <instance-root>
 //   One commit per ticket that passed, on the batch's branch, then archives the batch under batches/<run id>/.
 // No model or network. Exit 0 done and clean, 2 refused or in review, 1 usage.
@@ -28,13 +31,26 @@ import { beforeBatch, abortBatch } from '../src/router-worker/batch.mjs';
 import { afterBatch, commitBatch } from '../src/router-worker/batch-close.mjs';
 import { settleBatch, markNotMetered } from '../src/router-worker/batch-settle.mjs';
 import { loadRetryRules } from '../src/router-worker/retries.mjs';
+import { reviewBrief } from '../src/router-worker/review-brief.mjs';
 
 const print = result => { if (result.errors) { console.error(JSON.stringify(result)); process.exitCode = 2; } else process.stdout.write(JSON.stringify(result, null, 2) + '\n'); };
-const USAGE = 'usage: node scripts/rw-batch.mjs before BATCH.json --instance <instance-root> [--start-as-is]\n       node scripts/rw-batch.mjs after RESULT.json --instance <instance-root>\n       node scripts/rw-batch.mjs settle METER.json --instance <instance-root> [--run <run id>]\n       node scripts/rw-batch.mjs settle --not-metered "<reason>" --instance <instance-root> [--run <run id>]\n       node scripts/rw-batch.mjs commit --instance <instance-root>\n       node scripts/rw-batch.mjs abort --instance <instance-root>';
+const USAGE = 'usage: node scripts/rw-batch.mjs before BATCH.json --instance <instance-root> [--start-as-is]\n       node scripts/rw-batch.mjs after RESULT.json --instance <instance-root>\n       node scripts/rw-batch.mjs settle METER.json --instance <instance-root> [--run <run id>]\n       node scripts/rw-batch.mjs settle --not-metered "<reason>" --instance <instance-root> [--run <run id>]\n       node scripts/rw-batch.mjs review-brief --reviewer <security|architect> --instance <instance-root> [--ticket <id> ...]\n       node scripts/rw-batch.mjs commit --instance <instance-root>\n       node scripts/rw-batch.mjs abort --instance <instance-root>';
 if (['abort', 'commit'].includes(process.argv[2])) {
   const [flag, root, ...extra] = process.argv.slice(3);
   if (flag !== '--instance' || !root || extra.length) { console.error(USAGE); process.exit(1); }
   print((process.argv[2] === 'abort' ? abortBatch : commitBatch)({ teamRoot: join(resolve(root), 'kit'), instanceRoot: resolve(root) }));
+  process.exit();
+}
+if (process.argv[2] === 'review-brief') {
+  const argv = process.argv.slice(3), options = { '--ticket': [] };
+  for (let i = 0; i < argv.length; i += 2) {
+    if (!['--reviewer', '--instance', '--ticket'].includes(argv[i]) || argv[i + 1] === undefined || (argv[i] !== '--ticket' && options[argv[i]] !== undefined)) { console.error(USAGE); process.exit(1); }
+    if (argv[i] === '--ticket') options['--ticket'].push(argv[i + 1]); else options[argv[i]] = argv[i + 1];
+  }
+  if (!options['--reviewer'] || !options['--instance']) { console.error(USAGE); process.exit(1); }
+  const root = resolve(options['--instance']), made = reviewBrief({ teamRoot: join(root, 'kit'), instanceRoot: root, reviewer: options['--reviewer'], tickets: options['--ticket'] });
+  // A brief is long: it is written out in full before the process ends.
+  if (made.errors) print(made); else await new Promise(done => process.stdout.write(made.brief, done));
   process.exit();
 }
 if (process.argv[2] === 'settle' && process.argv[3] === '--not-metered') {
