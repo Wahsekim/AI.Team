@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { beforeBatch, abortBatch, BATCH_FILE, AFTER_FILE, RECORDS } from '../src/router-worker/batch.mjs';
 import { afterBatch, commitBatch, HOLD_ALL } from '../src/router-worker/batch-close.mjs';
-import { settleBatch } from '../src/router-worker/batch-settle.mjs';
+import { settleBatch, markNotMetered } from '../src/router-worker/batch-settle.mjs';
 import { loadRetryRules } from '../src/router-worker/retries.mjs';
 import { fileURLToPath } from 'node:url';
 import { runWorkflow, makeAgentImpl } from '../scripts/lib/workflow-harness.mjs';
@@ -258,7 +258,9 @@ async function ran(t, { tickets, agents = {}, edits = {}, hook = true, extra = {
   if (hook) appendFileSync(join(f.root, '.claude/rw-write-boundary.log.jsonl'), JSON.stringify({ at: new Date().toISOString(), tool: 'Edit', agentType: 'tag-list-fixture-worker-exec', judged: true, decision: 'allow' }) + '\n');
   const after = () => afterBatch({ teamRoot: f.kit, instanceRoot: f.root, result }), commit = () => commitBatch({ teamRoot: f.kit, instanceRoot: f.root });
   const log = () => git(f.product, 'log', '--format=%s', `${open.productHead}..HEAD`).trim().split('\n').filter(Boolean).reverse();
-  return { ...f, open, result, guardianBrief, after, commit, log, status: () => git(f.product, 'status', '--porcelain').trim() };
+  // The next batch opens only after this one is settled; a test that is about something else marks it as not metered.
+  const unmetered = () => assert.equal(markNotMetered({ teamRoot: f.kit, instanceRoot: f.root, reason: 'not measured in this test', runId: open.runId }).errors, undefined);
+  return { ...f, open, result, guardianBrief, after, commit, log, unmetered, status: () => git(f.product, 'status', '--porcelain').trim() };
 }
 const two = [ticket('US-01', ['src/list/**', 'src/app.js'], { expectedPaths: ['src/app.js'] }), ticket('US-02', ['src/api/tags.js'], { commitMessage: 'feat(api): tags endpoint' })];
 
@@ -279,7 +281,7 @@ test('after matches the engine return, closes the boundary and frees the lock; c
   assert.equal(git(f.product, 'symbolic-ref', '--short', 'HEAD').trim(), 'work');
   assert.deepEqual(readdirSync(join(f.root, 'batches', f.open.runId)).sort(), ['after.json', 'batch.json', 'commit.json', 'commits.json', 'return.json']); assert.equal(existsSync(join(f.root, BATCH_FILE)), false); assert.equal(existsSync(join(f.root, AFTER_FILE)), false);
   assert.match(f.read('pm-decisions.md'), /BATCH \S+ CLOSED \(clean\): 2 of 2 ticket\(s\) passed; 2 to commit, 0 changed path\(s\) left/); assert.match(f.read('pm-decisions.md'), /BATCH \S+ COMMITTED on work: 2 commit\(s\).*Nothing was pushed/);
-  const next = await f.before(batchOf(ticket('US-03', ['src/b.js'])));
+  f.unmetered(); const next = await f.before(batchOf(ticket('US-03', ['src/b.js'])));
   assert.equal(next.errors, undefined, JSON.stringify(next.errors)); assert.notEqual(next.runId, f.open.runId);
 });
 
@@ -297,6 +299,7 @@ test('a ticket that did not pass is not committed and stays in the work tree; a 
   assert.equal(done.errors, undefined, JSON.stringify(done.errors)); assert.deepEqual(f.log(), ['US-01: Ticket US-01']); assert.deepEqual(done.left, ['package-lock.json', 'src/api/tags.js']);
   assert.match(f.read('pm-decisions.md'), /COMMITTED on work: 1 commit\(s\).*2 changed path\(s\) left uncommitted \(package-lock\.json, src\/api\/tags\.js\)/);
   // What is left makes the next batch refuse until the PM deals with it, or starts as is.
+  f.unmetered();
   assert.match(refusal(await f.before(batchOf(ticket('US-03', ['src/b.js'])))).reason, /uncommitted changes/);
   const next = await f.before(batchOf(ticket('US-03', ['src/b.js'])), { startAsIs: true });
   assert.equal(next.errors, undefined, JSON.stringify(next.errors)); assert.deepEqual(next.preexisting, ['package-lock.json', 'src/api/tags.js']);
@@ -318,7 +321,7 @@ test('after refuses a return that is not this batch\'s and changes nothing; find
   assert.equal(out.errors, undefined, JSON.stringify(out.errors)); assert.equal(out.stage, 'batch-archived-without-commit');
   assert.deepEqual(readdirSync(join(f.root, 'batches', f.open.runId)).sort(), ['abandoned.json', 'after.json', 'batch.json', 'return.json']); assert.equal(existsSync(join(f.root, BATCH_FILE)), false);
   assert.match(f.read('pm-decisions.md'), /ARCHIVED WITHOUT COMMIT by rw-batch\.mjs abort/); assert.ok(f.status().includes('src/app.js'), 'the work is still there');
-  assert.equal((await f.before(batchOf(ticket('US-07', ['src/q.js'])), { startAsIs: true })).errors, undefined, 'and the team can open its next batch');
+  f.unmetered(); assert.equal((await f.before(batchOf(ticket('US-07', ['src/q.js'])), { startAsIs: true })).errors, undefined, 'and the team can open its next batch');
   const noHook = await ran(t, { tickets: two, edits: { 'src/app.js': 'export const x = 2;\n' }, hook: false });
   assert.ok(noHook.after().findings.some(finding => finding.code === 'HOOK_SAW_NO_WORKER'), 'files changed and the hook logged no worker: the write limits were not enforced');
   const edited = await ran(t, { tickets: two, edits: { 'src/app.js': 'export const x = 2;\n' } });
@@ -473,7 +476,7 @@ test('after is taken up again after a death, refuses a second caller, and is not
   const broken = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n' } }); writeFileSync(join(broken.root, '.claude/rw-write-boundary.json'), '{}');
   const record = broken.after(); assert.ok(record.findings.some(finding => finding.code === 'BOUNDARY_NOT_RESTORED')); assert.match(record.next.join(' '), /mode switch/);
   assert.equal(abortBatch({ teamRoot: broken.kit, instanceRoot: broken.root }).stage, 'batch-archived-without-commit');
-  assert.match(refusal(await broken.before(batchOf(ticket('US-08', ['src/z.js'])), { startAsIs: true })).reason, /rebuilt by a mode switch/);
+  broken.unmetered(); assert.match(refusal(await broken.before(batchOf(ticket('US-08', ['src/z.js'])), { startAsIs: true })).reason, /rebuilt by a mode switch/);
 });
 
 test('a commit that died after archiving is finished by the next call; nothing in a record the PM can write reaches a path, the ledger or a commit unchecked', async t => {
@@ -565,15 +568,16 @@ test('abort after a claimed or closed batch always frees the team; a forged arch
 
 // The session's transcripts as the runtime leaves them, read by the kit's meter: one agent per call, in the engine's order.
 const METER = fileURLToPath(new URL('../scripts/measure-spawn.mjs', import.meta.url));
-function meterOf(f, tokens, { briefOf = brief => brief, guardBrief = f.guardianBrief, session = 'sess', wf = 'wf_1', ticketsRun = f.open.args.plan.length } = {}) {
+function meterOf(f, tokens, { briefOf = brief => brief, guardBrief = f.guardianBrief, request = 'run the batch', session = 'sess', wf = 'wf_1', ticketsRun = f.open.args.plan.length } = {}) {
   const jsonl = rows => rows.map(row => JSON.stringify(row)).join('\n') + '\n', dir = join(f.base, 'projects'), folder = join(dir, `${session}/subagents/workflows/${wf}`);
   const usage = (id, agentId, create) => ({ type: 'assistant', isSidechain: Boolean(agentId), agentId, requestId: `req_${id}`, message: { id: `msg_${id}`, model: 'm', role: 'assistant', content: [],
     usage: { input_tokens: 10, cache_creation_input_tokens: create, cache_read_input_tokens: 0, output_tokens: 100 } } });
-  const relayed = text => ({ type: 'user', message: { role: 'user', content: `The computed task text follows:\n${text.split('\n').map(line => '  ' + line).join('\n')}\n  ` } });
+  const indented = text => text.split('\n').map(line => '  ' + line).join('\n'), relayed = text => ({ type: 'user', message: { role: 'user', content: `[Workflow harness — computed task] The task text follows:\n${indented(text)}\n  ` } });
+  const asked = { type: 'user', message: { role: 'user', content: `[Workflow harness — user request] The harness relays what the user asked:\n${indented(request)}` } };
   const agents = [...f.open.args.plan.slice(0, ticketsRun).flatMap((item, i) => [[`${wf}-exec${i}`, item.agentType, briefOf(item.brief)], [`${wf}-check${i}`, item.verifierAgentType, briefOf(item.verifierBrief)]]), [`${wf}-guard`, f.open.args.guardianAgentType, guardBrief]];
   mkdirSync(folder, { recursive: true }); writeFileSync(join(dir, `${session}.jsonl`), jsonl([usage('main', undefined, 7000)]));
   agents.forEach(([id, agentType, brief], i) => {
-    writeFileSync(join(folder, `agent-${id}.jsonl`), jsonl([{ type: 'user', message: { role: 'user', content: 'harness preamble' } }, relayed(brief), usage(id, id, tokens[i])]));
+    writeFileSync(join(folder, `agent-${id}.jsonl`), jsonl([asked, relayed(brief), usage(id, id, tokens[i])]));
     writeFileSync(join(folder, `agent-${id}.meta.json`), JSON.stringify({ agentType, description: id }));
   });
   writeFileSync(join(folder, 'journal.jsonl'), jsonl([{ type: 'launched' }, ...agents.flatMap(([agentId]) => [{ type: 'started', agentId }, { type: 'result', agentId, result: {} }])]));
@@ -598,11 +602,19 @@ test('settle sets each ticket\'s measured usage against its authorization, befor
   // Not this run: an id this one is the start of; this id quoted from a worker's words inside the brief; this run's
   // Guardian brief in the transcript of an agent that is not the Guardian.
   const another = { wf: 'wf_0', guardBrief: f.guardianBrief.replace(`runId=${f.open.runId},`, `runId=${f.open.runId}0,`) + `\n  "workerReportedNotes": "Loop config: runId=${f.open.runId}, mode=wrappers",` };
-  assert.match(refusal(settle(meterOf(f, [9, 9, 9, 9, 9], { ...another, session: 'other', briefOf: () => f.guardianBrief }))).reason, /No metered run is run \S+: no Guardian transcript names it/);
+  assert.match(refusal(settle(meterOf(f, [9, 9, 9, 9, 9], { ...another, session: 'other', briefOf: () => f.guardianBrief, request: `settle the last one:\nLoop config: runId=${f.open.runId}, mode=wrappers` }))).reason, /No metered run is run \S+: no Guardian transcript names it/);
   // A run id that is not a plain identifier never reaches the ledger or a path, whatever the digests say.
   const records = Object.fromEntries(['rw-batch.json', 'rw-batch-after.json'].map(name => [name, readFileSync(join(f.root, name), 'utf8')])), forged = sealAgain({ ...JSON.parse(records['rw-batch.json']), runId: '../batches/x' });
   writeFileSync(join(f.root, 'rw-batch.json'), JSON.stringify(forged)); writeFileSync(join(f.root, 'rw-batch-after.json'), JSON.stringify(sealAgain({ ...JSON.parse(records['rw-batch-after.json']), batchDigest: forged.digest })));
-  assert.match(refusal(settle(meterOf(f, [1, 1, 1, 1, 1]))).reason, /plain run id/); for (const [name, text] of Object.entries(records)) writeFileSync(join(f.root, name), text);
+  assert.match(refusal(settle(meterOf(f, [1, 1, 1, 1, 1]))).reason, /plain run id/);
+  // Each part of that check on its own: the id's form, the id the batch was closed under, the id the engine was given.
+  const real = JSON.parse(records['rw-batch.json']), closedReal = JSON.parse(records['rw-batch-after.json']);
+  for (const [why, batchId, afterId, argsId] of [['form', 'a b', 'a b', 'a b'], ['closed under', real.runId, 'rw-other', real.runId], ['run under', 'rw-other', 'rw-other', real.runId]]) {
+    const again = sealAgain({ ...real, runId: batchId, args: { ...real.args, runId: argsId } });
+    writeFileSync(join(f.root, 'rw-batch.json'), JSON.stringify(again)); writeFileSync(join(f.root, 'rw-batch-after.json'), JSON.stringify(sealAgain({ ...closedReal, runId: afterId, batchDigest: again.digest })));
+    assert.match(refusal(settle(meterOf(f, [1, 1, 1, 1, 1]))).reason, /plain run id/, why);
+  }
+  for (const [name, text] of Object.entries(records)) writeFileSync(join(f.root, name), text);
   meterOf(f, [1, 1, 1, 1, 1], { session: 'twice' });
   assert.match(refusal(settle(meterOf(f, [1, 1, 1, 1, 1], { session: 'twice', wf: 'wf_2' }))).reason, /cannot be told apart/);
   // A settlement another caller wrote while this one was reading the transcripts is not overwritten.
@@ -643,6 +655,10 @@ test('settle sets each ticket\'s measured usage against its authorization, befor
   assert.equal(late.commit().errors, undefined); assert.equal(existsSync(join(late.root, 'rw-batch-return.json')), false);
   assert.match(refusal(settleLate(lateMeter, { runId: late.open.runId })).reason, /already settled/);
   assert.match(refusal(settleLate({}, { runId: '../x' })).reason, /No archived batch/);
+  // An archive is named by its id, letter for letter, and holds the batch of that id.
+  assert.match(refusal(settleLate(lateMeter, { runId: late.open.runId.toLowerCase() })).reason, /No archived batch of that id/);
+  cpSync(join(late.root, 'batches', late.open.runId), join(late.root, 'batches/rw-a-copy'), { recursive: true }); rmSync(join(late.root, 'batches/rw-a-copy/settlement.json'));
+  assert.match(refusal(settleLate(lateMeter, { runId: 'rw-a-copy' })).reason, /plain run id/); rmSync(join(late.root, 'batches/rw-a-copy'), { recursive: true });
   // What an earlier batch left in the root is not read or archived as the next one's; the files that name the run leave the root last.
   const leftovers = ['rw-batch-commits.json', 'rw-batch-return.json', 'rw-batch-settlement.json'];
   for (const name of leftovers) writeFileSync(join(late.root, name), '{}\n');
@@ -682,4 +698,73 @@ test('settle after a run that halted: only the ticket that ran is settled, by th
   assert.deepEqual(record.calls.map(call => call.duty), ['exec', 'check', 'guard']);
   assert.match(f.read('pm-decisions.md'), /SETTLED \(review\): 256020 token\(s\) on 1 ticket\(s\) of 200000 authorized/);
   assert.ok(existsSync(join(f.root, 'batches', f.open.runId, 'settlement.json')));
+});
+
+test('the next batch does not open until the last one is settled, or marked as not metered with a reason', async t => {
+  const f = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n' } }), next = () => f.before(batchOf(ticket('US-07', ['src/q.js'])));
+  const mark = (reason, extra = {}) => markNotMetered({ teamRoot: f.kit, instanceRoot: f.root, reason, ...extra });
+  assert.match(refusal(mark('too early')).reason, /No closed batch is waiting/);
+  assert.equal(f.after().errors, undefined); assert.equal(f.commit().errors, undefined);
+  const stopped = refusal(await next());
+  assert.match(stopped.reason, new RegExp(`The usage of batch ${f.open.runId} was not settled\\. Settle it first: rw-batch\\.mjs settle METER\\.json --instance <instance-root> --run ${f.open.runId}; if it cannot be measured: rw-batch\\.mjs settle --not-metered`));
+  assert.equal(readLease({ productRoot: f.product }).status, 'free'); assert.equal(existsSync(join(f.root, BATCH_FILE)), false);
+  for (const bad of [undefined, '', ' padded ', 'two\nlines', 'x'.repeat(201)]) assert.match(refusal(mark(bad, { runId: f.open.runId })).reason, /with a reason: one line/, JSON.stringify(bad)?.slice(0, 20));
+  assert.match(refusal(mark('why', { runId: 'rw-none' })).reason, /No archived batch of that id/);
+  const run = (...argv) => spawnSync(process.execPath, [join(f.kit, 'scripts/rw-batch.mjs'), ...argv], { encoding: 'utf8' });
+  assert.equal(run('settle', '--not-metered').status, 1); assert.equal(run('settle', '--not-metered', 'why', '--instance', f.root, '--run').status, 1);
+  const marked = run('settle', '--not-metered', 'the session transcripts were deleted', '--instance', f.root, '--run', f.open.runId);
+  assert.equal(marked.status, 0, marked.stdout + marked.stderr); const record = JSON.parse(marked.stdout);
+  assert.equal(record.stage, 'batch-not-metered'); assert.equal(record.runId, f.open.runId); assert.equal(record.reason, 'the session transcripts were deleted');
+  assert.deepEqual(JSON.parse(readFileSync(join(f.root, 'batches', f.open.runId, 'settlement.json'), 'utf8')), record);
+  assert.match(f.read('pm-decisions.md'), new RegExp(`BATCH ${f.open.runId} NOT METERED by rw-batch\\.mjs settle --not-metered: the session transcripts were deleted\\.`));
+  assert.match(refusal(mark('again', { runId: f.open.runId })).reason, /already settled/);
+  assert.match(refusal(settleBatch({ teamRoot: f.kit, instanceRoot: f.root, meter: meterOf(f, [1, 1, 1, 1, 1]), rules: loadRetryRules({ teamRoot: f.kit, instanceRoot: f.root }), runId: f.open.runId })).reason, /already settled/);
+  const opened = await next(); assert.equal(opened.errors, undefined, JSON.stringify(opened.errors));
+  // A batch that never ran leaves nothing to settle.
+  assert.equal(abortBatch({ teamRoot: f.kit, instanceRoot: f.root }).errors, undefined); assert.equal((await next()).errors, undefined);
+  assert.equal(abortBatch({ teamRoot: f.kit, instanceRoot: f.root }).errors, undefined);
+
+  // Marked before the commit, the mark is archived with the batch; a batch abandoned after it ran must be settled or marked too.
+  const early = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n' } }); assert.equal(early.after().errors, undefined);
+  const first = markNotMetered({ teamRoot: early.kit, instanceRoot: early.root, reason: 'no meter on this machine' }); assert.equal(first.errors, undefined, JSON.stringify(first.errors));
+  assert.equal(early.commit().errors, undefined); assert.equal(JSON.parse(readFileSync(join(early.root, 'batches', early.open.runId, 'settlement.json'), 'utf8')).stage, 'batch-not-metered');
+  assert.equal((await early.before(batchOf(ticket('US-07', ['src/q.js'])))).errors, undefined);
+  const dropped = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n' } }); assert.equal(dropped.after().errors, undefined);
+  assert.equal(abortBatch({ teamRoot: dropped.kit, instanceRoot: dropped.root }).stage, 'batch-archived-without-commit');
+  assert.match(refusal(await dropped.before(batchOf(ticket('US-07', ['src/q.js'])), { startAsIs: true })).reason, /was not settled/);
+  dropped.unmetered(); assert.equal((await dropped.before(batchOf(ticket('US-07', ['src/q.js'])), { startAsIs: true })).errors, undefined);
+});
+
+
+test('the gate reads a settlement of that run, sealed; a mark is refused whole when its ledger line cannot be written', async t => {
+  const f = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n' } }), id = f.open.runId, next = () => f.before(batchOf(ticket('US-07', ['src/q.js'])));
+  const mark = (reason, extra = {}) => markNotMetered({ teamRoot: f.kit, instanceRoot: f.root, reason, runId: id, ...extra }), held = new RegExp(`The usage of batch ${id} was not settled`);
+  assert.equal(f.after().errors, undefined); assert.equal(f.commit().errors, undefined);
+  // A file the PM left among the archives is not a batch.
+  writeFileSync(join(f.root, 'batches', 'notes.txt'), 'x'); assert.match(refusal(await next()).reason, held);
+  for (const bad of ['a\u009bb', 'a\u200eb', 'a\ufeffb', 'a b', 'a b', 'a\u0085b', 'a‮b', 'a⁦b']) assert.match(refusal(mark(bad)).reason, /with a reason: one line/, JSON.stringify(bad));
+  const settlement = join(f.root, 'batches', id, 'settlement.json'), seal = body => JSON.stringify({ ...body, digest: digest(body) });
+  const body = { schemaVersion: 1, stage: 'batch-not-metered', runId: id, reason: 'forged', markedAt: new Date().toISOString() };
+  for (const forged of ['', '{}', JSON.stringify({ ...body, digest: 'sha256:0' }), seal({ ...body, runId: 'rw-other' }), seal({ ...body, stage: 'batch-open' })]) {
+    writeFileSync(settlement, forged); assert.match(refusal(await next()).reason, held, forged.slice(0, 60));
+  }
+  rmSync(settlement);
+  const ledger = join(f.root, 'pm-decisions.md'); chmodSync(ledger, 0o444);
+  assert.ok(refusal(mark('the meter is gone'))); chmodSync(ledger, 0o644);
+  assert.equal(existsSync(settlement), false, 'no mark without its ledger line');
+  assert.equal(mark('the meter is gone').errors, undefined); assert.equal((await next()).errors, undefined);
+});
+
+test('a mark of the closed batch is refused when its records do not agree on the run id', async t => {
+  const f = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n' } }), mark = () => markNotMetered({ teamRoot: f.kit, instanceRoot: f.root, reason: 'no meter' });
+  assert.equal(f.after().errors, undefined);
+  const afterPath = join(f.root, AFTER_FILE), original = readFileSync(afterPath, 'utf8'), closed = JSON.parse(original);
+  writeFileSync(afterPath, JSON.stringify(sealAgain({ ...closed, runId: 'rw-other' })));
+  assert.match(refusal(mark()).reason, /do not agree/); assert.equal(existsSync(join(f.root, 'rw-batch-settlement.json')), false);
+  writeFileSync(afterPath, original); assert.equal(f.commit().errors, undefined);
+  // A record left in the root names the archive only when it is the archive's own.
+  writeFileSync(afterPath, JSON.stringify(sealAgain({ ...closed, left: ['src/forged.js'] })));
+  assert.match(refusal(mark()).reason, /do not agree/);
+  writeFileSync(afterPath, original); const marked = mark(); assert.equal(marked.errors, undefined, JSON.stringify(marked.errors));
+  assert.equal(JSON.parse(readFileSync(join(f.root, 'batches', f.open.runId, 'settlement.json'), 'utf8')).stage, 'batch-not-metered');
 });
