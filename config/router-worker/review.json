@@ -3,13 +3,13 @@
   "reviewers": ["security", "architect"],
   "triggers": [
     { "id": "kit.dependency-manifest", "reviewers": ["security", "architect"],
-      "match": { "glob": ["**/package.json", "**/*.lock", "**/package-lock.json", "**/go.mod", "**/requirements*.txt", "**/pyproject.toml", "**/Cargo.toml", "**/*.csproj"] } },
+      "match": { "glob": ["**/package.json", "**/*.lock", "**/package-lock.json", "**/go.mod", "**/requirements*.txt", "**/pyproject.toml", "**/Cargo.toml", "**/*.csproj", "**/pnpm-lock.yaml", "**/pom.xml", "**/build.gradle", "**/build.gradle.kts", "**/.npmrc", "**/Gemfile"] } },
     { "id": "kit.sensitive-word", "reviewers": ["security"],
-      "match": { "contains": ["auth", "session", "token", "crypto", "secret"] } },
+      "match": { "contains": ["auth", "session", "token", "crypto", "secret", "credential"] } },
     { "id": "kit.migration", "reviewers": ["architect", "security"],
       "match": { "glob": ["**/migrations/**", "**/*.sql"] } },
     { "id": "kit.ci-deploy", "reviewers": ["security"],
-      "match": { "glob": [".github/**", ".gitlab-ci.yml", "**/Dockerfile*", "**/docker-compose*", "deploy/**", "**/*.tf"] } },
+      "match": { "glob": ["**/.github/**", ".gitlab-ci.yml", "**/Dockerfile*", "**/docker-compose*", "**/deploy/**", "**/*.tf"] } },
     { "id": "kit.lint-test-config", "reviewers": ["architect"],
       "match": { "glob": ["**/eslint*", "**/.eslintrc*", "**/tsconfig*.json", "**/jest.config.*", "**/vitest.config.*", "**/.semgrep*"] } }
   ],

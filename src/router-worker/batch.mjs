@@ -128,7 +128,7 @@ function checkBatch(batch, known) {
     const files = ticket.paths.filter(path => !path.endsWith('/**'));
     need(ticket.expectedPaths === undefined ? files.length > 0 : strings(ticket.expectedPaths), `Ticket ${ticket.id} grants only folders; add "expectedPaths" with at least one file the worker is expected to touch`);
     if (ticket.dependsOn === undefined) return;
-    need(Array.isArray(ticket.dependsOn) && ticket.dependsOn.length <= MAX_PATHS && ticket.dependsOn.every(id => typeof id === 'string' && TICKET_ID.test(id)) && new Set(ticket.dependsOn).size === ticket.dependsOn.length,
+    need(Array.isArray(ticket.dependsOn) && ticket.dependsOn.length <= MAX_PATHS && ticket.dependsOn.every(id => typeof id === 'string' && TICKET_ID.test(id)) && new Set(ticket.dependsOn.map(id => id.toLowerCase())).size === ticket.dependsOn.length,
       `Ticket ${ticket.id}: dependsOn must be a list of ticket ids, each named once`);
     // The tickets of a batch run in order: a ticket can wait only on one that runs before it.
     const later = ticket.dependsOn.find(id => batch.tickets.slice(i).some(other => String(other?.id).toLowerCase() === id.toLowerCase()));
@@ -192,7 +192,10 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     let archives; try { archives = readdirSync(join(instance, ARCHIVE)); } catch { archives = []; }
     const unsettled = archives.filter(id => !id.startsWith('.') && exists(join(instance, ARCHIVE, id, 'after.json')) && !exists(join(instance, ARCHIVE, id, 'settlement.json'))).sort();
     need(!unsettled.length, `The usage of ${unsettled.length === 1 ? 'batch' : 'batches'} ${unsettled.slice(0, 5).map(plain).join(', ')} was not settled. Settle it first: rw-batch.mjs settle METER.json --instance <instance-root> --run ${plain(unsettled[0])}; if it cannot be measured: rw-batch.mjs settle --not-metered "<reason>" --instance <instance-root> --run ${plain(unsettled[0])}`);
-    checkBatch(batch, new Set(archives.filter(id => !id.startsWith('.')).flatMap(id => readJSON(join(instance, ARCHIVE, id, 'batch.json'))?.tickets ?? []).map(entry => entry?.id).filter(id => typeof id === 'string').map(id => id.toLowerCase())));
+    const archived = archives.filter(id => !id.startsWith('.')).map(id => readJSON(join(instance, ARCHIVE, id, 'batch.json'))).filter(record => record && typeof record === 'object');
+    checkBatch(batch, new Set(archived.flatMap(record => Array.isArray(record.tickets) ? record.tickets : []).map(entry => entry?.id).filter(id => typeof id === 'string').map(id => id.toLowerCase())));
+    // Removals are judged against the archive, which a commit's record points to; a batch aborted before after is not archived.
+    const lastFrozen = archived.filter(record => typeof record.openedAt === 'string').sort((a, b) => a.openedAt.localeCompare(b.openedAt)).at(-1)?.review;
     // ADR 0011, decision 10: the trigger list is frozen into the batch; a change since the last batch is logged once it opens.
     let review;
     try { review = loadReview({ instance }); } catch (error) { if (isReviewListError(error)) need(false, `${error.message}. Nothing was started`); throw error; }
@@ -250,7 +253,7 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
       startedAsIs: startAsIs === true, preexisting: product.preexisting, preexistingContent: contentOf(productRoot, product.preexisting), hooks, lease, boundaryDigest: boundary.digest, isolationDigest: isolation.digest,
       limits, ceiling: { outputTokens: ceiling, stopLine: Math.floor(ceiling * 4 / 5) },
       tickets: batch.tickets.map((ticket, i) => ({ id: ticket.id, title: ticket.title, commitMessage: ticket.commitMessage ?? `${ticket.id}: ${ticket.title}`, paths: ticket.paths, expectedPaths: inputs[i].proposal.expectedPaths, dependsOn: ticket.dependsOn ?? [] })),
-      sensitivePaths: batch.sensitivePaths, verificationCommands: batch.verificationCommands, review, triggerChanges: triggerChanges(instance, review),
+      sensitivePaths: batch.sensitivePaths, verificationCommands: batch.verificationCommands, review, triggerChanges: triggerChanges(lastFrozen, review),
       launchManifest: manifest ? 'chained' : 'absent', runRecord: frozen.record, args: frozen.args };
     const record = { ...body, digest: digest(body) };
     // No batch is open: a record of an earlier one still in the root must not be read or archived as this one's.

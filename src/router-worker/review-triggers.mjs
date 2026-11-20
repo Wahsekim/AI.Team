@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, appendFileSync, renameSync, mkdirSync } from 'node:fs';
+import { readFileSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { digest } from '../loop/contracts.mjs';
@@ -6,7 +6,7 @@ import { digest } from '../loop/contracts.mjs';
 // ADR 0011, decisions 1, 3 and 8 to 10: the list of triggers and rules that decides which reviewer a batch's
 // changes require. The kit ships a general part and names the reviewers; the team's folder holds the project's part.
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
-export const KIT_REVIEW = 'config/router-worker/review.json', PROJECT_REVIEW = 'profiles/review.json', LAST_FROZEN = 'reviews/frozen-last.json';
+export const KIT_REVIEW = 'config/router-worker/review.json', PROJECT_REVIEW = 'profiles/review.json';
 const SEED = 'kit/profiles/review.template.json', LEDGER = 'pm-decisions.md', ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/, KINDS = ['glob', 'contains'], SHOWN = 20;
 
 class ReviewListError extends Error {}
@@ -65,22 +65,22 @@ const atoms = review => [
 const minus = (a, b) => a.filter(atom => !b.some(other => other.key === atom.key && other.same === atom.same)).map(atom => atom.key);
 const shown = keys => `${keys.slice(0, SHOWN).map(key => key.replace(/[\x00-\x1f\x7f]/g, '?')).join(', ')}${keys.length > SHOWN ? `, ... (${keys.length} in all)` : ''}`;
 
-// What changed since the list the last batch froze. A rule whose text changed is both removed and added.
-export function triggerChanges(instance, review) {
-  let previous = null;
-  try { const kept = JSON.parse(readFileSync(join(instance, LAST_FROZEN), 'utf8')), { digest: was, ...body } = kept; previous = was === digest(body) ? kept : null; } catch { /* none kept */ }
-  return previous ? { previous: previous.digest, added: minus(atoms(review), atoms(previous)), removed: minus(atoms(previous), atoms(review)) } : { previous: null, added: [], removed: [] };
+const names = value => list(value, name => typeof name === 'string');
+const wellFormed = kept => Boolean(kept) && typeof kept === 'object' && typeof kept.digest === 'string' && names(kept.adrs)
+  && list(kept.triggers, trigger => Boolean(trigger) && typeof trigger.id === 'string' && names(trigger.reviewers) && Boolean(trigger.match) && typeof trigger.match === 'object' && KINDS.every(kind => trigger.match[kind] === undefined || names(trigger.match[kind])))
+  && list(kept.rules, rule => Boolean(rule) && typeof rule.id === 'string' && typeof rule.reviewer === 'string');
+const sealed = kept => { if (!wellFormed(kept)) return false; const { digest: was, ...body } = kept; return was === digest(body); };
+
+// What changed since `previous`, the list the newest archived batch froze. A rule whose text changed is both removed and added.
+export function triggerChanges(previous, review) {
+  return sealed(previous) ? { previous: previous.digest, added: minus(atoms(review), atoms(previous)), removed: minus(atoms(previous), atoms(review)) } : { previous: null, added: [], removed: [] };
 }
 // Called once the batch record is written. With no earlier list kept, the whole list goes to the owner's spot review.
 export function recordFrozen({ instance, review, changes, runId, at }) {
   const day = at.slice(0, 10), lines = changes.previous
     ? [changes.added.length ? `${day} BATCH ${runId} REVIEW TRIGGERS ADDED: ${shown(changes.added)}.` : null, changes.removed.length ? `${day} BATCH ${runId} REVIEW TRIGGERS REMOVED (owner spot review): ${shown(changes.removed)}.` : null].filter(Boolean)
-    : [`${day} BATCH ${runId} REVIEW TRIGGERS FROZEN with no earlier list kept in ${LAST_FROZEN} (owner spot review): ${review.triggers.length} trigger(s), ${review.rules.length} rule(s), ${review.adrs.length} ADR(s), ${review.digest}.`];
+    : [`${day} BATCH ${runId} REVIEW TRIGGERS FROZEN with no earlier list kept in an archived batch (owner spot review): ${review.triggers.length} trigger(s), ${review.rules.length} rule(s), ${review.adrs.length} ADR(s), ${review.digest}.`];
   if (lines.length) appendFileSync(join(instance, LEDGER), lines.map(line => `${line}\n`).join(''));
-  if (changes.previous !== review.digest) {
-    mkdirSync(join(instance, 'reviews'), { recursive: true });
-    writeFileSync(join(instance, `${LAST_FROZEN}.tmp`), JSON.stringify(review, null, 2) + '\n'); renameSync(join(instance, `${LAST_FROZEN}.tmp`), join(instance, LAST_FROZEN));
-  }
 }
 
 // A glob matches the whole path: `**/` is any number of folders, `*` and `?` stay inside one. Case is ignored, as in `covers`.
