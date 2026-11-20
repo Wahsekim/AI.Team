@@ -477,8 +477,12 @@ The limits not being the ones the ledger binds is refused with its own code,
   boundary is refused by the hook and reported by `after` only if its digest
   was not recomputed.
 - **The hook log keeps the text of a worker's refused shell command** (at most
-  300 characters), so that `after` can report it. A refused command that held
-  a secret is kept in `.claude/rw-write-boundary.log.jsonl` and in the record.
+  300 characters), so that `after` can report it. Values that look like
+  secrets are replaced by `<redacted>` first: a `NAME=value` whose name holds
+  TOKEN, SECRET, PASS, KEY, AUTH or CRED, an `Authorization`, `Cookie` or
+  `X-Api-Key` header, credentials in a URL, and any run of 32 or more
+  letters, digits or `+_=-` (a path keeps its slashes). A secret in another shape is still kept in
+  `.claude/rw-write-boundary.log.jsonl` and in the record.
 - **The briefs and the shared disciplines still speak of a free shell**: an
   environment prefix before a command, `git diff` to report a change. Those
   calls are refused in a batch.

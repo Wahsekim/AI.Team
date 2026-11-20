@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { armBoundary, decideCall } from '../src/router-worker/write-boundary.mjs';
+import { armBoundary, decideCall, redacted } from '../src/router-worker/write-boundary.mjs';
 import { digest } from '../src/loop/contracts.mjs';
 import { inputFixture } from './fixtures/router-worker/input.mjs';
 
@@ -148,4 +148,17 @@ test('CLI arms from RUN.json, prints the record, exits 2 on refusal and 1 on usa
   assert.match(JSON.parse(readFileSync(join(f.team, '.claude/settings.json'), 'utf8')).hooks.PreToolUse[0].hooks[0].command, /scripts\/hooks\/rw-write-boundary\.mjs"$/);
   assert.equal(run(file, '--team-root', f.team, '--product-root', join(f.base, 'nope')).status, 2);
   assert.equal(run(file).status, 1);
+});
+
+test('a refused command is logged with the values that look like secrets redacted', () => {
+  const cases = [
+    ['API_TOKEN=abc123 npm test', 'API_TOKEN=<redacted> npm test'],
+    ['DB_PASSWORD="p w" make check', 'DB_PASSWORD=<redacted> make check'],
+    ['curl -H "Authorization: Bearer xyz" https://example.test', 'curl -H "Authorization: <redacted>" https://example.test'],
+    ['git clone https://user:pa55@example.test/r.git', 'git clone https://<redacted>@example.test/r.git'],
+    ['echo ghp_0123456789abcdefghijklmnopqrstuvwxyz', 'echo <redacted>'],
+    ['node --test tests/router-worker/components/a-rather-long-file-name.test.mjs', 'node --test tests/router-worker/components/a-rather-long-file-name.test.mjs'],
+    ['npm run test:tag-list', 'npm run test:tag-list'],
+  ];
+  for (const [command, expected] of cases) assert.equal(redacted(command), expected, command);
 });

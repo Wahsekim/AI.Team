@@ -176,13 +176,20 @@ function realTarget(path) {
   return join(realpathSync(current), ...pending);
 }
 
+// A refused command is kept for the owner's report; values that look like secrets never reach the log.
+export const redacted = command => command
+  .replace(/\b([A-Za-z_][A-Za-z0-9_]*(?:TOKEN|SECRET|PASS(?:WORD)?|KEY|AUTH|CRED(?:ENTIAL)?S?)[A-Za-z0-9_]*)=("[^"]*"|'[^']*'|\S+)/gi, '$1=<redacted>')
+  .replace(/(-H\s*["']?(?:Authorization|Cookie|X-Api-Key)\s*:\s*)[^"'\n]*/gi, '$1<redacted>')
+  .replace(/:\/\/[^\s/@:]+:[^\s/@]+@/g, '://<redacted>@')
+  .replace(/[A-Za-z0-9+_=-]{32,}/g, '<redacted>');
+
 // One log line per hook call: who called which tool and what was decided. No path. A worker's shell command that was
 // refused is kept as text, so that "after" can report it to the owner.
 export function logEntry({ input, boundary, decision, at }) {
   const tool = typeof input?.tool_name === 'string' ? input.tool_name : null, agentType = typeof input?.agent_type === 'string' ? input.agent_type : null;
   const entry = boundary && agentType !== null && Object.hasOwn(boundary.wrappers, agentType) ? boundary.wrappers[agentType] : null;
   const judged = agentType !== null && (WRITE_TOOLS.includes(tool) ? !boundary || entry !== null : tool === 'Bash' && (!boundary || Array.isArray(entry?.commands)));
-  const command = tool === 'Bash' && decision === 'deny' && Array.isArray(entry?.commands) && typeof input.tool_input?.command === 'string' ? input.tool_input.command.trim().slice(0, 300) : null;
+  const command = tool === 'Bash' && decision === 'deny' && Array.isArray(entry?.commands) && typeof input.tool_input?.command === 'string' ? redacted(input.tool_input.command.trim()).slice(0, 300) : null;
   return { at, tool, agentType, judged, decision, ...(command ? { command } : {}) };
 }
 
