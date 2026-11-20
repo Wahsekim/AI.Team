@@ -13,6 +13,9 @@
 // settle METER.json --instance <instance-root> [--run <run id>]
 //   METER.json is `measure-spawn.mjs <session-dir> --json`. Sets each ticket's measured usage against its
 //   authorization, for the batch that after closed or for an archived one. Exit 2 when it is in review.
+//   The next "before" is refused until the batch is settled.
+// settle --not-metered "<reason>" --instance <instance-root> [--run <run id>]
+//   Marks a batch whose usage cannot be measured, with the reason, in the place of its settlement.
 // commit --instance <instance-root>
 //   One commit per ticket that passed, on the batch's branch, then archives the batch under batches/<run id>/.
 // No model or network. Exit 0 done and clean, 2 refused or in review, 1 usage.
@@ -23,15 +26,21 @@ import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeBatch, abortBatch } from '../src/router-worker/batch.mjs';
 import { afterBatch, commitBatch } from '../src/router-worker/batch-close.mjs';
-import { settleBatch } from '../src/router-worker/batch-settle.mjs';
+import { settleBatch, markNotMetered } from '../src/router-worker/batch-settle.mjs';
 import { loadRetryRules } from '../src/router-worker/retries.mjs';
 
 const print = result => { if (result.errors) { console.error(JSON.stringify(result)); process.exitCode = 2; } else process.stdout.write(JSON.stringify(result, null, 2) + '\n'); };
-const USAGE = 'usage: node scripts/rw-batch.mjs before BATCH.json --instance <instance-root> [--start-as-is]\n       node scripts/rw-batch.mjs after RESULT.json --instance <instance-root>\n       node scripts/rw-batch.mjs settle METER.json --instance <instance-root> [--run <run id>]\n       node scripts/rw-batch.mjs commit --instance <instance-root>\n       node scripts/rw-batch.mjs abort --instance <instance-root>';
+const USAGE = 'usage: node scripts/rw-batch.mjs before BATCH.json --instance <instance-root> [--start-as-is]\n       node scripts/rw-batch.mjs after RESULT.json --instance <instance-root>\n       node scripts/rw-batch.mjs settle METER.json --instance <instance-root> [--run <run id>]\n       node scripts/rw-batch.mjs settle --not-metered "<reason>" --instance <instance-root> [--run <run id>]\n       node scripts/rw-batch.mjs commit --instance <instance-root>\n       node scripts/rw-batch.mjs abort --instance <instance-root>';
 if (['abort', 'commit'].includes(process.argv[2])) {
   const [flag, root, ...extra] = process.argv.slice(3);
   if (flag !== '--instance' || !root || extra.length) { console.error(USAGE); process.exit(1); }
   print((process.argv[2] === 'abort' ? abortBatch : commitBatch)({ teamRoot: join(resolve(root), 'kit'), instanceRoot: resolve(root) }));
+  process.exit();
+}
+if (process.argv[2] === 'settle' && process.argv[3] === '--not-metered') {
+  const [reason, flag, root, runFlag, runId, ...extra] = process.argv.slice(4);
+  if (reason === undefined || flag !== '--instance' || !root || (runFlag !== undefined && (runFlag !== '--run' || !runId)) || extra.length) { console.error(USAGE); process.exit(1); }
+  print(markNotMetered({ teamRoot: join(resolve(root), 'kit'), instanceRoot: resolve(root), reason, ...(runId ? { runId } : {}) }));
   process.exit();
 }
 if (process.argv[2] === 'settle') {

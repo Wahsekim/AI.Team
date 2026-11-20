@@ -24,11 +24,12 @@ no network.
 | 2 | PM | runs `run-n-rounds` with the `args` of the batch record |
 | 3 | PM | `after RESULT.json`, with the engine's return: the run is checked, the write limits close, the lock is released |
 | 4 | PM | `scripts/reconcile-run.mjs RESULT.json .`: lifecycle and message ledgers, as in specialist mode |
-| 5 | PM | `scripts/measure-spawn.mjs <session-dir> --json > METER.json`, then `settle METER.json`: usage per ticket |
+| 5 | PM | `scripts/measure-spawn.mjs <session-dir> --json > METER.json`, then `settle METER.json`: usage per ticket. The next `before` is refused until this is done |
 | 6 | PM | `commit`: one commit per ticket that passed; the batch is archived |
 
 `abort` replaces steps 2 to 6 for a batch that will not be run. `settle` may
-also come after `commit`, with `--run <run id>`, for an archived batch.
+also come after `commit`, with `--run <run id>`, for an archived batch; it
+must come before the next batch.
 
 ## What the PM writes
 
@@ -63,7 +64,8 @@ budget per ticket. Those come from the team.
 ## What "before" does, in order
 
 1. **The team**: two-root layout, live in Router/Worker mode, dispatch by the
-   engine, no interrupted mode switch, no batch already open, limits that are
+   engine, no interrupted mode switch, no batch already open, every archived
+   batch that ran settled or marked as not metered, limits that are
    valid. Every verification command of the batch is one of the commands the
    owner confirmed for the team (`allowedCommands` in its limits).
 2. **The tickets**: each is complete, and no two tickets claim the same file. A
@@ -221,6 +223,25 @@ settled, the settlement is moved into the archive. A record of an earlier
 batch still in the team's root when the next batch opens (commits made,
 return, settlement) belongs to no batch and is removed by `before`.
 
+**The next batch waits for it**
+([ADR 0010](../../../decisions/0010-router-worker-second-mode.md), second
+amendment of 2026-11-18). `before` refuses while an archived batch that ran
+(its archive holds the record of `after`) has no settlement, and names the
+batch and the two commands. A batch aborted before it ran leaves nothing to
+settle.
+
+A batch whose usage cannot be measured (the session's transcripts are gone, its
+records are damaged) is marked instead:
+
+```sh
+node kit/scripts/rw-batch.mjs settle --not-metered "<reason>" --instance . [--run <run id>]
+```
+
+The reason is one line of at most 200 characters. The mark takes the place of
+the settlement (`stage: batch-not-metered`) and one line goes to
+`pm-decisions.md`, which is where the owner sees which batch was passed over
+and why. A batch is settled or marked once.
+
 Settlement reports cost. It does not hold or undo a commit: a ticket that went
 over its authorization and passed its check is still committed. The
 authorization is a limit judged afterwards, as ADR 0010 says; what a batch over
@@ -367,11 +388,13 @@ kept out of the tickets' commits by the "after" command.
 
 ## Not covered
 
-- **Settlement is not required before `commit`**, and nothing checks that a
-  batch was ever settled.
+- **`commit` does not wait for the settlement**; the next `before` does. The
+  mark "not metered" is the PM's word: the kit records the reason and does not
+  judge it. The owner reads those lines at the spot review.
 - **The meter is trusted.** `settle` checks that the transcripts carry the
   frozen briefs and are in the engine's order, not that they are the real ones.
-  The run is told by the id in the Guardian's brief, which is the engine's
+  The run is told by the id in the Guardian's brief (the user's request, which
+  the runtime puts first in each transcript, is not read), which is the engine's
   own wording: an engine that words it differently makes `settle` refuse, and
   the tests read that wording from the real engine.
 - **Two runs of one id in one session** are refused by `settle`: the same

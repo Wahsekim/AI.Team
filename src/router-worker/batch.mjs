@@ -175,6 +175,10 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
   try {
     ({ instance, productRoot } = liveTeam(teamRoot, instanceRoot));
     need(!exists(join(instance, BATCH_FILE)) && !exists(join(instance, AFTER_FILE)), `A batch is already open (${BATCH_FILE}); close it with after and commit, or abort it, before starting another`);
+    // ADR 0010, amendment of 2026-11-18: a batch that ran is settled, or marked as not metered, before the next one opens.
+    let archives; try { archives = readdirSync(join(instance, ARCHIVE)); } catch { archives = []; }
+    const unsettled = archives.filter(id => !id.startsWith('.') && exists(join(instance, ARCHIVE, id, 'after.json')) && !exists(join(instance, ARCHIVE, id, 'settlement.json'))).sort();
+    need(!unsettled.length, `The usage of ${unsettled.length === 1 ? 'batch' : 'batches'} ${unsettled.slice(0, 5).map(plain).join(', ')} was not settled. Settle it first: rw-batch.mjs settle METER.json --instance <instance-root> --run ${plain(unsettled[0])}; if it cannot be measured: rw-batch.mjs settle --not-metered "<reason>" --instance <instance-root> --run ${plain(unsettled[0])}`);
     checkBatch(batch);
     checkProduct(productRoot, startAsIs === true);
     const held = readLease({ productRoot });

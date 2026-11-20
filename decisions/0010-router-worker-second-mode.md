@@ -205,3 +205,21 @@ shell no longer runs arbitrary commands, only the confirmed ones; what those
 commands write is still not bounded. Merging the pull request that adds this
 amendment ratifies it.
 
+### 2026-11-18: a batch is settled before the next one opens
+
+The consequence above says the per-ticket authorization "is judged afterwards,
+at settlement". Nothing made that settlement happen: a batch could be committed
+and the next one opened with no ticket ever set against its authorization. The
+owner decided in session on 2026-11-18 ("按你的建议来", the recommendation
+being enforcement with a logged way out):
+
+- "before" refuses a batch while an archived batch that ran has no settlement.
+- A batch whose usage cannot be measured is marked as not metered by the PM,
+  with a reason, in the place of its settlement and on one line of
+  `pm-decisions.md`. The kit records the reason and does not judge it; the
+  owner reads those lines at the spot review.
+- Settlement still reports cost only: it does not hold or undo a commit, and
+  "commit" does not wait for it.
+
+Merging the pull request that adds this amendment ratifies it.
+

@@ -225,7 +225,8 @@ opens the write limits; `after` matches the engine's return against what was
 frozen, finds what was written outside the tickets' paths and closes the batch;
 `commit` makes one commit per ticket that passed; `abort` clears a batch that
 will not run; `settle` sets each ticket's measured usage against its
-authorization ([details](docs/design/router-worker/batch.md)). Nothing has run
+authorization, and the next batch does not open until that is done or the batch
+is marked as not metered with a reason ([details](docs/design/router-worker/batch.md)). Nothing has run
 on a real team, so batches with real
 agents still run only in a throwaway copy of the team
 with a clone of the product, as described below.
