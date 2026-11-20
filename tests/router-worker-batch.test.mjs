@@ -712,3 +712,36 @@ test('the next batch does not open until the last one is settled, or marked as n
   dropped.unmetered(); assert.equal((await dropped.before(batchOf(ticket('US-07', ['src/q.js'])), { startAsIs: true })).errors, undefined);
 });
 
+
+test('the gate reads a settlement of that run, sealed; a mark is refused whole when its ledger line cannot be written', async t => {
+  const f = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n' } }), id = f.open.runId, next = () => f.before(batchOf(ticket('US-07', ['src/q.js'])));
+  const mark = (reason, extra = {}) => markNotMetered({ teamRoot: f.kit, instanceRoot: f.root, reason, runId: id, ...extra }), held = new RegExp(`The usage of batch ${id} was not settled`);
+  assert.equal(f.after().errors, undefined); assert.equal(f.commit().errors, undefined);
+  // A file the PM left among the archives is not a batch.
+  writeFileSync(join(f.root, 'batches', 'notes.txt'), 'x'); assert.match(refusal(await next()).reason, held);
+  for (const bad of ['a b', 'a b', 'a\u0085b', 'a‮b', 'a⁦b']) assert.match(refusal(mark(bad)).reason, /with a reason: one line/, JSON.stringify(bad));
+  const settlement = join(f.root, 'batches', id, 'settlement.json'), seal = body => JSON.stringify({ ...body, digest: digest(body) });
+  const body = { schemaVersion: 1, stage: 'batch-not-metered', runId: id, reason: 'forged', markedAt: new Date().toISOString() };
+  for (const forged of ['', '{}', JSON.stringify({ ...body, digest: 'sha256:0' }), seal({ ...body, runId: 'rw-other' }), seal({ ...body, stage: 'batch-open' })]) {
+    writeFileSync(settlement, forged); assert.match(refusal(await next()).reason, held, forged.slice(0, 60));
+  }
+  rmSync(settlement);
+  const ledger = join(f.root, 'pm-decisions.md'); chmodSync(ledger, 0o444);
+  assert.ok(refusal(mark('the meter is gone'))); chmodSync(ledger, 0o644);
+  assert.equal(existsSync(settlement), false, 'no mark without its ledger line');
+  assert.equal(mark('the meter is gone').errors, undefined); assert.equal((await next()).errors, undefined);
+});
+
+test('a mark of the closed batch is refused when its records do not agree on the run id', async t => {
+  const f = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n' } }), mark = () => markNotMetered({ teamRoot: f.kit, instanceRoot: f.root, reason: 'no meter' });
+  assert.equal(f.after().errors, undefined);
+  const afterPath = join(f.root, AFTER_FILE), original = readFileSync(afterPath, 'utf8'), closed = JSON.parse(original);
+  writeFileSync(afterPath, JSON.stringify(sealAgain({ ...closed, runId: 'rw-other' })));
+  assert.match(refusal(mark()).reason, /do not agree/); assert.equal(existsSync(join(f.root, 'rw-batch-settlement.json')), false);
+  writeFileSync(afterPath, original); assert.equal(f.commit().errors, undefined);
+  // A record left in the root names the archive only when it is the archive's own.
+  writeFileSync(afterPath, JSON.stringify(sealAgain({ ...closed, left: ['src/forged.js'] })));
+  assert.match(refusal(mark()).reason, /do not agree/);
+  writeFileSync(afterPath, original); const marked = mark(); assert.equal(marked.errors, undefined, JSON.stringify(marked.errors));
+  assert.equal(JSON.parse(readFileSync(join(f.root, 'batches', f.open.runId, 'settlement.json'), 'utf8')).stage, 'batch-not-metered');
+});

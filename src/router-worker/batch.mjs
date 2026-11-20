@@ -16,7 +16,9 @@ export const BATCH_FILE = 'rw-batch.json', AFTER_FILE = 'rw-batch-after.json', P
 // order: the files that name the run go last, so a clearing that died is finished by the next commit.
 export const RECORDS = { 'return.json': RETURN_FILE, 'settlement.json': SETTLE_FILE, 'batch.json': BATCH_FILE, 'after.json': AFTER_FILE, 'commits.json': PROGRESS_FILE };
 export const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/, TICKET_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/;
-export const oneLine = text => typeof text === 'string' && text.length > 0 && text.length <= 200 && text === text.trim() && !/[\x00-\x1f\x7f]/.test(text);
+// Line and paragraph separators break a line too; bidi controls make a ledger line read other than it is.
+const UNSAFE = /[\x00-\x1f\x7f\u0085\u2028\u2029\u202a-\u202e\u2066-\u2069]/g;
+export const oneLine = text => typeof text === 'string' && text.length > 0 && text.length <= 200 && text === text.trim() && !text.match(UNSAFE);
 const MODE_FILE = 'profiles/team-mode.json', JOURNAL = 'holiday/.switch-in-progress.json', LEDGER = 'pm-decisions.md';
 const IN_PROGRESS = ['index.lock', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'BISECT_LOG', 'rebase-merge', 'rebase-apply'];
 const TICKET_FIELDS = ['id', 'title', 'goal', 'acceptance', 'paths', 'estimate'], TICKET_OPTIONAL = ['expectedPaths', 'commitMessage'], BATCH_FIELDS = ['tickets', 'verificationCommands', 'sensitivePaths', 'nextLifecycleNumber'];
@@ -33,12 +35,14 @@ const refuse = reason => ({ errors: [{ code: 'BATCH_REFUSED', field: 'batch', re
 const exists = path => Boolean(lstatSync(path, { throwIfNoEntry: false }));
 const readJSON = path => { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; } };
 const ref = (id, value) => ({ id, digest: digest(value) });
+// A settlement, or a mark of not metered, of that run, sealed as settle writes it.
+const settles = (record, id) => ['batch-settled', 'batch-not-metered'].includes(record?.stage) && record.runId === id && (({ digest: sealed, ...body }) => sealed === digest(body))(record);
 // Compared without case: on a case-insensitive file system src/A.js and src/a.js are one file.
 export const covers = (grant, other) => { const [g, o] = [grant.toLowerCase(), other.toLowerCase()]; return g.endsWith('/**') ? o === g || o.startsWith(g.slice(0, -2)) : o === g; };
 const overlap = (a, b) => covers(a, b) || covers(b, a);
 // A sensitive entry written as a bare folder guards everything under it.
 const guards = (guarded, path) => overlap(path, guarded) || (!guarded.endsWith('/**') && overlap(path, `${guarded}/**`));
-export const plain = text => String(text).replace(/[\x00-\x1f\x7f]/g, '?');
+export const plain = text => String(text).replace(UNSAFE, '?');
 const strings = (value, min = 1) => Array.isArray(value) && value.length >= min && value.every(entry => typeof entry === 'string' && entry);
 
 // The branches a batch never works on: every remote's default, the configured default, and the usual names.
@@ -176,8 +180,8 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     ({ instance, productRoot } = liveTeam(teamRoot, instanceRoot));
     need(!exists(join(instance, BATCH_FILE)) && !exists(join(instance, AFTER_FILE)), `A batch is already open (${BATCH_FILE}); close it with after and commit, or abort it, before starting another`);
     // ADR 0010, amendment of 2026-11-18: a batch that ran is settled, or marked as not metered, before the next one opens.
-    let archives; try { archives = readdirSync(join(instance, ARCHIVE)); } catch { archives = []; }
-    const unsettled = archives.filter(id => !id.startsWith('.') && exists(join(instance, ARCHIVE, id, 'after.json')) && !exists(join(instance, ARCHIVE, id, 'settlement.json'))).sort();
+    let archives; try { archives = readdirSync(join(instance, ARCHIVE), { withFileTypes: true }).filter(entry => entry.isDirectory()).map(entry => entry.name); } catch { archives = []; }
+    const unsettled = archives.filter(id => !id.startsWith('.') && exists(join(instance, ARCHIVE, id, 'after.json')) && !settles(readJSON(join(instance, ARCHIVE, id, 'settlement.json')), id)).sort();
     need(!unsettled.length, `The usage of ${unsettled.length === 1 ? 'batch' : 'batches'} ${unsettled.slice(0, 5).map(plain).join(', ')} was not settled. Settle it first: rw-batch.mjs settle METER.json --instance <instance-root> --run ${plain(unsettled[0])}; if it cannot be measured: rw-batch.mjs settle --not-metered "<reason>" --instance <instance-root> --run ${plain(unsettled[0])}`);
     checkBatch(batch);
     checkProduct(productRoot, startAsIs === true);
