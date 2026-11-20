@@ -330,7 +330,7 @@ batch that is being run takes its lock and its write paths away mid-run.
 
 When the write-boundary file is missing or was changed, abort still releases
 the lock and removes the record, and says the boundary was not restored: every
-agent write is then refused until a mode switch to specialist and back rebuilds
+subagent write and shell command is then refused until a mode switch to specialist and back rebuilds
 it.
 
 A "before" that finds this team's lock with no batch record, or a boundary
