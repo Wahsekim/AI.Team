@@ -30,6 +30,9 @@ test('a proposal names the staffing, the limits and the files that move, and cha
   assert.deepEqual(f.propose('router-worker', { spec: f.spec, limits: { allowedCommands: ['npm test', 'npm run lint -- --max-warnings 0'] } }).limits.allowedCommands, ['npm test', 'npm run lint -- --max-warnings 0']);
   for (const bad of [null, 'npm test', ['npm test', 'npm test'], ['npm test\nrm -rf x'], [' npm test'], [''], [7], ['npm  test'], ['npm test\u202e'], ['npm\u00a0test'], ['x'.repeat(301)], Array.from({ length: 51 }, (_, i) => `make t${i}`)])
     assert.match(refusal(f.propose('router-worker', { spec: f.spec, limits: { allowedCommands: bad } })).reason, /allowedCommands must list at most 50 distinct commands, each on one line/, JSON.stringify(bad).slice(0, 60));
+  // The refusal names the command that is refused.
+  assert.match(refusal(f.propose('router-worker', { spec: f.spec, limits: { allowedCommands: ['npm test', 'npm  test'] } })).reason, /: "npm  test" is not one such command$/);
+  assert.match(refusal(f.propose('router-worker', { spec: f.spec, limits: { allowedCommands: ['npm test', 'make', 'npm test'] } })).reason, /: "npm test" is listed twice$/);
   assert.deepEqual(proposal.staffing.exec, f.spec.profiles.exec); assert.deepEqual(proposal.staffing.security, f.spec.governance.security);
   assert.deepEqual(proposal.pack, [...OWN_SPECIALIST].sort());
   assert.ok(proposal.install.includes('.claude/agents/tag-list-fixture-worker-exec.md') && proposal.install.includes('agents/roster.md') && proposal.install.includes('profiles/team-mode.json'));
@@ -413,4 +416,10 @@ test('the switch installs the write-limit hook: between batches no worker may wr
   // A team with no settings file gets one, and loses it again.
   const bare = fixture(t); assert.equal(bare.apply().errors, undefined); assert.ok(existsSync(join(bare.root, '.claude/settings.json')));
   assert.equal(bare.apply('specialist', {}).errors, undefined); assert.equal(existsSync(join(bare.root, '.claude/settings.json')), false);
+});
+
+test('a product root a quoted shell command cannot hold is refused at the switch, before anything else is checked', t => {
+  const f = fixture(t), odd = join(f.base, 'pro!duct');
+  const request = { spec: { ...f.spec, project: { ...f.spec.project, productRoot: odd } } };
+  assert.match(refusal(proposeSwitch({ to: 'router-worker', request, ...f.common, productRoot: odd })).reason, /cannot be written inside a quoted shell command/);
 });

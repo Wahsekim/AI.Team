@@ -30,7 +30,7 @@ The command prints a proposal:
 | `from`, `to` | the two modes |
 | `staffing` | model, effort, turn limit and tools of the three workers and of each staffed governance role; for a packed Router/Worker team, the staffing it was packed with |
 | `project`, `workflowsNotEnabled` | on a first switch: the project's name, slug, product repository and UI flag, and every workflow the request does not enable, with its status |
-| `limits` | attempts per ticket, output allowance per ticket, the Guardian's share, authorization per ticket; the ADR's defaults unless the request changes one; `allowedCommands`, the commands a worker's shell may run in a batch, which `request` proposes from the required gates of `profiles/stack.md` (empty when it gives none); for a packed Router/Worker team, the limits it was packed with |
+| `limits` | attempts per ticket, output allowance per ticket, the Guardian's share, authorization per ticket; the ADR's defaults unless the request changes one; `allowedCommands`, the commands a worker's shell may run in a batch, which `request` proposes from the required gates of `profiles/stack.md` (empty when it gives none; a gate it cannot confirm as written, or beyond the 50 a team may hold, is left out and named in a note); for a packed Router/Worker team, the limits it was packed with |
 | `dispatch` | `engine` |
 | `pack` | the files that go on holiday |
 | `install` | the files that are put in place |
@@ -243,6 +243,9 @@ was, the lock is free and the same switch can be proposed again.
   `scripts/migrate-to-instance.sh`.
 - The product repository is not the one the team is bound to, or is not at rest
   (above).
+- Into Router/Worker mode: the product repository's path holds a character that
+  cannot be written inside a quoted shell command (`` " $ ` \ ! `` or a control
+  character).
 - `holiday/<mode>/` for the mode being left already holds a packed team (a
   manifest, or a file at a path that would be packed): a packed team is never
   overwritten, and the folder is not touched. A stray file such as `.DS_Store`

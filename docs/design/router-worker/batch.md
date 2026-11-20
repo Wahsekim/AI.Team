@@ -188,8 +188,8 @@ the owner's to add, before the batch.
 
 A command is confirmed as one line of at most 300 printable ASCII characters
 with single spaces, so that what the owner reads in the proposal is all there
-is. `before` refuses a product repository whose path cannot be written inside a
-quoted shell command.
+is. A switch into Router/Worker mode, and then `before`, refuse a product
+repository whose path cannot be written inside a quoted shell command.
 
 A team that went live before the list existed has an empty one, and a boundary
 that does not judge its workers' shell. `before` refuses its batches until the

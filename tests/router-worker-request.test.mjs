@@ -38,6 +38,10 @@ test('the request is drafted from the team\'s own profile with the ADR\'s staffi
   writeFileSync(join(f.root, 'profiles/stack.md'), '# Stack\n\n```yaml\nverification:\n  code_shipping:\n    required:\n      - npm run lint\n      - npm test  # the suite\n```\n');
   const partly = draftRequest({ teamRoot: f.kit, instanceRoot: f.root });
   assert.deepEqual(partly.request.limits.allowedCommands, ['npm run lint']); assert.ok(partly.notes.some(note => /1 gate\(s\) that cannot be confirmed as they are written.*npm test  # the suite/.test(note)));
+  // Gates beyond the most a team may confirm are left out, and named.
+  writeFileSync(join(f.root, 'profiles/stack.md'), '# Stack\n\n```yaml\nverification:\n  code_shipping:\n    required:\n' + Array.from({ length: 52 }, (_, i) => `      - make t${i}\n`).join('') + '```\n');
+  const many = draftRequest({ teamRoot: f.kit, instanceRoot: f.root });
+  assert.equal(many.request.limits.allowedCommands.length, 50); assert.ok(many.notes.some(note => /2 gate\(s\) beyond the 50 a team may confirm.*"make t50", "make t51"/.test(note)), JSON.stringify(many.notes));
   assert.deepEqual(spec.workflowStates['WF-16'], { status: 'deferred', reason: 'first release is serial', decisionRef: null });
   assert.deepEqual(spec.workflowStates['WF-00'], { status: 'enabled', reason: 'As recorded in profiles/project.md', decisionRef: null });
   // A team bootstrapped with no delivery role goes straight into Router/Worker mode with this request.
