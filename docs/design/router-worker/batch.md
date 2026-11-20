@@ -246,8 +246,11 @@ return, settlement) belongs to no batch and is removed by `before`.
 ([ADR 0010](../../../decisions/0010-router-worker-second-mode.md), second
 amendment of 2026-11-18). `before` refuses while an archived batch that ran
 (its archive holds the record of `after`) has no settlement, and names the
-batch and the two commands. A batch aborted before it ran leaves nothing to
-settle.
+batch and the two commands. The settlement counts only when it is a sealed
+settlement or mark of that run (its stage, its run id the name of the archive,
+its digest). Only folders in `batches/` are read. A batch aborted before
+`after` leaves no archive, and so nothing to settle, whether or not the engine
+ran.
 
 A batch whose usage cannot be measured (the session's transcripts are gone, its
 records are damaged) is marked instead:
@@ -256,10 +259,12 @@ records are damaged) is marked instead:
 node kit/scripts/rw-batch.mjs settle --not-metered "<reason>" --instance . [--run <run id>]
 ```
 
-The reason is one line of at most 200 characters. The mark takes the place of
-the settlement (`stage: batch-not-metered`) and one line goes to
-`pm-decisions.md`, which is where the owner sees which batch was passed over
-and why. A batch is settled or marked once.
+The reason is one line of at most 200 characters, with no line separator or
+bidirectional control. The mark takes the place of the settlement
+(`stage: batch-not-metered`) and one line goes to `pm-decisions.md` before it,
+which is where the owner sees which batch was passed over and why: a line that
+cannot be written leaves no mark. Without `--run`, the run id read from the
+closed batch must be the batch record's. A batch is settled or marked once.
 
 Settlement reports cost. It does not hold or undo a commit: a ticket that went
 over its authorization and passed its check is still committed. The
@@ -432,6 +437,10 @@ The limits not being the ones the ledger binds is refused with its own code,
 
 ## Not covered
 
+- **A batch the engine ran and `abort` cleared before `after`** is not
+  settled and does not hold the next batch: `abort` leaves no archive for it,
+  and the kit cannot tell whether the engine ran. Its ledger line says only
+  that the batch was aborted and that nothing about the work was checked.
 - **`commit` does not wait for the settlement**; the next `before` does. The
   mark "not metered" is the PM's word: the kit records the reason and does not
   judge it. The owner reads those lines at the spot review.
