@@ -766,7 +766,7 @@ test('the gate reads a settlement of that run, sealed; a mark is refused whole w
   assert.equal(f.after().errors, undefined); assert.equal(f.commit().errors, undefined);
   // A file the PM left among the archives is not a batch.
   writeFileSync(join(f.root, 'batches', 'notes.txt'), 'x'); assert.match(refusal(await next()).reason, held);
-  for (const bad of ['a b', 'a b', 'a\u0085b', 'a‮b', 'a⁦b']) assert.match(refusal(mark(bad)).reason, /with a reason: one line/, JSON.stringify(bad));
+  for (const bad of ['a\u009bb', 'a\u200eb', 'a\ufeffb', 'a b', 'a b', 'a\u0085b', 'a‮b', 'a⁦b']) assert.match(refusal(mark(bad)).reason, /with a reason: one line/, JSON.stringify(bad));
   const settlement = join(f.root, 'batches', id, 'settlement.json'), seal = body => JSON.stringify({ ...body, digest: digest(body) });
   const body = { schemaVersion: 1, stage: 'batch-not-metered', runId: id, reason: 'forged', markedAt: new Date().toISOString() };
   for (const forged of ['', '{}', JSON.stringify({ ...body, digest: 'sha256:0' }), seal({ ...body, runId: 'rw-other' }), seal({ ...body, stage: 'batch-open' })]) {
