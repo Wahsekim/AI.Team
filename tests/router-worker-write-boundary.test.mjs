@@ -102,6 +102,23 @@ test('the hook process exits 0 to allow and 2 with a reason to deny; it fails cl
   assert.equal(runHook(f, call(f, 'sample-auditor', 'Write', join(f.team, 'audit.md'))).status, 2, 'no boundary: any subagent write is refused');
 });
 
+test('no session writes the team\'s limits with a file tool, the PM\'s included: the owner changes them with team-mode.mjs limits', t => {
+  const f = fixture(t); arm(f);
+  const limits = join(f.team, 'profiles/team-mode.json'), at = (path, cwd = f.team) => ({ ...call(f, undefined, 'Edit', path), cwd });
+  for (const [input, why] of [[at(limits), 'the PM\'s session, absolute'], [at('profiles/team-mode.json'), 'relative to the team'], [at('../profiles/team-mode.json', join(f.team, '.claude')), 'through ..'],
+    [at('PROFILES/Team-Mode.json'), 'another case'], [{ ...at(limits), agent_type: 'sample-auditor' }, 'a governance role'], [{ ...at(limits), agent_type: 'sample-worker-exec' }, 'a worker'],
+    [{ ...call(f, undefined, 'MultiEdit', limits), cwd: f.team }, 'MultiEdit'], [{ ...call(f, undefined, 'Write', limits), cwd: f.team }, 'Write'], [{ ...call(f, undefined, 'NotebookEdit', limits), cwd: f.team }, 'NotebookEdit']]) {
+    const denied = runHook(f, input);
+    assert.equal(denied.status, 2, why); assert.match(denied.stderr, /only the owner changes them, with: node kit\/scripts\/team-mode\.mjs limits <LIMITS\.json> --instance <instance-root>, at an interactive terminal/, why);
+  }
+  symlinkSync(join(f.team, 'profiles'), join(f.base, 'linked')); assert.equal(runHook(f, at(join(f.base, 'linked/team-mode.json'))).status, 2, 'through a symbolic link');
+  assert.equal(runHook(f, at(join(f.team, 'profiles/project.md'))).status, 0, 'another file of the team');
+  assert.equal(runHook(f, { ...call(f, undefined, 'Read', limits), cwd: f.team }).status, 0, 'reading it');
+  assert.equal(runHook(f, { ...call(f, undefined, 'Bash'), cwd: f.team, tool_input: { command: 'cat profiles/team-mode.json' } }).status, 0, 'the PM\'s shell is not judged');
+  rmSync(join(f.team, '.claude/rw-write-boundary.json')); assert.equal(runHook(f, at(limits)).status, 2, 'with no boundary file');
+  assert.equal(decideCall({ input: at(limits), boundary: null, projectDir: f.team }).decision, 'deny');
+});
+
 test('every hook call is logged without paths or commands, so a write that got through can be explained', t => {
   const f = fixture(t); arm(f);
   const secret = 'echo TOP-SECRET > /somewhere/else';

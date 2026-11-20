@@ -5,7 +5,7 @@ import { instanceOf } from './roots.mjs';
 import { git, gitRun, acquireLease, releaseLease, readLease } from './lease.mjs';
 import { accountRun } from './run-args.mjs';
 import { readBoundary, closeBoundary, within, LOG_FILE } from './write-boundary.mjs';
-import { BATCH_FILE, AFTER_FILE, PROGRESS_FILE, RETURN_FILE, RECORDS, ARCHIVE, RUN_ID, TICKET_ID, oneLine, changedPaths, contentOf, hooksOf, archiveBatch, plain } from './batch.mjs';
+import { BATCH_FILE, AFTER_FILE, PROGRESS_FILE, RETURN_FILE, RECORDS, ARCHIVE, RUN_ID, TICKET_ID, oneLine, changedPaths, contentOf, hooksOf, archiveBatch, plain, proposedTokens } from './batch.mjs';
 
 // ADR 0010, decisions 12 and 13: what a PM runs when a batch ends in a standing Router/Worker team.
 // after: the engine's return is matched against what was frozen, the product is compared with the tickets'
@@ -49,7 +49,25 @@ function hookSeen(instance, wrappers, since) {
   try { text = readFileSync(join(instance, LOG_FILE), 'utf8'); } catch { /* the hook never ran */ }
   const calls = text.split('\n').filter(Boolean).map(line => { try { return JSON.parse(line); } catch { return null; } }).filter(call => call && typeof call.at === 'string' && call.at >= since);
   const workers = calls.filter(call => wrappers.includes(call.agentType));
-  return { calls: calls.length, workerCalls: workers.length, denied: workers.filter(call => call.decision === 'deny').length };
+  const refused = [...new Set(workers.filter(call => call.tool === 'Bash' && call.decision === 'deny' && typeof call.command === 'string' && call.command).map(call => call.command))].slice(0, 20);
+  return { calls: calls.length, workerCalls: workers.length, denied: workers.filter(call => call.decision === 'deny').length, refused };
+}
+
+// Each limit that stopped work in this batch, with what was observed and a proposal for the owner, who decides.
+// Nothing here writes a limit.
+function limitsReached(limits, result, refused) {
+  const report = [], ran = result.results;
+  if (result.budgetGateTripped === true && Number.isSafeInteger(result.budgetStatus?.loopSpent)) {
+    const observed = Math.ceil(result.budgetStatus.loopSpent / Math.max(1, ran.length)), allowance = proposedTokens(observed);
+    report.push({ limit: 'outputAllowancePerTicket', observed, current: limits.outputAllowancePerTicket,
+      proposal: { outputAllowancePerTicket: allowance, ...(allowance > limits.authorizationPerTicket ? { authorizationPerTicket: allowance } : {}) } });
+  }
+  // The engine retries only a clean execution whose verification failed: such a ticket at the cap ran out of attempts.
+  const spent = ran.filter(r => r.attempts >= limits.attemptsPerTicket && r.workerStatus === 'succeeded' && r.verificationStatus === 'failed');
+  if (spent.length) report.push({ limit: 'attemptsPerTicket', observed: Math.max(...spent.map(r => r.attempts)), current: limits.attemptsPerTicket,
+    proposal: limits.attemptsPerTicket < 3 ? { attemptsPerTicket: limits.attemptsPerTicket + 1 } : null, tickets: spent.map(r => r.ticket) });
+  for (const command of refused) report.push({ limit: 'allowedCommands', observed: command, current: limits.allowedCommands, proposal: null });
+  return report;
 }
 
 // A ticket passed when the engine says it is done and nothing else in its own record says otherwise.
@@ -105,7 +123,7 @@ export function afterBatch({ teamRoot, instanceRoot, result }) {
     const tickets = batch.tickets.map((ticket, i) => ({ id: ticket.id, ...outcomeOf(result.results[i]), changedPaths: files.filter(path => within(path, ticket.paths)) }));
     const outside = files.filter(path => !batch.tickets.some(ticket => within(path, ticket.paths)));
     if (outside.length) findings.push({ code: 'WRITE_OUTSIDE_PATHS', paths: outside });
-    const hook = hookSeen(instance, batch.args.allowedAgentTypes, batch.openedAt);
+    const { refused, ...hook } = hookSeen(instance, batch.args.allowedAgentTypes, batch.openedAt);
     if (changed.length && hook.workerCalls === 0) findings.push({ code: 'HOOK_SAW_NO_WORKER' });
 
     let boundaryClosed = false;
@@ -129,7 +147,7 @@ export function afterBatch({ teamRoot, instanceRoot, result }) {
     // The engine's return is kept beside the record, which carries its digest: the settlement of usage needs it, and so does anyone who audits the batch.
     const kept = JSON.parse(JSON.stringify(result));
     const record = sealed({ schemaVersion: 1, stage: 'batch-closed', runId: batch.runId, batchDigest: batch.digest, closedAt: at, status: status(),
-      account, returnDigest: digest(kept), tickets, commits, left, holdAll, hook, findings, boundaryClosed, leaseReleased, next });
+      account, returnDigest: digest(kept), tickets, commits, left, holdAll, hook, findings, limits: limitsReached(batch.limits, result, refused), boundaryClosed, leaseReleased, next });
     replace(join(instance, RETURN_FILE), kept);
     replace(afterPath, record);
     return record;

@@ -66,7 +66,8 @@ budget per ticket. Those come from the team.
 1. **The team**: two-root layout, live in Router/Worker mode, dispatch by the
    engine, no interrupted mode switch, no batch already open, every archived
    batch that ran settled or marked as not metered, limits that are
-   valid. Every verification command of the batch is one of the commands the
+   valid and are the ones the last ledger line binds (see "What decides the
+   limits"). Every verification command of the batch is one of the commands the
    owner confirmed for the team (`allowedCommands` in its limits).
 2. **The tickets**: each is complete, and no two tickets claim the same file. A
    folder grant claims every file under it; paths are compared without case.
@@ -146,7 +147,13 @@ opened.
 6. **The record** `rw-batch-after.json` and one line in `pm-decisions.md`.
    `status` is `clean` when there is no finding and the engine reports no
    blocker, otherwise `review`. `next` says what the PM must do when something
-   is left or held.
+   is left or held. `limits` lists each limit that stopped work, for the owner
+   (see "What decides the limits"): the engine halted on its output ceiling
+   (`outputAllowancePerTicket`, observed as the output metered per ticket
+   dispatched); a ticket whose clean execution failed its check on the last
+   attempt allowed (`attemptsPerTicket`, with the tickets); a worker's shell
+   command the hook refused during the batch (`allowedCommands`, observed as the
+   command's text, at most 20). Empty when none applies.
 
 The close is claimed before anything is changed. A second `after` on the same
 batch is refused while the first is under a minute old; an `after` that died is
@@ -222,7 +229,10 @@ session's transcripts: one row per agent, with its tokens.
    own figure.
 
 The record is `rw-batch-settlement.json`, archived with the batch
-(`settlement.json`); one line goes to `pm-decisions.md`. `status` is `clear`
+(`settlement.json`); one line goes to `pm-decisions.md`. Its `limits` list holds
+one `authorizationPerTicket` entry when a ticket used more than 80% of its
+authorization: the largest usage observed, the tickets, and a proposal; empty
+otherwise. `status` is `clear`
 or `review`; exit 2 on review. A batch is settled once.
 
 `settle` takes no lock. With `--run` it settles an archived batch, committed
@@ -364,11 +374,33 @@ from the team's own files: `profiles/team-mode.json`, `agents/roster.md` and
 the write-boundary file. `BATCH.json` cannot change any of them; an unknown
 field is refused. The limits are checked for validity where they are used.
 
-They are not protected against the PM. The owner confirms the limits at the
-switch or with `team-mode.mjs limits`, by a code typed at a terminal, but the
-result is a file in the team's folder that a PM session can edit. Such an edit
-does not pass through the confirmation and writes no ledger line. Nothing in
-this command detects it.
+Only the owner changes them
+([ADR 0010](../../../decisions/0010-router-worker-second-mode.md), amendment of
+2026-11-20): at the switch or with `team-mode.mjs limits`, by a code typed at a
+terminal. Three mechanisms hold that:
+
+- **The ledger binds them.** The `MODE SWITCH` line into Router/Worker mode and
+  each `LIMITS CHANGED` line end with `limits <digest>`. `before` refuses
+  (`LIMITS_NOT_BOUND`) when the digest of the profile's limits is not the one
+  on the last such line, and names `team-mode.mjs limits`. A team that went
+  live before lines carried a digest is refused the same way; the owner binds
+  its limits with `team-mode.mjs limits` and `{}`, a request that changes
+  nothing, which is accepted only while the limits are unbound. The proposal
+  then says so (`unbound`).
+- **No file tool writes them.** The hook refuses a Write, Edit, MultiEdit or
+  NotebookEdit of the team's `profiles/team-mode.json` from any session, the
+  PM's included, whatever path, case or link names it. A shell command that
+  writes the file is not judged by the hook; the ledger digest catches it at
+  the next `before`.
+- **The kit reports, the owner decides.** `after` and `settle` list the limits
+  that stopped or nearly stopped work, each with `limit`, `observed`, `current`
+  and `proposal`: a LIMITS.json fragment the owner may confirm. A token value
+  is proposed as the next thousand above 1.25 times what was observed; an
+  attempts value as one more, up to 3; a refused command gets no proposal.
+  Nothing writes a limit from that list.
+
+A PM session that forges a ledger line together with the digest of the limits
+it wrote is not detected (see "What these commands trust").
 
 ## Start as is
 
@@ -394,6 +426,9 @@ kept out of the tickets' commits by the "after" command.
 - The batch cannot be frozen: an estimate above the authorization, a planned
   path under a sensitive path, a roster that does not staff the three workers.
 - The launch preflight or the isolation check does not pass.
+
+The limits not being the ones the ledger binds is refused with its own code,
+`LIMITS_NOT_BOUND`.
 
 ## Not covered
 
@@ -428,12 +463,13 @@ kept out of the tickets' commits by the "after" command.
   is first exercised in the attended run on the real team.
 - **A hook that cannot run decides nothing.** If the hook's file is missing or
   fails to load, the runtime sends the call to the session's own permissions.
-- **The list is as protected as the other limits.** A change through the kit
-  is confirmed and logged. An edit of `profiles/team-mode.json` or of the
-  boundary file by hand is not prevented; an edited boundary is refused by the
-  hook and reported by `after` only if its digest was not recomputed. Who may
-  edit the limits is an open decision of the owner, and it now covers commands
-  that run without a prompt.
+- **The list is as protected as the other limits** (see "What decides the
+  limits"). An edit of the boundary file by hand is not prevented; an edited
+  boundary is refused by the hook and reported by `after` only if its digest
+  was not recomputed.
+- **The hook log keeps the text of a worker's refused shell command** (at most
+  300 characters), so that `after` can report it. A refused command that held
+  a secret is kept in `.claude/rw-write-boundary.log.jsonl` and in the record.
 - **The briefs and the shared disciplines still speak of a free shell**: an
   environment prefix before a command, `git diff` to report a change. Those
   calls are refused in a batch.
@@ -453,7 +489,7 @@ kept out of the tickets' commits by the "after" command.
 - **The default branch is recognised by name**: every remote's default,
   `init.defaultBranch`, `main`, `master`. A repository with no remote whose
   default branch has another name (`develop`) is not recognised.
-- **The limits are not protected against the PM** (above).
+- **A forged ledger line is not detected** (above).
 - **The estimated output** the engine is told is half the ceiling. It is a
   figure the kit sets so that the engine's own checks on the ceiling hold; it
   is not a forecast.

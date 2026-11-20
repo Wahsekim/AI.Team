@@ -114,7 +114,13 @@ prints the limits before and after, and is confirmed like a switch: a code typed
 at an interactive terminal. It is refused when the team is not in Router/Worker
 mode, when nothing would change, when the authorization per ticket would fall
 below the output allowance, when a switch was interrupted, or while a batch
-holds the lock; it takes the lock for the write. One line is appended to `pm-decisions.md`. The changed limits go
+holds the lock; it takes the lock for the write. One line is appended to `pm-decisions.md`; it ends with
+`limits <digest>`, as the `MODE SWITCH` line into Router/Worker mode does, and the last such line binds the limits
+in force: `rw-batch.mjs before` refuses limits it does not bind. Limits no line binds (edited by hand, or a team
+that went live before lines carried a digest) are re-confirmed as they stand with `{}`; a request that changes
+nothing is refused once they are bound. The hook refuses any session's file-tool write of
+`profiles/team-mode.json`, so the owner's command is the way to change them
+([ADR 0010](../../../decisions/0010-router-worker-second-mode.md), amendment of 2026-11-20). The changed limits go
 on holiday and come back with the team.
 
 ## Into Router/Worker mode

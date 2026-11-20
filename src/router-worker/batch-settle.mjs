@@ -3,7 +3,7 @@ import { join, resolve } from 'node:path';
 import { digest } from '../loop/contracts.mjs';
 import { instanceOf } from './roots.mjs';
 import { settleEngineRun, Refusal as SettlementRefusal } from './launch-settle.mjs';
-import { BATCH_FILE, AFTER_FILE, RETURN_FILE, SETTLE_FILE, ARCHIVE, RUN_ID, oneLine, plain } from './batch.mjs';
+import { BATCH_FILE, AFTER_FILE, RETURN_FILE, SETTLE_FILE, ARCHIVE, RUN_ID, oneLine, plain, proposedTokens } from './batch.mjs';
 
 // ADR 0010, decision 12: usage settled per ticket. The agents the runtime metered are matched to the calls
 // of the batch, each call's transcript is checked for its frozen brief, and each ticket's measured usage is
@@ -63,8 +63,11 @@ export function settleBatch({ teamRoot, instanceRoot, meter, rules, runId }) {
     const settled = settleEngineRun({ launch: { digest: batch.digest, productHead: batch.productHead, args: batch.args, runRecord: batch.runRecord },
       close: { digest: after.digest, account: after.account, productHead: batch.productHead, changedPaths }, result, meter, rules });
     const tickets = settled.ticketRecords.map(({ settlement }) => ({ ticket: settlement.ticketId, authorizedTokens: settlement.authorizedTokens, spentTokens: settlement.spentTokens, remainingTokens: settlement.remainingTokens, budgetGate: settlement.budgetGate }));
+    // Reported for the owner, who decides: tickets over, or above 80% of, their authorization.
+    const near = tickets.filter(entry => 5 * entry.spentTokens > 4 * entry.authorizedTokens), most = Math.max(0, ...near.map(entry => entry.spentTokens));
+    const limits = near.length ? [{ limit: 'authorizationPerTicket', observed: most, current: near[0].authorizedTokens, proposal: { authorizationPerTicket: proposedTokens(most) }, tickets: near.map(entry => entry.ticket) }] : [];
     const body = { schemaVersion: 1, stage: 'batch-settled', runId: batch.runId, batchDigest: batch.digest, afterDigest: after.digest, settledAt: new Date().toISOString(), status: settled.status,
-      tickets, calls: settled.calls, mainSessionTokens: Number.isSafeInteger(meter?.session?.harnessEq) ? meter.session.harnessEq : null,
+      tickets, limits, calls: settled.calls, mainSessionTokens: Number.isSafeInteger(meter?.session?.harnessEq) ? meter.session.harnessEq : null,
       findings: settled.findings, run: settled.run, ticketRecords: settled.ticketRecords, journalSource: 'reconstructed-after-run' };
     const record = { ...body, digest: digest(body) };
     keep({ instance, folder, target: at('settlement'), record, runId: batch.runId });

@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, lstatSync, realpathSync, rmSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, lstatSync, statSync, realpathSync, rmSync, mkdirSync } from 'node:fs';
 import { join, resolve, dirname, basename, relative, isAbsolute, sep } from 'node:path';
 import { canonical, digest, parseJSON } from '../loop/contracts.mjs';
 import { compile } from './compile.mjs';
@@ -16,6 +16,9 @@ const WRITE_TOOLS = ['Write', 'Edit', 'NotebookEdit', 'MultiEdit'];
 const MATCHER = [...WRITE_TOOLS, 'Bash'].join('|');
 const DUTIES = ['exec', 'check', 'guard'];
 const UNRESOLVED = ['bash-writes', 'deny-under-non-default-permission-modes'];
+// Owner decision of 2026-11-20: only the owner changes the team's limits, through the kit's command. No session's file tool writes them.
+const LIMITS_FILE = 'profiles/team-mode.json';
+const LIMITS_REASON = `${LIMITS_FILE} holds the team's limits: only the owner changes them, with: node kit/scripts/team-mode.mjs limits <LIMITS.json> --instance <instance-root>, at an interactive terminal. A limit that stopped work is reported to the owner, who decides`;
 
 class Refusal extends Error { constructor(code, reason) { super(reason); this.code = code; } }
 const need = (condition, reason) => { if (!condition) throw new Refusal('BOUNDARY_REFUSED', reason); };
@@ -173,20 +176,36 @@ function realTarget(path) {
   return join(realpathSync(current), ...pending);
 }
 
-// One log line per hook call: who called which tool and what was decided. No path, no command.
+// One log line per hook call: who called which tool and what was decided. No path. A worker's shell command that was
+// refused is kept as text, so that "after" can report it to the owner.
 export function logEntry({ input, boundary, decision, at }) {
   const tool = typeof input?.tool_name === 'string' ? input.tool_name : null, agentType = typeof input?.agent_type === 'string' ? input.agent_type : null;
   const entry = boundary && agentType !== null && Object.hasOwn(boundary.wrappers, agentType) ? boundary.wrappers[agentType] : null;
   const judged = agentType !== null && (WRITE_TOOLS.includes(tool) ? !boundary || entry !== null : tool === 'Bash' && (!boundary || Array.isArray(entry?.commands)));
-  return { at, tool, agentType, judged, decision };
+  const command = tool === 'Bash' && decision === 'deny' && Array.isArray(entry?.commands) && typeof input.tool_input?.command === 'string' ? input.tool_input.command.trim().slice(0, 300) : null;
+  return { at, tool, agentType, judged, decision, ...(command ? { command } : {}) };
+}
+
+// The call writes the team's limits file: by its path as resolved, whatever its case, or as the same file under another name.
+function writesLimits(input, projectDir) {
+  const raw = input.tool_input?.file_path ?? input.tool_input?.notebook_path;
+  if (typeof projectDir !== 'string' || !isAbsolute(projectDir) || typeof raw !== 'string' || !raw) return false;
+  const target = realTarget(resolve(typeof input.cwd === 'string' ? input.cwd : projectDir, raw)), limits = realTarget(join(projectDir, LIMITS_FILE));
+  if (!target || !limits) return false;
+  if (target.toLowerCase() === limits.toLowerCase()) return true;
+  const [a, b] = [target, limits].map(path => statSync(path, { throwIfNoEntry: false }));
+  return Boolean(a && b && a.dev === b.dev && a.ino === b.ino);
 }
 
 // `boundary` is null when the file is missing, unreadable or edited. 'allow' leaves the call to the session's own
 // permissions; 'approve' answers the permission prompt for it; 'deny' refuses it.
-export function decideCall({ input, boundary }) {
+// `projectDir` is the team's root; its limits file is refused to every session.
+export function decideCall({ input, boundary, projectDir }) {
   const allow = { decision: 'allow' }, deny = reason => ({ decision: 'deny', reason });
   if (input?.tool_name === 'Bash') return decideCommand({ input, boundary, allow, deny });
-  if (!WRITE_TOOLS.includes(input?.tool_name) || typeof input.agent_type !== 'string') return allow;
+  if (!WRITE_TOOLS.includes(input?.tool_name)) return allow;
+  if (writesLimits(input, projectDir)) return deny(LIMITS_REASON);
+  if (typeof input.agent_type !== 'string') return allow;
   if (!boundary) return deny('The write boundary of this run is missing or was changed; no subagent write is allowed');
   const entry = Object.hasOwn(boundary.wrappers, input.agent_type) ? boundary.wrappers[input.agent_type] : null;
   if (!entry) return allow;

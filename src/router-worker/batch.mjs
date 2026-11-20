@@ -6,7 +6,7 @@ import { git, isRepositoryRoot, acquireLease, releaseLease, readLease } from './
 import { freezeRun } from './run-args.mjs';
 import { openBoundary, closeBoundary, readBoundary, quotable } from './write-boundary.mjs';
 import { observeIsolation } from './isolation.mjs';
-import { limitsOf, COUNT_LIMITS } from './switch.mjs';
+import { limitsOf, COUNT_LIMITS, boundLimits } from './switch.mjs';
 
 // ADR 0010, decisions 8 to 12: the one command a PM runs before a batch in a standing Router/Worker team.
 // It builds the engine's inputs from the PM's tickets, checks the product repository, computes the ceiling,
@@ -27,9 +27,11 @@ const STANDING = ['BASH_NOT_SANDBOXED', 'IGNORED_PATHS_PRESENT'];
 // Never a ticket's to write: Git's own files run code at the PM's next commit, and .claude holds agents and hooks.
 const RESERVED = ['.git', '.claude'];
 
-class Refusal extends Error {}
-const need = (condition, reason) => { if (!condition) throw new Refusal(reason); };
-const refuse = reason => ({ errors: [{ code: 'BATCH_REFUSED', field: 'batch', reason }] });
+class Refusal extends Error { constructor(reason, code = 'BATCH_REFUSED') { super(reason); this.code = code; } }
+const need = (condition, reason, code) => { if (!condition) throw new Refusal(reason, code); };
+const refuse = (reason, code = 'BATCH_REFUSED') => ({ errors: [{ code, field: 'batch', reason }] });
+// A token limit proposed to the owner from what a batch used: a quarter more, rounded up to the next thousand above.
+export const proposedTokens = observed => (Math.floor(observed * 5 / 4000) + 1) * 1000;
 const exists = path => Boolean(lstatSync(path, { throwIfNoEntry: false }));
 const readJSON = path => { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; } };
 const ref = (id, value) => ({ id, digest: digest(value) });
@@ -167,6 +169,7 @@ function liveTeam(teamRoot, instanceRoot) {
   let limits;
   try { limits = limitsOf({ limits: profile.limits }); } catch (error) { need(false, `The limits in ${MODE_FILE} are not valid (${error.message}); set them with: team-mode.mjs limits`); }
   need(COUNT_LIMITS.every(key => Object.hasOwn(profile.limits ?? {}, key)), `${MODE_FILE} does not hold the four limits of this team`);
+  need(boundLimits(instance) === digest(profile.limits), `The limits in ${MODE_FILE} are not the limits the owner last confirmed: no line of ${LEDGER} binds them. They were edited by hand, or the team went live before limits were bound. Only the owner decides the limits; nothing was started. The owner confirms them at an interactive terminal with: team-mode.mjs limits <LIMITS.json> --instance <instance-root>   (LIMITS.json: {} re-confirms them as they stand, or the limits to change)`, 'LIMITS_NOT_BOUND');
   return { instance, profile, productRoot, limits };
 }
 
@@ -248,7 +251,8 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     lease = null; opened = false;
     return record;
   } catch (error) {
-    return refuse(error instanceof Refusal || error?.code === 'BOUNDARY_REFUSED' ? error.message : `The batch could not be prepared: ${error?.code ?? error?.message}`);
+    if (error instanceof Refusal) return refuse(error.message, error.code);
+    return refuse(error?.code === 'BOUNDARY_REFUSED' ? error.message : `The batch could not be prepared: ${error?.code ?? error?.message}`);
   } finally {
     if (opened) try { closeBoundary({ teamRoot: instance }); } catch { /* the next before names it and points to abort */ }
     if (lease) releaseLease({ productRoot, lease });

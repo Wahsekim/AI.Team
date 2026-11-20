@@ -8,6 +8,7 @@ import { draftRequest } from '../src/router-worker/request.mjs';
 import { proposeSwitch, switchMode, proposeLimits, changeLimits, DEFAULT_LIMITS } from '../src/router-worker/switch.mjs';
 import { acquireLease, releaseLease, readLease } from '../src/router-worker/lease.mjs';
 import { fixture, CLI } from './fixtures/router-worker/standing-team.mjs';
+import { digest } from '../src/loop/contracts.mjs';
 
 const refusal = result => result.errors?.[0];
 const IDS = Array.from({ length: 32 }, (_, i) => `WF-${String(i).padStart(2, '0')}`);
@@ -111,12 +112,14 @@ test('the limits of a live Router/Worker team are changed by a confirmed proposa
   assert.equal(done.errors, undefined, JSON.stringify(done.errors)); assert.equal(done.stage, 'limits-changed');
   const mode = JSON.parse(f.read('profiles/team-mode.json'));
   assert.equal(mode.limits.outputAllowancePerTicket, 20000); assert.equal(mode.status, 'live'); assert.ok(mode.ownFiles.length > 0, 'the rest of the profile is kept');
-  assert.match(f.read('pm-decisions.md'), /LIMITS CHANGED: outputAllowancePerTicket 15000 -> 20000; .*typed at an interactive terminal/);
+  assert.match(f.read('pm-decisions.md'), new RegExp(`LIMITS CHANGED: outputAllowancePerTicket 15000 -> 20000; .*typed at an interactive terminal; limits ${digest(mode.limits)}\\.\\n`));
   assert.equal(readLease({ productRoot: f.product }).status, 'free', 'the lock taken for the write is given back');
   assert.equal(changeLimits({ ...common, limits: { attemptsPerTicket: 2 }, confirm: proposeLimits({ ...common, limits: { attemptsPerTicket: 2 } }).digest }).errors, undefined);
   assert.match(f.read('pm-decisions.md'), /LIMITS CHANGED: attemptsPerTicket 1 -> 2; .*called the change directly, not at a terminal/);
   // The changed limits go on holiday and come back with the team.
   f.apply('specialist', {}); assert.equal(f.propose('router-worker', {}).limits.outputAllowancePerTicket, 20000);
+  assert.equal(f.apply('router-worker', {}).errors, undefined);
+  assert.match(f.read('pm-decisions.md').trim().split('\n').at(-1), new RegExp(`MODE SWITCH: from specialist to router-worker; .*; limits ${digest(JSON.parse(f.read('profiles/team-mode.json')).limits)}\\.$`), 'the team that comes back is bound to the limits it brings');
 });
 
 test('CLI: request prints the drafted request; limits proposes and changes nothing without a terminal', t => {
