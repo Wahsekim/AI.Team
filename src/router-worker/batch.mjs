@@ -4,7 +4,7 @@ import { digest, bytesDigest } from '../loop/contracts.mjs';
 import { instanceOf } from './roots.mjs';
 import { git, isRepositoryRoot, acquireLease, releaseLease, readLease } from './lease.mjs';
 import { freezeRun } from './run-args.mjs';
-import { openBoundary, closeBoundary, readBoundary, quotable } from './write-boundary.mjs';
+import { openBoundary, closeBoundary, readBoundary, quotable, UNQUOTABLE } from './write-boundary.mjs';
 import { observeIsolation } from './isolation.mjs';
 import { limitsOf, COUNT_LIMITS, boundLimits } from './switch.mjs';
 
@@ -197,7 +197,7 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     // With the lock held, no switch and no change of limits can run: what is read now is what the batch uses.
     const { profile, limits } = liveTeam(teamRoot, instanceRoot), product = checkProduct(productRoot, startAsIs === true), count = batch.tickets.length;
     // In a batch a worker's shell runs the commands the owner confirmed for the team, and no other, from the product root.
-    need(quotable(productRoot), 'The path of the product repository holds a character that cannot be written inside a quoted shell command (" $ ` \\ !); the workers could run no command there');
+    need(quotable(productRoot), UNQUOTABLE);
     const unconfirmed = batch.verificationCommands.filter(command => !limits.allowedCommands.includes(command));
     need(!unconfirmed.length, `These verification commands are not among the commands the owner confirmed for this team (${unconfirmed.slice(0, 5).map(plain).join(' | ')}); the workers could not run them. The owner adds them with: team-mode.mjs limits <LIMITS.json> --instance <instance-root>   (LIMITS.json: {"allowedCommands": [...]}, the whole list)`);
     // Decision 11: paths already changed are kept out of the tickets' commits, so none may lie where a ticket writes.
@@ -294,11 +294,11 @@ export function abortBatch({ teamRoot, instanceRoot }) {
     if (ours) { const released = releaseLease({ productRoot, lease: held.lease.digest }); need(!released.errors, `The lock could not be released: ${released.errors?.[0]?.reason}`); }
     // The record is a file the PM can write; only a well-formed id reaches the ledger.
     const at = new Date().toISOString(), runId = typeof record?.runId === 'string' && /^[A-Za-z0-9._-]{1,64}$/.test(record.runId) ? record.runId : null;
-    // A boundary that is missing or was changed refuses every agent's write. This command cannot rebuild it; a mode switch does.
+    // A boundary that is missing or was changed refuses every subagent's write and shell command. This command cannot rebuild it; a mode switch does.
     appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} BATCH ${runId ?? '(no readable record)'} ABORTED by rw-batch.mjs abort: ${boundary ? 'the write boundary is closed' : 'the write boundary is missing or was changed and was NOT restored'}${ours ? ', the lock released' : ''}. Nothing about the work was checked.\n`);
     rmSync(join(instance, BATCH_FILE), { recursive: true, force: true });
     const body = { schemaVersion: 1, stage: 'batch-aborted', runId, boundary: boundary ? 'closed' : 'not-restored', lockReleased: ours, abortedAt: at,
-      ...(boundary ? {} : { next: 'The write boundary is missing or was changed: every agent write is refused until a mode switch to specialist and back rebuilds it' }) };
+      ...(boundary ? {} : { next: 'The write boundary is missing or was changed: every subagent write and shell command is refused until a mode switch to specialist and back rebuilds it' }) };
     return { ...body, digest: digest(body) };
   } catch (error) {
     return refuse(error instanceof Refusal || error?.code === 'BOUNDARY_REFUSED' ? error.message : `The batch could not be aborted: ${error?.code ?? error?.message}`);

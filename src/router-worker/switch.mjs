@@ -8,7 +8,7 @@ import { stageTeam } from './stage.mjs';
 import { makeLive } from './activate.mjs';
 import { instanceOf } from './roots.mjs';
 import { git, isRepositoryRoot, readLease, acquireLease, releaseLease } from './lease.mjs';
-import { standBoundary, dropBoundary, closeBoundary, readBoundary, settingsGap, hookGap, BOUNDARY_FILE } from './write-boundary.mjs';
+import { standBoundary, dropBoundary, closeBoundary, readBoundary, settingsGap, hookGap, quotable, UNQUOTABLE, BOUNDARY_FILE } from './write-boundary.mjs';
 import { randomBytes } from 'node:crypto';
 
 // ADR 0010: a deployed team is switched between specialist and Router/Worker mode. The live mode's own
@@ -28,7 +28,7 @@ export const DEFAULT_LIMITS = { attemptsPerTicket: 1, outputAllowancePerTicket: 
 // runs without a permission prompt; it is confirmed and changed like the counts.
 export const COUNT_LIMITS = ['attemptsPerTicket', 'outputAllowancePerTicket', 'guardianOutputShare', 'authorizationPerTicket'];
 // As the owner reads it in the proposal, so it runs: printable ASCII on one line, no space at either end, no run of spaces to hide a tail.
-const MAX_COMMANDS = 50;
+export const MAX_COMMANDS = 50;
 export const oneCommand = value => typeof value === 'string' && /^[\x21-\x7e]+( [\x21-\x7e]+)*$/.test(value) && value.length <= 300;
 const LIVE = { active: 'Live: Router/Worker mode of this team, confirmed by the owner at the switch', description: 'standing mode',
   roster: 'the specialist roster is packed under holiday/specialist.' };
@@ -126,9 +126,11 @@ export function limitsOf(request) {
   const given = request?.limits ?? {};
   need(given && typeof given === 'object' && !Array.isArray(given) && Object.keys(given).every(key => Object.hasOwn(DEFAULT_LIMITS, key))
     && COUNT_LIMITS.every(key => given[key] === undefined || (Number.isSafeInteger(given[key]) && given[key] >= 1)) && (given.attemptsPerTicket ?? 1) <= 3, 'limits may only set the known limits to positive integers');
-  const commands = given.allowedCommands === undefined ? [] : given.allowedCommands;
-  need(Array.isArray(commands) && commands.length <= MAX_COMMANDS && commands.every(oneCommand) && new Set(commands).size === commands.length,
-    `allowedCommands must list at most ${MAX_COMMANDS} distinct commands, each on one line of at most 300 printable ASCII characters with single spaces`);
+  const commands = given.allowedCommands === undefined ? [] : given.allowedCommands, rule = `allowedCommands must list at most ${MAX_COMMANDS} distinct commands, each on one line of at most 300 printable ASCII characters with single spaces`;
+  need(Array.isArray(commands) && commands.length <= MAX_COMMANDS, rule);
+  const unfit = commands.findIndex(command => !oneCommand(command)), repeated = commands.findIndex((command, i) => commands.indexOf(command) !== i), named = i => String(JSON.stringify(commands[i])).slice(0, 80);
+  need(unfit < 0, `${rule}: ${named(unfit)} is not one such command`);
+  need(repeated < 0, `${rule}: ${named(repeated)} is listed twice`);
   return coherent({ ...DEFAULT_LIMITS, ...given, allowedCommands: [...commands] });
 }
 function coherent(limits) {
@@ -152,6 +154,8 @@ function packedTeam(instance, mode) {
 function plan({ to, request, teamRoot, instanceRoot, productRoot }) {
   need(MODES.includes(to), `The mode must be one of: ${MODES.join(', ')}`);
   need(request && typeof request === 'object' && !Array.isArray(request), 'The request must be a JSON object: {"spec"?: {...}, "limits"?: {...}}');
+  // Refused here, before anything else, rather than by every batch's "before".
+  need(to !== 'router-worker' || typeof productRoot !== 'string' || quotable(productRoot), UNQUOTABLE);
   const kit = resolve(teamRoot);
   let instance;
   try { instance = instanceOf(kit, instanceRoot); } catch (error) { need(false, `Router/Worker mode needs the two-root layout (${error.message}); migrate the deployment with scripts/migrate-to-instance.sh first`); }
@@ -436,6 +440,10 @@ export function changeLimits({ confirm, atTerminal, ...options }) {
     // No batch and no switch can start while the profile is written.
     lock = acquireLease({ teamRoot: instance, productRoot });
     if (lock.errors) { lock = null; throw new Refusal('LIMITS_REFUSED', 'The lock on the product repository could not be taken; a batch may have started'); }
+    // A team that went live before the command list existed has a boundary without one, which does not judge its workers' shell.
+    // It is closed before the limits are written: a closed boundary is right under the old limits too, so a failure here leaves both files consistent.
+    const boundary = readBoundary(instance);
+    if (boundary && Object.values(boundary.wrappers).some(entry => !Array.isArray(entry.commands))) closeBoundary({ teamRoot: instance });
     const path = join(instance, MODE_FILE), at = new Date().toISOString();
     writeFileSync(`${path}.tmp`, JSON.stringify({ ...profile, limits: body.to }, null, 2) + '\n', { flag: 'wx' });
     // The ledger line comes first: a change is never in force without its line.
@@ -443,9 +451,6 @@ export function changeLimits({ confirm, atTerminal, ...options }) {
       appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} LIMITS CHANGED: ${changed.length ? changed.map(key => `${key} ${JSON.stringify(body.from[key])} -> ${JSON.stringify(body.to[key])}`).join(', ') : 'none, the limits in force re-confirmed as they stand'}; proposal ${confirm} was confirmed ${AT_TERMINAL}; limits ${digest(body.to)}.\n`);
       renameSync(`${path}.tmp`, path);
     } catch (error) { rmSync(`${path}.tmp`, { force: true }); throw error; }
-    // A team that went live before the command list existed has a boundary without one, which does not judge its workers' shell.
-    const boundary = readBoundary(instance);
-    if (boundary && Object.values(boundary.wrappers).some(entry => !Array.isArray(entry.commands))) closeBoundary({ teamRoot: instance });
     const record = { schemaVersion: 1, stage: 'limits-changed', limits: body.to, changed, changedAt: at };
     return { ...record, digest: digest(record) };
   } catch (error) { return limitsRefusal(error); } finally { if (lock) releaseLease({ productRoot, lease: lock.lease.digest }); }

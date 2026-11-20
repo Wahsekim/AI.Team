@@ -106,6 +106,29 @@ test('in a batch a worker\'s shell runs the confirmed verification commands from
   assert.match(old.read('pm-decisions.md'), /LIMITS CHANGED: allowedCommands \[\] -> \["npm test"\];/); assert.equal((await old.before(one)).errors, undefined);
 });
 
+test('before refuses a product repository whose path a quoted shell command cannot hold', async t => {
+  const f = live(t), odd = join(f.base, 'pro!duct'), profile = JSON.parse(f.read('profiles/team-mode.json'));
+  cpSync(f.product, odd, { recursive: true });
+  writeFileSync(join(f.root, 'profiles/team-mode.json'), JSON.stringify({ ...profile, spec: { ...profile.spec, project: { ...profile.spec.project, productRoot: odd } } }));
+  assert.match(refusal(await f.before(batchOf(ticket('US-01', ['src/a.js'])))).reason, /cannot be written inside a quoted shell command/);
+  assert.equal(readLease({ productRoot: odd }).status, 'free'); assert.equal(existsSync(join(f.root, BATCH_FILE)), false);
+});
+
+test('a change of limits that cannot close the boundary of a team without a command list changes nothing', t => {
+  const old = live(t), profile = JSON.parse(old.read('profiles/team-mode.json')), { allowedCommands: _none, ...counts } = profile.limits;
+  writeFileSync(join(old.root, 'profiles/team-mode.json'), JSON.stringify({ ...profile, limits: counts }));
+  const stood = readBoundary(old.root), boundaryFile = join(old.root, '.claude/rw-write-boundary.json');
+  writeFileSync(boundaryFile, JSON.stringify(sealAgain({ schemaVersion: 1, productRoot: stood.productRoot, wrappers: Object.fromEntries(Object.entries(stood.wrappers).map(([name, entry]) => [name, { duty: entry.duty, writePaths: [] }])) })));
+  const saved = old.read('profiles/team-mode.json'), ledger = old.read('pm-decisions.md');
+  const proposal = proposeLimits({ teamRoot: old.kit, instanceRoot: old.root, limits: { allowedCommands: ['npm test'] } });
+  chmodSync(boundaryFile, 0o444);
+  const changed = changeLimits({ teamRoot: old.kit, instanceRoot: old.root, limits: { allowedCommands: ['npm test'] }, confirm: proposal.digest });
+  chmodSync(boundaryFile, 0o644);
+  assert.equal(refusal(changed).code, 'LIMITS_REFUSED');
+  assert.equal(old.read('profiles/team-mode.json'), saved, 'the limits are not in force'); assert.equal(old.read('pm-decisions.md'), ledger, 'no ledger line for a change that did not happen');
+  assert.equal(readLease({ productRoot: old.product }).status, 'free');
+});
+
 test('abort clears a batch that will not run, and what a before that died left behind, so the next batch can open', async t => {
   const f = live(t), abort = () => abortBatch({ teamRoot: f.kit, instanceRoot: f.root }), one = batchOf(ticket('US-01', ['src/a.js']));
   assert.match(refusal(abort()).reason, /no batch to abort/);
