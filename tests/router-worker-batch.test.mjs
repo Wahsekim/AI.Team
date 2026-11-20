@@ -122,7 +122,7 @@ test('a change of limits that cannot close the boundary of a team without a comm
   const saved = old.read('profiles/team-mode.json'), ledger = old.read('pm-decisions.md');
   const proposal = proposeLimits({ teamRoot: old.kit, instanceRoot: old.root, limits: { allowedCommands: ['npm test'] } });
   chmodSync(boundaryFile, 0o444);
-  const changed = changeLimits({ teamRoot: old.kit, instanceRoot: old.root, limits: { allowedCommands: ['npm test'] }, confirm: proposal.digest });
+  const changed = changeLimits({ teamRoot: old.kit, instanceRoot: old.root, limits: { allowedCommands: ['npm test'] }, confirm: proposal.digest, atTerminal: true });
   chmodSync(boundaryFile, 0o644);
   assert.equal(refusal(changed).code, 'LIMITS_REFUSED');
   assert.equal(old.read('profiles/team-mode.json'), saved, 'the limits are not in force'); assert.equal(old.read('pm-decisions.md'), ledger, 'no ledger line for a change that did not happen');
