@@ -337,20 +337,26 @@ The list has two parts of the same shape:
 A `glob` matches the whole path (`**/` any folders, `*` and `?` inside one);
 `contains` is a substring of the path. Both ignore case. Adding a reviewer is
 one entry in the kit's `reviewers` plus its triggers. The kit's triggers: a
-dependency manifest or lock file (Security and Architect), a path containing
-auth, session, token, crypto or secret (Security), a database migration
-(Architect and Security), a CI or deployment file (Security), lint and test
-configuration (Architect).
+dependency manifest, lock file or registry setting (Security and Architect), a
+path containing auth, session, token, crypto, secret or credential (Security), a
+database migration (Architect and Security), a CI or deployment file at any
+depth (Security), lint and test configuration (Architect). `auth` also flags
+paths such as `author.md`: a substring over-flags, which costs a review, where
+a narrower pattern would miss `oauth/` or `authz.js`.
 
 - **"before"** refuses a batch when `profiles/review.json` is missing or not
   valid, and says how to fix it. It freezes the merged list with its digest
-  in the batch record (`review`). The last frozen list is kept in
-  `reviews/frozen-last.json`; `triggerChanges` in the record names each
-  pattern, rule and ADR added or removed since, and the ledger gets
+  in the batch record (`review`). `triggerChanges` in the record names each
+  pattern, rule and ADR added or removed since the list frozen by the newest
+  archived batch (by `openedAt`), and the ledger gets
   `REVIEW TRIGGERS ADDED: ...` and `REVIEW TRIGGERS REMOVED (owner spot review): ...`.
   A narrowed trigger shows as the patterns it lost; a rule whose text changed
-  is both removed and added. With no earlier list kept, the whole list is
-  logged as `FROZEN ... (owner spot review)`.
+  is both removed and added. With no archived list, or one of the wrong
+  shape or digest, the whole list is logged as `FROZEN ... (owner spot
+  review)`. A batch aborted before `after` is not archived, so the next batch
+  is compared with the same archived list and logs the same changes again.
+- A batch opened by a kit older than this list holds no `review`; `after`
+  refuses it. A batch left open across a kit upgrade is aborted and run again.
 - **"after"** gives each ticket that passed and changed something a
   `review`: `required` (reviewers, in the kit's order), `because` (reviewer,
   trigger, path), `flaggedFiles` and `content` (a digest of each flagged file
