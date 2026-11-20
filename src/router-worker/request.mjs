@@ -1,7 +1,7 @@
 import { readFileSync, realpathSync, lstatSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { instanceOf } from './roots.mjs';
-import { DEFAULT_LIMITS, oneCommand } from './switch.mjs';
+import { DEFAULT_LIMITS, MAX_COMMANDS, oneCommand } from './switch.mjs';
 import { readStackSource } from './stack-source.mjs';
 
 // ADR 0010, decision 7: the kit proposes the staffing and the limits of a Router/Worker team. The request is
@@ -57,5 +57,7 @@ export function draftRequest({ teamRoot, instanceRoot, model = 'opus', ui = fals
   if (stack.errors) notes.push(`profiles/stack.md gives no verification commands (${stack.errors[0].reason}); allowedCommands is empty, and no batch can start until it lists them`);
   const gates = stack.errors ? [] : stack.verificationCommands, unfit = gates.filter(gate => !oneCommand(gate));
   if (unfit.length) notes.push(`profiles/stack.md lists ${unfit.length} gate(s) that cannot be confirmed as they are written (one line of printable ASCII with single spaces, at most 300 characters); they are left out of allowedCommands: ${unfit.map(gate => JSON.stringify(gate.slice(0, 80))).join(', ')}`);
-  return { request: { spec, limits: { ...DEFAULT_LIMITS, allowedCommands: gates.filter(oneCommand).slice(0, 50) } }, notes };
+  const fit = gates.filter(oneCommand), beyond = fit.slice(MAX_COMMANDS);
+  if (beyond.length) notes.push(`profiles/stack.md lists ${beyond.length} gate(s) beyond the ${MAX_COMMANDS} a team may confirm; they are left out of allowedCommands: ${beyond.map(gate => JSON.stringify(gate)).join(', ')}`);
+  return { request: { spec, limits: { ...DEFAULT_LIMITS, allowedCommands: fit.slice(0, MAX_COMMANDS) } }, notes };
 }

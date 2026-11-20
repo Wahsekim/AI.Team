@@ -120,7 +120,7 @@ export function afterBatch({ teamRoot, instanceRoot, result }) {
       .map(ticket => ({ ticket: ticket.id, message: batch.tickets.find(entry => entry.id === ticket.id).commitMessage, paths: ticket.changedPaths }));
     const committed = new Set(commits.flatMap(commit => commit.paths)), at = new Date().toISOString(), passed = tickets.filter(ticket => ticket.status === 'passed').length;
     const left = changed.filter(path => !committed.has(path)), next = [];
-    if (!boundaryClosed) next.push('The write-boundary file is missing or was changed: every agent write is refused until a mode switch to specialist and back rebuilds it');
+    if (!boundaryClosed) next.push('The write-boundary file is missing or was changed: every subagent write and shell command is refused until a mode switch to specialist and back rebuilds it');
     if (holdAll) next.push(`No ticket of this batch is committed by the kit. ${ABANDON}`);
     if (!holdAll && left.length) next.push('Paths are left uncommitted in the product; the next batch refuses until they are committed or discarded by hand, or it is started as is');
     const status = () => findings.length || account.blockers.length ? 'review' : 'clean';

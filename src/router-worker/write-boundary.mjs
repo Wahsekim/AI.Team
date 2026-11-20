@@ -200,6 +200,7 @@ export function decideCall({ input, boundary }) {
 
 // A product root that can be written inside double quotes in a shell command, and one that needs no quotes at all.
 export const quotable = root => typeof root === 'string' && !/["$`\\!\x00-\x1f\x7f]/.test(root);
+export const UNQUOTABLE = 'The path of the product repository holds a character that cannot be written inside a quoted shell command (" $ ` \\ !); the workers could run no command there';
 const bare = root => /^[A-Za-z0-9_\/.+@%,:=-]+$/.test(root);
 
 // The shell of a standing team's worker. In a batch it runs the verification commands the owner confirmed and the
@@ -214,7 +215,8 @@ function decideCommand({ input, boundary, allow, deny }) {
   // Spaces and line breaks around the text change nothing for a shell; any other character is part of the command.
   const root = boundary.productRoot, text = typeof input.tool_input?.command === 'string' ? input.tool_input.command.replace(/^[ \t\n]+|[ \t\n]+$/g, '') : '';
   const forms = command => [...(input.cwd === root ? [command] : []), ...(quotable(root) ? [`cd "${root}" && ${command}`] : []), ...(bare(root) ? [`cd ${root} && ${command}`] : [])];
-  if (input.tool_input?.dangerouslyDisableSandbox !== true && entry.commands.some(command => forms(command).includes(text))) return { decision: 'approve' };
+  const unsandboxed = input.tool_input?.dangerouslyDisableSandbox;
+  if ((unsandboxed === undefined || unsandboxed === false) && entry.commands.some(command => forms(command).includes(text))) return { decision: 'approve' };
   return deny(entry.commands.length
     ? `${input.agent_type}: in a batch the shell runs only the verification commands confirmed for this team, from the product root, each exactly as written and inside the sandbox if there is one: ${entry.commands.map(command => `cd "${root}" && ${command}`).join('  |  ')}`
     : `${input.agent_type}: no batch is open, or this worker runs no command in it; the shell is closed`);
