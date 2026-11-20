@@ -382,7 +382,13 @@ field is refused. The limits are checked for validity where they are used.
 Only the owner changes them
 ([ADR 0010](../../../decisions/0010-router-worker-second-mode.md), amendment of
 2026-11-20): at the switch or with `team-mode.mjs limits`, by a code typed at a
-terminal. Three mechanisms hold that:
+terminal. Four mechanisms hold that:
+
+- **Only a terminal confirms them.** `changeLimits`, and `switchMode` into
+  Router/Worker mode, refuse a call that does not say the code was typed at a
+  terminal, or whose process has none (`process.stdin.isTTY`); `node --test`
+  is the one exception (`NODE_TEST_CONTEXT`). Only a ledger line that says
+  "typed at an interactive terminal" binds limits.
 
 - **The ledger binds them.** The `MODE SWITCH` line into Router/Worker mode and
   each `LIMITS CHANGED` line end with `limits <digest>`. `before` refuses
@@ -402,10 +408,16 @@ terminal. Three mechanisms hold that:
   and `proposal`: a LIMITS.json fragment the owner may confirm. A token value
   is proposed as the next thousand above 1.25 times what was observed; an
   attempts value as one more, up to 3; a refused command gets no proposal.
+  When the output ceiling stopped the batch, the proposal is for the share used
+  most against its limit: `guardianOutputShare` from the engine's
+  `guardianTokens`, or `outputAllowancePerTicket` from the rest per ticket. A
+  return without `guardianTokens` gets the allowance, with a `note` that the
+  figure includes the Guardian's spend.
   Nothing writes a limit from that list.
 
-A PM session that forges a ledger line together with the digest of the limits
-it wrote is not detected (see "What these commands trust").
+A PM session that fakes a terminal (`script`, its own pseudo-terminal) or sets
+`NODE_TEST_CONTEXT`, or that forges a ledger line together with the digest of
+the limits it wrote, is not detected (see "What these commands trust").
 
 ## Start as is
 
@@ -502,7 +514,8 @@ The limits not being the ones the ledger binds is refused with its own code,
 - **The default branch is recognised by name**: every remote's default,
   `init.defaultBranch`, `main`, `master`. A repository with no remote whose
   default branch has another name (`develop`) is not recognised.
-- **A forged ledger line is not detected** (above).
+- **A faked terminal, a faked test context or a forged ledger line is not
+  detected** (above).
 - **The estimated output** the engine is told is half the ceiling. It is a
   figure the kit sets so that the engine's own checks on the ceiling hold; it
   is not a forecast.

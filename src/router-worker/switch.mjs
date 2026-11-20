@@ -34,12 +34,18 @@ const LIVE = { active: 'Live: Router/Worker mode of this team, confirmed by the 
   roster: 'the specialist roster is packed under holiday/specialist.' };
 
 // The limits in force are the ones the owner last confirmed (owner decision of 2026-11-20): the digest on the last ledger
-// line of a switch into Router/Worker mode or of a change of limits. Null when no line carries one.
-const BINDING = /^\d{4}-\d{2}-\d{2} (?:MODE SWITCH|LIMITS CHANGED): .*; limits (sha256:[a-f0-9]{64})\.$/;
+// line of a switch into Router/Worker mode or of a change of limits, confirmed at a terminal. Null when no line carries one.
+const AT_TERMINAL = 'by its code, typed at an interactive terminal';
+const BINDING = new RegExp(`^\\d{4}-\\d{2}-\\d{2} (?:MODE SWITCH|LIMITS CHANGED): .*; proposal sha256:[a-f0-9]{64} was confirmed ${AT_TERMINAL}(?:\\. .*)?; limits (sha256:[a-f0-9]{64})\\.$`);
 export function boundLimits(instance) {
   let text; try { text = readFileSync(join(instance, LEDGER), 'utf8'); } catch { return null; }
-  return text.split('\n').reduce((last, line) => BINDING.exec(line)?.[1] ?? last, null);
+  return text.split(/\r?\n/).reduce((last, line) => BINDING.exec(line)?.[1] ?? last, null);
 }
+
+// Only a person confirms limits: the kit's command reads the code from a real terminal. `node --test` sets NODE_TEST_CONTEXT.
+// A faked terminal or test context is not detected (ADR 0010 amendment of 2026-11-20).
+const byPerson = atTerminal => atTerminal === true && (process.stdin.isTTY === true || Boolean(process.env.NODE_TEST_CONTEXT));
+const NOT_BY_PERSON = 'takes effect only when the owner types its code at an interactive terminal, with: node kit/scripts/team-mode.mjs';
 
 class Refusal extends Error { constructor(code, reason) { super(reason); this.code = code; } }
 const need = (condition, reason, code = 'SWITCH_REFUSED') => { if (!condition) throw new Refusal(code, reason); };
@@ -322,6 +328,7 @@ export function switchMode({ confirm, validate, atTerminal, ...options }) {
   try { planned = plan(options); } catch (error) { return refusal(error); }
   const { instance, kit, live, body, kind, packed, draft, spec, limits } = planned, proposalDigest = digest(body), to = body.to, productRoot = options.productRoot;
   if (confirm !== proposalDigest) return { errors: [{ code: 'SWITCH_NOT_CONFIRMED', field: 'switch', reason: 'A switch is confirmed by the digest of its proposal; this digest is not the current proposal' }] };
+  if (to === 'router-worker' && !byPerson(atTerminal)) return { errors: [{ code: 'SWITCH_NOT_CONFIRMED', field: 'switch', reason: `A switch into Router/Worker mode ${NOT_BY_PERSON} switch` }] };
 
   const journalPath = join(instance, JOURNAL), out = join(instance, HOLIDAY, live.name), into = join(instance, HOLIDAY, to);
   const started = { schemaVersion: 1, from: live.name, to, kind, pack: body.pack, install: body.install, lease: null, productRoot, startedAt: new Date().toISOString(), backup: `.switch-backup-${randomBytes(6).toString('hex')}`,
@@ -379,7 +386,7 @@ export function switchMode({ confirm, validate, atTerminal, ...options }) {
     }
     // 5. The lock is given back and the ledger written while the journal still stands: a death here is found and undone.
     need(releaseLease({ productRoot, lease }).status === 'free', 'The lock on the product repository could not be released');
-    appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} MODE SWITCH: from ${live.name} to ${to}; proposal ${proposalDigest} was confirmed ${atTerminal === true ? 'by its code, typed at an interactive terminal' : 'by a program that called the switch directly, not at a terminal'}. ${body.pack.length} file(s) packed under holiday/${live.name}${to === 'router-worker' && body.limits ? `; limits ${digest(body.limits)}` : ''}.\n`);
+    appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} MODE SWITCH: from ${live.name} to ${to}; proposal ${proposalDigest} was confirmed ${byPerson(atTerminal) ? AT_TERMINAL : 'by a program that called the switch directly, not at a terminal'}. ${body.pack.length} file(s) packed under holiday/${live.name}${to === 'router-worker' && body.limits ? `; limits ${digest(body.limits)}` : ''}.\n`);
     rmSync(journalPath); dropBackup(join(instance, HOLIDAY, journal.backup)); prune(join(instance, HOLIDAY));
   } catch (error) {
     try { rollBack(instance, journal); } catch (undo) {
@@ -425,6 +432,7 @@ export function changeLimits({ confirm, atTerminal, ...options }) {
   try {
     const { instance, profile, changed, body, ...planned } = planLimits(options); productRoot = planned.productRoot;
     if (confirm !== digest(body)) throw new Refusal('LIMITS_NOT_CONFIRMED', 'A change of limits is confirmed by the digest of its proposal; this digest is not the current proposal');
+    if (!byPerson(atTerminal)) throw new Refusal('LIMITS_NOT_CONFIRMED', `A change of limits ${NOT_BY_PERSON} limits`);
     // No batch and no switch can start while the profile is written.
     lock = acquireLease({ teamRoot: instance, productRoot });
     if (lock.errors) { lock = null; throw new Refusal('LIMITS_REFUSED', 'The lock on the product repository could not be taken; a batch may have started'); }
@@ -432,7 +440,7 @@ export function changeLimits({ confirm, atTerminal, ...options }) {
     writeFileSync(`${path}.tmp`, JSON.stringify({ ...profile, limits: body.to }, null, 2) + '\n', { flag: 'wx' });
     // The ledger line comes first: a change is never in force without its line.
     try {
-      appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} LIMITS CHANGED: ${changed.length ? changed.map(key => `${key} ${JSON.stringify(body.from[key])} -> ${JSON.stringify(body.to[key])}`).join(', ') : 'none, the limits in force re-confirmed as they stand'}; proposal ${confirm} was confirmed ${atTerminal === true ? 'by its code, typed at an interactive terminal' : 'by a program that called the change directly, not at a terminal'}; limits ${digest(body.to)}.\n`);
+      appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} LIMITS CHANGED: ${changed.length ? changed.map(key => `${key} ${JSON.stringify(body.from[key])} -> ${JSON.stringify(body.to[key])}`).join(', ') : 'none, the limits in force re-confirmed as they stand'}; proposal ${confirm} was confirmed ${AT_TERMINAL}; limits ${digest(body.to)}.\n`);
       renameSync(`${path}.tmp`, path);
     } catch (error) { rmSync(`${path}.tmp`, { force: true }); throw error; }
     // A team that went live before the command list existed has a boundary without one, which does not judge its workers' shell.

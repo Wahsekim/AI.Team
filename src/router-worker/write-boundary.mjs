@@ -178,7 +178,7 @@ function realTarget(path) {
 
 // A refused command is kept for the owner's report; values that look like secrets never reach the log.
 export const redacted = command => command
-  .replace(/\b([A-Za-z_][A-Za-z0-9_]*(?:TOKEN|SECRET|PASS(?:WORD)?|KEY|AUTH|CRED(?:ENTIAL)?S?)[A-Za-z0-9_]*)=("[^"]*"|'[^']*'|\S+)/gi, '$1=<redacted>')
+  .replace(/\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASS(?:WORD)?|KEY|AUTH|CRED(?:ENTIAL)?S?)[A-Za-z0-9_]*)=("[^"]*"|'[^']*'|[^\s;&|]+)/gi, '$1=<redacted>')
   .replace(/(-H\s*["']?(?:Authorization|Cookie|X-Api-Key)\s*:\s*)[^"'\n]*/gi, '$1<redacted>')
   .replace(/:\/\/[^\s/@:]+:[^\s/@]+@/g, '://<redacted>@')
   .replace(/[A-Za-z0-9+_=-]{32,}/g, '<redacted>');
@@ -193,14 +193,17 @@ export function logEntry({ input, boundary, decision, at }) {
   return { at, tool, agentType, judged, decision, ...(command ? { command } : {}) };
 }
 
+// A path that cannot be resolved (a dangling link, a file taken for a folder, no permission) is judged as written.
+const resolvedOr = path => { try { return realTarget(path) ?? path; } catch { return path; } };
+const statOf = path => { try { return statSync(path); } catch { return null; } };
+
 // The call writes the team's limits file: by its path as resolved, whatever its case, or as the same file under another name.
 function writesLimits(input, projectDir) {
   const raw = input.tool_input?.file_path ?? input.tool_input?.notebook_path;
   if (typeof projectDir !== 'string' || !isAbsolute(projectDir) || typeof raw !== 'string' || !raw) return false;
-  const target = realTarget(resolve(typeof input.cwd === 'string' ? input.cwd : projectDir, raw)), limits = realTarget(join(projectDir, LIMITS_FILE));
-  if (!target || !limits) return false;
+  const target = resolvedOr(resolve(typeof input.cwd === 'string' ? input.cwd : projectDir, raw)), limits = resolvedOr(join(projectDir, LIMITS_FILE));
   if (target.toLowerCase() === limits.toLowerCase()) return true;
-  const [a, b] = [target, limits].map(path => statSync(path, { throwIfNoEntry: false }));
+  const [a, b] = [target, limits].map(statOf);
   return Boolean(a && b && a.dev === b.dev && a.ino === b.ino);
 }
 

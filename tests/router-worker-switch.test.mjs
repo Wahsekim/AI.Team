@@ -60,6 +60,12 @@ test('the switch packs the specialist team into holiday/ and makes the three wor
   assert.equal(refusal(f.apply()).code, 'SWITCH_REFUSED', 'already in that mode');
 });
 
+test('a switch into Router/Worker is not confirmed by a program that calls it', t => {
+  const f = fixture(t), before = f.tree();
+  assert.equal(refusal(f.apply('router-worker', { spec: f.spec }, undefined, { atTerminal: false })).code, 'SWITCH_NOT_CONFIRMED');
+  assert.equal(f.tree(), before, 'nothing moved, and no ledger line');
+});
+
 test('switching back unpacks the specialist team exactly as it was, and Router/Worker goes on holiday in turn', t => {
   const f = fixture(t), before = f.digests(OWN_SPECIALIST);
   f.apply(); appendFileSync(join(f.root, 'agents/lessons.md'), '\n- a lesson learned in Router/Worker mode\n');

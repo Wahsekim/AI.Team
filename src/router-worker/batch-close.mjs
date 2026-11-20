@@ -53,15 +53,24 @@ function hookSeen(instance, wrappers, since) {
   return { calls: calls.length, workerCalls: workers.length, denied: workers.filter(call => call.decision === 'deny').length, refused };
 }
 
+// The output ceiling is the tickets' allowances plus the Guardian's share: the proposal is for the share used most against its limit.
+function outputReached(limits, spent, guardian, count) {
+  const perTicket = observed => { const allowance = proposedTokens(observed);
+    return { limit: 'outputAllowancePerTicket', observed, current: limits.outputAllowancePerTicket,
+      proposal: { outputAllowancePerTicket: allowance, ...(allowance > limits.authorizationPerTicket ? { authorizationPerTicket: allowance } : {}) } }; };
+  if (!Number.isSafeInteger(guardian) || guardian < 0 || guardian > spent)
+    return { ...perTicket(Math.ceil(spent / Math.max(1, count))), note: 'The engine return does not give the Guardian\'s spend apart: the figure per ticket includes it' };
+  const tickets = Math.ceil((spent - guardian) / Math.max(1, count));
+  return guardian / limits.guardianOutputShare > tickets / limits.outputAllowancePerTicket
+    ? { limit: 'guardianOutputShare', observed: guardian, current: limits.guardianOutputShare, proposal: { guardianOutputShare: proposedTokens(guardian) } }
+    : perTicket(tickets);
+}
+
 // Each limit that stopped work in this batch, with what was observed and a proposal for the owner, who decides.
 // Nothing here writes a limit.
 function limitsReached(limits, result, refused) {
   const report = [], ran = result.results;
-  if (result.budgetGateTripped === true && Number.isSafeInteger(result.budgetStatus?.loopSpent)) {
-    const observed = Math.ceil(result.budgetStatus.loopSpent / Math.max(1, ran.length)), allowance = proposedTokens(observed);
-    report.push({ limit: 'outputAllowancePerTicket', observed, current: limits.outputAllowancePerTicket,
-      proposal: { outputAllowancePerTicket: allowance, ...(allowance > limits.authorizationPerTicket ? { authorizationPerTicket: allowance } : {}) } });
-  }
+  if (result.budgetGateTripped === true && Number.isSafeInteger(result.budgetStatus?.loopSpent)) report.push(outputReached(limits, result.budgetStatus.loopSpent, result.guardianTokens, ran.length));
   // The engine retries only a clean execution whose verification failed: such a ticket at the cap ran out of attempts.
   const spent = ran.filter(r => r.attempts >= limits.attemptsPerTicket && r.workerStatus === 'succeeded' && r.verificationStatus === 'failed');
   if (spent.length) report.push({ limit: 'attemptsPerTicket', observed: Math.max(...spent.map(r => r.attempts)), current: limits.attemptsPerTicket,
