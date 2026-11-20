@@ -187,7 +187,8 @@ session after a switch.**
 - A session opened before a switch into Router/Worker mode has no hook: its
   workers are not bounded.
 - A session opened before a switch back still runs the hook. With no boundary
-  file it refuses every agent's write until a new session is started. The hook
+  file it refuses every subagent's write and shell command until a new session
+  is started. The hook
   stays fail-closed on purpose: any exception to that rule can be reached by
   hiding a file.
 - A hook that cannot load (a kit checkout without `src/`, an instance that was

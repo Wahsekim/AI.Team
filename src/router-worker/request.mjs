@@ -1,7 +1,7 @@
 import { readFileSync, realpathSync, lstatSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { instanceOf } from './roots.mjs';
-import { DEFAULT_LIMITS } from './switch.mjs';
+import { DEFAULT_LIMITS, oneCommand } from './switch.mjs';
 import { readStackSource } from './stack-source.mjs';
 
 // ADR 0010, decision 7: the kit proposes the staffing and the limits of a Router/Worker team. The request is
@@ -55,5 +55,7 @@ export function draftRequest({ teamRoot, instanceRoot, model = 'opus', ui = fals
   // The commands a worker runs without a permission prompt are proposed from the project's own stack profile.
   const stack = readStackSource({ root: instance });
   if (stack.errors) notes.push(`profiles/stack.md gives no verification commands (${stack.errors[0].reason}); allowedCommands is empty, and no batch can start until it lists them`);
-  return { request: { spec, limits: { ...DEFAULT_LIMITS, allowedCommands: stack.errors ? [] : stack.verificationCommands } }, notes };
+  const gates = stack.errors ? [] : stack.verificationCommands, unfit = gates.filter(gate => !oneCommand(gate));
+  if (unfit.length) notes.push(`profiles/stack.md lists ${unfit.length} gate(s) that cannot be confirmed as they are written (one line of printable ASCII with single spaces, at most 300 characters); they are left out of allowedCommands: ${unfit.map(gate => JSON.stringify(gate.slice(0, 80))).join(', ')}`);
+  return { request: { spec, limits: { ...DEFAULT_LIMITS, allowedCommands: gates.filter(oneCommand).slice(0, 50) } }, notes };
 }

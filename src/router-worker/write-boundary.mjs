@@ -176,7 +176,9 @@ function realTarget(path) {
 // One log line per hook call: who called which tool and what was decided. No path, no command.
 export function logEntry({ input, boundary, decision, at }) {
   const tool = typeof input?.tool_name === 'string' ? input.tool_name : null, agentType = typeof input?.agent_type === 'string' ? input.agent_type : null;
-  return { at, tool, agentType, judged: WRITE_TOOLS.includes(tool) && agentType !== null && (!boundary || Object.hasOwn(boundary.wrappers, agentType)), decision };
+  const entry = boundary && agentType !== null && Object.hasOwn(boundary.wrappers, agentType) ? boundary.wrappers[agentType] : null;
+  const judged = agentType !== null && (WRITE_TOOLS.includes(tool) ? !boundary || entry !== null : tool === 'Bash' && (!boundary || Array.isArray(entry?.commands)));
+  return { at, tool, agentType, judged, decision };
 }
 
 // `boundary` is null when the file is missing, unreadable or edited. 'allow' leaves the call to the session's own
@@ -196,17 +198,24 @@ export function decideCall({ input, boundary }) {
   return within(path, entry.writePaths) ? allow : deny(`${input.agent_type}: ${path} is outside the write boundary of this run`);
 }
 
+// A product root that can be written inside double quotes in a shell command, and one that needs no quotes at all.
+export const quotable = root => typeof root === 'string' && !/["$`\\!\x00-\x1f\x7f]/.test(root);
+const bare = root => /^[A-Za-z0-9_\/.+@%,:=-]+$/.test(root);
+
 // The shell of a standing team's worker. In a batch it runs the verification commands the owner confirmed and the
 // batch froze, from the product root, and nothing else: a command with anything added is another command. A wrapper
-// whose boundary carries no command list (a disposable launch, a boundary written before the list existed) is not judged.
+// whose boundary carries no command list (a disposable launch, a boundary written before the list existed) is not
+// judged. With no readable boundary nobody knows who the workers are: no subagent's shell runs, as for its writes.
 function decideCommand({ input, boundary, allow, deny }) {
-  const entry = boundary && typeof input.agent_type === 'string' && Object.hasOwn(boundary.wrappers, input.agent_type) ? boundary.wrappers[input.agent_type] : null;
+  if (typeof input.agent_type !== 'string') return allow;
+  if (!boundary) return deny('The write boundary of this run is missing or was changed; no subagent runs a shell command');
+  const entry = Object.hasOwn(boundary.wrappers, input.agent_type) ? boundary.wrappers[input.agent_type] : null;
   if (!entry || !Array.isArray(entry.commands)) return allow;
-  const root = boundary.productRoot, text = typeof input.tool_input?.command === 'string' ? input.tool_input.command.trim() : '';
-  const inProduct = typeof input.cwd === 'string' && (input.cwd === root || input.cwd.startsWith(root + sep));
-  if (entry.commands.some(command => (inProduct && text === command) || text === `cd "${root}" && ${command}` || text === `cd ${root} && ${command}`)) return { decision: 'approve' };
+  // Spaces and line breaks around the text change nothing for a shell; any other character is part of the command.
+  const root = boundary.productRoot, text = typeof input.tool_input?.command === 'string' ? input.tool_input.command.replace(/^[ \t\n]+|[ \t\n]+$/g, '') : '';
+  const forms = command => [...(input.cwd === root ? [command] : []), ...(quotable(root) ? [`cd "${root}" && ${command}`] : []), ...(bare(root) ? [`cd ${root} && ${command}`] : [])];
+  if (input.tool_input?.dangerouslyDisableSandbox !== true && entry.commands.some(command => forms(command).includes(text))) return { decision: 'approve' };
   return deny(entry.commands.length
-    ? `${input.agent_type}: in a batch the shell runs only the verification commands confirmed for this team, from the product root, each exactly as written: ${entry.commands.map(command => `cd "${root}" && ${command}`).join('  |  ')}`
+    ? `${input.agent_type}: in a batch the shell runs only the verification commands confirmed for this team, from the product root, each exactly as written and inside the sandbox if there is one: ${entry.commands.map(command => `cd "${root}" && ${command}`).join('  |  ')}`
     : `${input.agent_type}: no batch is open, or this worker runs no command in it; the shell is closed`);
 }
-

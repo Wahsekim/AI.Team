@@ -174,20 +174,29 @@ their shell:
 | Call | Decision |
 |---|---|
 | exec worker or checker, `cd "<product root>" && <command>` with a command of the batch | approved: no permission prompt |
-| the same command alone, when the shell is already inside the product | approved |
-| any other text: an argument added, two commands joined, a pipe, another folder | refused, and the refusal names the commands that run |
+| the same with the product root unquoted, when its path needs no quotes | approved |
+| the same command alone, when the shell is at the product root | approved |
+| any other text: an argument added, two commands joined, a pipe, another folder, a command of the team's list that is not this batch's | refused, and the refusal names the commands that run |
+| a confirmed command asked to run outside the sandbox | refused |
 | the Guardian, any command | refused |
 | any worker when no batch is open | refused |
-| the PM's session, a governance role | not judged |
+| any subagent when the boundary file is missing or was changed | refused |
+| the PM's session; a governance role while the boundary file is intact | not judged |
 
-The text must be the confirmed command, character for character. A worker
-reads files with its file tools; it has no `ls`, `cat` or `git` in a batch. A
-command a ticket needs and the list lacks is the owner's to add, before the
-batch.
+The text must be the confirmed command exactly; only spaces and line breaks
+around it are ignored. A worker reads files with its file tools; it has no
+`ls`, `cat` or `git` in a batch. A command a ticket needs and the list lacks is
+the owner's to add, before the batch.
 
-A team that went live before the list existed has an empty one: `before`
-refuses its batches until the owner confirms the commands with
-`team-mode.mjs limits`.
+A command is confirmed as one line of at most 300 printable ASCII characters
+with single spaces, so that what the owner reads in the proposal is all there
+is. `before` refuses a product repository whose path cannot be written inside a
+quoted shell command.
+
+A team that went live before the list existed has an empty one, and a boundary
+that does not judge its workers' shell. `before` refuses its batches until the
+owner confirms the commands with `team-mode.mjs limits`, which also closes
+that shell.
 
 ## Settle
 
@@ -415,7 +424,19 @@ kept out of the tickets' commits by the "after" command.
 - **The approval has not run with real agents.** That the runtime skips the
   permission prompt on the hook's decision is taken from Claude Code's
   documentation, which also says a `deny` or `ask` rule in the settings still
-  applies. It is first exercised in the attended run on the real team.
+  applies, and that no decision approves "actions no mode auto-approves". It
+  is first exercised in the attended run on the real team.
+- **A hook that cannot run decides nothing.** If the hook's file is missing or
+  fails to load, the runtime sends the call to the session's own permissions.
+- **The list is as protected as the other limits.** A change through the kit
+  is confirmed and logged. An edit of `profiles/team-mode.json` or of the
+  boundary file by hand is not prevented; an edited boundary is refused by the
+  hook and reported by `after` only if its digest was not recomputed. Who may
+  edit the limits is an open decision of the owner, and it now covers commands
+  that run without a prompt.
+- **The briefs and the shared disciplines still speak of a free shell**: an
+  environment prefix before a command, `git diff` to report a change. Those
+  calls are refused in a batch.
 - **Only the three workers are bounded.** The PM's session and the governance
   roles keep the shell their own permissions give them.
 - **The review of [ADR 0011](../../../decisions/0011-router-worker-batch-review.md)

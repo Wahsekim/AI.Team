@@ -38,8 +38,8 @@ inside subagents and names the subagent in `agent_type`.
 
 | Call | Decision |
 |---|---|
-| not a write tool, or no `agent_type` (the main session) | allowed |
-| a subagent, and the boundary file is missing, unreadable or does not match its digest | denied |
+| neither a write tool nor Bash, or no `agent_type` (the main session) | allowed |
+| a subagent, and the boundary file is missing, unreadable or does not match its digest | denied, for a write and for a shell command |
 | a subagent that is not a wrapper of the run (governance roles) | allowed |
 | a wrapper of the run, target inside the product and inside its paths | allowed |
 | a wrapper of the run, any other target | denied (exit 2, reason on stderr) |
@@ -55,7 +55,7 @@ The hook appends one line per call to `.claude/rw-write-boundary.log.jsonl` in
 the activated copy: time, tool name, the agent name the runtime passed (or
 `null`), whether the call was judged against the boundary, and the decision. It
 holds no path and no command. In a disposable copy Bash is matched only so that
-its calls are logged, and is never judged. In a standing team the workers'
+its calls are logged, and is not judged while the boundary file is intact. In a standing team the workers'
 shell is judged against the commands of the open batch
 ([details](batch.md#the-workers-shell)): the decision logged is then `approve`
 or `deny`. A log that cannot be written does not change the decision.

@@ -201,8 +201,9 @@ what happens to every other command ("您在切换时确认" for the first quest
   between batches.
 
 This narrows the consequence stated above: without a sandbox, a worker's
-shell no longer runs arbitrary commands, only the confirmed ones; what those
-commands write is still not bounded. Merging the pull request that adds this
+shell starts only the confirmed commands. It does not bound what those
+commands do: they write what they write, and they run the files the exec
+worker may write, a test file for one. Merging the pull request that adds this
 amendment ratifies it.
 
 ### 2026-11-18: a batch is settled before the next one opens

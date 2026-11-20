@@ -4,7 +4,7 @@ import { digest, bytesDigest } from '../loop/contracts.mjs';
 import { instanceOf } from './roots.mjs';
 import { git, isRepositoryRoot, acquireLease, releaseLease, readLease } from './lease.mjs';
 import { freezeRun } from './run-args.mjs';
-import { openBoundary, closeBoundary, readBoundary } from './write-boundary.mjs';
+import { openBoundary, closeBoundary, readBoundary, quotable } from './write-boundary.mjs';
 import { observeIsolation } from './isolation.mjs';
 import { limitsOf, COUNT_LIMITS } from './switch.mjs';
 
@@ -189,7 +189,8 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     lease = taken.lease.digest;
     // With the lock held, no switch and no change of limits can run: what is read now is what the batch uses.
     const { profile, limits } = liveTeam(teamRoot, instanceRoot), product = checkProduct(productRoot, startAsIs === true), count = batch.tickets.length;
-    // In a batch a worker's shell runs the commands the owner confirmed for the team, and no other.
+    // In a batch a worker's shell runs the commands the owner confirmed for the team, and no other, from the product root.
+    need(quotable(productRoot), 'The path of the product repository holds a character that cannot be written inside a quoted shell command (" $ ` \\ !); the workers could run no command there');
     const unconfirmed = batch.verificationCommands.filter(command => !limits.allowedCommands.includes(command));
     need(!unconfirmed.length, `These verification commands are not among the commands the owner confirmed for this team (${unconfirmed.slice(0, 5).map(plain).join(' | ')}); the workers could not run them. The owner adds them with: team-mode.mjs limits <LIMITS.json> --instance <instance-root>   (LIMITS.json: {"allowedCommands": [...]}, the whole list)`);
     // Decision 11: paths already changed are kept out of the tickets' commits, so none may lie where a ticket writes.

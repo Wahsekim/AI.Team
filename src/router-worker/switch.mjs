@@ -8,7 +8,7 @@ import { stageTeam } from './stage.mjs';
 import { makeLive } from './activate.mjs';
 import { instanceOf } from './roots.mjs';
 import { git, isRepositoryRoot, readLease, acquireLease, releaseLease } from './lease.mjs';
-import { standBoundary, dropBoundary, settingsGap, hookGap, BOUNDARY_FILE } from './write-boundary.mjs';
+import { standBoundary, dropBoundary, closeBoundary, readBoundary, settingsGap, hookGap, BOUNDARY_FILE } from './write-boundary.mjs';
 import { randomBytes } from 'node:crypto';
 
 // ADR 0010: a deployed team is switched between specialist and Router/Worker mode. The live mode's own
@@ -27,7 +27,9 @@ export const DEFAULT_LIMITS = { attemptsPerTicket: 1, outputAllowancePerTicket: 
 // The four limits that are counts. `allowedCommands` is the list of verification commands a worker of a batch
 // runs without a permission prompt; it is confirmed and changed like the counts.
 export const COUNT_LIMITS = ['attemptsPerTicket', 'outputAllowancePerTicket', 'guardianOutputShare', 'authorizationPerTicket'];
-const MAX_COMMANDS = 50, oneCommand = value => typeof value === 'string' && value.length > 0 && value.length <= 1000 && value === value.trim() && !/[\x00-\x1f\x7f]/.test(value);
+// As the owner reads it in the proposal, so it runs: printable ASCII on one line, no space at either end, no run of spaces to hide a tail.
+const MAX_COMMANDS = 50;
+export const oneCommand = value => typeof value === 'string' && /^[\x21-\x7e]+( [\x21-\x7e]+)*$/.test(value) && value.length <= 300;
 const LIVE = { active: 'Live: Router/Worker mode of this team, confirmed by the owner at the switch', description: 'standing mode',
   roster: 'the specialist roster is packed under holiday/specialist.' };
 
@@ -110,9 +112,9 @@ export function limitsOf(request) {
   const given = request?.limits ?? {};
   need(given && typeof given === 'object' && !Array.isArray(given) && Object.keys(given).every(key => Object.hasOwn(DEFAULT_LIMITS, key))
     && COUNT_LIMITS.every(key => given[key] === undefined || (Number.isSafeInteger(given[key]) && given[key] >= 1)) && (given.attemptsPerTicket ?? 1) <= 3, 'limits may only set the known limits to positive integers');
-  const commands = given.allowedCommands ?? [];
+  const commands = given.allowedCommands === undefined ? [] : given.allowedCommands;
   need(Array.isArray(commands) && commands.length <= MAX_COMMANDS && commands.every(oneCommand) && new Set(commands).size === commands.length,
-    `allowedCommands must list at most ${MAX_COMMANDS} distinct commands, each on one line`);
+    `allowedCommands must list at most ${MAX_COMMANDS} distinct commands, each on one line of at most 300 printable ASCII characters with single spaces`);
   return coherent({ ...DEFAULT_LIMITS, ...given, allowedCommands: [...commands] });
 }
 function coherent(limits) {
@@ -422,6 +424,9 @@ export function changeLimits({ confirm, atTerminal, ...options }) {
       appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} LIMITS CHANGED: ${changed.map(key => `${key} ${JSON.stringify(body.from[key])} -> ${JSON.stringify(body.to[key])}`).join(', ')}; proposal ${confirm} was confirmed ${atTerminal === true ? 'by its code, typed at an interactive terminal' : 'by a program that called the change directly, not at a terminal'}.\n`);
       renameSync(`${path}.tmp`, path);
     } catch (error) { rmSync(`${path}.tmp`, { force: true }); throw error; }
+    // A team that went live before the command list existed has a boundary without one, which does not judge its workers' shell.
+    const boundary = readBoundary(instance);
+    if (boundary && Object.values(boundary.wrappers).some(entry => !Array.isArray(entry.commands))) closeBoundary({ teamRoot: instance });
     const record = { schemaVersion: 1, stage: 'limits-changed', limits: body.to, changed, changedAt: at };
     return { ...record, digest: digest(record) };
   } catch (error) { return limitsRefusal(error); } finally { if (lock) releaseLease({ productRoot, lease: lock.lease.digest }); }
