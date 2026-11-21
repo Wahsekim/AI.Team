@@ -46,9 +46,9 @@ test('after flags a dependency manifest for both reviewers and a path naming aut
   const [manifest, auth, plain] = after.tickets;
   assert.deepEqual(manifest.review.required, ['security', 'architect']);
   assert.deepEqual(manifest.review.because, [{ reviewer: 'security', trigger: 'kit.dependency-manifest', path: 'package.json' }, { reviewer: 'architect', trigger: 'kit.dependency-manifest', path: 'package.json' }]);
-  assert.deepEqual(manifest.review.flaggedFiles, ['package.json']); assert.match(manifest.review.content['package.json'], /^sha256:[a-f0-9]{64}$/);
+  assert.deepEqual(manifest.review.flaggedFiles, ['package.json']); assert.match(manifest.content['package.json'], /^sha256:[a-f0-9]{64}$/);
   assert.deepEqual(auth.review.required, ['security']); assert.deepEqual(auth.review.because, [{ reviewer: 'security', trigger: 'kit.sensitive-word', path: 'src/authz.js' }]);
-  assert.deepEqual(plain.review, { required: [], because: [], flaggedFiles: [], content: {} });
+  assert.deepEqual(plain.review, { required: [], because: [], flaggedFiles: [] }); assert.match(plain.content['src/list/view.js'], /^sha256:/);
   assert.deepEqual(after.reviews, { security: { tickets: ['US-01', 'US-02'] }, architect: { tickets: ['US-01'] } });
   assert.deepEqual(after.commits.map(commit => commit.ticket), ['US-01', 'US-02', 'US-03'], 'the flags do not gate a commit yet');
 });

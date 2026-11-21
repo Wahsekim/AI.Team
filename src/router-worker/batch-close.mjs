@@ -126,9 +126,10 @@ export function afterBatch({ teamRoot, instanceRoot, result }) {
     if (rechanged.length) findings.push({ code: 'PREEXISTING_PATH_CHANGED', paths: rechanged });
     const tickets = batch.tickets.map((ticket, i) => ({ id: ticket.id, ...outcomeOf(result.results[i]), changedPaths: files.filter(path => within(path, ticket.paths)) }));
     // ADR 0011, decision 3: the reviewers each passed ticket's changes require, by the list frozen at "before". Not a gate yet.
+    // Every changed path is pinned, flagged or not: an elective review reads what after saw, not what is there later.
     for (const ticket of tickets.filter(entry => entry.status === 'passed' && entry.changedPaths.length)) {
-      const flags = flagPaths(batch.review, ticket.changedPaths);
-      ticket.review = { ...flags, content: contentOf(product, flags.flaggedFiles) };
+      ticket.review = flagPaths(batch.review, ticket.changedPaths);
+      ticket.content = contentOf(product, ticket.changedPaths);
     }
     const reviews = Object.fromEntries(batch.review.reviewers.map(name => [name, { tickets: tickets.filter(ticket => ticket.review?.required.includes(name)).map(ticket => ticket.id) }]).filter(([, entry]) => entry.tickets.length));
     const outside = files.filter(path => !batch.tickets.some(ticket => within(path, ticket.paths)));

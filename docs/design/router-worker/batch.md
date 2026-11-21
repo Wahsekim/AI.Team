@@ -359,8 +359,9 @@ a narrower pattern would miss `oauth/` or `authz.js`.
   refuses it. A batch left open across a kit upgrade is aborted and run again.
 - **"after"** gives each ticket that passed and changed something a
   `review`: `required` (reviewers, in the kit's order), `because` (reviewer,
-  trigger, path), `flaggedFiles` and `content` (a digest of each flagged file
-  as after saw it). `reviews` lists, per reviewer, the tickets it must review.
+  trigger, path) and `flaggedFiles`, and a `content` (a digest of each of its
+  changed paths, flagged or not, as after saw it). `reviews` lists, per
+  reviewer, the tickets it must review.
 
 ## Review state and brief
 
@@ -392,7 +393,9 @@ the commit gate come next.
   output tail of each verification command; the batch-review protocol
   (`agents/router-worker-review.md`); and the report schema, to be returned as
   the last fenced json block. It never holds a worker's report, the checker's
-  verdict or another reviewer's report.
+  verdict or another reviewer's report. The diff and each output tail sit in a
+  fence longer than any backtick run inside them, so worker text cannot close
+  it and forge a section.
 - **The kit runs the verification commands** for the brief
   (`src/router-worker/run-commands.mjs`): only a command both frozen in the
   batch and in the team's bound `allowedCommands`, with `/bin/sh -c` from the
@@ -404,7 +407,9 @@ the commit gate come next.
   every later brief of that reviewer. Its flagged files are all its changed
   paths.
 - **Refused**: no batch in review; a reviewer the kit does not name, or one
-  with no ticket; a flagged file whose content differs from what "after"
+  with no ticket; a briefed ticket with a changed path holding a control
+  character (named with the ticket: the reviewer cannot be told to open it); a
+  changed path of a briefed ticket whose content differs from what "after"
   recorded, before or after the verification commands ran; a brief record that
   was edited.
   `validate-team.sh` checks both parts with the same code.
@@ -586,8 +591,6 @@ The limits not being the ones the ledger binds is refused with its own code,
   refused by "before".
 - **The brief's verification runs without the lock.** Nothing else starts while
   the batch is in review, but the PM's own session can still change the product.
-- **An elective ticket's unflagged files** have no digest from "after"; the
-  brief records them as they are when it is made.
 - **A ticket that did not pass keeps its changes in the work tree.** They are
   not saved aside and removed; ADR 0011 does that for a rejected ticket.
 - **Git-ignored files a worker wrote are invisible**, inside or outside the
