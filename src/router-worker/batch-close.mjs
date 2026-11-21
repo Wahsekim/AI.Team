@@ -6,6 +6,8 @@ import { git, gitRun, acquireLease, releaseLease, readLease } from './lease.mjs'
 import { accountRun } from './run-args.mjs';
 import { readBoundary, closeBoundary, reviewBoundary, stateOf, within, LOG_FILE } from './write-boundary.mjs';
 import { flagPaths } from './review-triggers.mjs';
+import { reviewGate } from './review-judge.mjs';
+import { escalationsOf } from './escalations.mjs';
 import { BATCH_FILE, AFTER_FILE, PROGRESS_FILE, RETURN_FILE, RECORDS, ARCHIVE, RUN_ID, TICKET_ID, oneLine, changedPaths, contentOf, hooksOf, archiveBatch, plain, proposedTokens } from './batch.mjs';
 
 // ADR 0010, decisions 12 and 13: what a PM runs when a batch ends in a standing Router/Worker team.
@@ -125,7 +127,7 @@ export function afterBatch({ teamRoot, instanceRoot, result }) {
     const rechanged = batch.preexisting.filter(path => Object.hasOwn(was, path) && was[path] !== is[path]);
     if (rechanged.length) findings.push({ code: 'PREEXISTING_PATH_CHANGED', paths: rechanged });
     const tickets = batch.tickets.map((ticket, i) => ({ id: ticket.id, ...outcomeOf(result.results[i]), changedPaths: files.filter(path => within(path, ticket.paths)) }));
-    // ADR 0011, decision 3: the reviewers each passed ticket's changes require, by the list frozen at "before". Not a gate yet.
+    // ADR 0011, decision 3: the reviewers each passed ticket's changes require, by the list frozen at "before"; commit is gated on their verdicts.
     for (const ticket of tickets.filter(entry => entry.status === 'passed' && entry.changedPaths.length)) {
       const flags = flagPaths(batch.review, ticket.changedPaths);
       ticket.review = { ...flags, content: contentOf(product, flags.flaggedFiles) };
@@ -196,6 +198,8 @@ export function commitBatch({ teamRoot, instanceRoot }) {
         && commit.paths.every(path => typeof path === 'string' && !path.endsWith('/') && within(path, ticket.paths) && !batch.preexisting.includes(path));
     });
     need(planned && (after.holdAll !== true || after.commits.length === 0), `${AFTER_FILE} plans a commit that is not a passed ticket's own paths. ${ABANDON}`);
+    // ADR 0011, decisions 14 and 17: a ticket a review rejected or could not judge, and every ticket after it, stays uncommitted.
+    const { plan, held } = reviewGate(instance, batch, after);
     product = batch.productRoot;
     const taken = acquireLease({ teamRoot: instance, productRoot: product });
     need(!taken.errors, `The lock on the product repository could not be taken: ${taken.errors?.[0]?.reason}`);
@@ -208,19 +212,19 @@ export function commitBatch({ teamRoot, instanceRoot }) {
     need(!exists(join(instance, ARCHIVE, batch.runId)), `batches/${batch.runId} already exists: an archive of this batch was started. ${ABANDON}`);
     // The commits this command already made, by their ids: the branch must be the batch's start plus exactly those.
     const progressPath = join(instance, PROGRESS_FILE), progress = exists(progressPath) ? readJSON(progressPath) : { commits: [] };
-    need(Array.isArray(progress?.commits) && progress.commits.length <= after.commits.length && progress.commits.every((made, i) => made?.ticket === after.commits[i].ticket && /^[a-f0-9]{40}$/.test(made.sha ?? '')),
+    need(Array.isArray(progress?.commits) && progress.commits.length <= plan.length && progress.commits.every((made, i) => made?.ticket === plan[i].ticket && /^[a-f0-9]{40}$/.test(made.sha ?? '')),
       `${PROGRESS_FILE} cannot be read. ${ABANDON}`);
     const done = progress.commits, head = () => git(product, 'rev-parse', 'HEAD')?.trim(), parentOf = sha => git(product, 'rev-parse', `${sha}^`)?.trim();
     const holds = (sha, paths) => digest((git(product, 'diff-tree', '--no-commit-id', '--name-only', '--no-renames', '-r', '-z', sha) ?? '').split('\0').filter(Boolean).sort()) === digest([...paths].sort());
     // A commit that was made just before this command died, and so was never recorded, is taken up when it is the next planned one.
-    const tip = done.length ? done.at(-1).sha : batch.productHead, upNext = after.commits[done.length];
+    const tip = done.length ? done.at(-1).sha : batch.productHead, upNext = plan[done.length];
     if (upNext && head() !== tip && parentOf(head()) === tip && holds(head(), upNext.paths)) { done.push({ ticket: upNext.ticket, sha: head() }); replace(progressPath, { schemaVersion: 1, runId: batch.runId, commits: done }); }
-    need(done.every((made, i) => holds(made.sha, after.commits[i].paths)), `A commit recorded for this batch does not hold its ticket's paths. ${ABANDON}`);
+    need(done.every((made, i) => holds(made.sha, plan[i].paths)), `A commit recorded for this batch does not hold its ticket's paths. ${ABANDON}`);
     need(head() === (done.length ? done.at(-1).sha : batch.productHead) && done.every((made, i) => parentOf(made.sha) === (i ? done[i - 1].sha : batch.productHead)),
       `The product branch is not the batch's start plus the commits this command made: someone committed, or moved the branch. ${ABANDON}`);
-    const todo = after.commits.slice(done.length);
+    const todo = plan.slice(done.length), heldPaths = after.commits.slice(plan.length).flatMap(commit => commit.paths);
     // What is still to commit must be exactly what after saw: nothing was edited in between.
-    const pending = changedPaths(product).filter(path => !batch.preexisting.includes(path)), expected = [...todo.flatMap(commit => commit.paths), ...after.left].sort();
+    const pending = changedPaths(product).filter(path => !batch.preexisting.includes(path)), expected = [...todo.flatMap(commit => commit.paths), ...heldPaths, ...after.left].sort();
     need(digest(pending) === digest(expected), `The product repository changed since the batch was closed. ${ABANDON}`);
 
     for (const commit of todo) {
@@ -230,7 +234,7 @@ export function commitBatch({ teamRoot, instanceRoot }) {
       need(added.status === 0 && !added.error, `git add failed for ticket ${commit.ticket}: ${said(added)}. ${ABANDON}`);
       // --only: what else is staged, such as a path changed before the batch, is not carried into this commit.
       const parent = head(), committed = withPaths(product, ['commit', '-q', '-m', commit.message, '--only'], commit.paths, 600000);
-      need(committed.status === 0 && !committed.error, `git commit failed for ticket ${commit.ticket} (${done.length} of ${after.commits.length} made): ${said(committed)}. Fix the cause and run commit again. ${ABANDON}`);
+      need(committed.status === 0 && !committed.error, `git commit failed for ticket ${commit.ticket} (${done.length} of ${plan.length} made): ${said(committed)}. Fix the cause and run commit again. ${ABANDON}`);
       const sha = head();
       need(sha && sha !== parent && parentOf(sha) === parent, `The commit of ticket ${commit.ticket} did not land on the product branch. ${ABANDON}`);
       // A hook may have put other paths into the commit: what it holds must be the ticket's paths, nothing else.
@@ -238,11 +242,14 @@ export function commitBatch({ teamRoot, instanceRoot }) {
       done.push({ ticket: commit.ticket, sha });
       replace(progressPath, { schemaVersion: 1, runId: batch.runId, commits: done });
     }
-    const left = changedPaths(product).filter(path => !batch.preexisting.includes(path)), at = new Date().toISOString();
-    const record = sealed({ schemaVersion: 1, stage: 'batch-committed', runId: batch.runId, batchDigest: batch.digest, afterDigest: after.digest, committedAt: at, branch: batch.branch, commits: done, left, pushed: false });
+    const left = changedPaths(product).filter(path => !batch.preexisting.includes(path)), at = new Date().toISOString(), escalations = escalationsOf(instance, batch.runId);
+    const record = sealed({ schemaVersion: 1, stage: 'batch-committed', runId: batch.runId, batchDigest: batch.digest, afterDigest: after.digest, committedAt: at, branch: batch.branch, commits: done, held, escalations, left, pushed: false });
     let ledgerWritten = true;
-    try { appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} BATCH ${batch.runId} COMMITTED on ${plain(batch.branch)}: ${done.length} commit(s)${done.length ? ` (${done.map(commit => `${commit.ticket} ${commit.sha.slice(0, 8)}`).join(', ')})` : ''}; ${left.length} changed path(s) left uncommitted${left.length ? ` (${left.slice(0, 10).map(plain).join(', ')}${left.length > 10 ? ', ...' : ''})` : ''}. Nothing was pushed.\n`); }
+    try { appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} BATCH ${batch.runId} COMMITTED on ${plain(batch.branch)}: ${done.length} commit(s)${done.length ? ` (${done.map(commit => `${commit.ticket} ${commit.sha.slice(0, 8)}`).join(', ')})` : ''}; ${left.length} changed path(s) left uncommitted${left.length ? ` (${left.slice(0, 10).map(plain).join(', ')}${left.length > 10 ? ', ...' : ''})` : ''}${held.length ? `; held: ${held.map(entry => `${entry.ticket} (${entry.reason})`).join(', ')}` : ''}${escalations.length ? `; escalated to the owner: ${escalations.map(entry => entry.id).join(', ')}` : ''}. Nothing was pushed.\n`); }
     catch { ledgerWritten = false; }
+    // The commit ends the review: the workers stay closed and the reviewers leave the boundary.
+    const boundary = readBoundary(instance);
+    if (boundary && stateOf(boundary) === 'review') closeBoundary({ teamRoot: instance });
     archiveBatch(instance, batch.runId, { 'commit.json': record }, RECORDS);
     return ledgerWritten ? record : { ...record, warning: `${LEDGER} could not be written; add the COMMITTED line by hand` };
   } catch (error) { return refuse(error); } finally { if (lease) releaseLease({ productRoot: product, lease }); }

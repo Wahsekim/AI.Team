@@ -238,7 +238,7 @@ with a clone of the product, as described below.
 [ADR 0011](decisions/0011-router-worker-batch-review.md) adds a review to that
 mode: at the end of a batch the kit, not the PM, decides from a trigger list
 which tickets Security or Architect must review before they are committed.
-Built so far: the trigger list (`kit/config/router-worker/review.json` plus the team's `profiles/review.json`), frozen by `before` and flagged per ticket by `after`; a flagged batch enters a review state in which the hook bounds the reviewers too, and `rw-batch.mjs review-brief` gives each reviewer a brief built by the kit. It does not gate a commit yet.
+Built so far: the trigger list (`kit/config/router-worker/review.json` plus the team's `profiles/review.json`), frozen by `before` and flagged per ticket by `after`; a flagged batch enters a review state in which the hook bounds the reviewers too, `rw-batch.mjs review-brief` gives each reviewer a brief built by the kit, and `rw-batch.mjs review` judges the reviewer's report from its own transcript; `commit` holds a rejected or unreviewed ticket and every ticket after it, and a ticket that fails review in a second batch is escalated to the owner, blocking only it and related tickets until `team-mode.mjs acknowledge`.
 
 What exists today is offline tooling in `src/router-worker/`: a deterministic
 compiler (first-attempt `exec` and `check` previews only), local source/context

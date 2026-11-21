@@ -6,6 +6,7 @@ import { stageTeam } from '../src/router-worker/stage.mjs';
 
 import { proposeSwitch, switchMode, recoverSwitch, proposeLimits, changeLimits } from '../src/router-worker/switch.mjs';
 import { draftRequest } from '../src/router-worker/request.mjs';
+import { proposeAcknowledge, acknowledgeEscalation } from '../src/router-worker/escalations.mjs';
 
 // Written synchronously: process.exit would cut a pending pipe write short.
 const finish = (result, done) => {
@@ -59,6 +60,18 @@ if (process.argv[2] === 'limits') {
   if (proposal.errors) finish(proposal, false);
   typedAtTerminal(proposal, 'change the limits of this team');
   finish(changeLimits({ ...common, limits, confirm: proposal.digest, atTerminal: true }), true);
+}
+
+// acknowledge <escalation id> --instance <root>
+//   The owner lifts an escalated ticket's block (ADR 0011, decisions 16 and 17); confirmed like a switch.
+if (process.argv[2] === 'acknowledge') {
+  const [id, ...rest] = process.argv.slice(3), options = id && !id.startsWith('--') ? flags(rest, ['--instance']) : null;
+  if (!options?.['--instance']) { console.error('usage: node scripts/team-mode.mjs acknowledge <escalation id> --instance <instance-root>   (the open escalations are in reviews/escalations.jsonl)'); process.exit(1); }
+  const instanceRoot = resolve(options['--instance']), common = { teamRoot: join(instanceRoot, 'kit'), instanceRoot, id };
+  const proposal = proposeAcknowledge(common);
+  if (proposal.errors) finish(proposal, false);
+  typedAtTerminal(proposal, `lift escalation ${proposal.escalation.id}`);
+  finish(acknowledgeEscalation({ ...common, confirm: proposal.digest, atTerminal: true }), true);
 }
 
 // switch <specialist|router-worker> <REQUEST.json> --instance <root> --product-root <product>
