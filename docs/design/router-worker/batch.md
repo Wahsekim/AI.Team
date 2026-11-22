@@ -638,7 +638,8 @@ terminal. Four mechanisms hold that:
   figure includes the Guardian's spend.
   Nothing writes a limit from that list.
 
-A PM session that fakes a terminal (`script`, its own pseudo-terminal) or sets
+A PM session that fakes a terminal (`script`, its own pseudo-terminal, or
+`process.stdin.isTTY` set by a program that imports the kit) or sets
 `NODE_TEST_CONTEXT`, or that forges a ledger line together with the digest of
 the limits it wrote, is not detected (see "What these commands trust").
 

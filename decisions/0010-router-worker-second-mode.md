@@ -261,7 +261,10 @@ human."
   confirm. Nothing in the kit writes a limit from that list.
 
 Not covered: a PM that fakes a terminal (`script`, a pseudo-terminal of its
-own) or sets `NODE_TEST_CONTEXT` gets past the terminal check, and a PM that
+own, or one line setting `process.stdin.isTTY` in a program that imports the
+kit) or sets `NODE_TEST_CONTEXT` gets past the terminal check; the profile
+packed under `holiday/` is not guarded and binds at the next switch back,
+where the owner sees it in the proposal; and a PM that
 forges a ledger line together with the digest of the limits it wrote is not
 detected. Nothing detects either. As for the batch records, the digests detect
 an accidental or careless edit, not a deliberate one by a session that can
