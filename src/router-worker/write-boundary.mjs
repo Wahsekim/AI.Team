@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, lstatSync, statSync, realpathSync, rmSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, lstatSync, statSync, realpathSync, readlinkSync, rmSync, mkdirSync } from 'node:fs';
 import { join, resolve, dirname, basename, relative, isAbsolute, sep } from 'node:path';
 import { canonical, digest, parseJSON } from '../loop/contracts.mjs';
 import { compile } from './compile.mjs';
@@ -213,7 +213,9 @@ export function logEntry({ input, boundary, decision, at }) {
 }
 
 // A path that cannot be resolved (a dangling link, a file taken for a folder, no permission) is judged as written.
-const resolvedOr = path => { try { return realTarget(path) ?? path; } catch { return path; } };
+// A dangling link is followed by its text, so a Write through it is judged where it would create the file.
+const linkedTo = path => { let current = path; for (let hops = 0; hops < 40; hops++) { try { if (!lstatSync(current).isSymbolicLink()) return current; current = resolve(dirname(current), readlinkSync(current)); } catch { return current; } } return current; };
+const resolvedOr = path => { try { return realTarget(path) ?? linkedTo(path); } catch { return linkedTo(path); } };
 const statOf = path => { try { return statSync(path); } catch { return null; } };
 
 // The call writes the team's limits file: by its path as resolved, whatever its case, or as the same file under another name.
