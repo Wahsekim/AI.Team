@@ -18,7 +18,9 @@ export { REVIEW_FILE };
 // Each brief is recorded, sealed, in rw-batch-review-<reviewer>.json, which the judging of the review reads.
 const KIT = fileURLToPath(new URL('../../', import.meta.url));
 const PROTOCOL = 'agents/router-worker-review.md', KIT_PROTOCOL = 'config/router-worker/review-protocol.md', MODE_FILE = 'profiles/team-mode.json';
-const DIFF_CAP = 60000, FENCE = '````';
+const DIFF_CAP = 60000;
+// A fence longer than any backtick run in the text, so the text cannot close it.
+const fenced = (text, info = '') => { const fence = '`'.repeat(Math.max(4, ...(text.match(/`+/g) ?? []).map(run => run.length + 1))); return `${fence}${info}\n${text}${text.endsWith('\n') ? '' : '\n'}${fence}`; };
 const need = (condition, reason) => { if (!condition) throw new Refusal(reason); };
 const readJSON = path => { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; } };
 const sealed = body => ({ ...body, digest: digest(body) });
@@ -49,9 +51,9 @@ function render({ batch, reviewer, attempt, tickets, diff, rules, adrs, verifica
     'Files to open with your Read tool, every one, and to report in filesRead:',
     lines(flaggedFiles.map(path => content[path] === null ? `${join(batch.productRoot, path)} (deleted by the ticket: nothing to open)` : join(batch.productRoot, path))),
     `Changed paths of the ticket: ${ticket.changedPaths.join(', ')}`].join('\n')).join('\n\n');
-  const diffText = diff.length <= DIFF_CAP ? `${FENCE}diff\n${diff}${FENCE}`
+  const diffText = diff.length <= DIFF_CAP ? fenced(diff, 'diff')
     : `The diff is ${diff.length} characters, over the cap of ${DIFF_CAP}: open each changed path of the tickets above with your Read tool instead.`;
-  const runs = verification.map(run => `### \`${run.command}\`: exit ${run.exit}${run.timedOut ? ' (stopped at the time limit)' : ''}\n${FENCE}\n${run.tail}\n${FENCE}`).join('\n\n');
+  const runs = verification.map(run => `### \`${run.command}\`: exit ${run.exit}${run.timedOut ? ' (stopped at the time limit)' : ''}\n${fenced(run.tail)}`).join('\n\n');
   return [`# Batch review brief: ${reviewer}, run ${batch.runId}, attempt ${attempt}`,
     `You review the tickets below as ${reviewer}. You write nothing in the product and run no shell command: the kit ran the verification commands and gives their output here. Follow the protocol.`,
     ...(retryReason ? ['## Why you are dispatched again', `Your earlier attempt was refused by the kit: ${retryReason}. This attempt is the last one.`] : []),
@@ -61,7 +63,7 @@ function render({ batch, reviewer, attempt, tickets, diff, rules, adrs, verifica
     '## Verification run by the kit, from the product root', runs || 'No command was run.',
     ...(dropped.length ? [`Frozen in the batch but no longer confirmed for the team, so not run: ${dropped.join(' | ')}`] : []),
     '## Report', 'Return your report as JSON in this shape; return it as the last fenced json block of your final message.',
-    `${FENCE}json\n${JSON.stringify(REPORT(reviewer, '<the briefDigest below>'), null, 2)}\n${FENCE}`].join('\n\n') + '\n';
+    fenced(JSON.stringify(REPORT(reviewer, '<the briefDigest below>'), null, 2), 'json')].join('\n\n') + '\n';
 }
 
 export function reviewBrief({ teamRoot, instanceRoot, reviewer, tickets: named = [], run = runCommands }) {
@@ -89,16 +91,21 @@ export function reviewBrief({ teamRoot, instanceRoot, reviewer, tickets: named =
     const chosen = after.tickets.filter(entry => required.includes(entry.id) || elective.has(entry.id));
     need(chosen.length, `There is no ticket of this batch for ${reviewer} to review; name one with --ticket for an elective review`);
 
-    // What the reviewer reads is what after saw: a flagged file that changed since then is not reviewed.
-    const product = batch.productRoot, recorded = Object.assign({}, ...after.tickets.map(entry => entry.review?.content ?? {}));
-    const unchanged = () => { const now = contentOf(product, Object.keys(recorded)); return Object.keys(recorded).filter(path => now[path] !== recorded[path]); };
+    // A path the reviewer is told to open goes into the brief as it is: one holding a control character could forge a section of it.
+    for (const ticket of chosen) {
+      const unsafe = ticket.changedPaths.filter(path => plain(path) !== path);
+      need(!unsafe.length, `Ticket ${ticket.id} changed ${unsafe.slice(0, 5).map(path => JSON.stringify(path)).join(', ')}, a path holding a control character; it cannot be put in a brief. Rename it, or abort the batch`);
+    }
+    // What the reviewer reads is what after saw: a briefed path that changed since then is not reviewed.
+    const product = batch.productRoot, recorded = Object.assign({}, ...chosen.map(entry => entry.content ?? {})), briefed = [...new Set(chosen.flatMap(ticket => ticket.changedPaths))];
+    const unchanged = () => { const now = contentOf(product, briefed); return briefed.filter(path => !Object.hasOwn(recorded, path) || now[path] !== recorded[path]); };
     const moved = unchanged();
     need(!moved.length, `${moved.slice(0, 5).map(plain).join(', ')} changed since after; the review would not see what is committed. Restore it, or abort the batch`);
     const tickets = chosen.map(ticket => {
       const because = elective.has(ticket.id) ? [] : ticket.review.because.filter(entry => entry.reviewer === reviewer);
       const flaggedFiles = elective.has(ticket.id) ? ticket.changedPaths : [...new Set(because.map(entry => entry.path))];
       return { ticket, frozen: batch.tickets.find(entry => entry.id === ticket.id), elective: elective.has(ticket.id), because, flaggedFiles,
-        content: Object.fromEntries(flaggedFiles.map(path => [path, Object.hasOwn(recorded, path) ? recorded[path] : contentOf(product, [path])[path]])) };
+        content: Object.fromEntries(flaggedFiles.map(path => [path, recorded[path]])) };
     });
 
     const profile = readJSON(join(instance, MODE_FILE)), bound = boundLimits(instance) === digest(profile?.limits);
@@ -111,7 +118,7 @@ export function reviewBrief({ teamRoot, instanceRoot, reviewer, tickets: named =
 
     const rules = batch.review.rules.filter(rule => rule.reviewer === reviewer), adrs = batch.review.adrs.map(path => join(instance, path));
     let protocol; try { protocol = readFileSync(join(instance, PROTOCOL), 'utf8'); } catch { protocol = readFileSync(join(KIT, KIT_PROTOCOL), 'utf8'); }
-    const attempt = entries.length + 1, diff = diffOf(product, batch.productHead, [...new Set(chosen.flatMap(ticket => ticket.changedPaths))]);
+    const attempt = entries.length + 1, diff = diffOf(product, batch.productHead, briefed);
     const body = render({ batch, reviewer, attempt, tickets, diff, rules, adrs, verification, dropped, protocol, retryReason }), briefDigest = digest(body);
     const brief = `${body}\nbriefDigest: ${briefDigest}\n`;
     const record = sealed({ schemaVersion: 1, stage: 'review-brief', runId: batch.runId, reviewer, wrapper, attempt, briefDigest, madeAt: new Date().toISOString(),
