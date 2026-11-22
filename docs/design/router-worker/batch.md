@@ -441,14 +441,20 @@ offline on transcript fixtures.
   relayed by the workflow harness and carries R's latest brief unchanged (the
   body between the brief's heading and its `briefDigest:` line has that
   digest); and it holds a `Read` tool call of the absolute path of every
-  flagged file that exists. The report is the last fenced `json` block of the
+  flagged file that exists. A `Read` counts only when the `tool_result` with
+  its `tool_use_id` is in the transcript and is not an error, and it has no
+  `limit` and no `offset` past 1; a partial `Read` is ignored, so it counts
+  only next to a full `Read` of the same path. The Read tool's own default
+  cut of a long file is not detected. The report is the last fenced `json` block of the
   last assistant message; a `REPORT.json` given must be equal to it.
 - **The verdict is derived by the kit**, per ticket of the brief: every flagged
   file listed in `filesRead` with `read: true`; every rule of the frozen list
   reported `pass`, `fail` or `not-checked`; not every rule `not-checked`; a
   `GREEN`, `AMBER` or `RED` item, `RED` exactly when a rule failed; each failed
   rule with a fix and a proposed control (`detects`, `variation`,
-  `toolCanDetect`). Any gap refuses the report. A failed rule rejects the
+  `toolCanDetect`). A rule reported more than once for a ticket with
+  different results, or a ticket listed more than once with different
+  verdicts, is refused. Any gap refuses the report. A failed rule rejects the
   ticket; `AMBER` does not (the ticket is committed and the PM files the
   concern, kept as `finding`, as a backlog ticket). A single `not-checked` is
   recorded in the verdict and the ledger.
@@ -461,7 +467,8 @@ offline on transcript fixtures.
   Refusal codes: `REVIEW_TRANSCRIPT_PLACE`, `REVIEW_NOT_REVIEWER`,
   `REVIEW_WORKFLOW_AGENT`, `REVIEW_BRIEF_NOT_FOUND`,
   `REVIEW_TRANSCRIPT_NO_OPEN`, `REVIEW_NO_REPORT`, `REVIEW_REPORT_MISMATCH`,
-  `REVIEW_REPORT_SHAPE`, `REVIEW_FILE_NOT_READ`, `REVIEW_RULE_MISSING`,
+  `REVIEW_REPORT_SHAPE`, `REVIEW_FILE_NOT_READ`, `REVIEW_RULE_CONFLICT`,
+  `REVIEW_ITEM_CONFLICT`, `REVIEW_RULE_MISSING`,
   `REVIEW_ALL_NOT_CHECKED`, `REVIEW_ITEM_MISSING`, `REVIEW_VERDICT_MISMATCH`,
   `REVIEW_CONTROL_MISSING`, `REVIEW_NO_ANSWER`. A transcript that cannot be
   read, one already judged, or a flagged file changed since the brief is
@@ -481,13 +488,19 @@ offline on transcript fixtures.
   re-running the verification commands comes with decision 15. The commit
   record carries `held: [{ticket, reason: "rejected"|"review-not-obtained"|"after-held-ticket"}]`
   and `escalations`, the ledger line names both, and the commit closes the
-  review state.
+  review state. `commit` also refuses when `reviews/tickets.jsonl` holds a
+  `rejected` or `not-obtained` line for this run that the reviewer's final
+  verdict does not show: deleting or rewriting `rw-batch-reviews.json` to have
+  a ticket judged again does not reset its rejection. A judgment that died
+  after that line and before its verdict, then passed on a new attempt, is
+  refused the same way; the batch is aborted.
 - **Across batches.** Each final outcome that is not a pass is appended to
   `reviews/tickets.jsonl` as `{ticket, runId, reviewer, outcome:
   "rejected"|"not-obtained", finding, at}`, once per ticket, run and reviewer.
-  A ticket id (compared without case) rejected in a second batch, or whose
-  review was not obtained in a second batch, is escalated: `{id:
-  "ESC-<ticket>-<run>", kind: "second-rejection"|"review-not-obtained-again",
+  A ticket id (compared without case) with two such outcomes in two distinct
+  batches is escalated, whether they are two rejections, two reviews not
+  obtained, or one of each (PM decision of 2026-11-22): `{id:
+  "ESC-<ticket>-<run>", kind: "second-rejection"|"review-not-obtained-again"|"repeated-adverse",
   ticket, reviewer, runIds, paths, findings, at}` in
   `reviews/escalations.jsonl`, an `ESCALATED` ledger line, and the verdict's
   `escalated` list. Two reviewers rejecting the same ticket in one batch count
@@ -497,12 +510,22 @@ offline on transcript fixtures.
   the escalated ticket, a ticket whose paths overlap the escalated ticket's
   paths (the same comparison as two tickets claiming one file), or a ticket
   that depends on a blocked ticket, directly or through others, in this batch
-  or an archived one. Every other batch opens.
+  or an archived one. Every other batch opens. A ticket that depends on an
+  archived ticket whose paths overlap the escalated ticket's paths is not
+  blocked: the archived ticket was committed after its own review, and only
+  the tickets of the batch are compared by path.
 - **The owner lifts an escalation** with `node kit/scripts/team-mode.mjs
   acknowledge <escalation id> --instance <instance-root>`, confirmed like a
-  limit change by typing the code at an interactive terminal. It appends
-  `{id, escalationDigest, acknowledgedAt, atTerminal}` to
-  `reviews/acknowledged.jsonl` and an `ESCALATION ... ACKNOWLEDGED` ledger line.
+  limit change by typing the code at an interactive terminal: a call that does
+  not say the code was typed at a terminal, or whose process has none, is
+  refused, with the same `node --test` exception. It appends
+  `{id, escalationDigest, acknowledgedAt, atTerminal: true}` to
+  `reviews/acknowledged.jsonl` and an `ESCALATION ... ACKNOWLEDGED` ledger line
+  that says "typed at an interactive terminal". Only a line with
+  `atTerminal: true` whose `escalationDigest` is the digest of the escalation
+  as it stands lifts it. A PM session that fakes a terminal, sets
+  `NODE_TEST_CONTEXT`, or appends a forged line with the right digest is not
+  detected (see "What these commands trust").
 - The kit checks the transcript's place, shape and content; it cannot prove that
   the reviewer, and not the PM's session, wrote it.
 - The Coach takes the findings from `reviews/tickets.jsonl` and the verdicts
@@ -718,7 +741,8 @@ The limits not being the ones the ledger binds is refused with its own code,
   `init.defaultBranch`, `main`, `master`. A repository with no remote whose
   default branch has another name (`develop`) is not recognised.
 - **A faked terminal, a faked test context or a forged ledger line is not
-  detected** (above).
+  detected** (above); nor is a forged acknowledgement line that carries the
+  escalation's digest.
 - **The estimated output** the engine is told is half the ceiling. It is a
   figure the kit sets so that the engine's own checks on the ceiling hold; it
   is not a forecast.

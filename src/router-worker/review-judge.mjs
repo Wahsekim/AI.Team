@@ -6,7 +6,7 @@ import { instanceOf } from './roots.mjs';
 import { readBoundary, stateOf } from './write-boundary.mjs';
 import { AFTER_FILE, REVIEW_FILE, VERDICTS_FILE, contentOf, plain } from './batch.mjs';
 import { openBatch, intact, Refusal } from './batch-close.mjs';
-import { recordOutcomes } from './escalations.mjs';
+import { recordOutcomes, outcomesOf, TICKETS } from './escalations.mjs';
 
 // ADR 0011, decisions 13, 17 and 19: the kit judges a reviewer's report from the reviewer's own session transcript
 // and derives the verdict itself. Each judgment is appended, sealed, to rw-batch-reviews.json; commit reads it.
@@ -80,7 +80,12 @@ function evidenceOf({ transcript, text, projectsRoot, wrapper, reviewer, runId, 
   const start = prompt.indexOf(`# Batch review brief: ${reviewer}, run ${runId}, attempt ${brief.attempt}\n`), end = start === -1 ? -1 : prompt.indexOf(`\nbriefDigest: ${brief.briefDigest}`, start);
   if (end === -1 || digest(prompt.slice(start, end)) !== brief.briefDigest) gap('REVIEW_BRIEF_NOT_FOUND', `The transcript's prompt does not carry brief attempt ${brief.attempt} (${brief.briefDigest}) unchanged`);
   const assistant = entries.filter(entry => entry.type === 'assistant' && entry.message && Array.isArray(entry.message.content));
-  const opened = new Set(assistant.flatMap(entry => entry.message.content.filter(block => block?.type === 'tool_use' && block.name === 'Read' && typeof block.input?.file_path === 'string').map(block => block.input.file_path)));
+  // A Read counts when its result is not an error and it read the file from its first line with no limit.
+  const succeeded = new Set(entries.filter(entry => entry.type === 'user' && Array.isArray(entry.message?.content))
+    .flatMap(entry => entry.message.content.filter(block => block?.type === 'tool_result' && block.is_error !== true).map(block => block.tool_use_id)));
+  const whole = input => input.limit === undefined && (input.offset === undefined || input.offset <= 1);
+  const opened = new Set(assistant.flatMap(entry => entry.message.content.filter(block => block?.type === 'tool_use' && block.name === 'Read' && typeof block.input?.file_path === 'string'
+    && succeeded.has(block.id) && whole(block.input)).map(block => block.input.file_path)));
   const unopened = flaggedOf(brief, product).filter(item => !opened.has(item.absolute));
   if (unopened.length) gap('REVIEW_TRANSCRIPT_NO_OPEN', `The transcript shows no Read of ${unopened.slice(0, 5).map(item => plain(item.absolute)).join(', ')}`);
   // A message streamed in several entries shares one id; the report is the last fenced json block of the last one.
@@ -101,11 +106,14 @@ function derive(report, brief, reviewer, product) {
   const unread = flaggedOf(brief, product).filter(item => !read.has(item.path) && !read.has(item.absolute));
   if (unread.length) gap('REVIEW_FILE_NOT_READ', `The report does not list as read: ${unread.slice(0, 5).map(item => plain(item.path)).join(', ')}`);
   const tickets = brief.tickets.map(({ id }) => {
+    const conflicts = brief.ruleIds.filter(rule => new Set(report.rules.filter(row => row?.rule === rule && same(row.ticket, id)).map(row => row.result)).size > 1);
+    if (conflicts.length) gap('REVIEW_RULE_CONFLICT', `Ticket ${id}: ${conflicts.join(', ')} reported more than once with different results`);
     const rows = brief.ruleIds.map(rule => report.rules.find(row => row?.rule === rule && same(row.ticket, id) && RESULTS.includes(row.result)));
     const missing = brief.ruleIds.filter((_, i) => !rows[i]);
     if (missing.length) gap('REVIEW_RULE_MISSING', `Ticket ${id}: no pass, fail or not-checked for ${missing.join(', ')}`);
     const fails = brief.ruleIds.filter((_, i) => rows[i]?.result === 'fail'), notChecked = brief.ruleIds.filter((_, i) => rows[i]?.result === 'not-checked');
     if (brief.ruleIds.length && notChecked.length === brief.ruleIds.length) gap('REVIEW_ALL_NOT_CHECKED', `Ticket ${id}: every rule is not-checked`);
+    if (new Set(report.items.filter(entry => same(entry?.ticket, id)).map(entry => entry.verdict)).size > 1) gap('REVIEW_ITEM_CONFLICT', `Ticket ${id}: listed more than once with different verdicts`);
     const item = report.items.find(entry => same(entry?.ticket, id) && VERDICTS.includes(entry.verdict));
     if (!item) gap('REVIEW_ITEM_MISSING', `Ticket ${id}: no GREEN, AMBER or RED verdict`);
     else if ((item.verdict === 'RED') !== (fails.length > 0)) gap('REVIEW_VERDICT_MISMATCH', `Ticket ${id}: ${item.verdict} with ${fails.length ? `the failed rule(s) ${fails.join(', ')}` : 'no failed rule'}; RED goes with a failed rule and only with one`);
@@ -175,7 +183,11 @@ export function reviewGate(instance, batch, after) {
   const needs = new Map((after.tickets ?? []).filter(ticket => ticket.review).map(ticket => [ticket.id, new Set(ticket.review.required)]));
   for (const reviewer of batch.review.reviewers) for (const brief of briefsOf(instance, reviewer, batch.runId))
     for (const item of brief.tickets.filter(entry => entry.elective)) needs.set(item.id, new Set([...(needs.get(item.id) ?? []), reviewer]));
-  const verdicts = verdictsOf(instance, batch.runId), open = new Set(), reasons = after.commits.map(commit => {
+  const verdicts = verdictsOf(instance, batch.runId);
+  // The lines across batches are written before the verdict: one the verdicts do not show means they were changed or removed.
+  const lost = outcomesOf(instance, batch.runId).filter(line => finalOf(verdicts, line.reviewer)?.tickets.find(item => same(item.id, line.ticket))?.verdict !== line.outcome);
+  need(!lost.length, `${lost.slice(0, 5).map(line => `${plain(String(line.ticket))} (${plain(String(line.outcome))} by ${plain(String(line.reviewer))})`).join(', ')} ${lost.length > 1 ? 'are' : 'is'} recorded in ${TICKETS} for this batch, but ${VERDICTS_FILE} does not show it: the verdicts were changed or removed. Restore them, or abort the batch`);
+  const open = new Set(), reasons = after.commits.map(commit => {
     const outcomes = [...(needs.get(commit.ticket) ?? [])].map(reviewer => {
       const final = finalOf(verdicts, reviewer);
       if (!final) { open.add(reviewer); return null; }

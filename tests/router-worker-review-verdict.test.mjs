@@ -2,15 +2,17 @@
 // on the verdicts, and escalates a ticket that keeps failing review to the owner without stopping unrelated work.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, readFileSync, existsSync, mkdirSync, rmSync, appendFileSync } from 'node:fs';
+import { writeFileSync, readFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { digest } from '../src/loop/contracts.mjs';
 import { spawnSync } from 'node:child_process';
 import { beforeBatch, abortBatch } from '../src/router-worker/batch.mjs';
 import { afterBatch, commitBatch } from '../src/router-worker/batch-close.mjs';
 import { markNotMetered } from '../src/router-worker/batch-settle.mjs';
 import { reviewBrief } from '../src/router-worker/review-brief.mjs';
 import { judgeReview, recordNoAnswer, VERDICTS_FILE } from '../src/router-worker/review-judge.mjs';
-import { proposeAcknowledge, acknowledgeEscalation } from '../src/router-worker/escalations.mjs';
+import { proposeAcknowledge, acknowledgeEscalation, recordOutcomes, blockedTickets } from '../src/router-worker/escalations.mjs';
 import { readBoundary } from '../src/router-worker/write-boundary.mjs';
 import { runWorkflow, makeAgentImpl } from '../scripts/lib/workflow-harness.mjs';
 import { fixture, git } from './fixtures/router-worker/standing-team.mjs';
@@ -63,13 +65,16 @@ const failing = (report, id, rule, item = {}) => ({ ...report,
 
 let agentSeq = 0;
 // A reviewer's transcript as Claude Code writes it for an Agent-tool subagent: the brief as the prompt, one Read per
-// flagged file, the report as the last fenced json block of the final message, and the meta file naming the wrapper.
+// flagged file and its result, the report as the last fenced json block of the final message, and the meta file naming
+// the wrapper. A read is a path, or { path, input, error } for a partial or failed Read.
 function transcriptOf(f, made, { report = reportOf(made), reads, agentType = made.record.wrapper, workflow = false, prompt = `Review this batch.\n\n${made.brief}` } = {}) {
   const folder = join(f.projectsRoot, '-fixture-team', 'session-1', 'subagents', ...(workflow ? ['workflows', 'wf_1'] : [])), id = `agent-a${++agentSeq}`;
   const opened = reads ?? made.record.tickets.flatMap(item => item.flaggedFiles.filter(path => item.content[path] !== null).map(path => join(f.product, path)));
   const rows = [{ type: 'user', isSidechain: true, message: { role: 'user', content: prompt } },
     { type: 'attachment', attachment: {} },
-    ...opened.map((path, i) => ({ type: 'assistant', message: { id: 'msg_reads', role: 'assistant', content: [{ type: 'tool_use', id: `toolu_${i}`, name: 'Read', input: { file_path: path } }] } })),
+    ...opened.map(read => typeof read === 'string' ? { path: read } : read).flatMap(({ path, input = {}, error = false }, i) => [
+      { type: 'assistant', message: { id: 'msg_reads', role: 'assistant', content: [{ type: 'tool_use', id: `toolu_${i}`, name: 'Read', input: { file_path: path, ...input } }] } },
+      { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `toolu_${i}`, content: error ? 'File does not exist.' : '1\tcode', ...(error ? { is_error: true } : {}) }] } }]),
     { type: 'assistant', message: { id: 'msg_report', role: 'assistant', content: [{ type: 'text', text: `Review done.\n\n\`\`\`json\n${JSON.stringify(report, null, 2)}\n\`\`\`\n` }] } }];
   mkdirSync(folder, { recursive: true });
   writeFileSync(join(folder, `${id}.jsonl`), rows.map(row => JSON.stringify(row)).join('\n') + '\n');
@@ -109,6 +114,11 @@ test('a failed rule rejects its ticket: it and every later ticket stay uncommitt
   assert.deepEqual(verdict.tickets.map(item => [item.id, item.verdict, item.fails]), [['US-01', 'passed', []], ['US-03', 'rejected', ['kit.sec.secret-in-code']]]);
   assert.equal(verdict.tickets[0].finding, 'the session lifetime is long', 'the AMBER concern is kept for the PM\'s backlog');
   assert.deepEqual(f.lines('reviews/tickets.jsonl').map(line => [line.ticket, line.runId, line.reviewer, line.outcome, line.finding]), [['US-03', open.runId, 'security', 'rejected', 'a token is written in code']]);
+  // Deleting the verdicts lets the reviewer be judged again; the lines across batches still hold the rejection.
+  const kept = f.read(VERDICTS_FILE);
+  rmSync(join(f.root, VERDICTS_FILE)); assert.equal(f.judge('security', transcriptOf(f, made)).outcome, 'accepted');
+  assert.match(refusal(f.commit()).reason, /US-03.*rejected.*reviews\/tickets\.jsonl/);
+  writeFileSync(join(f.root, VERDICTS_FILE), kept);
   const committed = f.commit();
   assert.equal(committed.errors, undefined, JSON.stringify(committed.errors));
   assert.deepEqual(committed.commits.map(commit => commit.ticket), ['US-01', 'US-02']);
@@ -138,12 +148,19 @@ test('the kit refuses a report that does not show the work, and a transcript tha
   check('a brief that was edited', 'REVIEW_BRIEF_NOT_FOUND', made => [transcriptOf(f, made, { prompt: made.brief.replace('Goal of US-01', 'Goal of nothing') })]);
   check('RED with no failed rule', 'REVIEW_VERDICT_MISMATCH', made => [transcriptOf(f, made, { report: { ...reportOf(made), items: reportOf(made).items.map(item => ({ ...item, verdict: 'RED' })) } })]);
   check('a failed rule with no proposed control', 'REVIEW_CONTROL_MISSING', made => [transcriptOf(f, made, { report: failing(reportOf(made), 'US-01', 'kit.sec.access-check', { control: null }) })]);
+  check('a rule reported twice with different results', 'REVIEW_RULE_CONFLICT', made => [transcriptOf(f, made, { report: { ...reportOf(made), rules: [...reportOf(made).rules, { ...reportOf(made).rules[0], result: 'fail' }] } })]);
+  check('a ticket given two verdicts', 'REVIEW_ITEM_CONFLICT', made => [transcriptOf(f, made, { report: { ...reportOf(made), items: [...reportOf(made).items, { ...reportOf(made).items[0], verdict: 'AMBER' }] } })]);
+  const flagged = join(f.product, 'src/authz.js');
+  check('a Read that failed', 'REVIEW_TRANSCRIPT_NO_OPEN', made => [transcriptOf(f, made, { reads: [{ path: flagged, error: true }] })]);
+  check('a Read that starts past the first line', 'REVIEW_TRANSCRIPT_NO_OPEN', made => [transcriptOf(f, made, { reads: [{ path: flagged, input: { offset: 5 } }] })]);
+  check('a Read with a limit', 'REVIEW_TRANSCRIPT_NO_OPEN', made => [transcriptOf(f, made, { reads: [{ path: flagged, input: { limit: 3 } }] })]);
   check('a REPORT.json that is not the transcript\'s report', 'REVIEW_REPORT_MISMATCH', made => [transcriptOf(f, made), { ...reportOf(made), residualRisk: 'other' }]);
   // A single rule not checked is allowed and recorded in the ledger.
   rmSync(join(f.root, VERDICTS_FILE), { force: true });
   assert.match(refusal(f.judge('security', join(f.base, 'missing.jsonl'))).reason, /cannot be read/, 'a file that is not there is not an attempt');
   const made = f.brief('security'), one = reportOf(made);
-  const verdict = f.judge('security', transcriptOf(f, made, { report: { ...one, rules: one.rules.map((row, i) => i === 0 ? { ...row, result: 'not-checked' } : row) } }));
+  const reads = [{ path: flagged, input: { limit: 3 } }, { path: flagged, input: { offset: 1 } }];
+  const verdict = f.judge('security', transcriptOf(f, made, { reads, report: { ...one, rules: one.rules.map((row, i) => i === 0 ? { ...row, result: 'not-checked' } : row) } }));
   assert.equal(verdict.outcome, 'accepted'); assert.deepEqual(verdict.tickets[0].notChecked, [made.record.ruleIds[0]]);
   assert.match(f.ledger(), new RegExp(`not checked: ${made.record.ruleIds[0]} on US-01`));
 });
@@ -213,8 +230,44 @@ test('a ticket rejected in a second batch is escalated: only a batch with it or 
   assert.match(refusal(acknowledgeEscalation({ ...f.common, id: escalation.id, confirm: 'sha256:0' })).reason, /code/);
   const proposal = proposeAcknowledge({ ...f.common, id: escalation.id });
   assert.equal(proposal.errors, undefined, JSON.stringify(proposal.errors));
-  assert.equal(acknowledgeEscalation({ ...f.common, id: escalation.id, confirm: proposal.digest }).errors, undefined);
-  assert.deepEqual(f.lines('reviews/acknowledged.jsonl').map(line => line.id), [escalation.id]);
-  assert.match(f.ledger(), new RegExp(`ESCALATION ${escalation.id} ACKNOWLEDGED`));
+  assert.match(refusal(acknowledgeEscalation({ ...f.common, id: escalation.id, confirm: proposal.digest })).reason, /interactive terminal/, 'a program that calls it confirms nothing');
+  const { NODE_TEST_CONTEXT, ...outsideTests } = process.env;
+  const program = spawnSync(process.execPath, ['--input-type=module', '-e', `import { acknowledgeEscalation } from ${JSON.stringify(new URL('../src/router-worker/escalations.mjs', import.meta.url).href)};
+process.stdout.write(JSON.stringify(acknowledgeEscalation(${JSON.stringify({ ...f.common, id: escalation.id, confirm: proposal.digest, atTerminal: true })})));`], { encoding: 'utf8', env: outsideTests });
+  assert.match(refusal(JSON.parse(program.stdout)).reason, /interactive terminal/, `even one that says it runs at a terminal: ${program.stderr}`);
+  assert.equal(f.lines('reviews/acknowledged.jsonl').length, 0);
+  assert.equal(acknowledgeEscalation({ ...f.common, id: escalation.id, confirm: proposal.digest, atTerminal: true }).errors, undefined);
+  assert.deepEqual(f.lines('reviews/acknowledged.jsonl').map(line => [line.id, line.atTerminal]), [[escalation.id, true]]);
+  assert.match(f.ledger(), new RegExp(`ESCALATION ${escalation.id} ACKNOWLEDGED: .*typed at an interactive terminal`));
   assert.equal((await f.before(batchOf(ticket('US-02', ['src/authz.js'])))).errors, undefined, 'the owner lifted the block');
+});
+
+const escalationsIn = () => { const instance = mkdtempSync(join(tmpdir(), 'rw-escalations-')); return { instance, at: new Date().toISOString(),
+  outcome: (runId, ticket, outcome) => recordOutcomes({ instance, runId, reviewer: 'security', outcomes: [{ ticket, outcome, finding: 'x' }], tickets: [{ id: ticket, paths: ['src/a.js'] }], at: new Date().toISOString() }) }; };
+
+test('only an acknowledgement typed at a terminal, for the escalation as it stands, lifts its block', t => {
+  const { instance, outcome } = escalationsIn(); t.after(() => rmSync(instance, { recursive: true, force: true }));
+  outcome('r1', 'T-1', 'rejected'); const [escalation] = outcome('r2', 't-1', 'rejected');
+  const next = [{ id: 'T-1', paths: ['src/a.js'] }, { id: 'U-1', paths: ['src/b.js'] }, { id: 'V-1', paths: ['src/c.js'], dependsOn: ['W-1'] }];
+  // W-1 was committed after its own review: a ticket built on it is not blocked although W-1's paths overlap.
+  const archived = [{ id: 'W-1', paths: ['src/a.js'], dependsOn: [] }];
+  const blocked = () => blockedTickets({ instance, tickets: next, archived }).map(entry => entry.ticket);
+  assert.deepEqual(blocked(), ['T-1']);
+  const forge = line => appendFileSync(join(instance, 'reviews/acknowledged.jsonl'), JSON.stringify(line) + '\n');
+  forge({ id: escalation.id });
+  forge({ id: escalation.id, atTerminal: true });
+  forge({ id: escalation.id, atTerminal: true, escalationDigest: 'sha256:' + '0'.repeat(64) });
+  forge({ id: escalation.id, atTerminal: false, escalationDigest: digest(escalation) });
+  assert.deepEqual(blocked(), ['T-1'], 'a line not typed at a terminal, or for another escalation, lifts nothing');
+  forge({ id: escalation.id, atTerminal: true, escalationDigest: digest(escalation) });
+  assert.deepEqual(blocked(), [], 'a forged line with the right digest is the stated gap');
+});
+
+test('two adverse outcomes of one ticket in two batches escalate, mixed or not', t => {
+  const { instance, outcome } = escalationsIn(); t.after(() => rmSync(instance, { recursive: true, force: true }));
+  assert.deepEqual(outcome('r1', 'T-2', 'rejected'), []);
+  const [mixed] = outcome('r2', 'T-2', 'not-obtained');
+  assert.equal(mixed?.kind, 'repeated-adverse'); assert.deepEqual(mixed.runIds, ['r1', 'r2']);
+  outcome('r1', 'T-3', 'not-obtained'); assert.equal(outcome('r3', 'T-3', 'not-obtained')[0]?.kind, 'review-not-obtained-again');
+  assert.match(readFileSync(join(instance, 'pm-decisions.md'), 'utf8'), /ESCALATED ESC-T-2-r2: ticket T-2 was rejected or could not be reviewed in batches r1 and r2/);
 });
