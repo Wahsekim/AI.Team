@@ -46,8 +46,8 @@ the one moment the owner approves by hand, and an unattended session must not
 be able to approve itself. This is a barrier against that case, not a proof of
 identity. `switchMode` into Router/Worker mode also refuses a direct call whose
 process has no terminal (`process.stdin.isTTY`), except under `node --test`
-(`NODE_TEST_CONTEXT`). A program that builds a pseudo-terminal (`script`) or
-sets `NODE_TEST_CONTEXT` gets past it, and nothing detects that: the same trust
+(`NODE_TEST_CONTEXT`). A program that builds a pseudo-terminal (`script`), sets
+`process.stdin.isTTY` itself, or sets `NODE_TEST_CONTEXT` gets past it, and nothing detects that: the same trust
 as a forged record. The ledger line says whether the code was typed at a
 terminal; only such a line binds limits.
 

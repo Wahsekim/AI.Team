@@ -117,6 +117,8 @@ test('no session writes the team\'s limits with a file tool, the PM\'s included:
     const written = runHook(f, { ...call(f, undefined, 'Write', path), cwd: f.team });
     assert.equal(written.status, 0, `${why}: ${written.stderr}`);
   }
+  rmSync(limits); symlinkSync(limits, join(f.base, 'to-limits.json'));
+  assert.equal(runHook(f, { ...call(f, undefined, 'Write', join(f.base, 'to-limits.json')), cwd: f.team }).status, 2, 'a dangling link that would create the missing limits file');
   assert.equal(runHook(f, at(join(f.team, 'profiles/project.md'))).status, 0, 'another file of the team');
   assert.equal(runHook(f, { ...call(f, undefined, 'Read', limits), cwd: f.team }).status, 0, 'reading it');
   assert.equal(runHook(f, { ...call(f, undefined, 'Bash'), cwd: f.team, tool_input: { command: 'cat profiles/team-mode.json' } }).status, 0, 'the PM\'s shell is not judged');
