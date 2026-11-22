@@ -49,6 +49,12 @@ of `tests/*.test.mjs`. It drives one team through these steps in order:
   `team-mode.mjs request` from the interview's answers. That team does not pass
   `validate-team.sh` before the switch, as `docs/staffing.md` asks; it passes
   after it.
+- The product edits of the stand-in workers are written by the test after the
+  engine run, and the write-boundary hook's log line that shows a worker call
+  is written by the test too: the hook itself is not exercised here (its own
+  tests cover it).
+- The round-trip snapshot leaves out `kit/`; a switch never writes there
+  (ADR 0009), and this test does not check it.
 - The steps are called as library functions, as the other Router/Worker tests
   call them, not through `rw-batch.mjs` and `team-mode.mjs` at a terminal.
   The terminal confirmation is the `node --test` exception of the switch.

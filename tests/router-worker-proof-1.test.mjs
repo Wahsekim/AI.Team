@@ -103,7 +103,10 @@ function checkBatchOne(f, one) {
   assert.equal(settled.errors, undefined, JSON.stringify(settled.errors));
   assert.equal(settled.status, 'clear'); assert.deepEqual(settled.findings, []);
   assert.equal(settled.reviewCost, REVIEW_TOKENS); assert.deepEqual(settled.reviews.map(entry => [entry.reviewer, entry.spentTokens, entry.overrun]), [['security', REVIEW_TOKENS, false]]);
-  assert.equal(settled.run.ticketTokens, settled.tickets.reduce((sum, entry) => sum + entry.spentTokens, 0), 'the reviewer is not charged to a ticket');
+  // The stand-ins spend alike, so every ticket costs the same; the reviewer's 40,000 folded into one would stand out.
+  const spent = settled.tickets.map(entry => entry.spentTokens);
+  assert.ok(spent.every(value => value === spent[0] && value >= 18000 && value < 18000 + 1000), `each ticket is charged its own execute and check, and the reviewer is charged to none: ${spent}`);
+  assert.equal(settled.run.ticketTokens, spent[0] * TICKETS.length);
 
   const ledger = f.ledger();
   for (const line of [`BATCH ${run} REVIEW TRIGGERS FROZEN`, `BATCH ${run} CLOSED \\(review\\)`, `REVIEW ${run} security ACCEPTED`, `REVIEW ${run} architect NOT OBTAINED`,
