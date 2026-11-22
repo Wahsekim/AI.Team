@@ -79,7 +79,7 @@ export function settleBatch({ teamRoot, instanceRoot, meter, rules, runId }) {
     need(result && digest(result) === after.returnDigest, 'The engine return kept for this batch is missing or was changed; it cannot be settled');
     need(!exists(at('settlement')), 'This batch was already settled');
     const boundary = readBoundary(instance);
-    need(!(boundary && stateOf(boundary) === 'review'), 'A batch of this team is in review; it is settled once its review is over: rw-batch.mjs resolve --instance <instance-root>');
+    need(!(boundary && stateOf(boundary) === 'review' && !boundary.periodic), 'A batch of this team is in review; it is settled once its review is over: rw-batch.mjs resolve --instance <instance-root>');
     need(batch.runRecord.items.every(item => Number.isSafeInteger(item.authorizedTokens)), 'The batch record carries no ticket authorizations');
     // What the run left, named for the settlement: the commit it started from and every path it changed.
     const changedPaths = [...new Set([...after.tickets.flatMap(ticket => ticket.changedPaths), ...after.left])].sort();

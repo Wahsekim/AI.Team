@@ -18,9 +18,9 @@ const exists = path => Boolean(lstatSync(path, { throwIfNoEntry: false }));
 const readJSON = path => { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; } };
 const sealed = body => ({ ...body, digest: digest(body) });
 const same = (a, b) => typeof a === 'string' && a.toLowerCase() === String(b).toLowerCase();
-const said = (text, max = 300) => typeof text === 'string' ? plain(text.trim()).slice(0, max) : '';
+export const said = (text, max = 300) => typeof text === 'string' ? plain(text.trim()).slice(0, max) : '';
 const refuse = error => ({ errors: [{ code: 'REVIEW_REFUSED', field: 'review', reason: error instanceof Refusal ? error.message : `The review could not be judged: ${error?.code ?? error?.message}` }] });
-const projectsOf = () => join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'projects');
+export const projectsOf = () => join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'projects');
 
 // This reviewer's briefs for the run, each still as it was sealed.
 export function briefsOf(instance, reviewer, runId) {
@@ -63,7 +63,8 @@ const textOf = content => typeof content === 'string' ? content : Array.isArray(
 const flaggedOf = (brief, product) => brief.tickets.flatMap(item => item.flaggedFiles.filter(path => item.content[path] !== null).map(path => ({ ticket: item.id, path, absolute: join(product, path) })));
 
 // What the transcript shows, and the report it ends with. Each gap is a refusal of the report.
-function evidenceOf({ transcript, text, projectsRoot, wrapper, reviewer, runId, brief, product }) {
+// `heading`: the first line of the brief, as the kit printed it.
+export function evidenceOf({ transcript, text, projectsRoot, wrapper, reviewer, heading, brief, product }) {
   const refusals = [], gap = (code, detail) => refusals.push({ code, detail });
   let real = null, root = null;
   try { real = realpathSync(transcript); root = realpathSync(projectsRoot); } catch { /* judged below */ }
@@ -77,7 +78,7 @@ function evidenceOf({ transcript, text, projectsRoot, wrapper, reviewer, runId, 
   const prompt = textOf(entries.find(entry => entry.type === 'user')?.message?.content);
   if (prompt.trimStart().startsWith('[Workflow harness')) gap('REVIEW_WORKFLOW_AGENT', 'The transcript starts with a task relayed by the workflow harness: the reviewer was not dispatched by the PM');
   // The brief is in the prompt as it was printed: its body has the digest the brief record holds.
-  const start = prompt.indexOf(`# Batch review brief: ${reviewer}, run ${runId}, attempt ${brief.attempt}\n`), end = start === -1 ? -1 : prompt.indexOf(`\nbriefDigest: ${brief.briefDigest}`, start);
+  const start = prompt.indexOf(`${heading}\n`), end = start === -1 ? -1 : prompt.indexOf(`\nbriefDigest: ${brief.briefDigest}`, start);
   if (end === -1 || digest(prompt.slice(start, end)) !== brief.briefDigest) gap('REVIEW_BRIEF_NOT_FOUND', `The transcript's prompt does not carry brief attempt ${brief.attempt} (${brief.briefDigest}) unchanged`);
   const assistant = entries.filter(entry => entry.type === 'assistant' && entry.message && Array.isArray(entry.message.content));
   // A Read counts when its result is not an error and it read the file from its first line with no limit.
@@ -98,7 +99,7 @@ function evidenceOf({ transcript, text, projectsRoot, wrapper, reviewer, runId, 
 
 // ADR 0011, decision 13, with the owner's answer of 2026-11-20: only a failed rule rejects a ticket, a RED verdict
 // must coincide with one, and decision 19: each failed rule comes with a fix and a proposed control.
-function derive(report, brief, reviewer, product) {
+export function derive(report, brief, reviewer, product) {
   const refusals = [], gap = (code, detail) => refusals.push({ code, detail });
   if (report.schemaVersion !== 1 || report.reviewer !== reviewer || report.briefDigest !== brief.briefDigest || !['filesRead', 'rules', 'items'].every(key => Array.isArray(report[key])))
     return { refusals: [{ code: 'REVIEW_REPORT_SHAPE', detail: `The report must be schemaVersion 1, reviewer ${reviewer}, briefDigest ${brief.briefDigest}, with the lists filesRead, rules and items` }], tickets: [] };
@@ -162,7 +163,7 @@ export function judgeReview({ teamRoot, instanceRoot, reviewer, transcript, repo
     const recorded = Object.assign({}, ...brief.tickets.map(item => item.content)), now = contentOf(product, Object.keys(recorded));
     const moved = Object.keys(recorded).filter(path => now[path] !== recorded[path]);
     need(!moved.length, `${moved.slice(0, 5).map(plain).join(', ')} changed since the brief; the review would not judge what is committed. Restore it, or abort the batch`);
-    const evidence = evidenceOf({ transcript, text, projectsRoot, wrapper: brief.wrapper, reviewer, runId: batch.runId, brief, product });
+    const evidence = evidenceOf({ transcript, text, projectsRoot, wrapper: brief.wrapper, reviewer, heading: `# Batch review brief: ${reviewer}, run ${batch.runId}, attempt ${brief.attempt}`, brief, product });
     const refusals = [...evidence.refusals];
     if (evidence.report && given !== undefined && digest(given) !== digest(evidence.report)) refusals.push({ code: 'REVIEW_REPORT_MISMATCH', detail: 'The report file given is not the report the transcript ends with' });
     const derived = evidence.report ? derive(evidence.report, brief, reviewer, product) : { refusals: [], tickets: [] };
@@ -182,7 +183,7 @@ export function recordNoAnswer({ teamRoot, instanceRoot, reviewer, reason }) {
 // Why a review holds each planned commit once the reviews are over: null, "rejected" or "review-not-obtained". A
 // flagged ticket, by a trigger or an elective brief, needs a passed verdict from each of its reviewers.
 export function reviewGate(instance, batch, after) {
-  const needs = new Map((after.tickets ?? []).filter(ticket => ticket.review).map(ticket => [ticket.id, new Set(ticket.review.required)]));
+  const needs = new Map((after.tickets ?? []).filter(ticket => ticket.review?.required.length).map(ticket => [ticket.id, new Set(ticket.review.required)]));
   for (const reviewer of batch.review.reviewers) for (const brief of briefsOf(instance, reviewer, batch.runId))
     for (const item of brief.tickets.filter(entry => entry.elective)) needs.set(item.id, new Set([...(needs.get(item.id) ?? []), reviewer]));
   const verdicts = verdictsOf(instance, batch.runId);
