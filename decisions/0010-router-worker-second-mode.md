@@ -244,6 +244,12 @@ human."
   live before lines carried a digest is refused the same way; the owner binds
   its limits as they stand with `team-mode.mjs limits` and a request that
   changes nothing, which is accepted only while the limits are unbound.
+- **Only a terminal confirms them.** `changeLimits`, and `switchMode` into
+  Router/Worker mode, refuse unless the caller says the code was typed at a
+  terminal and the process has one (`process.stdin.isTTY`), or runs under
+  `node --test` (`NODE_TEST_CONTEXT`). A PM session that imports the kit and
+  calls them changes nothing. Only a line that says the code was "typed at an
+  interactive terminal" binds limits.
 - **No session's file tool writes the limits.** The PreToolUse hook refuses a
   Write, Edit, MultiEdit or NotebookEdit of the team's
   `profiles/team-mode.json` from any session, the PM's own included, and names
@@ -254,8 +260,10 @@ human."
   batch, what was observed, the current value and a proposal the owner may
   confirm. Nothing in the kit writes a limit from that list.
 
-Not covered: a PM that forges a ledger line together with the digest of the
-limits it wrote is not detected. As for the batch records, the digests detect
+Not covered: a PM that fakes a terminal (`script`, a pseudo-terminal of its
+own) or sets `NODE_TEST_CONTEXT` gets past the terminal check, and a PM that
+forges a ledger line together with the digest of the limits it wrote is not
+detected. Nothing detects either. As for the batch records, the digests detect
 an accidental or careless edit, not a deliberate one by a session that can
 write the team's files; the owner's spot review of `pm-decisions.md` is the
 check on that.

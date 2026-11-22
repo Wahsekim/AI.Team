@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { armBoundary, decideCall } from '../src/router-worker/write-boundary.mjs';
+import { armBoundary, decideCall, logEntry, quotable, redacted } from '../src/router-worker/write-boundary.mjs';
 import { digest } from '../src/loop/contracts.mjs';
 import { inputFixture } from './fixtures/router-worker/input.mjs';
 
@@ -112,6 +112,11 @@ test('no session writes the team\'s limits with a file tool, the PM\'s included:
     assert.equal(denied.status, 2, why); assert.match(denied.stderr, /only the owner changes them, with: node kit\/scripts\/team-mode\.mjs limits <LIMITS\.json> --instance <instance-root>, at an interactive terminal/, why);
   }
   symlinkSync(join(f.team, 'profiles'), join(f.base, 'linked')); assert.equal(runHook(f, at(join(f.base, 'linked/team-mode.json'))).status, 2, 'through a symbolic link');
+  symlinkSync(join(f.base, 'nowhere.json'), join(f.team, 'dangling.json'));
+  for (const [path, why] of [[join(f.team, 'dangling.json'), 'a dangling symbolic link'], [join(f.team, 'profiles/project.md/x'), 'under a file']]) {
+    const written = runHook(f, { ...call(f, undefined, 'Write', path), cwd: f.team });
+    assert.equal(written.status, 0, `${why}: ${written.stderr}`);
+  }
   assert.equal(runHook(f, at(join(f.team, 'profiles/project.md'))).status, 0, 'another file of the team');
   assert.equal(runHook(f, { ...call(f, undefined, 'Read', limits), cwd: f.team }).status, 0, 'reading it');
   assert.equal(runHook(f, { ...call(f, undefined, 'Bash'), cwd: f.team, tool_input: { command: 'cat profiles/team-mode.json' } }).status, 0, 'the PM\'s shell is not judged');
@@ -148,4 +153,38 @@ test('CLI arms from RUN.json, prints the record, exits 2 on refusal and 1 on usa
   assert.match(JSON.parse(readFileSync(join(f.team, '.claude/settings.json'), 'utf8')).hooks.PreToolUse[0].hooks[0].command, /scripts\/hooks\/rw-write-boundary\.mjs"$/);
   assert.equal(run(file, '--team-root', f.team, '--product-root', join(f.base, 'nope')).status, 2);
   assert.equal(run(file).status, 1);
+});
+
+test('a refused command is logged with the values that look like secrets redacted', () => {
+  const cases = [
+    ['API_TOKEN=abc123 npm test', 'API_TOKEN=<redacted> npm test'],
+    ['DB_PASSWORD="p w" make check', 'DB_PASSWORD=<redacted> make check'],
+    ['TOKEN=abc npm test', 'TOKEN=<redacted> npm test'],
+    ['PASSWORD=x SECRET=s KEY=k make', 'PASSWORD=<redacted> SECRET=<redacted> KEY=<redacted> make'],
+    ['export PASS=x; npm test', 'export PASS=<redacted>; npm test'],
+    ['API_KEY=k&&npm test', 'API_KEY=<redacted>&&npm test'],
+    ['curl -H "Authorization: Bearer xyz" https://example.test', 'curl -H "Authorization: <redacted>" https://example.test'],
+    ['git clone https://user:pa55@example.test/r.git', 'git clone https://<redacted>@example.test/r.git'],
+    ['echo ghp_0123456789abcdefghijklmnopqrstuvwxyz', 'echo <redacted>'],
+    ['node --test tests/router-worker/components/a-rather-long-file-name.test.mjs', 'node --test tests/router-worker/components/a-rather-long-file-name.test.mjs'],
+    ['npm run test:tag-list', 'npm run test:tag-list'],
+  ];
+  for (const [command, expected] of cases) assert.equal(redacted(command), expected, command);
+});
+
+test('a product root is quotable unless it holds a character a double-quoted shell word would read', () => {
+  for (const root of ['/x/a"b', '/x/a$b', '/x/a`b', '/x/a\\b', '/x/a!b', '/x/a\x00b', '/x/a\nb', '/x/a\x1fb', '/x/a\x7fb', null, 7])
+    assert.equal(quotable(root), false, JSON.stringify(root));
+  for (const root of ['/x/My Project', "/x/it's", '/x/p[1]', '/x/a#b', '/x/a&b', '/x/a*b', '/x/caf\u00e9']) assert.equal(quotable(root), true, root);
+});
+
+test('with no boundary every subagent write and shell command is judged, and the main session is not', () => {
+  const judged = (tool, agent) => logEntry({ input: { tool_name: tool, ...(agent ? { agent_type: agent } : {}) }, boundary: null, decision: 'deny', at: 'now' }).judged;
+  assert.deepEqual([judged('Write', 'any'), judged('Edit', 'any'), judged('Bash', 'any'), judged('Read', 'any'), judged('Write'), judged('Bash')], [true, true, true, false, false, false]);
+});
+
+test('a command asked to run outside the sandbox is refused whatever value asks for it', () => {
+  const boundary = { productRoot: '/p', wrappers: { w: { duty: 'exec', writePaths: [], commands: ['npm test'] } } };
+  const verdict = value => decideCall({ boundary, input: { tool_name: 'Bash', agent_type: 'w', cwd: '/p', tool_input: { command: 'npm test', ...(value === undefined ? {} : { dangerouslyDisableSandbox: value }) } } }).decision;
+  assert.deepEqual([undefined, false, true, 'true', 1, {}, null].map(verdict), ['approve', 'approve', 'deny', 'deny', 'deny', 'deny', 'deny']);
 });

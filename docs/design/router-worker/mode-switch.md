@@ -30,7 +30,7 @@ The command prints a proposal:
 | `from`, `to` | the two modes |
 | `staffing` | model, effort, turn limit and tools of the three workers and of each staffed governance role; for a packed Router/Worker team, the staffing it was packed with |
 | `project`, `workflowsNotEnabled` | on a first switch: the project's name, slug, product repository and UI flag, and every workflow the request does not enable, with its status |
-| `limits` | attempts per ticket, output allowance per ticket, the Guardian's share, authorization per ticket; the ADR's defaults unless the request changes one; `allowedCommands`, the commands a worker's shell may run in a batch, which `request` proposes from the required gates of `profiles/stack.md` (empty when it gives none); for a packed Router/Worker team, the limits it was packed with |
+| `limits` | attempts per ticket, output allowance per ticket, the Guardian's share, authorization per ticket; the ADR's defaults unless the request changes one; `allowedCommands`, the commands a worker's shell may run in a batch, which `request` proposes from the required gates of `profiles/stack.md` (empty when it gives none; a gate it cannot confirm as written, or beyond the 50 a team may hold, is left out and named in a note); for a packed Router/Worker team, the limits it was packed with |
 | `dispatch` | `engine` |
 | `pack` | the files that go on holiday |
 | `install` | the files that are put in place |
@@ -44,9 +44,12 @@ commands without a terminal), it prints the proposal, changes nothing and exits
 2. There is no flag that confirms (owner decision, 2026-11-17): the switch is
 the one moment the owner approves by hand, and an unattended session must not
 be able to approve itself. This is a barrier against that case, not a proof of
-identity: a program that builds a pseudo-terminal, or that calls
-`switchMode` directly, gets past it. The ledger line says whether the code was
-typed at a terminal.
+identity. `switchMode` into Router/Worker mode also refuses a direct call whose
+process has no terminal (`process.stdin.isTTY`), except under `node --test`
+(`NODE_TEST_CONTEXT`). A program that builds a pseudo-terminal (`script`) or
+sets `NODE_TEST_CONTEXT` gets past it, and nothing detects that: the same trust
+as a forged record. The ledger line says whether the code was typed at a
+terminal; only such a line binds limits.
 
 The proposal is computed again when the code is typed; if the team, the kit or
 the request changed since, the switch is refused (`SWITCH_NOT_CONFIRMED`). The
@@ -111,7 +114,7 @@ decision in its `decisionRef`, added by hand; the command prints a note.
 `limits LIMITS.json` (`{"outputAllowancePerTicket": 20000}`, any of the four,
 or `{"allowedCommands": [...]}`, the whole list)
 prints the limits before and after, and is confirmed like a switch: a code typed
-at an interactive terminal. It is refused when the team is not in Router/Worker
+at an interactive terminal. `changeLimits` called directly refuses the same way. It is refused when the team is not in Router/Worker
 mode, when nothing would change, when the authorization per ticket would fall
 below the output allowance, when a switch was interrupted, or while a batch
 holds the lock; it takes the lock for the write. One line is appended to `pm-decisions.md`; it ends with
@@ -249,6 +252,9 @@ was, the lock is free and the same switch can be proposed again.
   `scripts/migrate-to-instance.sh`.
 - The product repository is not the one the team is bound to, or is not at rest
   (above).
+- Into Router/Worker mode: the product repository's path holds a character that
+  cannot be written inside a quoted shell command (`` " $ ` \ ! `` or a control
+  character).
 - `holiday/<mode>/` for the mode being left already holds a packed team (a
   manifest, or a file at a path that would be packed): a packed team is never
   overwritten, and the folder is not touched. A stray file such as `.DS_Store`

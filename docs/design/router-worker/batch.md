@@ -206,8 +206,8 @@ the owner's to add, before the batch.
 
 A command is confirmed as one line of at most 300 printable ASCII characters
 with single spaces, so that what the owner reads in the proposal is all there
-is. `before` refuses a product repository whose path cannot be written inside a
-quoted shell command.
+is. A switch into Router/Worker mode, and then `before`, refuse a product
+repository whose path cannot be written inside a quoted shell command.
 
 A team that went live before the list existed has an empty one, and a boundary
 that does not judge its workers' shell. `before` refuses its batches until the
@@ -255,8 +255,11 @@ return, settlement) belongs to no batch and is removed by `before`.
 ([ADR 0010](../../../decisions/0010-router-worker-second-mode.md), second
 amendment of 2026-11-18). `before` refuses while an archived batch that ran
 (its archive holds the record of `after`) has no settlement, and names the
-batch and the two commands. A batch aborted before it ran leaves nothing to
-settle.
+batch and the two commands. The settlement counts only when it is a sealed
+settlement or mark of that run (its stage, its run id the name of the archive,
+its digest). Only folders in `batches/` are read. A batch aborted before
+`after` leaves no archive, and so nothing to settle, whether or not the engine
+ran.
 
 A batch whose usage cannot be measured (the session's transcripts are gone, its
 records are damaged) is marked instead:
@@ -265,10 +268,12 @@ records are damaged) is marked instead:
 node kit/scripts/rw-batch.mjs settle --not-metered "<reason>" --instance . [--run <run id>]
 ```
 
-The reason is one line of at most 200 characters. The mark takes the place of
-the settlement (`stage: batch-not-metered`) and one line goes to
-`pm-decisions.md`, which is where the owner sees which batch was passed over
-and why. A batch is settled or marked once.
+The reason is one line of at most 200 characters, with no line separator or
+bidirectional control. The mark takes the place of the settlement
+(`stage: batch-not-metered`) and one line goes to `pm-decisions.md` before it,
+which is where the owner sees which batch was passed over and why: a line that
+cannot be written leaves no mark. Without `--run`, the run id read from the
+closed batch must be the batch record's. A batch is settled or marked once.
 
 Settlement reports cost. It does not hold or undo a commit: a ticket that went
 over its authorization and passed its check is still committed. The
@@ -470,7 +475,7 @@ batch that is being run takes its lock and its write paths away mid-run.
 
 When the write-boundary file is missing or was changed, abort still releases
 the lock and removes the record, and says the boundary was not restored: every
-agent write is then refused until a mode switch to specialist and back rebuilds
+subagent write and shell command is then refused until a mode switch to specialist and back rebuilds
 it.
 
 A "before" that finds this team's lock with no batch record, or a boundary
@@ -486,7 +491,13 @@ field is refused. The limits are checked for validity where they are used.
 Only the owner changes them
 ([ADR 0010](../../../decisions/0010-router-worker-second-mode.md), amendment of
 2026-11-20): at the switch or with `team-mode.mjs limits`, by a code typed at a
-terminal. Three mechanisms hold that:
+terminal. Four mechanisms hold that:
+
+- **Only a terminal confirms them.** `changeLimits`, and `switchMode` into
+  Router/Worker mode, refuse a call that does not say the code was typed at a
+  terminal, or whose process has none (`process.stdin.isTTY`); `node --test`
+  is the one exception (`NODE_TEST_CONTEXT`). Only a ledger line that says
+  "typed at an interactive terminal" binds limits.
 
 - **The ledger binds them.** The `MODE SWITCH` line into Router/Worker mode and
   each `LIMITS CHANGED` line end with `limits <digest>`. `before` refuses
@@ -506,10 +517,16 @@ terminal. Three mechanisms hold that:
   and `proposal`: a LIMITS.json fragment the owner may confirm. A token value
   is proposed as the next thousand above 1.25 times what was observed; an
   attempts value as one more, up to 3; a refused command gets no proposal.
+  When the output ceiling stopped the batch, the proposal is for the share used
+  most against its limit: `guardianOutputShare` from the engine's
+  `guardianTokens`, or `outputAllowancePerTicket` from the rest per ticket. A
+  return without `guardianTokens` gets the allowance, with a `note` that the
+  figure includes the Guardian's spend.
   Nothing writes a limit from that list.
 
-A PM session that forges a ledger line together with the digest of the limits
-it wrote is not detected (see "What these commands trust").
+A PM session that fakes a terminal (`script`, its own pseudo-terminal) or sets
+`NODE_TEST_CONTEXT`, or that forges a ledger line together with the digest of
+the limits it wrote, is not detected (see "What these commands trust").
 
 ## Start as is
 
@@ -541,6 +558,10 @@ The limits not being the ones the ledger binds is refused with its own code,
 
 ## Not covered
 
+- **A batch the engine ran and `abort` cleared before `after`** is not
+  settled and does not hold the next batch: `abort` leaves no archive for it,
+  and the kit cannot tell whether the engine ran. Its ledger line says only
+  that the batch was aborted and that nothing about the work was checked.
 - **`commit` does not wait for the settlement**; the next `before` does. The
   mark "not metered" is the PM's word: the kit records the reason and does not
   judge it. The owner reads those lines at the spot review.
@@ -577,8 +598,12 @@ The limits not being the ones the ledger binds is refused with its own code,
   boundary is refused by the hook and reported by `after` only if its digest
   was not recomputed.
 - **The hook log keeps the text of a worker's refused shell command** (at most
-  300 characters), so that `after` can report it. A refused command that held
-  a secret is kept in `.claude/rw-write-boundary.log.jsonl` and in the record.
+  300 characters), so that `after` can report it. Values that look like
+  secrets are replaced by `<redacted>` first: a `NAME=value` whose name holds
+  TOKEN, SECRET, PASS, KEY, AUTH or CRED, an `Authorization`, `Cookie` or
+  `X-Api-Key` header, credentials in a URL, and any run of 32 or more
+  letters, digits or `+_=-` (a path keeps its slashes). A secret in another shape is still kept in
+  `.claude/rw-write-boundary.log.jsonl` and in the record.
 - **The briefs and the shared disciplines still speak of a free shell**: an
   environment prefix before a command, `git diff` to report a change. Those
   calls are refused in a batch.
@@ -601,7 +626,8 @@ The limits not being the ones the ledger binds is refused with its own code,
 - **The default branch is recognised by name**: every remote's default,
   `init.defaultBranch`, `main`, `master`. A repository with no remote whose
   default branch has another name (`develop`) is not recognised.
-- **A forged ledger line is not detected** (above).
+- **A faked terminal, a faked test context or a forged ledger line is not
+  detected** (above).
 - **The estimated output** the engine is told is half the ceiling. It is a
   figure the kit sets so that the engine's own checks on the ceiling hold; it
   is not a forecast.

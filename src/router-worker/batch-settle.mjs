@@ -86,12 +86,16 @@ export function markNotMetered({ teamRoot, instanceRoot, reason, runId }) {
   try {
     const instance = instanceRootOf(teamRoot, instanceRoot), { names, folder, id } = recordsOf(instance, runId), target = join(folder, names.settlement);
     need(id, 'The closed batch in this team has no readable run id; abort it, then mark its archive with --run <run id>');
+    // Without --run the id comes from the closed batch in the root: it must be the id of the batch record, and the
+    // record of after in the root must be the archive's own when it names one.
+    need(runId !== undefined || (readJSON(join(folder, names.batch))?.runId === id && (folder === instance || readJSON(join(folder, names.after))?.digest === readJSON(join(instance, AFTER_FILE))?.digest)),
+      'The records of the closed batch do not agree on its run id; abort it, then mark its archive with --run <run id>');
     need(oneLine(reason), 'A batch is marked as not metered with a reason: one line, at most 200 characters');
     need(!exists(target), 'This batch was already settled');
     const body = { schemaVersion: 1, stage: 'batch-not-metered', runId: id, reason, markedAt: new Date().toISOString() }, record = { ...body, digest: digest(body) };
-    keep({ instance, folder, target, record, runId: id });
-    // The ledger line comes with the record: a batch is never passed over without its line.
+    // The ledger line goes first: a batch is never passed over without its line.
     appendFileSync(join(instance, LEDGER), `${body.markedAt.slice(0, 10)} BATCH ${id} NOT METERED by rw-batch.mjs settle --not-metered: ${plain(reason)}. Its usage was not set against its authorization.\n`);
+    keep({ instance, folder, target, record, runId: id });
     return record;
   } catch (error) { return refused(error); }
 }
