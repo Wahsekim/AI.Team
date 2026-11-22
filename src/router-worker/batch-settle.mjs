@@ -58,7 +58,10 @@ function reviewCalls({ batch, after, kept, meter }) {
   need(Number.isSafeInteger(authorizedTokens), 'The batch record carries no authorization per reviewer call');
   const real = file => { try { return realpathSync(file); } catch { return null; } };
   const rows = (Array.isArray(meter?.subagents) ? meter.subagents : []).filter(row => !row?.workflowRunId && typeof row.file === 'string' && Number.isSafeInteger(row.harnessEq));
-  const findings = [], reviews = judged.map(({ reviewer, attempt, transcript }) => {
+  // A resumed reviewer keeps one transcript across attempts: its row is the whole of that agent's usage, counted once, on the last attempt.
+  const lastOf = file => judged.findLastIndex(entry => entry.transcript.file === file);
+  const findings = [], reviews = judged.map(({ reviewer, attempt, transcript }, index) => {
+    if (lastOf(transcript.file) !== index) return { reviewer, attempt, transcript: transcript.file, spentTokens: null, countedWith: judged[lastOf(transcript.file)].attempt, authorizedTokens, overrun: null };
     const row = rows.find(candidate => candidate.agentType === batch.reviewWrappers?.[reviewer] && real(candidate.file) === transcript.file);
     if (!row) findings.push({ code: 'REVIEW_NOT_METERED', reviewer, attempt, transcript: transcript.file });
     return { reviewer, attempt, transcript: transcript.file, spentTokens: row?.harnessEq ?? null, authorizedTokens, overrun: row ? row.harnessEq > authorizedTokens : null };
@@ -78,7 +81,7 @@ export function settleBatch({ teamRoot, instanceRoot, meter, rules, runId }) {
       'The batch record does not hold the plain run id it was run, closed and archived under');
     need(result && digest(result) === after.returnDigest, 'The engine return kept for this batch is missing or was changed; it cannot be settled');
     need(!exists(at('settlement')), 'This batch was already settled');
-    const boundary = readBoundary(instance);
+    const boundary = folder === instance ? readBoundary(instance) : null;
     need(!(boundary && stateOf(boundary) === 'review'), 'A batch of this team is in review; it is settled once its review is over: rw-batch.mjs resolve --instance <instance-root>');
     need(batch.runRecord.items.every(item => Number.isSafeInteger(item.authorizedTokens)), 'The batch record carries no ticket authorizations');
     // What the run left, named for the settlement: the commit it started from and every path it changed.
