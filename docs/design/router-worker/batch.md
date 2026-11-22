@@ -5,8 +5,10 @@ on a bootstrapped fixture, with the real engine run on mock agents; so is
 "settle". Of the review of ADR 0011 the trigger list, the flags, the review
 state, the reviewer's brief, the judging of its report, the commit gate and the
 escalation to the owner are built ("Review triggers", "Review state and brief",
-"Review verdict, commit gate and escalation"); a rejected ticket is not yet
-saved as a patch and removed (it stays in the work tree). Not yet used on a real team.
+"Review verdict, commit gate and escalation"), and so are "Resolve" (held
+tickets saved as patches, the rest verified again) and sensitive tickets. The
+reviewer's cost limit and the periodic review are not built yet. Not yet used
+on a real team.
 [ADR 0010](../../../decisions/0010-router-worker-second-mode.md), decisions 8 to 12.
 
 ```sh
@@ -333,8 +335,8 @@ repository's Git identity ([ADR 0007](../../../decisions/0007-pm-only-commits.md
 ## Review triggers
 
 [ADR 0011](../../../decisions/0011-router-worker-batch-review.md), decisions 1,
-3 and 8 to 10. **Not yet gating**: the flags are recorded, and `commit` commits
-a flagged ticket as it commits any other.
+3 and 8 to 10. The flags gate the commit: see "Review verdict, commit gate and
+escalation" and "Resolve".
 
 The list has two parts of the same shape:
 
@@ -792,9 +794,9 @@ The limits not being the ones the ledger binds is refused with its own code,
 - **Only the three workers are bounded.** The PM's session and the governance
   roles keep the shell their own permissions give them.
 - **The review of [ADR 0011](../../../decisions/0011-router-worker-batch-review.md)
-  is not built** beyond its triggers, review state and brief. Until then a
-  ticket that passed its check is committed with no security or architecture
-  review, even when flagged.
+  has no cost limit per reviewer call and no periodic review yet.** A flagged
+  ticket is never committed without its passed reviews; what no trigger flags
+  is not reviewed until the periodic review exists.
 - **The brief's verification runs without the lock.** Nothing else starts while
   the batch is in review, but the PM's own session can still change the product.
 - **A ticket that did not pass keeps its changes in the work tree.** They are
