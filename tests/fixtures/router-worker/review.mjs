@@ -21,8 +21,8 @@ const agentsOf = commands => ({ worker: () => ({ outcome: 'done', progress: true
   verifier: () => ({ pass: true, staticPass: true, e2ePass: true, summary: 'ok', commandsRun: commands.map(command => ({ command, exitCode: 0 })), failures: [] }) });
 
 // `commands`: the verification commands the batch freezes and the owner confirms, or a function of the fixture's base folder.
-export function live(t, { commands = COMMANDS } = {}) {
-  const f = fixture(t), confirmed = typeof commands === 'function' ? commands(f.base) : commands;
+export function live(t, { commands = COMMANDS, blank = false } = {}) {
+  const f = fixture(t, { blank }), confirmed = typeof commands === 'function' ? commands(f.base) : commands;
   assert.equal(f.apply('router-worker', { spec: f.spec, limits: { allowedCommands: confirmed } }).errors, undefined); git(f.product, 'checkout', '-q', '-b', 'work');
   writeFileSync(join(f.root, 'profiles/review.json'), JSON.stringify({ schemaVersion: 1, triggers: [], rules: [], adrs: [] }));
   const common = { teamRoot: f.kit, instanceRoot: f.root }, projectsRoot = join(f.base, 'projects');
