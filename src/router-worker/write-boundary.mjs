@@ -176,24 +176,34 @@ function realTarget(path) {
   return join(realpathSync(current), ...pending);
 }
 
+// A refused command is kept for the owner's report; values that look like secrets never reach the log.
+export const redacted = command => command
+  .replace(/\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASS(?:WORD)?|KEY|AUTH|CRED(?:ENTIAL)?S?)[A-Za-z0-9_]*)=("[^"]*"|'[^']*'|[^\s;&|]+)/gi, '$1=<redacted>')
+  .replace(/(-H\s*["']?(?:Authorization|Cookie|X-Api-Key)\s*:\s*)[^"'\n]*/gi, '$1<redacted>')
+  .replace(/:\/\/[^\s/@:]+:[^\s/@]+@/g, '://<redacted>@')
+  .replace(/[A-Za-z0-9+_=-]{32,}/g, '<redacted>');
+
 // One log line per hook call: who called which tool and what was decided. No path. A worker's shell command that was
 // refused is kept as text, so that "after" can report it to the owner.
 export function logEntry({ input, boundary, decision, at }) {
   const tool = typeof input?.tool_name === 'string' ? input.tool_name : null, agentType = typeof input?.agent_type === 'string' ? input.agent_type : null;
   const entry = boundary && agentType !== null && Object.hasOwn(boundary.wrappers, agentType) ? boundary.wrappers[agentType] : null;
   const judged = agentType !== null && (WRITE_TOOLS.includes(tool) ? !boundary || entry !== null : tool === 'Bash' && (!boundary || Array.isArray(entry?.commands)));
-  const command = tool === 'Bash' && decision === 'deny' && Array.isArray(entry?.commands) && typeof input.tool_input?.command === 'string' ? input.tool_input.command.trim().slice(0, 300) : null;
+  const command = tool === 'Bash' && decision === 'deny' && Array.isArray(entry?.commands) && typeof input.tool_input?.command === 'string' ? redacted(input.tool_input.command.trim()).slice(0, 300) : null;
   return { at, tool, agentType, judged, decision, ...(command ? { command } : {}) };
 }
+
+// A path that cannot be resolved (a dangling link, a file taken for a folder, no permission) is judged as written.
+const resolvedOr = path => { try { return realTarget(path) ?? path; } catch { return path; } };
+const statOf = path => { try { return statSync(path); } catch { return null; } };
 
 // The call writes the team's limits file: by its path as resolved, whatever its case, or as the same file under another name.
 function writesLimits(input, projectDir) {
   const raw = input.tool_input?.file_path ?? input.tool_input?.notebook_path;
   if (typeof projectDir !== 'string' || !isAbsolute(projectDir) || typeof raw !== 'string' || !raw) return false;
-  const target = realTarget(resolve(typeof input.cwd === 'string' ? input.cwd : projectDir, raw)), limits = realTarget(join(projectDir, LIMITS_FILE));
-  if (!target || !limits) return false;
+  const target = resolvedOr(resolve(typeof input.cwd === 'string' ? input.cwd : projectDir, raw)), limits = resolvedOr(join(projectDir, LIMITS_FILE));
   if (target.toLowerCase() === limits.toLowerCase()) return true;
-  const [a, b] = [target, limits].map(path => statSync(path, { throwIfNoEntry: false }));
+  const [a, b] = [target, limits].map(statOf);
   return Boolean(a && b && a.dev === b.dev && a.ino === b.ino);
 }
 
@@ -219,6 +229,7 @@ export function decideCall({ input, boundary, projectDir }) {
 
 // A product root that can be written inside double quotes in a shell command, and one that needs no quotes at all.
 export const quotable = root => typeof root === 'string' && !/["$`\\!\x00-\x1f\x7f]/.test(root);
+export const UNQUOTABLE = 'The path of the product repository holds a character that cannot be written inside a quoted shell command (" $ ` \\ !); the workers could run no command there';
 const bare = root => /^[A-Za-z0-9_\/.+@%,:=-]+$/.test(root);
 
 // The shell of a standing team's worker. In a batch it runs the verification commands the owner confirmed and the
@@ -233,7 +244,8 @@ function decideCommand({ input, boundary, allow, deny }) {
   // Spaces and line breaks around the text change nothing for a shell; any other character is part of the command.
   const root = boundary.productRoot, text = typeof input.tool_input?.command === 'string' ? input.tool_input.command.replace(/^[ \t\n]+|[ \t\n]+$/g, '') : '';
   const forms = command => [...(input.cwd === root ? [command] : []), ...(quotable(root) ? [`cd "${root}" && ${command}`] : []), ...(bare(root) ? [`cd ${root} && ${command}`] : [])];
-  if (input.tool_input?.dangerouslyDisableSandbox !== true && entry.commands.some(command => forms(command).includes(text))) return { decision: 'approve' };
+  const unsandboxed = input.tool_input?.dangerouslyDisableSandbox;
+  if ((unsandboxed === undefined || unsandboxed === false) && entry.commands.some(command => forms(command).includes(text))) return { decision: 'approve' };
   return deny(entry.commands.length
     ? `${input.agent_type}: in a batch the shell runs only the verification commands confirmed for this team, from the product root, each exactly as written and inside the sandbox if there is one: ${entry.commands.map(command => `cd "${root}" && ${command}`).join('  |  ')}`
     : `${input.agent_type}: no batch is open, or this worker runs no command in it; the shell is closed`);

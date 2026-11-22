@@ -54,15 +54,24 @@ function hookSeen(instance, wrappers, since) {
   return { calls: calls.length, workerCalls: workers.length, denied: workers.filter(call => call.decision === 'deny').length, refused };
 }
 
+// The output ceiling is the tickets' allowances plus the Guardian's share: the proposal is for the share used most against its limit.
+function outputReached(limits, spent, guardian, count) {
+  const perTicket = observed => { const allowance = proposedTokens(observed);
+    return { limit: 'outputAllowancePerTicket', observed, current: limits.outputAllowancePerTicket,
+      proposal: { outputAllowancePerTicket: allowance, ...(allowance > limits.authorizationPerTicket ? { authorizationPerTicket: allowance } : {}) } }; };
+  if (!Number.isSafeInteger(guardian) || guardian < 0 || guardian > spent)
+    return { ...perTicket(Math.ceil(spent / Math.max(1, count))), note: 'The engine return does not give the Guardian\'s spend apart: the figure per ticket includes it' };
+  const tickets = Math.ceil((spent - guardian) / Math.max(1, count));
+  return guardian / limits.guardianOutputShare > tickets / limits.outputAllowancePerTicket
+    ? { limit: 'guardianOutputShare', observed: guardian, current: limits.guardianOutputShare, proposal: { guardianOutputShare: proposedTokens(guardian) } }
+    : perTicket(tickets);
+}
+
 // Each limit that stopped work in this batch, with what was observed and a proposal for the owner, who decides.
 // Nothing here writes a limit.
 function limitsReached(limits, result, refused) {
   const report = [], ran = result.results;
-  if (result.budgetGateTripped === true && Number.isSafeInteger(result.budgetStatus?.loopSpent)) {
-    const observed = Math.ceil(result.budgetStatus.loopSpent / Math.max(1, ran.length)), allowance = proposedTokens(observed);
-    report.push({ limit: 'outputAllowancePerTicket', observed, current: limits.outputAllowancePerTicket,
-      proposal: { outputAllowancePerTicket: allowance, ...(allowance > limits.authorizationPerTicket ? { authorizationPerTicket: allowance } : {}) } });
-  }
+  if (result.budgetGateTripped === true && Number.isSafeInteger(result.budgetStatus?.loopSpent)) report.push(outputReached(limits, result.budgetStatus.loopSpent, result.guardianTokens, ran.length));
   // The engine retries only a clean execution whose verification failed: such a ticket at the cap ran out of attempts.
   const spent = ran.filter(r => r.attempts >= limits.attemptsPerTicket && r.workerStatus === 'succeeded' && r.verificationStatus === 'failed');
   if (spent.length) report.push({ limit: 'attemptsPerTicket', observed: Math.max(...spent.map(r => r.attempts)), current: limits.attemptsPerTicket,
@@ -146,7 +155,7 @@ export function afterBatch({ teamRoot, instanceRoot, result }) {
       .map(ticket => ({ ticket: ticket.id, message: batch.tickets.find(entry => entry.id === ticket.id).commitMessage, paths: ticket.changedPaths }));
     const committed = new Set(commits.flatMap(commit => commit.paths)), at = new Date().toISOString(), passed = tickets.filter(ticket => ticket.status === 'passed').length;
     const left = changed.filter(path => !committed.has(path)), next = [];
-    if (!boundaryClosed) next.push('The write-boundary file is missing or was changed: every agent write is refused until a mode switch to specialist and back rebuilds it');
+    if (!boundaryClosed) next.push('The write-boundary file is missing or was changed: every subagent write and shell command is refused until a mode switch to specialist and back rebuilds it');
     if (holdAll) next.push(`No ticket of this batch is committed by the kit. ${ABANDON}`);
     if (!holdAll && left.length) next.push('Paths are left uncommitted in the product; the next batch refuses until they are committed or discarded by hand, or it is started as is');
     const status = () => findings.length || account.blockers.length ? 'review' : 'clean';

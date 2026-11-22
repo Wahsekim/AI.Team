@@ -36,7 +36,7 @@ export function fixture(t, { roles = 'backend' } = {}) {
     governance: Object.fromEntries(GOVERNANCE.map(role => [role, ['architect', 'coach'].includes(role) ? { ...readOnly, tools: [...readOnly.tools, 'Write', 'Edit'] } : readOnly])) };
   const common = { teamRoot: kit, instanceRoot: root, productRoot: product };
   const propose = (to = 'router-worker', request = { spec }) => proposeSwitch({ to, request, ...common });
-  const apply = (to = 'router-worker', request = { spec }, confirm, extra = {}) => switchMode({ to, request, ...common, ...extra, confirm: confirm ?? propose(to, request).digest });
+  const apply = (to = 'router-worker', request = { spec }, confirm, extra = {}) => switchMode({ to, request, ...common, atTerminal: true, ...extra, confirm: confirm ?? propose(to, request).digest });
   const read = path => readFileSync(join(root, path), 'utf8'), digests = paths => Object.fromEntries(paths.map(path => [path, existsSync(join(root, path)) ? bytesDigest(readFileSync(join(root, path))) : null]));
   const tree = () => execFileSync('bash', ['-c', 'cd "$1" && find . -path ./kit -prune -o -type f -exec shasum -a 256 {} + | sort', 'sh', root], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   return { base, root, kit, product, spec, common, propose, apply, read, digests, tree, wrappers: () => readdirSync(join(root, '.claude/agents')).sort() };

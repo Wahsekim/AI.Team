@@ -4,7 +4,7 @@ import { digest, bytesDigest } from '../loop/contracts.mjs';
 import { instanceOf } from './roots.mjs';
 import { git, isRepositoryRoot, acquireLease, releaseLease, readLease } from './lease.mjs';
 import { freezeRun } from './run-args.mjs';
-import { openBoundary, closeBoundary, readBoundary, quotable } from './write-boundary.mjs';
+import { openBoundary, closeBoundary, readBoundary, quotable, UNQUOTABLE } from './write-boundary.mjs';
 import { observeIsolation } from './isolation.mjs';
 import { limitsOf, COUNT_LIMITS, boundLimits } from './switch.mjs';
 import { loadReview, isReviewListError, triggerChanges, recordFrozen } from './review-triggers.mjs';
@@ -17,7 +17,9 @@ export const BATCH_FILE = 'rw-batch.json', AFTER_FILE = 'rw-batch-after.json', P
 // order: the files that name the run go last, so a clearing that died is finished by the next commit.
 export const RECORDS = { 'return.json': RETURN_FILE, 'settlement.json': SETTLE_FILE, 'batch.json': BATCH_FILE, 'after.json': AFTER_FILE, 'commits.json': PROGRESS_FILE };
 export const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/, TICKET_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/;
-export const oneLine = text => typeof text === 'string' && text.length > 0 && text.length <= 200 && text === text.trim() && !/[\x00-\x1f\x7f]/.test(text);
+// Line and paragraph separators break a line too; bidi controls make a ledger line read other than it is.
+const UNSAFE = /[\x00-\x1f\x7f-\x9f\u061c\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]/g;
+export const oneLine = text => typeof text === 'string' && text.length > 0 && text.length <= 200 && text === text.trim() && !text.match(UNSAFE);
 const MODE_FILE = 'profiles/team-mode.json', JOURNAL = 'holiday/.switch-in-progress.json', LEDGER = 'pm-decisions.md';
 const IN_PROGRESS = ['index.lock', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'BISECT_LOG', 'rebase-merge', 'rebase-apply'];
 const TICKET_FIELDS = ['id', 'title', 'goal', 'acceptance', 'paths', 'estimate'], TICKET_OPTIONAL = ['expectedPaths', 'commitMessage', 'dependsOn'], BATCH_FIELDS = ['tickets', 'verificationCommands', 'sensitivePaths', 'nextLifecycleNumber'];
@@ -36,12 +38,14 @@ export const proposedTokens = observed => (Math.floor(observed * 5 / 4000) + 1) 
 const exists = path => Boolean(lstatSync(path, { throwIfNoEntry: false }));
 const readJSON = path => { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; } };
 const ref = (id, value) => ({ id, digest: digest(value) });
+// A settlement, or a mark of not metered, of that run, sealed as settle writes it.
+const settles = (record, id) => ['batch-settled', 'batch-not-metered'].includes(record?.stage) && record.runId === id && (({ digest: sealed, ...body }) => sealed === digest(body))(record);
 // Compared without case: on a case-insensitive file system src/A.js and src/a.js are one file.
 export const covers = (grant, other) => { const [g, o] = [grant.toLowerCase(), other.toLowerCase()]; return g.endsWith('/**') ? o === g || o.startsWith(g.slice(0, -2)) : o === g; };
 const overlap = (a, b) => covers(a, b) || covers(b, a);
 // A sensitive entry written as a bare folder guards everything under it.
 const guards = (guarded, path) => overlap(path, guarded) || (!guarded.endsWith('/**') && overlap(path, `${guarded}/**`));
-export const plain = text => String(text).replace(/[\x00-\x1f\x7f]/g, '?');
+export const plain = text => String(text).replace(UNSAFE, '?');
 const strings = (value, min = 1) => Array.isArray(value) && value.length >= min && value.every(entry => typeof entry === 'string' && entry);
 
 // The branches a batch never works on: every remote's default, the configured default, and the usual names.
@@ -189,8 +193,8 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     ({ instance, productRoot } = liveTeam(teamRoot, instanceRoot));
     need(!exists(join(instance, BATCH_FILE)) && !exists(join(instance, AFTER_FILE)), `A batch is already open (${BATCH_FILE}); close it with after and commit, or abort it, before starting another`);
     // ADR 0010, amendment of 2026-11-18: a batch that ran is settled, or marked as not metered, before the next one opens.
-    let archives; try { archives = readdirSync(join(instance, ARCHIVE)); } catch { archives = []; }
-    const unsettled = archives.filter(id => !id.startsWith('.') && exists(join(instance, ARCHIVE, id, 'after.json')) && !exists(join(instance, ARCHIVE, id, 'settlement.json'))).sort();
+    let archives; try { archives = readdirSync(join(instance, ARCHIVE), { withFileTypes: true }).filter(entry => entry.isDirectory()).map(entry => entry.name); } catch { archives = []; }
+    const unsettled = archives.filter(id => !id.startsWith('.') && exists(join(instance, ARCHIVE, id, 'after.json')) && !settles(readJSON(join(instance, ARCHIVE, id, 'settlement.json')), id)).sort();
     need(!unsettled.length, `The usage of ${unsettled.length === 1 ? 'batch' : 'batches'} ${unsettled.slice(0, 5).map(plain).join(', ')} was not settled. Settle it first: rw-batch.mjs settle METER.json --instance <instance-root> --run ${plain(unsettled[0])}; if it cannot be measured: rw-batch.mjs settle --not-metered "<reason>" --instance <instance-root> --run ${plain(unsettled[0])}`);
     const archived = archives.filter(id => !id.startsWith('.')).map(id => readJSON(join(instance, ARCHIVE, id, 'batch.json'))).filter(record => record && typeof record === 'object');
     checkBatch(batch, new Set(archived.flatMap(record => Array.isArray(record.tickets) ? record.tickets : []).map(entry => entry?.id).filter(id => typeof id === 'string').map(id => id.toLowerCase())));
@@ -209,7 +213,7 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     // With the lock held, no switch and no change of limits can run: what is read now is what the batch uses.
     const { profile, limits } = liveTeam(teamRoot, instanceRoot), product = checkProduct(productRoot, startAsIs === true), count = batch.tickets.length;
     // In a batch a worker's shell runs the commands the owner confirmed for the team, and no other, from the product root.
-    need(quotable(productRoot), 'The path of the product repository holds a character that cannot be written inside a quoted shell command (" $ ` \\ !); the workers could run no command there');
+    need(quotable(productRoot), UNQUOTABLE);
     const unconfirmed = batch.verificationCommands.filter(command => !limits.allowedCommands.includes(command));
     need(!unconfirmed.length, `These verification commands are not among the commands the owner confirmed for this team (${unconfirmed.slice(0, 5).map(plain).join(' | ')}); the workers could not run them. The owner adds them with: team-mode.mjs limits <LIMITS.json> --instance <instance-root>   (LIMITS.json: {"allowedCommands": [...]}, the whole list)`);
     // Decision 11: paths already changed are kept out of the tickets' commits, so none may lie where a ticket writes.
@@ -308,11 +312,11 @@ export function abortBatch({ teamRoot, instanceRoot }) {
     if (ours) { const released = releaseLease({ productRoot, lease: held.lease.digest }); need(!released.errors, `The lock could not be released: ${released.errors?.[0]?.reason}`); }
     // The record is a file the PM can write; only a well-formed id reaches the ledger.
     const at = new Date().toISOString(), runId = typeof record?.runId === 'string' && /^[A-Za-z0-9._-]{1,64}$/.test(record.runId) ? record.runId : null;
-    // A boundary that is missing or was changed refuses every agent's write. This command cannot rebuild it; a mode switch does.
+    // A boundary that is missing or was changed refuses every subagent's write and shell command. This command cannot rebuild it; a mode switch does.
     appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} BATCH ${runId ?? '(no readable record)'} ABORTED by rw-batch.mjs abort: ${boundary ? 'the write boundary is closed' : 'the write boundary is missing or was changed and was NOT restored'}${ours ? ', the lock released' : ''}. Nothing about the work was checked.\n`);
     rmSync(join(instance, BATCH_FILE), { recursive: true, force: true });
     const body = { schemaVersion: 1, stage: 'batch-aborted', runId, boundary: boundary ? 'closed' : 'not-restored', lockReleased: ours, abortedAt: at,
-      ...(boundary ? {} : { next: 'The write boundary is missing or was changed: every agent write is refused until a mode switch to specialist and back rebuilds it' }) };
+      ...(boundary ? {} : { next: 'The write boundary is missing or was changed: every subagent write and shell command is refused until a mode switch to specialist and back rebuilds it' }) };
     return { ...body, digest: digest(body) };
   } catch (error) {
     return refuse(error instanceof Refusal || error?.code === 'BOUNDARY_REFUSED' ? error.message : `The batch could not be aborted: ${error?.code ?? error?.message}`);

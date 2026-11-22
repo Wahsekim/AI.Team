@@ -13,7 +13,7 @@ import { runWorkflow, makeAgentImpl } from '../scripts/lib/workflow-harness.mjs'
 import { readLease, acquireLease, releaseLease } from '../src/router-worker/lease.mjs';
 import { observeIsolation } from '../src/router-worker/isolation.mjs';
 import { readBoundary, decideCall, closeBoundary } from '../src/router-worker/write-boundary.mjs';
-import { DEFAULT_LIMITS, proposeLimits, changeLimits } from '../src/router-worker/switch.mjs';
+import { DEFAULT_LIMITS, proposeLimits, changeLimits, boundLimits } from '../src/router-worker/switch.mjs';
 import { fixture, git } from './fixtures/router-worker/standing-team.mjs';
 import { digest } from '../src/loop/contracts.mjs';
 
@@ -101,9 +101,32 @@ test('in a batch a worker\'s shell runs the confirmed verification commands from
   assert.equal(oldShell(), 'allow');
   const added = proposeLimits({ teamRoot: old.kit, instanceRoot: old.root, limits: { allowedCommands: ['npm test'] } });
   assert.equal(added.errors, undefined, JSON.stringify(added.errors)); assert.deepEqual([added.from.allowedCommands, added.to.allowedCommands], [[], ['npm test']]);
-  assert.equal(changeLimits({ teamRoot: old.kit, instanceRoot: old.root, limits: { allowedCommands: ['npm test'] }, confirm: added.digest }).errors, undefined);
+  assert.equal(changeLimits({ teamRoot: old.kit, instanceRoot: old.root, limits: { allowedCommands: ['npm test'] }, confirm: added.digest, atTerminal: true }).errors, undefined);
   assert.equal(oldShell(), 'deny', 'the change of limits closes the shell of a team that had no list');
   assert.match(old.read('pm-decisions.md'), /LIMITS CHANGED: allowedCommands \[\] -> \["npm test"\];/); assert.equal((await old.before(one)).errors, undefined);
+});
+
+test('before refuses a product repository whose path a quoted shell command cannot hold', async t => {
+  const f = live(t), odd = join(f.base, 'pro!duct'), profile = JSON.parse(f.read('profiles/team-mode.json'));
+  cpSync(f.product, odd, { recursive: true });
+  writeFileSync(join(f.root, 'profiles/team-mode.json'), JSON.stringify({ ...profile, spec: { ...profile.spec, project: { ...profile.spec.project, productRoot: odd } } }));
+  assert.match(refusal(await f.before(batchOf(ticket('US-01', ['src/a.js'])))).reason, /cannot be written inside a quoted shell command/);
+  assert.equal(readLease({ productRoot: odd }).status, 'free'); assert.equal(existsSync(join(f.root, BATCH_FILE)), false);
+});
+
+test('a change of limits that cannot close the boundary of a team without a command list changes nothing', t => {
+  const old = live(t), profile = JSON.parse(old.read('profiles/team-mode.json')), { allowedCommands: _none, ...counts } = profile.limits;
+  writeFileSync(join(old.root, 'profiles/team-mode.json'), JSON.stringify({ ...profile, limits: counts }));
+  const stood = readBoundary(old.root), boundaryFile = join(old.root, '.claude/rw-write-boundary.json');
+  writeFileSync(boundaryFile, JSON.stringify(sealAgain({ schemaVersion: 1, productRoot: stood.productRoot, wrappers: Object.fromEntries(Object.entries(stood.wrappers).map(([name, entry]) => [name, { duty: entry.duty, writePaths: [] }])) })));
+  const saved = old.read('profiles/team-mode.json'), ledger = old.read('pm-decisions.md');
+  const proposal = proposeLimits({ teamRoot: old.kit, instanceRoot: old.root, limits: { allowedCommands: ['npm test'] } });
+  chmodSync(boundaryFile, 0o444);
+  const changed = changeLimits({ teamRoot: old.kit, instanceRoot: old.root, limits: { allowedCommands: ['npm test'] }, confirm: proposal.digest, atTerminal: true });
+  chmodSync(boundaryFile, 0o644);
+  assert.equal(refusal(changed).code, 'LIMITS_REFUSED');
+  assert.equal(old.read('profiles/team-mode.json'), saved, 'the limits are not in force'); assert.equal(old.read('pm-decisions.md'), ledger, 'no ledger line for a change that did not happen');
+  assert.equal(readLease({ productRoot: old.product }).status, 'free');
 });
 
 test('abort clears a batch that will not run, and what a before that died left behind, so the next batch can open', async t => {
@@ -140,24 +163,27 @@ test('the limits in force are the ones the last ledger line binds: a hand edit, 
   const bound = JSON.parse(stored).limits, common = { teamRoot: f.kit, instanceRoot: f.root };
   assert.match(f.read('pm-decisions.md'), new RegExp(`MODE SWITCH: from specialist to router-worker; .*; limits ${digest(bound)}\\.\\n`));
   // Lines that are not a switch or a change of limits never bind, whatever they quote.
-  appendFileSync(join(f.root, 'pm-decisions.md'), `2026-11-20 BATCH x ABORTED: limits ${digest({ ...bound, attemptsPerTicket: 3 })}.\nfree text; limits sha256:${'0'.repeat(64)}.\n`);
+  appendFileSync(join(f.root, 'pm-decisions.md'), `2026-11-20 BATCH x ABORTED: limits ${digest({ ...bound, attemptsPerTicket: 3 })}.\nfree text; limits sha256:${'0'.repeat(64)}.\n`
+    + `2026-11-20 LIMITS CHANGED: attemptsPerTicket 1 -> 3; proposal sha256:${'1'.repeat(64)} was confirmed by a program that called the change directly, not at a terminal; limits ${digest({ ...bound, attemptsPerTicket: 3 })}.\n`);
   writeFileSync(profilePath, JSON.stringify({ ...JSON.parse(stored), limits: { ...bound, attemptsPerTicket: 3 } }));
   const stopped = refusal(await f.before(one));
   assert.equal(stopped.code, 'LIMITS_NOT_BOUND'); assert.match(stopped.reason, /not the limits the owner last confirmed.*team-mode\.mjs limits <LIMITS\.json> --instance <instance-root>/); f.untouched();
   // The owner re-confirms the limits as they stand: the proposal changes nothing, the ledger line binds them.
   const again = proposeLimits({ ...common, limits: {} });
   assert.equal(again.errors, undefined, JSON.stringify(again.errors)); assert.deepEqual(again.from, again.to); assert.equal(again.to.attemptsPerTicket, 3);
-  assert.equal(changeLimits({ ...common, limits: {}, confirm: again.digest }).errors, undefined);
+  assert.equal(changeLimits({ ...common, limits: {}, confirm: again.digest, atTerminal: true }).errors, undefined);
   assert.match(f.read('pm-decisions.md'), new RegExp(`LIMITS CHANGED: none, the limits in force re-confirmed as they stand; .*; limits ${digest(again.to)}\\.\\n`));
   assert.match(refusal(proposeLimits({ ...common, limits: {} })).reason, /already has/, 'bound limits are not re-confirmed');
   const opened = await f.before(one); assert.equal(opened.errors, undefined, JSON.stringify(opened.errors)); assert.equal(opened.limits.attemptsPerTicket, 3);
   assert.equal(abortBatch(common).errors, undefined);
+  writeFileSync(join(f.root, 'pm-decisions.md'), f.read('pm-decisions.md').replace(/\n/g, '\r\n'));
+  assert.equal(boundLimits(f.root), digest(again.to), 'a ledger saved with CRLF line ends');
   // A team that went live before the ledger bound its limits.
   const old = live(t), ledgerPath = join(old.root, 'pm-decisions.md');
   writeFileSync(ledgerPath, old.read('pm-decisions.md').replace(/; limits sha256:[a-f0-9]{64}\./g, '.'));
   assert.equal(refusal(await old.before(one)).code, 'LIMITS_NOT_BOUND'); old.untouched();
   const legacy = proposeLimits({ teamRoot: old.kit, instanceRoot: old.root, limits: {} }); assert.equal(legacy.errors, undefined, JSON.stringify(legacy.errors));
-  assert.equal(changeLimits({ teamRoot: old.kit, instanceRoot: old.root, limits: {}, confirm: legacy.digest }).errors, undefined);
+  assert.equal(changeLimits({ teamRoot: old.kit, instanceRoot: old.root, limits: {}, confirm: legacy.digest, atTerminal: true }).errors, undefined);
   assert.equal((await old.before(one)).errors, undefined);
 });
 
@@ -341,14 +367,21 @@ test('after reports, and does not change, each limit that stopped work: the outp
     input: JSON.stringify({ tool_name: 'Bash', agent_type: exec, cwd: f.product, tool_input: { command } }) });
   for (const command of ['npm run e2e', 'npm run e2e', 'npm test']) hook(command);
   const profile = f.read('profiles/team-mode.json');
-  const tripped = { ...f.result, budgetGateTripped: true, budgetStatus: { ...f.result.budgetStatus, loopSpent: 30000, tripped: true } };
+  const tripped = { ...f.result, budgetGateTripped: true, budgetStatus: { ...f.result.budgetStatus, loopSpent: 30000, tripped: true }, guardianTokens: 2000 };
   const closed = afterBatch({ teamRoot: f.kit, instanceRoot: f.root, result: tripped });
   assert.equal(closed.errors, undefined, JSON.stringify(closed.errors));
   assert.deepEqual(closed.limits, [
-    { limit: 'outputAllowancePerTicket', observed: 30000, current: 15000, proposal: { outputAllowancePerTicket: 38000 } },
+    { limit: 'outputAllowancePerTicket', observed: 28000, current: 15000, proposal: { outputAllowancePerTicket: 36000 } },
     { limit: 'attemptsPerTicket', observed: 1, current: 1, proposal: { attemptsPerTicket: 2 }, tickets: ['US-01'] },
     { limit: 'allowedCommands', observed: 'npm run e2e', current: ['npm test', 'npm run lint'], proposal: null }]);
   assert.equal(f.read('profiles/team-mode.json'), profile, 'nothing writes the limits');
+  // The ceiling is the tickets' allowances plus the Guardian's share: the proposal is for the share that ran out.
+  const closeAgain = result => { writeFileSync(join(f.root, AFTER_FILE), JSON.stringify({ stage: 'batch-closing', runId: f.open.runId, claimedAt: '2000-01-01T00:00:00.000Z' }));
+    const again = afterBatch({ teamRoot: f.kit, instanceRoot: f.root, result }); assert.equal(again.errors, undefined, JSON.stringify(again.errors)); return again.limits[0]; };
+  assert.deepEqual(closeAgain({ ...tripped, guardianTokens: 20000 }), { limit: 'guardianOutputShare', observed: 20000, current: 6000, proposal: { guardianOutputShare: 26000 } });
+  const { guardianTokens, ...unsplit } = tripped;
+  assert.deepEqual(closeAgain(unsplit), { limit: 'outputAllowancePerTicket', observed: 30000, current: 15000, proposal: { outputAllowancePerTicket: 38000 },
+    note: 'The engine return does not give the Guardian\'s spend apart: the figure per ticket includes it' });
 });
 
 test('commit refuses when the product changed after the batch was closed, keeps paths changed before the batch out of every commit, and resumes after a failure', async t => {
@@ -759,3 +792,36 @@ test('the next batch does not open until the last one is settled, or marked as n
   dropped.unmetered(); assert.equal((await dropped.before(batchOf(ticket('US-07', ['src/q.js'])), { startAsIs: true })).errors, undefined);
 });
 
+
+test('the gate reads a settlement of that run, sealed; a mark is refused whole when its ledger line cannot be written', async t => {
+  const f = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n' } }), id = f.open.runId, next = () => f.before(batchOf(ticket('US-07', ['src/q.js'])));
+  const mark = (reason, extra = {}) => markNotMetered({ teamRoot: f.kit, instanceRoot: f.root, reason, runId: id, ...extra }), held = new RegExp(`The usage of batch ${id} was not settled`);
+  assert.equal(f.after().errors, undefined); assert.equal(f.commit().errors, undefined);
+  // A file the PM left among the archives is not a batch.
+  writeFileSync(join(f.root, 'batches', 'notes.txt'), 'x'); assert.match(refusal(await next()).reason, held);
+  for (const bad of ['a\u009bb', 'a\u200eb', 'a\ufeffb', 'a b', 'a b', 'a\u0085b', 'a‮b', 'a⁦b']) assert.match(refusal(mark(bad)).reason, /with a reason: one line/, JSON.stringify(bad));
+  const settlement = join(f.root, 'batches', id, 'settlement.json'), seal = body => JSON.stringify({ ...body, digest: digest(body) });
+  const body = { schemaVersion: 1, stage: 'batch-not-metered', runId: id, reason: 'forged', markedAt: new Date().toISOString() };
+  for (const forged of ['', '{}', JSON.stringify({ ...body, digest: 'sha256:0' }), seal({ ...body, runId: 'rw-other' }), seal({ ...body, stage: 'batch-open' })]) {
+    writeFileSync(settlement, forged); assert.match(refusal(await next()).reason, held, forged.slice(0, 60));
+  }
+  rmSync(settlement);
+  const ledger = join(f.root, 'pm-decisions.md'); chmodSync(ledger, 0o444);
+  assert.ok(refusal(mark('the meter is gone'))); chmodSync(ledger, 0o644);
+  assert.equal(existsSync(settlement), false, 'no mark without its ledger line');
+  assert.equal(mark('the meter is gone').errors, undefined); assert.equal((await next()).errors, undefined);
+});
+
+test('a mark of the closed batch is refused when its records do not agree on the run id', async t => {
+  const f = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n' } }), mark = () => markNotMetered({ teamRoot: f.kit, instanceRoot: f.root, reason: 'no meter' });
+  assert.equal(f.after().errors, undefined);
+  const afterPath = join(f.root, AFTER_FILE), original = readFileSync(afterPath, 'utf8'), closed = JSON.parse(original);
+  writeFileSync(afterPath, JSON.stringify(sealAgain({ ...closed, runId: 'rw-other' })));
+  assert.match(refusal(mark()).reason, /do not agree/); assert.equal(existsSync(join(f.root, 'rw-batch-settlement.json')), false);
+  writeFileSync(afterPath, original); assert.equal(f.commit().errors, undefined);
+  // A record left in the root names the archive only when it is the archive's own.
+  writeFileSync(afterPath, JSON.stringify(sealAgain({ ...closed, left: ['src/forged.js'] })));
+  assert.match(refusal(mark()).reason, /do not agree/);
+  writeFileSync(afterPath, original); const marked = mark(); assert.equal(marked.errors, undefined, JSON.stringify(marked.errors));
+  assert.equal(JSON.parse(readFileSync(join(f.root, 'batches', f.open.runId, 'settlement.json'), 'utf8')).stage, 'batch-not-metered');
+});
