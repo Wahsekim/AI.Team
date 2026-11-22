@@ -20,7 +20,7 @@ import { fenced, lines, REPORT, protocolOf } from './review-brief.mjs';
 const KIT = fileURLToPath(new URL('../../', import.meta.url));
 export const PERIODIC_FILE = 'reviews/periodic.jsonl';
 const BRIEF_FILE = reviewer => `rw-periodic-review-${reviewer}.json`;
-const LEDGER = 'pm-decisions.md', MODE_FILE = 'profiles/team-mode.json', ATTEMPTS = 2, DEFAULT_INTERVAL = 25;
+const LEDGER = 'pm-decisions.md', MODE_FILE = 'profiles/team-mode.json', ATTEMPTS = 2, DEFAULT_INTERVAL = 25, MAX_INTERVAL = 100;
 const FINAL = ['accepted', 'not-obtained', 'nothing-to-review'];
 const need = (condition, reason) => { if (!condition) throw new Refusal(reason); };
 const exists = path => Boolean(lstatSync(path, { throwIfNoEntry: false }));
@@ -30,20 +30,34 @@ const refuse = error => ({ errors: [{ code: 'REVIEW_REFUSED', field: 'review', r
 const heading = (reviewer, id, attempt) => `# Periodic review brief: ${reviewer}, period ${id}, attempt ${attempt}`;
 const COMMANDS = 'rw-batch.mjs periodic-brief --reviewer <reviewer> --instance <instance-root>, dispatch the reviewer with that brief, then rw-batch.mjs periodic --reviewer <reviewer> --transcript <agent-*.jsonl> --instance <instance-root> (or periodic --no-answer "<reason>" --reviewer <reviewer> --instance <instance-root>)';
 
-// The charter's hardening interval: a number, or the placeholder's default; the kit's default otherwise.
+// The charter's hardening interval, which the PM can edit: trusted from 1 to MAX_INTERVAL, clamped above, the kit's
+// default otherwise. `source` is charter, clamped or default; `note` says why, for the refusal and the brief.
 export function hardeningInterval(instance, kit = KIT) {
   let text; try { text = readFileSync(join(instance, 'charter.md'), 'utf8'); } catch { text = readFileSync(join(kit, 'charter.template.md'), 'utf8'); }
-  const found = /At counter = `(?:(\d+)|\{\{HARDENING_INTERVAL \| default:(\d+)\}\})`/.exec(text), value = Number(found?.[1] ?? found?.[2]);
-  return Number.isSafeInteger(value) && value > 0 ? value : DEFAULT_INTERVAL;
+  const raw = /At counter = `([^`\n]*)`/.exec(text)?.[1], placeholder = /^\{\{HARDENING_INTERVAL \| default:(\d+)\}\}$/.exec(raw ?? '')?.[1];
+  const digits = placeholder ?? (/^\d+$/.test(raw ?? '') ? raw : null), value = digits === null ? NaN : Number(digits);
+  if (value > MAX_INTERVAL) return { value: MAX_INTERVAL, source: 'clamped', note: `charter.md gives ${digits}; the kit trusts at most ${MAX_INTERVAL}` };
+  if (value >= 1) return placeholder ? { value, source: 'default', note: "the placeholder's default in charter.md" } : { value, source: 'charter', note: 'set in charter.md' };
+  return { value: DEFAULT_INTERVAL, source: 'default', note: raw === undefined ? "charter.md names no interval; the kit's default" : `charter.md gives ${JSON.stringify(plain(raw))}, not a whole number from 1 to ${MAX_INTERVAL}; the kit's default` };
 }
 
-// Every ticket the kit committed, oldest batch first, from the sealed commit records of the archive.
+// The commits of one archived batch: its sealed commit record, or, for a batch archived without commit, the commits the
+// kit made before it stopped, each named in the sealed abandon note.
+function archivedCommits(instance, id) {
+  const committed = readJSON(join(instance, ARCHIVE, id, 'commit.json'));
+  if (intact(committed, 'batch-committed') && committed.runId === id && Array.isArray(committed.commits)) return { at: committed.committedAt, commits: committed.commits };
+  const note = readJSON(join(instance, ARCHIVE, id, 'abandoned.json')), made = readJSON(join(instance, ARCHIVE, id, 'commits.json'));
+  if (!intact(note, 'batch-archived-without-commit') || note.runId !== id || made?.runId !== id || !Array.isArray(made.commits) || !Array.isArray(note.commitsMade)) return null;
+  return { at: note.archivedAt, commits: made.commits.filter(commit => typeof commit?.sha === 'string' && note.commitsMade.includes(`${commit.ticket} ${commit.sha.slice(0, 8)}`)) };
+}
+// Every ticket the kit committed, oldest batch first, each commit once.
 function committedOf(instance) {
   let ids; try { ids = readdirSync(join(instance, ARCHIVE)).filter(id => !id.startsWith('.')); } catch { ids = []; }
-  return ids.map(id => ({ id, record: readJSON(join(instance, ARCHIVE, id, 'commit.json')) }))
-    .filter(({ id, record }) => intact(record, 'batch-committed') && record.runId === id && Array.isArray(record.commits))
-    .sort((a, b) => a.record.committedAt.localeCompare(b.record.committedAt))
-    .flatMap(({ id, record }) => record.commits.map(commit => ({ ticket: commit.ticket, sha: commit.sha, runId: id })));
+  const seen = new Set();
+  return ids.map(id => ({ id, record: archivedCommits(instance, id) })).filter(({ record }) => record)
+    .sort((a, b) => a.record.at.localeCompare(b.record.at))
+    .flatMap(({ id, record }) => record.commits.map(commit => ({ ticket: commit.ticket, sha: commit.sha, runId: id })))
+    .filter(entry => !seen.has(entry.sha) && seen.add(entry.sha));
 }
 // The tickets of an archived batch that this reviewer's triggered review passed.
 function passedOf(instance, runId, reviewer) {
@@ -53,6 +67,8 @@ function passedOf(instance, runId, reviewer) {
 function periodicLines(instance) {
   let text; try { text = readFileSync(join(instance, PERIODIC_FILE), 'utf8'); } catch { return []; }
   const kept = text.split('\n').filter(Boolean).map(line => { try { return JSON.parse(line); } catch { return null; } });
+  need(kept.at(-1) !== null || kept.slice(0, -1).some(line => !intact(line, 'periodic-review')),
+    `The last line of ${PERIODIC_FILE} is incomplete, a write that did not finish; remove that line (the review it was recording becomes due again)`);
   need(kept.every(line => intact(line, 'periodic-review')), `${PERIODIC_FILE} was changed; the periodic count cannot be derived. Restore it`);
   return kept;
 }
@@ -61,11 +77,14 @@ function pendingOf(committed, kept, reviewer) {
   const counted = new Set(kept.filter(line => line.reviewer === reviewer && FINAL.includes(line.outcome)).flatMap(line => line.counted));
   return committed.filter(entry => !counted.has(entry.sha));
 }
+// This reviewer's refused attempts at the same pending commits, whatever period id an abort gave them.
+const sameShas = (a, b) => a.length === b.length && a.every(sha => b.includes(sha));
+const triedOf = (kept, reviewer, counted) => kept.filter(line => line.reviewer === reviewer && line.outcome === 'refused' && sameShas(line.counted, counted));
 export function periodicDue({ instance, reviewers, kit = KIT }) {
   const interval = hardeningInterval(instance, kit), committed = committedOf(instance), kept = periodicLines(instance);
-  return { interval, due: reviewers.map(reviewer => ({ reviewer, pending: pendingOf(committed, kept, reviewer).length })).filter(entry => entry.pending >= interval) };
+  return { interval, due: reviewers.map(reviewer => ({ reviewer, pending: pendingOf(committed, kept, reviewer).length })).filter(entry => entry.pending >= interval.value) };
 }
-export const periodicDueReason = ({ interval, due }) => `A periodic review is due, every ${interval} committed tickets (ADR 0011, decision 7): ${due.map(entry => `${entry.reviewer} (${entry.pending} committed tickets since its last)`).join(', ')}. No batch opens until each is recorded: ${COMMANDS}. A review not obtained twice is recorded, reported to the owner, and stops nothing`;
+export const periodicDueReason = ({ interval, due }) => `A periodic review is due, every ${interval.value} committed tickets (${interval.note}; ADR 0011, decision 7): ${due.map(entry => `${entry.reviewer} (${entry.pending} committed tickets since its last)`).join(', ')}. No batch opens until each is recorded: ${COMMANDS}. A review not obtained twice is recorded, reported to the owner, and stops nothing`;
 
 // The team between batches, the reviewer, and the periodic review open in the boundary, if any.
 function periodOf({ teamRoot, instanceRoot, reviewer }) {
@@ -122,13 +141,13 @@ const afterwards = due => due.length ? `Still due: ${due.map(entry => entry.revi
 
 export function periodicBrief({ teamRoot, instanceRoot, reviewer }) {
   try {
-    const period = periodOf({ teamRoot, instanceRoot, reviewer }), { instance, review, product, kept, mine } = period;
-    const interval = hardeningInterval(instance), pending = pendingOf(committedOf(instance), kept, reviewer);
-    need(pending.length >= interval, `No periodic review by ${reviewer} is due: ${pending.length} committed ticket(s) since its last, of ${interval}`);
+    const period = periodOf({ teamRoot, instanceRoot, reviewer }), { instance, review, product, kept } = period;
+    const { value: interval, source: intervalSource, note } = hardeningInterval(instance), pending = pendingOf(committedOf(instance), kept, reviewer);
+    need(pending.length >= interval, `No periodic review by ${reviewer} is due: ${pending.length} committed ticket(s) since its last, of ${interval} (${note})`);
     const id = period.id ?? `periodic-${new Date().toISOString().replace(/[:.]/g, '-')}`, at = new Date().toISOString(), counted = pending.map(entry => entry.sha);
     const passed = new Map(), scope = pending.filter(entry => { if (!passed.has(entry.runId)) passed.set(entry.runId, passedOf(instance, entry.runId, reviewer)); return !passed.get(entry.runId).has(entry.ticket); });
     if (!scope.length) {
-      const line = sealed({ schemaVersion: 1, stage: 'periodic-review', id, reviewer, attempt: 1, briefAttempt: null, briefDigest: null, interval, outcome: 'nothing-to-review', counted, scope: [],
+      const line = sealed({ schemaVersion: 1, stage: 'periodic-review', id, reviewer, attempt: 1, briefAttempt: null, briefDigest: null, interval, intervalSource, outcome: 'nothing-to-review', counted, scope: [],
         refusals: [], transcript: null, reportDigest: null, tokens: null, authorizedTokens: null, overrun: null, findings: [], at });
       append(instance, line, `NOTHING TO REVIEW: the ${counted.length} committed ticket(s) since its last were passed by its triggered reviews`);
       return { ...line, next: afterwards(closeIfOver(instance, review.reviewers)) };
@@ -146,10 +165,10 @@ export function periodicBrief({ teamRoot, instanceRoot, reviewer }) {
     }
     const tickets = [...byTicket.values()].map(item => ({ ...item, flaggedFiles: item.changedPaths, content: contentOf(product, item.changedPaths) }));
     if (!period.id) reviewBoundary({ teamRoot: instance, runId: id, reviewers: period.wrappers, periodic: true });
-    const refused = mine.at(-1), retryReason = refused ? refused.refusals.map(item => `${item.code}: ${item.detail}`).join('; ') : null;
+    const refused = triedOf(kept, reviewer, counted).at(-1), retryReason = refused ? refused.refusals.map(item => `${item.code}: ${item.detail}`).join('; ') : null;
     const briefs = briefsOf(instance, reviewer, period.id), attempt = briefs.length + 1, rules = review.rules.filter(rule => rule.reviewer === reviewer);
     const body = render({ reviewer, id, attempt, interval, tickets, product, rules, adrs: review.adrs.map(path => join(instance, path)), protocol: protocolOf(instance), retryReason }), briefDigest = digest(body);
-    const record = sealed({ schemaVersion: 1, stage: 'periodic-brief', id, reviewer, wrapper: period.wrappers[reviewer], attempt, briefDigest, madeAt: at, interval, counted,
+    const record = sealed({ schemaVersion: 1, stage: 'periodic-brief', id, reviewer, wrapper: period.wrappers[reviewer], attempt, briefDigest, madeAt: at, interval, intervalSource, counted,
       tickets: tickets.map(({ id: ticket, runs, shas, changedPaths, flaggedFiles, content }) => ({ id: ticket, runs, shas, changedPaths, flaggedFiles, content })),
       ruleIds: rules.map(rule => rule.id), adrs: review.adrs, ...(retryReason ? { retryReason } : {}) });
     const path = join(instance, BRIEF_FILE(reviewer));
@@ -169,8 +188,8 @@ function judging(options) {
 }
 
 // Records one judgment; the second failed attempt is final, not obtained. `meter` is measure-spawn.mjs --json, or absent.
-function record({ instance, review, id, mine, brief }, reviewer, judged, meter) {
-  const outcome = !judged.refusals.length ? 'accepted' : mine.length + 1 >= ATTEMPTS ? 'not-obtained' : 'refused', at = new Date().toISOString();
+function record({ instance, review, id, kept, brief }, reviewer, judged, meter) {
+  const attempt = triedOf(kept, reviewer, brief.counted).length + 1, outcome = !judged.refusals.length ? 'accepted' : attempt >= ATTEMPTS ? 'not-obtained' : 'refused', at = new Date().toISOString();
   const real = file => { try { return realpathSync(file); } catch { return null; } };
   const row = judged.transcript && Array.isArray(meter?.subagents) ? meter.subagents.find(candidate => !candidate?.workflowRunId && candidate?.agentType === brief.wrapper
     && typeof candidate.file === 'string' && real(candidate.file) === judged.transcript.file && Number.isSafeInteger(candidate.harnessEq)) : null;
@@ -178,7 +197,7 @@ function record({ instance, review, id, mine, brief }, reviewer, judged, meter) 
   const shasOf = ticket => brief.tickets.find(item => item.id === ticket)?.shas ?? [];
   const findings = outcome !== 'accepted' ? [] : judged.tickets.filter(item => item.verdict === 'rejected' || item.item === 'AMBER')
     .map(item => ({ ticket: item.id, shas: shasOf(item.id), verdict: item.item, fails: item.fails, finding: item.finding, ...(item.fix !== undefined ? { fix: item.fix, control: item.control } : {}) }));
-  const line = sealed({ schemaVersion: 1, stage: 'periodic-review', id, reviewer, attempt: mine.length + 1, briefAttempt: brief.attempt, briefDigest: brief.briefDigest, interval: brief.interval, outcome,
+  const line = sealed({ schemaVersion: 1, stage: 'periodic-review', id, reviewer, attempt, briefAttempt: brief.attempt, briefDigest: brief.briefDigest, interval: brief.interval, intervalSource: brief.intervalSource, outcome,
     counted: brief.counted, scope: brief.tickets.map(item => ({ ticket: item.id, runs: item.runs, shas: item.shas })), refusals: judged.refusals, transcript: judged.transcript ?? null,
     reportDigest: judged.reportDigest ?? null, tokens, authorizedTokens, overrun: tokens === null || authorizedTokens === null ? null : tokens > authorizedTokens, findings, at });
   const codes = judged.refusals.map(item => item.code).join(', '), cost = tokens === null ? '' : `; ${tokens} token(s) of ${authorizedTokens ?? 'no'} authorized${line.overrun ? ', over' : ''}`;

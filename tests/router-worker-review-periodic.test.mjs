@@ -2,11 +2,12 @@
 // over what no triggered review of that reviewer passed. "before" waits for it; it holds no commit.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, realpathSync } from 'node:fs';
+import { writeFileSync, realpathSync, appendFileSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { markNotMetered } from '../src/router-worker/batch-settle.mjs';
-import { periodicBrief, judgePeriodic, recordPeriodicNoAnswer, hardeningInterval } from '../src/router-worker/review-periodic.mjs';
+import { abortBatch } from '../src/router-worker/batch.mjs';
+import { periodicBrief, judgePeriodic, recordPeriodicNoAnswer, hardeningInterval, periodicDue, periodicDueReason } from '../src/router-worker/review-periodic.mjs';
 import { git } from './fixtures/router-worker/standing-team.mjs';
 import { refusal, ticket, batchOf, live, runBatch, edits, transcriptOf, reportOf, failing, changed } from './fixtures/router-worker/review.mjs';
 
@@ -42,9 +43,63 @@ async function due(t) {
 
 test('the interval comes from the instance charter, the template default when unset', t => {
   const f = team(t, 3);
-  assert.equal(hardeningInterval(f.root, f.kit), 3);
+  assert.deepEqual([hardeningInterval(f.root, f.kit).value, hardeningInterval(f.root, f.kit).source], [3, 'charter']);
   writeFileSync(join(f.root, 'charter.md'), f.read('charter.md').replace('At counter = `3`', 'At counter = `{{HARDENING_INTERVAL | default:25}}`'));
-  assert.equal(hardeningInterval(f.root, f.kit), 25);
+  assert.deepEqual([hardeningInterval(f.root, f.kit).value, hardeningInterval(f.root, f.kit).source], [25, 'default']);
+});
+
+test('a charter interval is trusted up to 100; zero, negative or not a number falls back to the default, and each is reported', t => {
+  const f = team(t, 3);
+  const set = value => writeFileSync(join(f.root, 'charter.md'), f.read('charter.md').replace(/At counter = `[^`]*`/, `At counter = \`${value}\``));
+  for (const [value, expected] of [['0', [25, 'default']], ['-3', [25, 'default']], ['twelve', [25, 'default']], ['100', [100, 'charter']], ['101', [100, 'clamped']], ['1000000000000000000000', [100, 'clamped']]]) {
+    set(value); const found = hardeningInterval(f.root, f.kit);
+    assert.deepEqual([found.value, found.source], expected, value);
+    if (expected[1] !== 'charter') assert.ok(found.note.includes(value), `the note names ${value}: ${found.note}`);
+  }
+  set('1000');
+  const reason = periodicDueReason({ ...periodicDue({ instance: f.root, reviewers: ['security'], kit: f.kit }), due: [{ reviewer: 'security', pending: 100 }] });
+  assert.match(reason, /every 100 committed tickets \(charter\.md gives 1000; the kit trusts at most 100;/);
+});
+
+test('the refusal and each periodic line name the interval used and its source', async t => {
+  const f = team(t);
+  writeFileSync(join(f.root, 'charter.md'), f.read('charter.md').replace(/At counter = `[^`]*`/, 'At counter = `{{HARDENING_INTERVAL | default:1}}`'));
+  await committed(f, [ticket('US-01', ['src/one.js'])]);
+  assert.match(refusal(await next(f)).reason, /every 1 committed tickets \(the placeholder's default in charter\.md;/);
+  assert.equal(f.periodic('security', transcriptOf(f, f.periodicBrief('security'))).outcome, 'accepted');
+  assert.deepEqual(f.periodicLines().map(line => [line.interval, line.intervalSource]), [[1, 'default']]);
+});
+
+test('tickets the kit committed before a failed commit and abort are counted, once', async t => {
+  const f = team(t, 1);
+  writeFileSync(join(f.product, '.git/hooks/pre-commit'), `#!/bin/sh\ngit diff --cached --name-only | grep -q two.js && exit 1\nexit 0\n`); chmodSync(join(f.product, '.git/hooks/pre-commit'), 0o755);
+  const { open } = await runBatch(f, [ticket('US-01', ['src/one.js']), ticket('US-02', ['src/two.js'])], edits(['src/one.js', 'src/two.js']));
+  assert.ok(f.commit().errors, 'the hook stops the second commit');
+  const left = abortBatch(f.common); assert.equal(left.commitsMade.length, 1, JSON.stringify(left));
+  settled(f, open.runId);
+  const sha = git(f.product, 'rev-parse', 'HEAD').trim();
+  assert.deepEqual(periodicDue({ instance: f.root, reviewers: ['security', 'architect'], kit: f.kit }).due, [{ reviewer: 'security', pending: 1 }, { reviewer: 'architect', pending: 1 }]);
+  assert.deepEqual(f.periodicBrief('security').record.counted, [sha]);
+});
+
+test('abort during a periodic review keeps the attempt count of the same pending tickets: the second failure is not obtained', async t => {
+  const { f } = await due(t);
+  const made = f.periodicBrief('security');
+  assert.equal(f.periodic('security', transcriptOf(f, made, { reads: [] })).outcome, 'refused');
+  assert.equal(abortBatch(f.common).errors, undefined); assert.equal(f.state(), 'closed');
+  const again = f.periodicBrief('security');
+  assert.notEqual(again.record.id, made.record.id); assert.match(again.brief, /This attempt is the last one/);
+  const second = f.silent('security', 'the reviewer stopped at its turn limit');
+  assert.deepEqual([second.outcome, second.attempt], ['not-obtained', 2]);
+});
+
+test('a half-written last line of periodic.jsonl refuses before and names the recovery', async t => {
+  const { f } = await due(t);
+  assert.equal(f.periodic('security', transcriptOf(f, f.periodicBrief('security'))).outcome, 'accepted');
+  appendFileSync(join(f.root, 'reviews/periodic.jsonl'), '{"schemaVersion":1,"stage":"periodic-rev');
+  assert.equal(abortBatch(f.common).errors, undefined);
+  const reason = refusal(await next(f)).reason;
+  assert.match(reason, /last line of reviews\/periodic\.jsonl is incomplete.*remove that line.*due again/);
 });
 
 test('the committed ticket that reaches the interval makes before refuse, naming the periodic commands; no brief while a batch is open', async t => {

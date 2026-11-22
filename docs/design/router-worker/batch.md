@@ -630,11 +630,18 @@ What no trigger flags is read by Security once and Architect once every
 `HARDENING_INTERVAL` committed tickets.
 
 - **Interval.** The number in the instance's `charter.md` line "At counter =
-  `N`", or the placeholder's default; 25 when the line holds neither. Before
-  bootstrap, `charter.template.md`.
+  `N`", or the placeholder's default; before bootstrap, `charter.template.md`.
+  The PM can edit the charter, so its value is trusted up to 100: a larger one
+  is clamped to 100, and zero, a negative number, anything that is not a whole
+  number, or no such line gives the kit's default, 25. The interval used and
+  its source (`charter`, `clamped` or `default`) are in the `before` refusal,
+  in the brief record and in each periodic line.
 - **Count, derived and never stored.** For each reviewer: the tickets in the
-  sealed `batches/*/commit.json` records whose commit no final periodic line of
-  that reviewer counted. A final line is `accepted`, `not-obtained` or
+  sealed `batches/*/commit.json` records, and, for a batch archived without
+  commit by `abort`, the commits the kit had made before it stopped
+  (`commits.json` of the same run, each named in the sealed `abandoned.json`),
+  whose commit no final periodic line of that reviewer counted. Each commit is
+  counted once. A final line is `accepted`, `not-obtained` or
   `nothing-to-review`. A refused attempt counts nothing.
 - **Due.** `before` refuses with `PERIODIC_REVIEW_DUE` while any reviewer's count
   is at the interval or above, and names the commands. It checks this after the
@@ -661,7 +668,9 @@ What no trigger flags is read by Security once and Architect once every
   (transcript place, wrapper, brief carried unchanged, a whole Read of each
   file, every rule per ticket, RED only with a failed rule, a fix and a control
   per failed rule). A refused report is briefed and dispatched once more; the
-  second failure, or `--no-answer` twice, is `not-obtained`.
+  second failure, or `--no-answer` twice, is `not-obtained`. Attempts are
+  counted per reviewer over the same pending commits, so an `abort` between
+  them, which gives the review a new period id, does not reset the count.
 - **Holds nothing.** No commit is touched. Each RED or AMBER ticket of an
   accepted report is a finding, with its commits, failed rules, fix and proposed
   control, for the PM to file as a ticket. Owner answer of 2026-11-20: a review
@@ -674,13 +683,16 @@ What no trigger flags is read by Security once and Architect once every
 
 `reviews/periodic.jsonl`, one sealed line per judgment: `{schemaVersion: 1,
 stage: "periodic-review", id, reviewer, attempt, briefAttempt, briefDigest,
-interval, outcome: "accepted"|"refused"|"not-obtained"|"nothing-to-review",
+interval, intervalSource, outcome: "accepted"|"refused"|"not-obtained"|"nothing-to-review",
 counted: [sha], scope: [{ticket, runs, shas}], refusals, transcript: {file,
 digest, agentType}|null, reportDigest, tokens, authorizedTokens, overrun,
 findings: [{ticket, shas, verdict, fails, finding, fix?, control?}], at,
-digest}`. A line changed by hand refuses `before` and the periodic commands.
+digest}`. A line changed by hand refuses `before` and
+the periodic commands. A last line that a write did not finish refuses them
+too, and the refusal names the recovery: remove that line, and the review it
+was recording becomes due again.
 The brief is kept, sealed per attempt, in `rw-periodic-review-<reviewer>.json`:
-`{id, reviewer, wrapper, attempt, briefDigest, madeAt, interval, counted,
+`{id, reviewer, wrapper, attempt, briefDigest, madeAt, interval, intervalSource, counted,
 tickets: [{id, runs, shas, changedPaths, flaggedFiles, content}], ruleIds,
 adrs, retryReason?}`. The ledger gets one `PERIODIC REVIEW <id> <reviewer>`
 line per judgment.
