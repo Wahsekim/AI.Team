@@ -818,3 +818,14 @@ The limits not being the ones the ledger binds is refused with its own code,
 - **The hook must be loaded** in the PM's session. The command checks that it
   is registered and that its file exists, not that the running session read it.
 - **Nothing has run with real agents** from a batch record.
+
+**Not covered by resolve.**
+
+- A ticket held because a verification command failed is patched from the tree
+  as the commands left it: if a command edited that ticket's files, the patch
+  carries the command's edit with the worker's.
+- A command that deletes or rewrites a path left uncommitted by `after`, or a
+  path that was there before the batch (start as is), is not recorded; the next
+  `commit` then refuses because the product changed, and the batch is aborted.
+- A `resolve` that dies after its ledger line and before its record writes a
+  second `RESOLVED` line when it is finished.

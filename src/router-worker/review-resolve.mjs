@@ -73,6 +73,10 @@ export function resolveBatch({ teamRoot, instanceRoot, run = runCommands }) {
     const held = readLease({ productRoot: product });
     if (kept?.lease && held.status === 'held' && held.lease.digest === kept.lease) { need(!alive(kept.pid), 'Another resolve of this batch is running'); lease = kept.lease; }
     else { const taken = acquireLease({ teamRoot: instance, productRoot: product }); need(!taken.errors, `The lock on the product repository could not be taken: ${taken.errors?.[0]?.reason}`); lease = taken.lease.digest; }
+    // Another resolve may have finished between the first read and the lock.
+    const current = exists(path) ? readJSON(path) : null;
+    if (intact(current, 'batch-resolved') && current.afterDigest === after.digest) return current;
+    need(JSON.stringify(current) === JSON.stringify(kept), `${RESOLUTION_FILE} changed while this resolve waited for the lock; run resolve again`);
 
     need(git(product, 'rev-parse', 'HEAD')?.trim() === batch.productHead, `The product branch moved since the batch opened. ${ABANDON}`);
     need(git(product, 'symbolic-ref', '--short', '-q', 'HEAD')?.trim() === batch.branch, `The product repository is no longer on the batch's branch (${plain(batch.branch)}). ${ABANDON}`);
