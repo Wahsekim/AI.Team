@@ -23,10 +23,12 @@ const MODE_FILE = 'profiles/team-mode.json', ROSTER = 'agents/roster.md', REGIST
 const SHARED_ROLES = ['pm', 'architect', 'coach', 'auditor', 'security', 'chaos'];
 const SHARED_AGENT_FILES = [...SHARED_ROLES, 'lessons', 'lifecycle', 'self-improvement', 'templates'].map(name => `agents/${name}.md`);
 const IN_PROGRESS = ['index.lock', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'BISECT_LOG', 'rebase-merge', 'rebase-apply'];
-export const DEFAULT_LIMITS = { attemptsPerTicket: 1, outputAllowancePerTicket: 15000, guardianOutputShare: 6000, authorizationPerTicket: 200000, allowedCommands: [] };
-// The four limits that are counts. `allowedCommands` is the list of verification commands a worker of a batch
+export const DEFAULT_LIMITS = { attemptsPerTicket: 1, outputAllowancePerTicket: 15000, guardianOutputShare: 6000, authorizationPerTicket: 200000, authorizationPerReviewerCall: 300000, allowedCommands: [] };
+// The limits that are counts. `allowedCommands` is the list of verification commands a worker of a batch
 // runs without a permission prompt; it is confirmed and changed like the counts.
-export const COUNT_LIMITS = ['attemptsPerTicket', 'outputAllowancePerTicket', 'guardianOutputShare', 'authorizationPerTicket'];
+export const COUNT_LIMITS = ['attemptsPerTicket', 'outputAllowancePerTicket', 'guardianOutputShare', 'authorizationPerTicket', 'authorizationPerReviewerCall'];
+// Limits added after teams went live: a team's profile may lack them until the owner adds them with `limits`.
+export const LATER_LIMITS = ['authorizationPerReviewerCall'];
 // As the owner reads it in the proposal, so it runs: printable ASCII on one line, no space at either end, no run of spaces to hide a tail.
 export const MAX_COMMANDS = 50;
 export const oneCommand = value => typeof value === 'string' && /^[\x21-\x7e]+( [\x21-\x7e]+)*$/.test(value) && value.length <= 300;
@@ -424,8 +426,10 @@ function planLimits({ teamRoot, instanceRoot, limits }) {
   if (live.name !== 'router-worker') no('The team is not in Router/Worker mode; limits are set with the switch');
   if (inReview(instance)) no(IN_REVIEW);
   const stored = live.profile.limits;
-  if (!stored || typeof stored !== 'object' || COUNT_LIMITS.some(key => !Object.hasOwn(stored, key))) no('profiles/team-mode.json does not hold the four limits of this team');
-  const from = checked(stored, 'The limits in profiles/team-mode.json are not valid');
+  if (!stored || typeof stored !== 'object' || COUNT_LIMITS.some(key => !LATER_LIMITS.includes(key) && !Object.hasOwn(stored, key))) no('profiles/team-mode.json does not hold the limits of this team');
+  // What is stored, so that a limit it lacks is shown, and confirmed, as a change.
+  checked(stored, 'The limits in profiles/team-mode.json are not valid');
+  const from = stored;
   if (!limits || typeof limits !== 'object') no('The limits to change are required: {"outputAllowancePerTicket": 20000}');
   checked(limits, 'The limits given are not valid');
   const to = checked({ ...from, ...limits }, 'The limits would not be coherent'), changed = Object.keys(to).filter(key => JSON.stringify(to[key]) !== JSON.stringify(from[key]));
@@ -459,7 +463,7 @@ export function changeLimits({ confirm, atTerminal, ...options }) {
     writeFileSync(`${path}.tmp`, JSON.stringify({ ...profile, limits: body.to }, null, 2) + '\n', { flag: 'wx' });
     // The ledger line comes first: a change is never in force without its line.
     try {
-      appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} LIMITS CHANGED: ${changed.length ? changed.map(key => `${key} ${JSON.stringify(body.from[key])} -> ${JSON.stringify(body.to[key])}`).join(', ') : 'none, the limits in force re-confirmed as they stand'}; proposal ${confirm} was confirmed ${AT_TERMINAL}; limits ${digest(body.to)}.\n`);
+      appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} LIMITS CHANGED: ${changed.length ? changed.map(key => `${key} ${JSON.stringify(body.from[key]) ?? 'unset'} -> ${JSON.stringify(body.to[key])}`).join(', ') : 'none, the limits in force re-confirmed as they stand'}; proposal ${confirm} was confirmed ${AT_TERMINAL}; limits ${digest(body.to)}.\n`);
       renameSync(`${path}.tmp`, path);
     } catch (error) { rmSync(`${path}.tmp`, { force: true }); throw error; }
     const record = { schemaVersion: 1, stage: 'limits-changed', limits: body.to, changed, changedAt: at };

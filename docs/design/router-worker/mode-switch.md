@@ -30,7 +30,7 @@ The command prints a proposal:
 | `from`, `to` | the two modes |
 | `staffing` | model, effort, turn limit and tools of the three workers and of each staffed governance role; for a packed Router/Worker team, the staffing it was packed with |
 | `project`, `workflowsNotEnabled` | on a first switch: the project's name, slug, product repository and UI flag, and every workflow the request does not enable, with its status |
-| `limits` | attempts per ticket, output allowance per ticket, the Guardian's share, authorization per ticket; the ADR's defaults unless the request changes one; `allowedCommands`, the commands a worker's shell may run in a batch, which `request` proposes from the required gates of `profiles/stack.md` (empty when it gives none; a gate it cannot confirm as written, or beyond the 50 a team may hold, is left out and named in a note); for a packed Router/Worker team, the limits it was packed with |
+| `limits` | attempts per ticket, output allowance per ticket, the Guardian's share, authorization per ticket, authorization per reviewer call (`authorizationPerReviewerCall`, ADR 0011 decision 23); the ADRs' defaults unless the request changes one; `allowedCommands`, the commands a worker's shell may run in a batch, which `request` proposes from the required gates of `profiles/stack.md` (empty when it gives none; a gate it cannot confirm as written, or beyond the 50 a team may hold, is left out and named in a note); for a packed Router/Worker team, the limits it was packed with |
 | `dispatch` | `engine` |
 | `pack` | the files that go on holiday |
 | `install` | the files that are put in place |
@@ -99,7 +99,7 @@ project's name, slug and product repository, one status per workflow from its
 | auditor, security | same | medium | 40 | read, search |
 
 Limits: 1 attempt, 15,000 output tokens per ticket, 6,000 for the Guardian,
-200,000 authorized per ticket. The governance rows are the kit's proposal; the
+200,000 authorized per ticket, 300,000 authorized per reviewer call. The governance rows are the kit's proposal; the
 ADR sets only the three workers. The owner sees all of it in the switch's
 proposal and may edit the file first. A profile that leaves the name, the slug,
 the product repository or a workflow's status unanswered refuses the request and
@@ -111,7 +111,7 @@ decision in its `decisionRef`, added by hand; the command prints a note.
 
 ## Changing the limits later
 
-`limits LIMITS.json` (`{"outputAllowancePerTicket": 20000}`, any of the four,
+`limits LIMITS.json` (`{"outputAllowancePerTicket": 20000}`, any of the counts,
 or `{"allowedCommands": [...]}`, the whole list)
 prints the limits before and after, and is confirmed like a switch: a code typed
 at an interactive terminal. `changeLimits` called directly refuses the same way. It is refused when the team is not in Router/Worker
@@ -121,7 +121,10 @@ holds the lock; it takes the lock for the write. One line is appended to `pm-dec
 `limits <digest>`, as the `MODE SWITCH` line into Router/Worker mode does, and the last such line binds the limits
 in force: `rw-batch.mjs before` refuses limits it does not bind. Limits no line binds (edited by hand, or a team
 that went live before lines carried a digest) are re-confirmed as they stand with `{}`; a request that changes
-nothing is refused once they are bound. The hook refuses any session's file-tool write of
+nothing is refused once they are bound. A team that went live before
+`authorizationPerReviewerCall` existed is refused by `rw-batch.mjs before`
+until the owner adds it: `{}` proposes it at its default, shown as a change
+(`unset -> 300000`), and confirming binds it with the others. The hook refuses any session's file-tool write of
 `profiles/team-mode.json`, so the owner's command is the way to change them
 ([ADR 0010](../../../decisions/0010-router-worker-second-mode.md), amendment of 2026-11-20). The changed limits go
 on holiday and come back with the team.

@@ -1,9 +1,10 @@
-import { readFileSync, writeFileSync, appendFileSync, lstatSync, linkSync, rmSync, readdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync, lstatSync, linkSync, rmSync, readdirSync, realpathSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { digest } from '../loop/contracts.mjs';
 import { instanceOf } from './roots.mjs';
 import { settleEngineRun, Refusal as SettlementRefusal } from './launch-settle.mjs';
-import { BATCH_FILE, AFTER_FILE, RETURN_FILE, SETTLE_FILE, ARCHIVE, RUN_ID, oneLine, plain, proposedTokens } from './batch.mjs';
+import { readBoundary, stateOf } from './write-boundary.mjs';
+import { BATCH_FILE, AFTER_FILE, RETURN_FILE, SETTLE_FILE, VERDICTS_FILE, ARCHIVE, RUN_ID, oneLine, plain, proposedTokens } from './batch.mjs';
 
 // ADR 0010, decision 12: usage settled per ticket. The agents the runtime metered are matched to the calls
 // of the batch, each call's transcript is checked for its frozen brief, and each ticket's measured usage is
@@ -18,7 +19,7 @@ const intact = (value, stage) => { if (!value || typeof value !== 'object') retu
 
 // The batch to settle: the one that after closed and commit has not archived yet, or an archived one by its id.
 // A batch whose archive exists is settled there: what is still in the root is a clearing that did not finish.
-const ARCHIVED = { batch: 'batch.json', after: 'after.json', result: 'return.json', settlement: 'settlement.json' };
+const ARCHIVED = { batch: 'batch.json', after: 'after.json', result: 'return.json', settlement: 'settlement.json', reviews: 'reviews.json' };
 function recordsOf(instance, runId) {
   // The folder's own name, letter for letter: a file system that ignores case does not make two ids one.
   let folders; try { folders = readdirSync(join(instance, ARCHIVE)); } catch { folders = []; }
@@ -26,7 +27,7 @@ function recordsOf(instance, runId) {
   if (runId !== undefined) { need(known(runId), 'No archived batch of that id'); return archived(runId); }
   need(exists(join(instance, AFTER_FILE)), 'No closed batch is waiting in this team; name an archived one with --run <run id>');
   const id = readJSON(join(instance, AFTER_FILE))?.runId;
-  return known(id) ? archived(id) : { names: { batch: BATCH_FILE, after: AFTER_FILE, result: RETURN_FILE, settlement: SETTLE_FILE }, folder: instance, id: typeof id === 'string' && RUN_ID.test(id) ? id : null };
+  return known(id) ? archived(id) : { names: { batch: BATCH_FILE, after: AFTER_FILE, result: RETURN_FILE, settlement: SETTLE_FILE, reviews: VERDICTS_FILE }, folder: instance, id: typeof id === 'string' && RUN_ID.test(id) ? id : null };
 }
 const instanceRootOf = (teamRoot, instanceRoot) => {
   let instance;
@@ -44,6 +45,26 @@ function keep({ instance, folder, target, record, runId }) {
   const home = join(instance, ARCHIVE, runId);
   if (folder === instance && exists(home)) place(target, join(home, 'settlement.json'));
 }
+// ADR 0011, decision 23: each judged reviewer call is set against the authorization frozen with the batch. Its meter row
+// is the main-session agent of the reviewer's wrapper whose transcript is the one the verdict was judged from.
+function reviewCalls({ batch, after, kept, meter }) {
+  const flagged = Object.keys(after.reviews ?? {}).length > 0;
+  need(!flagged || kept, `The batch was reviewed, and its verdicts (${VERDICTS_FILE}) are missing; it cannot be settled`);
+  const verdicts = kept?.entries ?? [];
+  need(!kept || (kept.runId === batch.runId && Array.isArray(verdicts) && verdicts.every(entry => intact(entry, 'review-verdict') && entry.runId === batch.runId)), `${VERDICTS_FILE} was changed, or belongs to another batch`);
+  const judged = verdicts.filter(entry => entry.transcript);
+  if (!judged.length) return { reviews: [], findings: [] };
+  const authorizedTokens = batch.limits?.authorizationPerReviewerCall;
+  need(Number.isSafeInteger(authorizedTokens), 'The batch record carries no authorization per reviewer call');
+  const real = file => { try { return realpathSync(file); } catch { return null; } };
+  const rows = (Array.isArray(meter?.subagents) ? meter.subagents : []).filter(row => !row?.workflowRunId && typeof row.file === 'string' && Number.isSafeInteger(row.harnessEq));
+  const findings = [], reviews = judged.map(({ reviewer, attempt, transcript }) => {
+    const row = rows.find(candidate => candidate.agentType === batch.reviewWrappers?.[reviewer] && real(candidate.file) === transcript.file);
+    if (!row) findings.push({ code: 'REVIEW_NOT_METERED', reviewer, attempt, transcript: transcript.file });
+    return { reviewer, attempt, transcript: transcript.file, spentTokens: row?.harnessEq ?? null, authorizedTokens, overrun: row ? row.harnessEq > authorizedTokens : null };
+  });
+  return { reviews, findings };
+}
 const refused = error => ({ errors: [{ code: 'BATCH_REFUSED', field: 'batch', reason: error instanceof Refusal || error instanceof SettlementRefusal ? error.message : `Settlement failed: ${error?.code ?? 'the return, the meter or a transcript could not be read'}` }] });
 
 export function settleBatch({ teamRoot, instanceRoot, meter, rules, runId }) {
@@ -57,6 +78,8 @@ export function settleBatch({ teamRoot, instanceRoot, meter, rules, runId }) {
       'The batch record does not hold the plain run id it was run, closed and archived under');
     need(result && digest(result) === after.returnDigest, 'The engine return kept for this batch is missing or was changed; it cannot be settled');
     need(!exists(at('settlement')), 'This batch was already settled');
+    const boundary = readBoundary(instance);
+    need(!(boundary && stateOf(boundary) === 'review'), 'A batch of this team is in review; it is settled once its review is over: rw-batch.mjs resolve --instance <instance-root>');
     need(batch.runRecord.items.every(item => Number.isSafeInteger(item.authorizedTokens)), 'The batch record carries no ticket authorizations');
     // What the run left, named for the settlement: the commit it started from and every path it changed.
     const changedPaths = [...new Set([...after.tickets.flatMap(ticket => ticket.changedPaths), ...after.left])].sort();
@@ -66,14 +89,18 @@ export function settleBatch({ teamRoot, instanceRoot, meter, rules, runId }) {
     // Reported for the owner, who decides: tickets over, or above 80% of, their authorization.
     const near = tickets.filter(entry => 5 * entry.spentTokens > 4 * entry.authorizedTokens), most = Math.max(0, ...near.map(entry => entry.spentTokens));
     const limits = near.length ? [{ limit: 'authorizationPerTicket', observed: most, current: near[0].authorizedTokens, proposal: { authorizationPerTicket: proposedTokens(most) }, tickets: near.map(entry => entry.ticket) }] : [];
-    const body = { schemaVersion: 1, stage: 'batch-settled', runId: batch.runId, batchDigest: batch.digest, afterDigest: after.digest, settledAt: new Date().toISOString(), status: settled.status,
-      tickets, limits, calls: settled.calls, mainSessionTokens: Number.isSafeInteger(meter?.session?.harnessEq) ? meter.session.harnessEq : null,
-      findings: settled.findings, run: settled.run, ticketRecords: settled.ticketRecords, journalSource: 'reconstructed-after-run' };
+    // A reviewer call over its authorization is reported; the turn limit was its brake, and no ticket is held for it.
+    const { reviews, findings: reviewFindings } = reviewCalls({ batch, after, kept: readJSON(at('reviews')), meter }), over = reviews.filter(entry => entry.overrun);
+    const reviewCost = reviews.reduce((total, entry) => total + (entry.spentTokens ?? 0), 0), findings = [...settled.findings, ...reviewFindings];
+    if (over.length) { const observed = Math.max(...over.map(entry => entry.spentTokens)); limits.push({ limit: 'authorizationPerReviewerCall', observed, current: over[0].authorizedTokens, proposal: { authorizationPerReviewerCall: proposedTokens(observed) }, reviews: over.map(({ reviewer, attempt }) => ({ reviewer, attempt })) }); }
+    const body = { schemaVersion: 1, stage: 'batch-settled', runId: batch.runId, batchDigest: batch.digest, afterDigest: after.digest, settledAt: new Date().toISOString(), status: settled.status === 'clear' && !findings.length && !over.length ? 'clear' : 'review',
+      tickets, limits, calls: settled.calls, reviews, reviewCost, mainSessionTokens: Number.isSafeInteger(meter?.session?.harnessEq) ? meter.session.harnessEq : null,
+      findings, run: settled.run, ticketRecords: settled.ticketRecords, journalSource: 'reconstructed-after-run' };
     const record = { ...body, digest: digest(body) };
     keep({ instance, folder, target: at('settlement'), record, runId: batch.runId });
     // Tickets that never ran are not in the comparison: the authorization named is that of the tickets settled.
     const authorized = tickets.reduce((total, entry) => total + entry.authorizedTokens, 0);
-    try { appendFileSync(join(instance, LEDGER), `${body.settledAt.slice(0, 10)} BATCH ${batch.runId} SETTLED (${record.status}): ${settled.run.ticketTokens} token(s) on ${tickets.length} ticket(s) of ${authorized} authorized, Guardian ${settled.run.guardianTokens ?? 'not metered'}; run gate ${settled.run.runGate}${settled.findings.length ? `; findings: ${settled.findings.map(finding => finding.code).join(', ')}` : ''}.\n`); }
+    try { appendFileSync(join(instance, LEDGER), `${body.settledAt.slice(0, 10)} BATCH ${batch.runId} SETTLED (${record.status}): ${settled.run.ticketTokens} token(s) on ${tickets.length} ticket(s) of ${authorized} authorized, Guardian ${settled.run.guardianTokens ?? 'not metered'}; ${reviews.length ? `review ${reviewCost} token(s) on ${reviews.length} reviewer call(s) of ${reviews[0].authorizedTokens} authorized each${over.length ? `, over: ${over.map(entry => `${entry.reviewer} attempt ${entry.attempt}`).join(', ')}` : ''}` : 'no review'}; run gate ${settled.run.runGate}${findings.length ? `; findings: ${findings.map(finding => finding.code).join(', ')}` : ''}.\n`); }
     catch { /* the record is written; the line is the PM's to add */ }
     return record;
   } catch (error) { return refused(error); }

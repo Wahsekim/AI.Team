@@ -25,7 +25,7 @@ test('a proposal names the staffing, the limits and the files that move, and cha
   assert.equal(proposal.errors, undefined, JSON.stringify(proposal.errors));
   assert.equal(proposal.from, 'specialist'); assert.equal(proposal.to, 'router-worker'); assert.equal(proposal.dispatch, 'engine');
   assert.deepEqual(proposal.limits, DEFAULT_LIMITS);
-  assert.deepEqual(DEFAULT_LIMITS, { attemptsPerTicket: 1, outputAllowancePerTicket: 15000, guardianOutputShare: 6000, authorizationPerTicket: 200000, allowedCommands: [] });
+  assert.deepEqual(DEFAULT_LIMITS, { attemptsPerTicket: 1, outputAllowancePerTicket: 15000, guardianOutputShare: 6000, authorizationPerTicket: 200000, authorizationPerReviewerCall: 300000, allowedCommands: [] });
   // The commands a worker's shell runs in a batch are in the proposal the owner confirms, as written.
   assert.deepEqual(f.propose('router-worker', { spec: f.spec, limits: { allowedCommands: ['npm test', 'npm run lint -- --max-warnings 0'] } }).limits.allowedCommands, ['npm test', 'npm run lint -- --max-warnings 0']);
   for (const bad of [null, 'npm test', ['npm test', 'npm test'], ['npm test\nrm -rf x'], [' npm test'], [''], [7], ['npm  test'], ['npm test\u202e'], ['npm\u00a0test'], ['x'.repeat(301)], Array.from({ length: 51 }, (_, i) => `make t${i}`)])
