@@ -81,7 +81,9 @@ budget per ticket. Those come from the team.
 ## What "before" does, in order
 
 1. **The team**: two-root layout, live in Router/Worker mode, dispatch by the
-   engine, no interrupted mode switch, no batch already open, every archived
+   engine, the gate path off (`gatePath` false or absent in
+   `profiles/team-mode.json`; anything else is refused with
+   `GATE_PATH_REFUSED`, ADR 0010 decision 15), no interrupted mode switch, no batch already open, every archived
    batch that ran settled or marked as not metered, limits that are
    valid and are the ones the last ledger line binds (see "What decides the
    limits"), a valid review trigger list (see "Review triggers"), no batch in

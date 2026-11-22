@@ -32,6 +32,9 @@ export const LATER_LIMITS = ['authorizationPerReviewerCall'];
 // As the owner reads it in the proposal, so it runs: printable ASCII on one line, no space at either end, no run of spaces to hide a tail.
 export const MAX_COMMANDS = 50;
 export const oneCommand = value => typeof value === 'string' && /^[\x21-\x7e]+( [\x21-\x7e]+)*$/.test(value) && value.length <= 300;
+// ADR 0010, decisions 14 and 15: the gate path (main-session dispatch through the gate hook) is a setting of the team,
+// stored with its mode and changed only by the switch. It is off, and turning it on in a standing team is refused.
+export const GATE_PATH_OFF = 'gatePath may only be false: the gate path is not completed, and turning it on in a standing team is refused (ADR 0010, decision 15)';
 const LIVE = { active: 'Live: Router/Worker mode of this team, confirmed by the owner at the switch', description: 'standing mode',
   roster: 'the specialist roster is packed under holiday/specialist.' };
 
@@ -158,6 +161,7 @@ function plan({ to, request, teamRoot, instanceRoot, productRoot }) {
   need(request && typeof request === 'object' && !Array.isArray(request), 'The request must be a JSON object: {"spec"?: {...}, "limits"?: {...}}');
   // Refused here, before anything else, rather than by every batch's "before".
   need(to !== 'router-worker' || typeof productRoot !== 'string' || quotable(productRoot), UNQUOTABLE);
+  need(request.gatePath === undefined || request.gatePath === false, GATE_PATH_OFF);
   const kit = resolve(teamRoot);
   let instance;
   try { instance = instanceOf(kit, instanceRoot); } catch (error) { need(false, `Router/Worker mode needs the two-root layout (${error.message}); migrate the deployment with scripts/migrate-to-instance.sh first`); }
@@ -200,8 +204,10 @@ function plan({ to, request, teamRoot, instanceRoot, productRoot }) {
     need(!blocked.length, `These files are in the way of the packed ${to} team: ${blocked.slice(0, 5).join(', ')}`);
     const profile = to === 'router-worker' ? readJSON(join(packed.folder, MODE_FILE)) : null;
     need(request.limits === undefined, `A packed team comes back with the limits it was packed with${profile ? ` (${JSON.stringify(profile.limits)})` : ''}; to set others, move holiday/${to} away and switch with a new request`);
+    // A team packed before the setting existed lacks it: it is off, the default.
+    need(!profile || profile.gatePath === undefined || profile.gatePath === false, `The packed team's ${MODE_FILE} turns the gate path on; ${GATE_PATH_OFF}`);
     return { kit, instance, live, kind: 'restore', packed,
-      body: { ...base, ...(profile ? { dispatch: profile.dispatch, limits: profile.limits, staffing: profile.staffing } : {}), install, kept: [], restoreManifestDigest: packed.digest } };
+      body: { ...base, ...(profile ? { dispatch: profile.dispatch, gatePath: false, limits: profile.limits, staffing: profile.staffing } : {}), install, kept: [], restoreManifestDigest: packed.digest } };
   }
   need(to === 'router-worker', 'No packed specialist team under holiday/specialist');
   const spec = request.spec;
@@ -224,7 +230,7 @@ function plan({ to, request, teamRoot, instanceRoot, productRoot }) {
   const install = Object.keys(draft.files).filter(path => !present.includes(path)).sort(), foreign = install.filter(path => !safePath(path) || !installable(path));
   need(!foreign.length, `The draft would create files that are not Router/Worker files: ${foreign.slice(0, 5).join(', ')}`);
   return { kit, instance, live, kind: 'draft', draft, spec, limits,
-    body: { ...base, dispatch: 'engine', limits, staffing: { ...spec.profiles, ...(spec.governance ?? {}) }, project: spec.project,
+    body: { ...base, dispatch: 'engine', gatePath: false, limits, staffing: { ...spec.profiles, ...(spec.governance ?? {}) }, project: spec.project,
       // Workflows the request does not enable; every other one is enabled.
       workflowsNotEnabled: Object.fromEntries(Object.entries(spec.workflowStates ?? {}).filter(([, state]) => state?.status !== 'enabled').map(([id, state]) => [id, state?.status])), install, kept: present, specDigest: digest(spec), draftDigest: draft.digest } };
 }
@@ -380,7 +386,7 @@ export function switchMode({ confirm, validate, atTerminal, ...options }) {
       for (const path of body.install) { mkdirSync(dirname(join(instance, path)), { recursive: true }); writeFileSync(join(instance, path), draft.files[path], { flag: 'wx' }); }
       makeLive(instance, body.install, LIVE);
       // Governance role files the switch had to create are shared from now on: they are not the mode's own.
-      const mode = { ...parseJSON(draft.files[MODE_FILE]), status: 'live', launchable: true, dispatch: 'engine', limits, staffing: body.staffing, spec,
+      const mode = { ...parseJSON(draft.files[MODE_FILE]), status: 'live', launchable: true, dispatch: 'engine', gatePath: false, limits, staffing: body.staffing, spec,
         specDigest: body.specDigest, draftDigest: draft.digest, confirmedProposal: proposalDigest, ownFiles: body.install.filter(OWN['router-worker']) };
       writeFileSync(join(instance, MODE_FILE), JSON.stringify(mode, null, 2) + '\n');
     }

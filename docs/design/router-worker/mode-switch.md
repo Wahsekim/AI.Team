@@ -12,7 +12,7 @@ node kit/scripts/team-mode.mjs request --instance . [--model <id>] [--ui] > REQU
 node kit/scripts/team-mode.mjs limits LIMITS.json --instance .
 ```
 
-`REQUEST.json` is `{"spec"?, "limits"?}`: the Router/Worker team spec that
+`REQUEST.json` is `{"spec"?, "limits"?, "gatePath"?}`: the Router/Worker team spec that
 `team-mode.mjs preview` takes (project, the three worker profiles, governance
 staffing, workflow states) and any limit the owner wants to change. `{}` is
 enough for a switch to specialist, and for a switch back to Router/Worker when
@@ -32,6 +32,7 @@ The command prints a proposal:
 | `project`, `workflowsNotEnabled` | on a first switch: the project's name, slug, product repository and UI flag, and every workflow the request does not enable, with its status |
 | `limits` | attempts per ticket, output allowance per ticket, the Guardian's share, authorization per ticket, authorization per reviewer call (`authorizationPerReviewerCall`, ADR 0011 decision 23); the ADRs' defaults unless the request changes one; `allowedCommands`, the commands a worker's shell may run in a batch, which `request` proposes from the required gates of `profiles/stack.md` (empty when it gives none; a gate it cannot confirm as written, or beyond the 50 a team may hold, is left out and named in a note); for a packed Router/Worker team, the limits it was packed with |
 | `dispatch` | `engine` |
+| `gatePath` | `false`: the gate path (main-session dispatch through the gate hook, [ADR 0010](../../../decisions/0010-router-worker-second-mode.md) decisions 14 and 15) is off; see "The gate path" |
 | `pack` | the files that go on holiday |
 | `install` | the files that are put in place |
 | `kept` | files of the new team that are already there and stay as they are (shared governance role files) |
@@ -138,7 +139,7 @@ The first time, from a spec:
    duty with no role, refuses the switch before the team is touched.
 2. The specialist files are packed.
 3. The drafted files are written and made live, and `profiles/team-mode.json`
-   records: `mode: router-worker`, `status: live`, `dispatch: engine`, the
+   records: `mode: router-worker`, `status: live`, `dispatch: engine`, `gatePath: false`, the
    limits, the staffing, the spec, the confirmed proposal and the list of files
    that belong to the mode.
 4. The deployment validator runs on the team. If it fails, everything is put
@@ -248,6 +249,27 @@ A test simulates a death at every write of both restores, and at a sample of
 the writes of a first switch, and checks after recover that the tree is as it
 was, the lock is free and the same switch can be proposed again.
 
+## The gate path
+
+`gatePath` is a setting of the team, stored in `profiles/team-mode.json` with
+the mode ([ADR 0010](../../../decisions/0010-router-worker-second-mode.md),
+decisions 14 and 15). Only the switch writes it, always `false`, and it goes on
+holiday and comes back with the mode. A request may carry `"gatePath": false`;
+any other value is refused, because the gate path is not completed and turning
+it on in a standing team is refused. No other command changes it: `limits`
+knows only the limits, and `BATCH.json` refuses a field it does not know. A
+profile without the key (a team switched before the setting existed) is read as
+off. `rw-batch.mjs before` refuses a profile whose `gatePath` is anything but
+`false` (a hand edit). The setting is not bound by a ledger line: the hook
+refuses a file-tool edit of the profile, and `before` refuses an edit made
+another way.
+
+The gate path's own tooling (`launch-router-worker.mjs prepare` with
+`"dispatch": "main-session"`, the gate hook) works only in an activated
+throwaway copy: arming the hook refuses any team root whose profile is not
+`activated-disposable-smoke`, and the hook refuses every call without that
+copy's launch record. A standing team cannot reach it.
+
 ## Refusals (`SWITCH_REFUSED`)
 
 - The team is already in that mode, or the mode is unknown.
@@ -264,6 +286,8 @@ was, the lock is free and the same switch can be proposed again.
   does not count.
 - The roster does not name a role file for a delivery role (above).
 - `limits` are given for a team that is already packed.
+- The request's `gatePath` is anything but `false`, or a packed team's profile
+  turns the gate path on (see "The gate path").
 - A file is in the way of the team being put in place.
 - A mode profile or manifest names a file that cannot belong to that mode.
 
@@ -272,7 +296,8 @@ was, the lock is free and the same switch can be proposed again.
 - **A packed specialist team is not upgraded.** After a kit upgrade,
   `pin-kit.sh` lists the seeds to port for the files it finds in the instance;
   files under `holiday/specialist/` are not among them.
-- **The gate flag** (`dispatch: main-session`) cannot be set: a later step.
+- **Turning the gate path on** (`gatePath: true`): refused until the gate path
+  is completed (ADR 0010, decision 15).
 - **Bootstrap asks for the mode in its documents** (`docs/bootstrap-*.md`,
   `docs/staffing.md`); `bootstrap-team.sh` itself has no mode option. A team is
   bootstrapped as today and then switched.

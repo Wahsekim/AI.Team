@@ -230,7 +230,7 @@ authorization, and the next batch does not open until that is done or the batch
 is marked as not metered with a reason ([details](docs/design/router-worker/batch.md)). Only the owner
 changes the limits: the ledger line of the switch or of `team-mode.mjs limits` binds them, `before` refuses limits
 no line binds, the hook refuses any session's file-tool write of `profiles/team-mode.json`, and `after` and
-`settle` report each limit that stopped work with a proposal the owner may confirm. Nothing has run
+`settle` report each limit that stopped work with a proposal the owner may confirm. The gate path (ADR 0010 decisions 14 and 15) is a team setting, `gatePath`, that the switch writes as `false`; a request or profile that turns it on is refused. Nothing has run
 on a real team, so batches with real
 agents still run only in a throwaway copy of the team
 with a clone of the product, as described below.
