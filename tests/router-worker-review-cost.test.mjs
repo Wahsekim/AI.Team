@@ -72,3 +72,19 @@ test('a team whose bound limits lack the authorization per reviewer call is stop
   assert.equal(abortBatch(common).errors, undefined);
   assert.match(refusal(proposeLimits({ ...common, limits: { authorizationPerReviewerCall: 0 } })).reason, /positive integers/);
 });
+
+test('a reviewer resumed across attempts keeps one transcript, and its usage is counted once, on the last attempt', async t => {
+  const f = live(t), paths = ['src/authz.js', 'src/list/view.js'];
+  const { open, guardianBrief } = await runBatch(f, paths.map((path, i) => ticket(`US-0${i + 1}`, [path])), edits(paths));
+  const made = f.brief('security'), file = transcriptOf(f, made, { report: {} });
+  f.judge('security', file);
+  const again = f.brief('security');
+  appendFileSync(file, JSON.stringify({ type: 'user', message: { role: 'user', content: again.brief } }) + '\n');
+  f.judge('security', file); f.resolve(); f.commit();
+  const base = meterOf({ ...f, open, guardianBrief }, [12000, 6000, 12000, 6000, 5000]);
+  const meter = { ...base, subagents: [...base.subagents, { agentId: 'a-review', workflowRunId: null, agentType: made.record.wrapper, file, harnessEq: 200000, finished: true }] };
+  const settled = settleBatch({ ...f.common, meter, rules: loadRetryRules({ teamRoot: f.kit, instanceRoot: f.root }), runId: open.runId });
+  assert.equal(settled.errors, undefined, JSON.stringify(settled.errors));
+  assert.equal(settled.reviewCost, 200000, 'one transcript, one count');
+  assert.deepEqual(settled.reviews.map(entry => [entry.attempt, entry.spentTokens, entry.overrun]), [[1, null, null], [2, 200000, false]]);
+});
