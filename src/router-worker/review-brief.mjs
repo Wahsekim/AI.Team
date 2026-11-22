@@ -46,7 +46,7 @@ const REPORT = (reviewer, briefDigest) => ({ schemaVersion: 1, reviewer, briefDi
 function render({ batch, reviewer, attempt, tickets, diff, rules, adrs, verification, dropped, protocol, retryReason }) {
   const ticketText = tickets.map(({ ticket, frozen, elective, flaggedFiles, content, because }) => [
     `### ${ticket.id}: ${frozen.title}`, `Goal: ${frozen.goal}`, 'Acceptance:', lines(frozen.acceptance),
-    `Review: ${elective ? 'elective (named by the PM; it binds like a required one)' : `required (${because.map(entry => `${entry.trigger ?? `declared ${entry.declared}`} on ${entry.path}`).join(', ')})`}`,
+    `Review: ${elective ? 'elective (named by the PM; it binds like a required one)' : `required (${because.map(entry => `${entry.trigger ?? `declared ${plain(entry.declared)}`} on ${plain(entry.path)}`).join(', ')})`}`,
     'Files to open with your Read tool, every one, and to report in filesRead:',
     lines(flaggedFiles.map(path => content[path] === null ? `${join(batch.productRoot, path)} (deleted by the ticket: nothing to open)` : join(batch.productRoot, path))),
     `Changed paths of the ticket: ${ticket.changedPaths.join(', ')}`].join('\n')).join('\n\n');

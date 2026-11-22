@@ -58,7 +58,7 @@ function within(file, grants) {
   return grants.some(g => g.endsWith('/**') ? file.startsWith(g.slice(0, -2)) : file === g);
 }
 
-function validateInput(input, bundle) {
+function validateInput(input, bundle, standingBatch) {
   fields(input, ['schemaVersion', 'ticket', 'mandate', 'proposal', 'catalog', 'policy', 'baseline'], 'input');
   requireValue([1, 2].includes(input.schemaVersion), 'schemaVersion', 'Unsupported schema version');
   const withMethods = input.schemaVersion === 2;
@@ -81,6 +81,8 @@ function validateInput(input, bundle) {
   // ADR 0011, decision 6: set only by a standing batch, whose Security review covers a declared-sensitive ticket.
   const standingReview = Object.hasOwn(policy, 'securityReview');
   requireValue(!standingReview || policy.securityReview === 'standing-batch', 'policy.securityReview', 'The only security review a policy can name is "standing-batch"');
+  // The input cannot vouch for itself: only the batch's own call says a standing review follows.
+  requireValue(!standingReview || standingBatch === true, 'policy.securityReview', 'Only a standing batch compiles a policy that names the standing-batch review');
   requireValue(policy.schemaVersion === input.schemaVersion && policy.mode === 'router-worker', 'policy', 'Unsupported policy version or mode');
   if (withMethods) {
     fields(policy.methodAllowlist, DUTIES, 'policy.methodAllowlist');
@@ -188,11 +190,11 @@ function render(input, duty, methods) {
   ].join('\n');
 }
 
-export function compile(input, { methodBundle } = {}) {
+export function compile(input, { methodBundle, standingBatch } = {}) {
   try {
     // Round-trip into plain JSON so returned previews cannot alias caller-owned objects.
     const frozenInput = parseJSON(canonical(input));
-    validateInput(frozenInput, methodBundle);
+    validateInput(frozenInput, methodBundle, standingBatch);
     const { ticket: t, proposal: p, policy } = frozenInput;
     const methods = {
       exec: [],

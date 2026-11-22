@@ -219,6 +219,8 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     let review;
     try { review = loadReview({ instance }); } catch (error) { if (isReviewListError(error)) need(false, `${error.message}. Nothing was started`); throw error; }
     // Owner decision of 2026-11-20: every reviewer of the kit is staffed before a batch can need it.
+    // A declared-sensitive ticket is flagged for Security by name (ADR 0011, decision 6).
+    need(review.reviewers.includes('security'), 'The kit\'s review list names no security reviewer; a declared-sensitive ticket would go unreviewed. Nothing was started');
     const staffed = review.reviewers.map(reviewer => [reviewer, rosterWrapper(instance, reviewer)]), unstaffed = staffed.find(([, found]) => !found.name);
     need(!unstaffed, `The reviewer ${unstaffed?.[0]} is not staffed (${unstaffed?.[1].gap}); both reviewers (${review.reviewers.join(', ')}) are needed before a batch opens. Staff it in the Router/Worker team's governance, then switch again. Nothing was started`);
     const reviewWrappers = Object.fromEntries(staffed.map(([reviewer, found]) => [reviewer, found.name]));
@@ -253,12 +255,12 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     const run = { rounds: count, date: batch.date ?? new Date().toISOString().slice(0, 10), nextLifecycleNumber: batch.nextLifecycleNumber, runId,
       budgetCeilingTokens: ceiling, estimatedOutputTokens: Math.floor(ceiling / 2), guardianEstimateTokens: limits.authorizationPerTicket, maxAttemptsPerTicket: limits.attemptsPerTicket };
     const inputs = batch.tickets.map(ticket => inputOf(ticket, { batch, profile, wrappers, product, limits, allPaths }));
-    let frozen = await freezeRun({ inputs, run, teamRoot: instance });
+    let frozen = await freezeRun({ inputs, run, teamRoot: instance, standingBatch: true });
     need(!frozen.errors, `The batch cannot be frozen: ${frozen.errors?.[0]?.field}: ${frozen.errors?.[0]?.reason}`);
     if (manifest) {
       const chained = await manifest(frozen.args, { teamRoot: instance, productRoot, allowDirty: startAsIs === true });
       need(!chained.errors, chained.errors?.[0]?.reason);
-      frozen = await freezeRun({ inputs, run: { ...run, launchManifestDigest: chained.digest }, teamRoot: instance });
+      frozen = await freezeRun({ inputs, run: { ...run, launchManifestDigest: chained.digest }, teamRoot: instance, standingBatch: true });
       need(!frozen.errors, `The batch cannot be frozen: ${frozen.errors?.[0]?.reason}`);
     }
     const isolation = observeIsolation({ teamRoot: instance, productRoot, lease, dispatch: 'engine', standing: [...STANDING, ...(startAsIs === true ? ['PRODUCT_DIRTY'] : [])] });
