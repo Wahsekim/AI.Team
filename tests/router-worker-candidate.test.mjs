@@ -66,10 +66,10 @@ for (const [name, mutate, code] of [
     f.input.policy.sensitivePaths.push('src/tag-list/secret.ts'); f.input.mandate.policyDigest = digest(f.input.policy);
     put(f.root, 'src/tag-list/secret.ts', 'sensitive');
   }, 'SECURITY_CHECK_REQUIRED'],
-  // A throwaway copy has no batch review: an input that says the standing-batch review applies is still refused.
+  // A throwaway copy has no batch review: an input that says the standing-batch review applies is refused by the compiler.
   ['risk flag under the standing-batch review', f => {
     f.input.ticket.riskFlags = ['auth']; f.input.policy.securityReview = 'standing-batch'; f.input.mandate.policyDigest = digest(f.input.policy);
-  }, 'SECURITY_CHECK_REQUIRED'],
+  }, 'INVALID_INPUT'],
   ['changed HEAD', f => git(f.root, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgSign=false', 'commit', '--allow-empty', '-qm', 'unexpected'), 'CANDIDATE_HEAD_CHANGED'],
 ]) test(`refuses ${name}`, t => {
   const f = fixture(t); changed(f); mutate(f);

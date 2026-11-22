@@ -90,11 +90,13 @@ const failures = [
 test('the standing-batch review lets a risk flag or a sensitive planned path through; an unknown review value is refused', () => {
   const standing = x => { x.policy.securityReview = 'standing-batch'; return rebindPolicy(x); };
   const flagged = standing(inputFixture()); flagged.ticket.riskFlags = ['auth'];
-  assert.equal(compile(flagged).errors, undefined, JSON.stringify(compile(flagged).errors));
+  const asBatch = { standingBatch: true };
+  assert.equal(compile(flagged, asBatch).errors, undefined, JSON.stringify(compile(flagged, asBatch).errors));
   const sensitive = inputFixture(); sensitive.policy.sensitivePaths.push('src/api/tags.ts'); standing(sensitive);
-  assert.equal(compile(sensitive).errors, undefined);
+  assert.equal(compile(sensitive, asBatch).errors, undefined);
+  assert.match(compile(flagged).errors[0].reason, /Only a standing batch/, 'an input cannot vouch for itself');
   const other = inputFixture(); other.ticket.riskFlags = ['auth']; other.policy.securityReview = 'later'; rebindPolicy(other);
-  assert.equal(compile(other).errors[0].code, 'INVALID_INPUT');
+  assert.equal(compile(other, asBatch).errors[0].code, 'INVALID_INPUT');
 });
 
 for (const [name, mutate, code] of failures) test(`rejects ${name} with no partial artifacts`, () => {
