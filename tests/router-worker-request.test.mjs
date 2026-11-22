@@ -39,13 +39,17 @@ test('the request is drafted from the team\'s own profile with the ADR\'s staffi
   writeFileSync(join(f.root, 'profiles/stack.md'), '# Stack\n\n```yaml\nverification:\n  code_shipping:\n    required:\n      - npm run lint\n      - npm test  # the suite\n```\n');
   const partly = draftRequest({ teamRoot: f.kit, instanceRoot: f.root });
   assert.deepEqual(partly.request.limits.allowedCommands, ['npm run lint']); assert.ok(partly.notes.some(note => /1 gate\(s\) that cannot be confirmed as they are written.*npm test  # the suite/.test(note)));
+  // Gates beyond the most a team may confirm are left out, and named.
+  writeFileSync(join(f.root, 'profiles/stack.md'), '# Stack\n\n```yaml\nverification:\n  code_shipping:\n    required:\n' + Array.from({ length: 52 }, (_, i) => `      - make t${i}\n`).join('') + '```\n');
+  const many = draftRequest({ teamRoot: f.kit, instanceRoot: f.root });
+  assert.equal(many.request.limits.allowedCommands.length, 50); assert.ok(many.notes.some(note => /2 gate\(s\) beyond the 50 a team may confirm.*"make t50", "make t51"/.test(note)), JSON.stringify(many.notes));
   assert.deepEqual(spec.workflowStates['WF-16'], { status: 'deferred', reason: 'first release is serial', decisionRef: null });
   assert.deepEqual(spec.workflowStates['WF-00'], { status: 'enabled', reason: 'As recorded in profiles/project.md', decisionRef: null });
   // A team bootstrapped with no delivery role goes straight into Router/Worker mode with this request.
   const proposal = proposeSwitch({ to: 'router-worker', request: drafted.request, ...f.common });
   assert.equal(proposal.errors, undefined, JSON.stringify(proposal.errors)); assert.deepEqual(proposal.pack, ['agents/roster.md']);
   assert.deepEqual(proposal.project, spec.project, 'the owner sees what was read from the profile'); assert.deepEqual(proposal.workflowsNotEnabled, { 'WF-16': 'deferred' });
-  const done = switchMode({ to: 'router-worker', request: drafted.request, ...f.common, confirm: proposal.digest });
+  const done = switchMode({ to: 'router-worker', request: drafted.request, ...f.common, confirm: proposal.digest, atTerminal: true });
   assert.equal(done.errors, undefined, JSON.stringify(done.errors)); assert.match(done.validator, /^DEPLOYMENT-STRUCTURALLY-COMPLETE/);
   const other = draftRequest({ teamRoot: f.kit, instanceRoot: f.root, model: 'sonnet', ui: true }).request.spec;
   assert.equal(other.profiles.exec.model, 'sonnet'); assert.equal(other.project.ui, true);
@@ -102,11 +106,11 @@ test('the limits of a live Router/Worker team are changed by a confirmed proposa
   rmSync(join(f.root, 'holiday/.switch-in-progress.json'));
   // A change is never in force without its ledger line.
   chmodSync(join(f.root, 'pm-decisions.md'), 0o444);
-  assert.equal(refusal(changeLimits({ ...common, limits: { outputAllowancePerTicket: 20000 }, confirm: proposal.digest })).code, 'LIMITS_REFUSED');
+  assert.equal(refusal(changeLimits({ ...common, limits: { outputAllowancePerTicket: 20000 }, confirm: proposal.digest, atTerminal: true })).code, 'LIMITS_REFUSED');
   assert.equal(readFileSync(profile, 'utf8'), stored); assert.equal(readLease({ productRoot: f.product }).status, 'free');
   chmodSync(join(f.root, 'pm-decisions.md'), 0o644);
   const lock = acquireLease({ teamRoot: f.root, productRoot: f.product });
-  assert.match(refusal(changeLimits({ ...common, limits: { outputAllowancePerTicket: 20000 }, confirm: proposal.digest })).reason, /lock/);
+  assert.match(refusal(changeLimits({ ...common, limits: { outputAllowancePerTicket: 20000 }, confirm: proposal.digest, atTerminal: true })).reason, /lock/);
   releaseLease({ productRoot: f.product, lease: lock.lease.digest });
   const done = changeLimits({ ...common, limits: { outputAllowancePerTicket: 20000 }, confirm: proposal.digest, atTerminal: true });
   assert.equal(done.errors, undefined, JSON.stringify(done.errors)); assert.equal(done.stage, 'limits-changed');
@@ -114,8 +118,16 @@ test('the limits of a live Router/Worker team are changed by a confirmed proposa
   assert.equal(mode.limits.outputAllowancePerTicket, 20000); assert.equal(mode.status, 'live'); assert.ok(mode.ownFiles.length > 0, 'the rest of the profile is kept');
   assert.match(f.read('pm-decisions.md'), new RegExp(`LIMITS CHANGED: outputAllowancePerTicket 15000 -> 20000; .*typed at an interactive terminal; limits ${digest(mode.limits)}\\.\\n`));
   assert.equal(readLease({ productRoot: f.product }).status, 'free', 'the lock taken for the write is given back');
-  assert.equal(changeLimits({ ...common, limits: { attemptsPerTicket: 2 }, confirm: proposeLimits({ ...common, limits: { attemptsPerTicket: 2 } }).digest }).errors, undefined);
-  assert.match(f.read('pm-decisions.md'), /LIMITS CHANGED: attemptsPerTicket 1 -> 2; .*called the change directly, not at a terminal/);
+  // A program that calls the change confirms nothing, even one that says it runs at a terminal.
+  const twice = { ...common, limits: { attemptsPerTicket: 2 }, confirm: proposeLimits({ ...common, limits: { attemptsPerTicket: 2 } }).digest }, ledger = f.read('pm-decisions.md');
+  assert.equal(refusal(changeLimits(twice)).code, 'LIMITS_NOT_CONFIRMED');
+  const { NODE_TEST_CONTEXT, ...outsideTests } = process.env;
+  const program = spawnSync(process.execPath, ['--input-type=module', '-e', `import { changeLimits } from ${JSON.stringify(new URL('../src/router-worker/switch.mjs', import.meta.url).href)};
+process.stdout.write(JSON.stringify(changeLimits(${JSON.stringify({ ...twice, atTerminal: true })})));`], { encoding: 'utf8', env: outsideTests });
+  assert.equal(refusal(JSON.parse(program.stdout)).code, 'LIMITS_NOT_CONFIRMED', program.stderr); assert.match(refusal(JSON.parse(program.stdout)).reason, /interactive terminal/);
+  assert.equal(f.read('pm-decisions.md'), ledger); assert.equal(JSON.parse(f.read('profiles/team-mode.json')).limits.attemptsPerTicket, 1);
+  assert.equal(changeLimits({ ...twice, atTerminal: true }).errors, undefined);
+  assert.match(f.read('pm-decisions.md'), /LIMITS CHANGED: attemptsPerTicket 1 -> 2; .*typed at an interactive terminal/);
   // The changed limits go on holiday and come back with the team.
   f.apply('specialist', {}); assert.equal(f.propose('router-worker', {}).limits.outputAllowancePerTicket, 20000);
   assert.equal(f.apply('router-worker', {}).errors, undefined);
@@ -129,7 +141,7 @@ test('CLI: request prints the drafted request; limits proposes and changes nothi
   assert.equal(drafted.status, 0, drafted.stderr); const request = JSON.parse(drafted.stdout);
   assert.equal(request.spec.profiles.check.model, 'sonnet'); assert.deepEqual(request.limits, DEFAULT_LIMITS);
   assert.equal(run('request').status, 1); assert.equal(run('request', '--instance', f.root, '--bogus', 'x').status, 1); assert.equal(run('request', '--instance', '--ui').status, 1);
-  assert.equal(switchMode({ to: 'router-worker', request, ...f.common, confirm: proposeSwitch({ to: 'router-worker', request, ...f.common }).digest }).errors, undefined);
+  assert.equal(switchMode({ to: 'router-worker', request, ...f.common, confirm: proposeSwitch({ to: 'router-worker', request, ...f.common }).digest, atTerminal: true }).errors, undefined);
   const file = join(f.base, 'limits.json'); writeFileSync(file, JSON.stringify({ guardianOutputShare: 8000 }));
   const proposed = run('limits', file, '--instance', f.root);
   assert.equal(proposed.status, 2); assert.equal(JSON.parse(proposed.stdout).stage, 'limits-proposed'); assert.match(proposed.stderr, /interactive terminal/);

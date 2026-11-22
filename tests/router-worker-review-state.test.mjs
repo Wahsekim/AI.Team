@@ -96,7 +96,7 @@ test('in review, before, a switch and a change of limits are refused; abort clos
   assert.match(refusal(await f.before(one)).reason, /already open/, 'the batch in review is still open: commit ends it');
   assert.match(refusal(f.propose('specialist', {})).reason, /in review/);
   assert.match(refusal(proposeLimits({ ...f.common, limits: { attemptsPerTicket: 2 } })).reason, /in review/);
-  assert.match(refusal(changeLimits({ ...f.common, limits: { attemptsPerTicket: 2 }, confirm: 'sha256:x' })).reason, /in review/);
+  assert.match(refusal(changeLimits({ ...f.common, limits: { attemptsPerTicket: 2 }, confirm: 'sha256:x', atTerminal: true })).reason, /in review/);
   const aborted = f.abort();
   assert.equal(aborted.errors, undefined, JSON.stringify(aborted.errors)); assert.equal(aborted.runId, f.open.runId);
   assert.equal(f.state(), 'closed'); assert.equal(readBoundary(f.root).wrappers[SEC], undefined, 'the reviewers leave the boundary');
