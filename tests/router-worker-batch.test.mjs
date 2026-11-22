@@ -103,7 +103,7 @@ test('in a batch a worker\'s shell runs the confirmed verification commands from
   assert.equal(added.errors, undefined, JSON.stringify(added.errors)); assert.deepEqual([added.from.allowedCommands, added.to.allowedCommands], [undefined, ['npm test']], 'a limit the old profile lacks is shown unset');
   assert.equal(changeLimits({ teamRoot: old.kit, instanceRoot: old.root, limits: { allowedCommands: ['npm test'] }, confirm: added.digest, atTerminal: true }).errors, undefined);
   assert.equal(oldShell(), 'deny', 'the change of limits closes the shell of a team that had no list');
-  assert.match(old.read('pm-decisions.md'), /LIMITS CHANGED: allowedCommands \[\] -> \["npm test"\];/); assert.equal((await old.before(one)).errors, undefined);
+  assert.match(old.read('pm-decisions.md'), /LIMITS CHANGED: allowedCommands unset -> \["npm test"\];/); assert.equal((await old.before(one)).errors, undefined);
 });
 
 test('before refuses a product repository whose path a quoted shell command cannot hold', async t => {
