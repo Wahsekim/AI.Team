@@ -24,8 +24,8 @@ const UNSAFE = /[\x00-\x1f\x7f-\x9f\u061c\u200b-\u200f\u2028-\u202e\u2066-\u2069
 export const oneLine = text => typeof text === 'string' && text.length > 0 && text.length <= 200 && text === text.trim() && !text.match(UNSAFE);
 const MODE_FILE = 'profiles/team-mode.json', JOURNAL = 'holiday/.switch-in-progress.json', LEDGER = 'pm-decisions.md';
 const IN_PROGRESS = ['index.lock', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'BISECT_LOG', 'rebase-merge', 'rebase-apply'];
-const TICKET_FIELDS = ['id', 'title', 'goal', 'acceptance', 'paths', 'estimate'], TICKET_OPTIONAL = ['expectedPaths', 'commitMessage', 'dependsOn'], BATCH_FIELDS = ['tickets', 'verificationCommands', 'sensitivePaths', 'nextLifecycleNumber'];
-const ESTIMATE = ['execTokens', 'checkTokens', 'reworkTokens'], MAX_PATHS = 100;
+const TICKET_FIELDS = ['id', 'title', 'goal', 'acceptance', 'paths', 'estimate'], TICKET_OPTIONAL = ['expectedPaths', 'commitMessage', 'dependsOn', 'riskFlags'], BATCH_FIELDS = ['tickets', 'verificationCommands', 'sensitivePaths', 'nextLifecycleNumber'];
+const ESTIMATE = ['execTokens', 'checkTokens', 'reworkTokens'], MAX_PATHS = 100, MAX_FLAGS = 10;
 const STOP = ['Owner stop', 'Required scope or permission change', 'Missing verification environment'];
 // What a standing team accepts by decision: no sandbox is required, and Git-ignored build output is tolerated.
 const STANDING = ['BASH_NOT_SANDBOXED', 'IGNORED_PATHS_PRESENT'];
@@ -47,6 +47,10 @@ export const covers = (grant, other) => { const [g, o] = [grant.toLowerCase(), o
 export const overlap = (a, b) => covers(a, b) || covers(b, a);
 // A sensitive entry written as a bare folder guards everything under it.
 const guards = (guarded, path) => overlap(path, guarded) || (!guarded.endsWith('/**') && overlap(path, `${guarded}/**`));
+// ADR 0011, decision 6: why a ticket is always reviewed by Security. Decision 12 bounds the worker by `paths`,
+// so the sensitive paths are judged against `paths`, not against the plan.
+const declaredOf = (ticket, sensitivePaths) => [...(ticket.riskFlags ?? []).map(flag => `riskFlag:${flag}`),
+  ...sensitivePaths.filter(guarded => ticket.paths.some(path => guards(guarded, path))).map(guarded => `sensitivePath:${guarded}`)];
 export const plain = text => String(text).replace(UNSAFE, '?');
 const strings = (value, min = 1) => Array.isArray(value) && value.length >= min && value.every(entry => typeof entry === 'string' && entry);
 
@@ -112,7 +116,7 @@ function checkBatch(batch, known) {
   need(batch && typeof batch === 'object' && !Array.isArray(batch) && BATCH_FIELDS.every(key => Object.hasOwn(batch, key))
     && Object.keys(batch).every(key => [...BATCH_FIELDS, 'runId', 'date'].includes(key)), `The batch must carry ${BATCH_FIELDS.join(', ')} and optionally runId, date`);
   need(Array.isArray(batch.tickets) && batch.tickets.length >= 1 && batch.tickets.length <= MAX_PATHS, `The batch must list 1 to ${MAX_PATHS} tickets`);
-  need(strings(batch.sensitivePaths) && batch.sensitivePaths.length <= MAX_PATHS, `sensitivePaths must list 1 to ${MAX_PATHS} paths no ticket of this batch may write`);
+  need(strings(batch.sensitivePaths) && batch.sensitivePaths.length <= MAX_PATHS, `sensitivePaths must list 1 to ${MAX_PATHS} paths; a ticket that can write one is always reviewed by Security`);
   need(strings(batch.verificationCommands) && batch.verificationCommands.length <= MAX_PATHS, `verificationCommands must list 1 to ${MAX_PATHS} commands`);
   const ids = new Set();
   batch.tickets.forEach((ticket, i) => {
@@ -128,9 +132,9 @@ function checkBatch(batch, known) {
     need(ticket.estimate && typeof ticket.estimate === 'object' && Object.keys(ticket.estimate).sort().join() === [...ESTIMATE].sort().join(), `Ticket ${ticket.id}: the estimate must carry exactly ${ESTIMATE.join(', ')}`);
     const reserved = ticket.paths.filter(path => { const parts = path.toLowerCase().split('/'); return RESERVED.includes(parts[0]) || parts.includes('.git'); });
     need(!reserved.length, `Ticket ${ticket.id} claims ${reserved.join(', ')}; no ticket writes under ${RESERVED.join(' or ')}`);
-    // Decision 12 bounds the worker by `paths`, so the sensitive paths are judged against `paths`, not against the plan.
-    const sensitive = ticket.paths.filter(path => batch.sensitivePaths.some(guarded => guards(guarded, path)));
-    need(!sensitive.length, `Ticket ${ticket.id} would be able to write a sensitive path (${sensitive.slice(0, 5).join(', ')}); such a ticket needs a security review, which is not built yet`);
+    need(ticket.riskFlags === undefined || (strings(ticket.riskFlags) && ticket.riskFlags.length <= MAX_FLAGS && ticket.riskFlags.every(flag => TICKET_ID.test(flag))
+      && new Set(ticket.riskFlags.map(flag => flag.toLowerCase())).size === ticket.riskFlags.length),
+      `Ticket ${ticket.id}: riskFlags must list 1 to ${MAX_FLAGS} plain names ("auth", "payments"), each named once`);
     const files = ticket.paths.filter(path => !path.endsWith('/**'));
     need(ticket.expectedPaths === undefined ? files.length > 0 : strings(ticket.expectedPaths), `Ticket ${ticket.id} grants only folders; add "expectedPaths" with at least one file the worker is expected to touch`);
     if (ticket.dependsOn === undefined) return;
@@ -159,9 +163,9 @@ function inputOf(ticket, { batch, profile, wrappers, product, limits, allPaths }
     runtimeRef: ref('count-engine', 'run-n-rounds'), rosterRef: ref('worker-wrappers', wrappers),
     profiles: Object.fromEntries(['exec', 'check', 'guard'].map(duty => [duty, { wrapper: wrappers[duty], permissionRef: ref(`${duty}-staffing`, staffing[duty]) }])),
     allowedWritePaths: allPaths, allowedTools: tools, sensitivePaths: batch.sensitivePaths, verificationCommands: batch.verificationCommands,
-    maxBriefChars: 20000, budgetUnit: 'input+cache_creation', maxTicketBudget: limits.authorizationPerTicket };
+    maxBriefChars: 20000, budgetUnit: 'input+cache_creation', maxTicketBudget: limits.authorizationPerTicket, securityReview: 'standing-batch' };
   return { schemaVersion: 1,
-    ticket: { id: ticket.id, title: ticket.title, goal: ticket.goal, acceptance: ticket.acceptance, acceptanceRef: ref('acceptance', ticket.acceptance), isCodeShipping: true, deliveryRequired: false, riskFlags: [] },
+    ticket: { id: ticket.id, title: ticket.title, goal: ticket.goal, acceptance: ticket.acceptance, acceptanceRef: ref('acceptance', ticket.acceptance), isCodeShipping: true, deliveryRequired: false, riskFlags: ticket.riskFlags ?? [] },
     mandate: { ticketId: ticket.id, repoId, approvalRef: ref('batch-ticket', ticket), policyDigest: digest(policy), allowedWritePaths: ticket.paths, allowedTools: tools,
       budgetTokens: limits.authorizationPerTicket, stopConditions: STOP },
     proposal: { assignmentId: `${ticket.id}.exec.1`, checkAssignmentId: `${ticket.id}.check.1`, duty: 'exec', attempt: 1, sessionRef: null, continuationOf: null, methodIds: [],
@@ -268,7 +272,7 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     const body = { schemaVersion: 1, stage: 'batch-open', runId: frozen.args.runId, openedAt: at, productRoot, productHead: product.head, branch: product.branch,
       startedAsIs: startAsIs === true, preexisting: product.preexisting, preexistingContent: contentOf(productRoot, product.preexisting), hooks, lease, boundaryDigest: boundary.digest, isolationDigest: isolation.digest,
       limits, ceiling: { outputTokens: ceiling, stopLine: Math.floor(ceiling * 4 / 5) },
-      tickets: batch.tickets.map((ticket, i) => ({ id: ticket.id, title: ticket.title, goal: ticket.goal, acceptance: ticket.acceptance, commitMessage: ticket.commitMessage ?? `${ticket.id}: ${ticket.title}`, paths: ticket.paths, expectedPaths: inputs[i].proposal.expectedPaths, dependsOn: ticket.dependsOn ?? [] })),
+      tickets: batch.tickets.map((ticket, i) => ({ id: ticket.id, title: ticket.title, goal: ticket.goal, acceptance: ticket.acceptance, commitMessage: ticket.commitMessage ?? `${ticket.id}: ${ticket.title}`, paths: ticket.paths, expectedPaths: inputs[i].proposal.expectedPaths, dependsOn: ticket.dependsOn ?? [], declared: declaredOf(ticket, batch.sensitivePaths) })),
       sensitivePaths: batch.sensitivePaths, verificationCommands: batch.verificationCommands, review, reviewWrappers, triggerChanges: triggerChanges(lastFrozen, review),
       launchManifest: manifest ? 'chained' : 'absent', runRecord: frozen.record, args: frozen.args };
     const record = { ...body, digest: digest(body) };

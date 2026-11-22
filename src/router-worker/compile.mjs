@@ -77,7 +77,10 @@ function validateInput(input, bundle) {
 
   fields(policy, ['schemaVersion', 'mode', 'approvalRef', 'stackRef', 'runtimeRef', 'rosterRef',
     'profiles', 'allowedWritePaths', 'allowedTools', 'sensitivePaths', 'verificationCommands',
-    'maxBriefChars', 'budgetUnit', 'maxTicketBudget', ...(withMethods ? ['methodAllowlist'] : [])], 'policy');
+    'maxBriefChars', 'budgetUnit', 'maxTicketBudget', ...(withMethods ? ['methodAllowlist'] : []), ...(Object.hasOwn(policy ?? {}, 'securityReview') ? ['securityReview'] : [])], 'policy');
+  // ADR 0011, decision 6: set only by a standing batch, whose Security review covers a declared-sensitive ticket.
+  const standingReview = Object.hasOwn(policy, 'securityReview');
+  requireValue(!standingReview || policy.securityReview === 'standing-batch', 'policy.securityReview', 'The only security review a policy can name is "standing-batch"');
   requireValue(policy.schemaVersion === input.schemaVersion && policy.mode === 'router-worker', 'policy', 'Unsupported policy version or mode');
   if (withMethods) {
     fields(policy.methodAllowlist, DUTIES, 'policy.methodAllowlist');
@@ -142,7 +145,7 @@ function validateInput(input, bundle) {
     'proposal.expectedPaths', 'A proposed path is outside the policy/mandate intersection', 'SCOPE_NOT_AUTHORIZED');
   requireValue(p.requestedTools.every(tool => m.allowedTools.includes(tool) && policy.allowedTools.includes(tool)),
     'proposal.requestedTools', 'Requested tools exceed the policy/mandate intersection', 'TOOLS_NOT_AUTHORIZED');
-  requireValue(t.riskFlags.length === 0 && !p.expectedPaths.some(file => within(file, policy.sensitivePaths)),
+  requireValue(standingReview || (t.riskFlags.length === 0 && !p.expectedPaths.some(file => within(file, policy.sensitivePaths))),
     'ticket.riskFlags', 'A security/risk-specific check is required but is not implemented in this slice', 'SECURITY_CHECK_REQUIRED');
 
   fields(p.estimate, ['ref', 'execTokens', 'checkTokens', 'reworkTokens'], 'proposal.estimate');

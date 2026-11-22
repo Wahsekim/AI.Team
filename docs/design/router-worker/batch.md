@@ -63,7 +63,8 @@ must come before the next batch.
 | `paths` | What the ticket's worker may write: a file, or a folder grant ending in `/**`. Never under `.git` or `.claude`. At most 100 paths over the whole batch |
 | `expectedPaths` | The files the worker is expected to touch; by default the `paths` that are files. Required when a ticket grants only folders |
 | `estimate` | Input-side tokens for execution, check and rework; their sum may not exceed the authorization per ticket |
-| `sensitivePaths` | Paths no ticket of this batch may write. They are judged against `paths`, which is what bounds the worker, not against the plan: a ticket whose grant covers a sensitive path, or lies under one, is refused. An entry written as a bare folder (`src/auth`) guards everything under it. This lasts until the review of [ADR 0011](../../../decisions/0011-router-worker-batch-review.md) exists |
+| `sensitivePaths` | Paths whose tickets Security always reviews ([ADR 0011](../../../decisions/0011-router-worker-batch-review.md), decision 6). They are judged against `paths`, which is what bounds the worker, not against the plan: a ticket whose grant covers a sensitive path, or lies under one, is declared sensitive (`sensitivePath:<entry>`). An entry written as a bare folder (`src/auth`) guards everything under it. At least one entry |
+| `riskFlags` (optional) | 1 to 10 plain names (`auth`, `payments`), each named once. Each declares the ticket sensitive (`riskFlag:<name>`). What a ticket declares is frozen in the record as its `declared` list. A declared-sensitive ticket that passed and changed something is flagged for Security on every changed path, even when no trigger matches, and is not committed without a passed Security verdict; one that changed nothing is not committed, so it is not flagged |
 | `commitMessage` (optional) | The message of the ticket's commit, one line; by default `<id>: <title>` |
 | `dependsOn` (optional) | Ids of tickets this one builds on: an earlier ticket of the batch, or a ticket of an archived batch. Frozen in the record (`[]` when absent); an escalated ticket blocks every ticket that depends on it, directly or through others (see "Review verdict, commit gate and escalation") |
 | `runId`, `date` (optional) | Default: `rw-<commit>-L<nextLifecycleNumber>-<time>`, new at every `before`, and today |
@@ -374,7 +375,8 @@ a narrower pattern would miss `oauth/` or `authz.js`.
   refuses it. A batch left open across a kit upgrade is aborted and run again.
 - **"after"** gives each ticket that passed and changed something a
   `review`: `required` (reviewers, in the kit's order), `because` (reviewer,
-  trigger, path) and `flaggedFiles`, and a `content` (a digest of each of its
+  trigger, path; or reviewer `security`, `declared`, path for each changed path
+  of a ticket that declared itself sensitive) and `flaggedFiles`, and a `content` (a digest of each of its
   changed paths, flagged or not, as after saw it). `reviews` lists, per
   reviewer, the tickets it must review.
 
@@ -730,8 +732,7 @@ kept out of the tickets' commits by the "after" command.
   listed), or changed while the batch was being prepared.
 - The lock is held. If this team holds it with no batch open, the message names
   `abort`.
-- The batch cannot be frozen: an estimate above the authorization, a planned
-  path under a sensitive path, a roster that does not staff the three workers.
+- The batch cannot be frozen: an estimate above the authorization, a roster that does not staff the three workers.
 - The launch preflight or the isolation check does not pass.
 
 The limits not being the ones the ledger binds is refused with its own code,
@@ -793,8 +794,7 @@ The limits not being the ones the ledger binds is refused with its own code,
 - **The review of [ADR 0011](../../../decisions/0011-router-worker-batch-review.md)
   is not built** beyond its triggers, review state and brief. Until then a
   ticket that passed its check is committed with no security or architecture
-  review, even when flagged, and a ticket that could write a sensitive path is
-  refused by "before".
+  review, even when flagged.
 - **The brief's verification runs without the lock.** Nothing else starts while
   the batch is in review, but the PM's own session can still change the product.
 - **A ticket that did not pass keeps its changes in the work tree.** They are

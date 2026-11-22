@@ -87,8 +87,10 @@ export function recordFrozen({ instance, review, changes, runId, at }) {
 const globOf = pattern => new RegExp(`^${pattern.split(/(\*\*\/|\*\*|\*|\?)/).map(part => ({ '**/': '(?:.*/)?', '**': '.*', '*': '[^/]*', '?': '[^/]' })[part] ?? part.replace(/[.+^${}()|[\]\\]/g, '\\$&')).join('')}$`, 'i');
 const hits = (match, path) => (match.glob ?? []).some(pattern => globOf(pattern).test(path)) || (match.contains ?? []).some(word => path.toLowerCase().includes(word.toLowerCase()));
 
-// The reviewers a ticket's changed paths require, in the kit's order, and why.
-export function flagPaths(review, paths) {
-  const because = paths.flatMap(path => review.triggers.filter(trigger => hits(trigger.match, path)).flatMap(trigger => trigger.reviewers.map(reviewer => ({ reviewer, trigger: trigger.id, path }))));
+// The reviewers a ticket's changed paths require, in the kit's order, and why. A ticket that declared itself
+// sensitive (ADR 0011, decision 6) needs Security on every path it changed, whatever the triggers say.
+export function flagPaths(review, paths, declared = []) {
+  const because = [...paths.flatMap(path => review.triggers.filter(trigger => hits(trigger.match, path)).flatMap(trigger => trigger.reviewers.map(reviewer => ({ reviewer, trigger: trigger.id, path })))),
+    ...declared.flatMap(reason => paths.map(path => ({ reviewer: 'security', declared: reason, path })))];
   return { required: review.reviewers.filter(name => because.some(entry => entry.reviewer === name)), because, flaggedFiles: [...new Set(because.map(entry => entry.path))] };
 }

@@ -56,7 +56,7 @@ export function bindCandidate({ input, baseline, candidate, methodBundle }) {
     requireThat(paths.length > 0, 'NO_CANDIDATE_PROGRESS', 'No observable candidate change');
     requireThat(paths.every(path => within(path, frozen.policy.allowedWritePaths) && within(path, frozen.mandate.allowedWritePaths)),
       'SCOPE_NOT_AUTHORIZED', 'Actual candidate changes exceed mandate or policy paths');
-    requireThat(!paths.some(path => within(path, frozen.policy.sensitivePaths)),
+    requireThat(!Object.hasOwn(frozen.policy, 'securityReview') && !frozen.ticket.riskFlags.length && !paths.some(path => within(path, frozen.policy.sensitivePaths)),
       'SECURITY_CHECK_REQUIRED', 'Actual candidate changes require an unsupported security check');
     const current = observe(after.target.root);
     requireThat(canonical(current.target) === canonical(after.target) && canonical(current.reference) === canonical(after.reference),

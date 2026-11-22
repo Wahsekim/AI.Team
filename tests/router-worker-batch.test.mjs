@@ -43,7 +43,7 @@ test('before freezes N tickets, computes the ceiling, takes the lock and opens t
   const boundary = readBoundary(f.root), write = (agent, path) => decideCall({ boundary, input: { tool_name: 'Edit', agent_type: agent, cwd: f.product, tool_input: { file_path: path } } }).decision;
   assert.equal(write('tag-list-fixture-worker-exec', 'src/list/view.js'), 'allow'); assert.equal(write('tag-list-fixture-worker-exec', 'src/api/tags.js'), 'allow');
   assert.equal(write('tag-list-fixture-worker-exec', 'src/other.js'), 'deny'); assert.equal(write('tag-list-fixture-worker-check', 'src/app.js'), 'deny');
-  assert.deepEqual(record.sensitivePaths, ['src/auth/**']); assert.deepEqual(record.tickets[1], { id: 'US-02', title: 'Ticket US-02', goal: 'Do US-02', acceptance: ['US-02 works'], commitMessage: 'US-02: Ticket US-02', paths: ['src/api/tags.js'], expectedPaths: ['src/api/tags.js'], dependsOn: [] });
+  assert.deepEqual(record.sensitivePaths, ['src/auth/**']); assert.deepEqual(record.tickets[1], { id: 'US-02', title: 'Ticket US-02', goal: 'Do US-02', acceptance: ['US-02 works'], commitMessage: 'US-02: Ticket US-02', paths: ['src/api/tags.js'], expectedPaths: ['src/api/tags.js'], dependsOn: [], declared: [] });
   assert.match(refusal(await f.before(batchOf(ticket('US-03', ['src/x.js'])))).reason, /already open/);
   assert.equal(readLease({ productRoot: f.product }).lease.digest, record.lease, 'the open batch keeps its lock'); assert.equal(write('tag-list-fixture-worker-exec', 'src/list/view.js'), 'allow');
 });
@@ -201,11 +201,6 @@ test('before refuses, and leaves the lock free and the boundary closed, when the
   await refused(batchOf(ticket('US-01', ['src/list/**'])), /grants only folders; add "expectedPaths"/);
   await refused(batchOf(ticket('US-01', ['.git/hooks/pre-commit', 'src/a.js'])), /no ticket writes under \.git or \.claude/);
   await refused(batchOf(ticket('US-01', ['.claude/**'], { expectedPaths: ['.claude/x'] })), /no ticket writes under/);
-  // The worker is bounded by `paths`, so that is what the sensitive paths are judged against, whatever the plan says.
-  await refused(batchOf(ticket('US-01', ['src/**'], { expectedPaths: ['src/a.js'] })), /would be able to write a sensitive path \(src\/\*\*\)/);
-  await refused(batchOf(ticket('US-01', ['src/auth/login.js', 'src/a.js'], { expectedPaths: ['src/a.js'] })), /sensitive path \(src\/auth\/login\.js\)/);
-  await refused({ ...batchOf(ticket('US-01', ['src/auth/login.js'])), sensitivePaths: ['src/auth'] }, /sensitive path/);
-  await refused({ ...batchOf(ticket('US-01', ['src/auth/**'], { expectedPaths: ['src/auth/x.js'] })), sensitivePaths: ['src/auth'] }, /sensitive path/);
   await refused(batchOf(ticket('US-01', ['sub/.git/hooks/x'])), /no ticket writes under/);
   await refused(batchOf(...Array.from({ length: 51 }, (_, i) => ticket(`T-${i}`, [`src/f${i}.js`, `src/g${i}.js`]))), /at most 100 paths in all \(102 given\)/);
   await refused(batchOf(...Array.from({ length: 101 }, (_, i) => ticket(`T-${i}`, [`src/f${i}.js`]))), /1 to 100 tickets/);
