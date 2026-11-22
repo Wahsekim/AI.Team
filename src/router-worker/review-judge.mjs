@@ -182,7 +182,7 @@ export function recordNoAnswer({ teamRoot, instanceRoot, reviewer, reason }) {
 // Why a review holds each planned commit once the reviews are over: null, "rejected" or "review-not-obtained". A
 // flagged ticket, by a trigger or an elective brief, needs a passed verdict from each of its reviewers.
 export function reviewGate(instance, batch, after) {
-  const needs = new Map((after.tickets ?? []).filter(ticket => ticket.review).map(ticket => [ticket.id, new Set(ticket.review.required)]));
+  const needs = new Map((after.tickets ?? []).filter(ticket => ticket.review?.required.length).map(ticket => [ticket.id, new Set(ticket.review.required)]));
   for (const reviewer of batch.review.reviewers) for (const brief of briefsOf(instance, reviewer, batch.runId))
     for (const item of brief.tickets.filter(entry => entry.elective)) needs.set(item.id, new Set([...(needs.get(item.id) ?? []), reviewer]));
   const verdicts = verdictsOf(instance, batch.runId);
