@@ -18,7 +18,7 @@ const append = (path, rows) => { if (rows.length) appendFileSync(path, rows.map(
 
 // Appends a reviewer's final outcome for each ticket of a run and returns the escalations it raised. A line already
 // there is not written again, so a judgment that died half-way is judged again without counting twice.
-// `outcomes`: [{ ticket, outcome: 'rejected'|'not-obtained', finding }]; `tickets`: the batch's frozen tickets.
+// `outcomes`: [{ ticket, outcome: 'rejected'|'not-obtained', finding }]; `tickets`: [{ id, paths }], the paths each changed.
 export function recordOutcomes({ instance, runId, reviewer, outcomes, tickets, at }) {
   mkdirSync(join(instance, 'reviews'), { recursive: true });
   const seen = linesOf(join(instance, TICKETS));

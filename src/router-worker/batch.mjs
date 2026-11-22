@@ -16,8 +16,8 @@ import { blockedTickets } from './escalations.mjs';
 export const BATCH_FILE = 'rw-batch.json', AFTER_FILE = 'rw-batch-after.json', PROGRESS_FILE = 'rw-batch-commits.json', RETURN_FILE = 'rw-batch-return.json', SETTLE_FILE = 'rw-batch-settlement.json', ARCHIVE = 'batches';
 // What a batch leaves in the team's root, by the name it takes in the archive. The root is cleared in this
 // order: the files that name the run go last, so a clearing that died is finished by the next commit.
-export const REVIEW_FILE = reviewer => `rw-batch-review-${reviewer}.json`, VERDICTS_FILE = 'rw-batch-reviews.json';
-export const RECORDS = { 'review-security.json': REVIEW_FILE('security'), 'review-architect.json': REVIEW_FILE('architect'), 'reviews.json': VERDICTS_FILE, 'return.json': RETURN_FILE, 'settlement.json': SETTLE_FILE, 'batch.json': BATCH_FILE, 'after.json': AFTER_FILE, 'commits.json': PROGRESS_FILE };
+export const REVIEW_FILE = reviewer => `rw-batch-review-${reviewer}.json`, VERDICTS_FILE = 'rw-batch-reviews.json', RESOLUTION_FILE = 'rw-batch-resolution.json';
+export const RECORDS = { 'resolution.json': RESOLUTION_FILE, 'review-security.json': REVIEW_FILE('security'), 'review-architect.json': REVIEW_FILE('architect'), 'reviews.json': VERDICTS_FILE, 'return.json': RETURN_FILE, 'settlement.json': SETTLE_FILE, 'batch.json': BATCH_FILE, 'after.json': AFTER_FILE, 'commits.json': PROGRESS_FILE };
 export const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/, TICKET_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/;
 // Line and paragraph separators break a line too; bidi controls make a ledger line read other than it is.
 const UNSAFE = /[\x00-\x1f\x7f-\x9f\u061c\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]/g;
@@ -312,7 +312,9 @@ export function abortBatch({ teamRoot, instanceRoot }) {
       const id = typeof record?.runId === 'string' && RUN_ID.test(record.runId) && !exists(join(instance, ARCHIVE, record.runId)) ? record.runId : `unreadable-${Date.now()}`;
       // Commits the kit already made for this batch are named: they are on the branch and stay there.
       const made = (readJSON(join(instance, PROGRESS_FILE))?.commits ?? []).filter(commit => typeof commit?.ticket === 'string' && TICKET_ID.test(commit.ticket) && /^[a-f0-9]{40}$/.test(commit?.sha ?? '')).map(commit => `${commit.ticket} ${commit.sha.slice(0, 8)}`);
-      const work = made.length ? `${made.length} commit(s) were already made by the kit and stay on the branch (${made.join(', ')}); the rest of what the batch changed is still in the product work tree` : 'Nothing was committed by the kit; what the batch changed is still in the product work tree';
+      // A resolve already took the held tickets out of the work tree; their patches stay where it saved them.
+      const patches = Array.isArray(readJSON(join(instance, RESOLUTION_FILE))?.removed) && !id.startsWith('unreadable-') ? `; the tickets resolve held are patches under reviews/held/${id}/ and are not put back` : '';
+      const work = (made.length ? `${made.length} commit(s) were already made by the kit and stay on the branch (${made.join(', ')}); the rest of what the batch changed is still in the product work tree` : 'Nothing was committed by the kit; what the batch changed is still in the product work tree') + patches;
       const stamp = new Date().toISOString(), note = { schemaVersion: 1, stage: 'batch-archived-without-commit', runId: id, archivedAt: stamp, commitsMade: made, boundary: boundary ? 'closed' : 'not-restored', lockReleased: ours,
         next: `${work}: commit it by hand on the working branch, or discard it.${boundary ? '' : ' The write-boundary file is missing or was changed: a mode switch to specialist and back rebuilds it.'}` };
       appendFileSync(join(instance, LEDGER), `${stamp.slice(0, 10)} BATCH ${id} ARCHIVED WITHOUT COMMIT by rw-batch.mjs abort: the batch was not finished by the kit. ${work}.\n`);

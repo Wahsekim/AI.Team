@@ -6,8 +6,7 @@ import { digest } from '../loop/contracts.mjs';
 import { instanceOf } from './roots.mjs';
 import { gitRun } from './lease.mjs';
 import { readBoundary, stateOf } from './write-boundary.mjs';
-import { boundLimits } from './switch.mjs';
-import { runCommands } from './run-commands.mjs';
+import { runCommands, confirmedOf } from './run-commands.mjs';
 import { AFTER_FILE, REVIEW_FILE, contentOf, plain } from './batch.mjs';
 import { openBatch, intact, Refusal } from './batch-close.mjs';
 import { briefsOf, verdictsOf, finalOf } from './review-judge.mjs';
@@ -17,7 +16,7 @@ export { REVIEW_FILE };
 // it froze and what is in the product, never from a worker's report, the checker's verdict or another reviewer.
 // Each brief is recorded, sealed, in rw-batch-review-<reviewer>.json, which the judging of the review reads.
 const KIT = fileURLToPath(new URL('../../', import.meta.url));
-const PROTOCOL = 'agents/router-worker-review.md', KIT_PROTOCOL = 'config/router-worker/review-protocol.md', MODE_FILE = 'profiles/team-mode.json';
+const PROTOCOL = 'agents/router-worker-review.md', KIT_PROTOCOL = 'config/router-worker/review-protocol.md';
 const DIFF_CAP = 60000;
 // A fence longer than any backtick run in the text, so the text cannot close it.
 const fenced = (text, info = '') => { const fence = '`'.repeat(Math.max(4, ...(text.match(/`+/g) ?? []).map(run => run.length + 1))); return `${fence}${info}\n${text}${text.endsWith('\n') ? '' : '\n'}${fence}`; };
@@ -108,9 +107,7 @@ export function reviewBrief({ teamRoot, instanceRoot, reviewer, tickets: named =
         content: Object.fromEntries(flaggedFiles.map(path => [path, recorded[path]])) };
     });
 
-    const profile = readJSON(join(instance, MODE_FILE)), bound = boundLimits(instance) === digest(profile?.limits);
-    const allowed = bound && Array.isArray(profile.limits.allowedCommands) ? profile.limits.allowedCommands : [];
-    const commands = batch.verificationCommands.filter(command => allowed.includes(command)), dropped = batch.verificationCommands.filter(command => !allowed.includes(command));
+    const { allowed, commands, dropped } = confirmedOf(instance, batch.verificationCommands);
     const verification = run({ productRoot: product, commands, frozen: batch.verificationCommands, allowed });
     need(!verification.errors, verification.errors?.[0]?.reason);
     const touched = unchanged();

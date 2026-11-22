@@ -21,8 +21,8 @@ export function git(root, ...args) {
   return result.status === 0 && !result.error ? result.stdout : null;
 }
 // A Git command whose outcome matters, under the same scrubbed environment: {status, stdout, stderr, error}.
-export function gitRun(root, args, { input, timeout = 120000, env = {} } = {}) {
-  return spawnSync('git', ['-C', root, ...args], { encoding: 'utf8', timeout, maxBuffer: 64 * 1024 * 1024, env: { ...gitEnv(), ...env }, ...(input === undefined ? {} : { input }) });
+export function gitRun(root, args, { input, timeout = 120000, env = {}, encoding = 'utf8' } = {}) {
+  return spawnSync('git', ['-C', root, ...args], { encoding, timeout, maxBuffer: 64 * 1024 * 1024, env: { ...gitEnv(), ...env }, ...(input === undefined ? {} : { input }) });
 }
 export function canonicalDirectory(path, label) {
   requireValue(typeof path === 'string' && isAbsolute(path) && resolve(path) === path, `${label} must be a normalized absolute path`);
