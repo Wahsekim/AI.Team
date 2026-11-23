@@ -1,25 +1,26 @@
 import { readFileSync, writeFileSync, appendFileSync, renameSync, rmSync, lstatSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { digest } from '../loop/contracts.mjs';
+import { digest, bytesDigest } from '../loop/contracts.mjs';
 import { instanceOf } from './roots.mjs';
 import { git, gitRun, acquireLease, releaseLease, readLease } from './lease.mjs';
 import { accountRun } from './run-args.mjs';
 import { readBoundary, closeBoundary, reviewBoundary, stateOf, within, LOG_FILE } from './write-boundary.mjs';
 import { flagPaths } from './review-triggers.mjs';
-import { reviewGate } from './review-judge.mjs';
+import { reviewGate, verdictsOf } from './review-judge.mjs';
 import { escalationsOf } from './escalations.mjs';
-import { BATCH_FILE, AFTER_FILE, PROGRESS_FILE, RETURN_FILE, RECORDS, ARCHIVE, RUN_ID, TICKET_ID, oneLine, changedPaths, contentOf, hooksOf, archiveBatch, plain, proposedTokens } from './batch.mjs';
+import { BATCH_FILE, AFTER_FILE, PROGRESS_FILE, RETURN_FILE, RESOLUTION_FILE, RECORDS, ARCHIVE, RUN_ID, TICKET_ID, oneLine, changedPaths, contentOf, hooksOf, archiveBatch, plain, proposedTokens } from './batch.mjs';
 
 // ADR 0010, decisions 12 and 13: what a PM runs when a batch ends in a standing Router/Worker team.
 // after: the engine's return is matched against what was frozen, the product is compared with the tickets'
 //   paths, the write boundary is closed and the lock released. It decides which tickets may be committed.
 // commit: one commit per such ticket, on the batch's branch, then the batch is archived. Nothing is pushed.
-const LEDGER = 'pm-decisions.md', IN_PROGRESS = ['index.lock', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'BISECT_LOG', 'rebase-merge', 'rebase-apply'];
+const LEDGER = 'pm-decisions.md';
+export const IN_PROGRESS = ['index.lock', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'BISECT_LOG', 'rebase-merge', 'rebase-apply'];
 // Findings after which no ticket of the batch is committed by the kit: what ran is not what was frozen.
 export const HOLD_ALL = ['BOUNDARY_CHANGED', 'PRODUCT_HEAD_MOVED', 'PRODUCT_BRANCH_CHANGED', 'GUARDIAN_NOT_CLEAN', 'HOOKS_CHANGED', 'HOOKS_WRITTEN'];
 // An after that was claimed this recently is taken to be running; an older claim is one that died.
 const CLAIM_MS = 60000;
-const ABANDON = 'If the batch cannot be committed by the kit, archive it with: rw-batch.mjs abort --instance <instance-root>, then commit or discard its changes by hand';
+export const ABANDON = 'If the batch cannot be committed by the kit, archive it with: rw-batch.mjs abort --instance <instance-root>, then commit or discard its changes by hand';
 
 export class Refusal extends Error {}
 const need = (condition, reason) => { if (!condition) throw new Refusal(reason); };
@@ -182,6 +183,27 @@ export function afterBatch({ teamRoot, instanceRoot, result }) {
   } catch (error) { return refuse(error); }
 }
 
+// The plan of a batch: after's commits, or for a reviewed batch the commits of its resolution, checked again against
+// the verdicts, after's plan and the held patches on disk.
+const HELD_REASONS = ['rejected', 'review-not-obtained', 'verification-failed-after-removal'];
+function resolutionOf(instance, batch, after) {
+  const { reasons, flagged } = reviewGate(instance, batch, after);
+  if (!flagged) return { plan: after.commits, held: [], wrote: [], reviewed: false };
+  const path = join(instance, RESOLUTION_FILE), resolution = readJSON(path);
+  need(intact(resolution, 'batch-resolved'), `This batch was reviewed: resolve it first with: rw-batch.mjs resolve --instance <instance-root>${exists(path) ? `. ${RESOLUTION_FILE} is not a finished resolution: run resolve again` : ''}`);
+  need(resolution.afterDigest === after.digest && resolution.reviewsDigest === digest(verdictsOf(instance, batch.runId)), `${RESOLUTION_FILE} belongs to another close of the batch or to other verdicts. ${ABANDON}`);
+  const removed = Array.isArray(resolution.removed) ? resolution.removed : null, ids = new Set((removed ?? []).map(entry => entry?.ticket));
+  const plan = after.commits.filter(commit => !ids.has(commit.ticket));
+  need(removed && removed.every(entry => HELD_REASONS.includes(entry.reason) && after.commits.some(commit => commit.ticket === entry.ticket && digest(commit.paths) === digest(entry.paths))) && digest(resolution.commits) === digest(plan)
+    && after.commits.every((commit, i) => !reasons[i] || ids.has(commit.ticket)) && Array.isArray(resolution.verification?.wrote),
+  `${RESOLUTION_FILE} does not hold after's commits less the tickets a review held. ${ABANDON}`);
+  const lost = removed.filter(entry => entry.patch !== `reviews/held/${batch.runId}/${entry.ticket}.patch` || !exists(join(instance, entry.patch)) || bytesDigest(readFileSync(join(instance, entry.patch))) !== entry.patchDigest);
+  need(!lost.length, `The patch of ${lost.map(entry => plain(String(entry.ticket))).join(', ')} is missing or was changed; the held work would be lost. ${ABANDON}`);
+  const committing = new Set(plan.flatMap(commit => commit.paths)), wrote = resolution.verification.wrote;
+  need(wrote.every(file => typeof file === 'string' && !committing.has(file)), `${RESOLUTION_FILE} records as written by a command a path it commits. ${ABANDON}`);
+  return { plan, held: removed.map(({ ticket, reason, patch }) => ({ ticket, reason, patch })), wrote, reviewed: true };
+}
+
 // Paths go to Git on standard input, NUL-separated and taken literally: no length limit, no pattern.
 const withPaths = (product, args, paths, timeout) => gitRun(product, ['--literal-pathspecs', ...args, '--pathspec-from-file=-', '--pathspec-file-nul'], { input: paths.join('\0'), timeout });
 const said = result => plain(`${result.error?.code ?? ''} ${result.stderr ?? ''} ${result.stdout ?? ''}`.trim().slice(0, 300));
@@ -208,8 +230,8 @@ export function commitBatch({ teamRoot, instanceRoot }) {
         && commit.paths.every(path => typeof path === 'string' && !path.endsWith('/') && within(path, ticket.paths) && !batch.preexisting.includes(path));
     });
     need(planned && (after.holdAll !== true || after.commits.length === 0), `${AFTER_FILE} plans a commit that is not a passed ticket's own paths. ${ABANDON}`);
-    // ADR 0011, decisions 14 and 17: a ticket a review rejected or could not judge, and every ticket after it, stays uncommitted.
-    const { plan, held } = reviewGate(instance, batch, after);
+    // ADR 0011, decisions 14 and 15: a reviewed batch commits what its resolution kept; the tickets it held are patches.
+    const { plan, held, wrote, reviewed } = resolutionOf(instance, batch, after);
     product = batch.productRoot;
     const taken = acquireLease({ teamRoot: instance, productRoot: product });
     need(!taken.errors, `The lock on the product repository could not be taken: ${taken.errors?.[0]?.reason}`);
@@ -232,10 +254,14 @@ export function commitBatch({ teamRoot, instanceRoot }) {
     need(done.every((made, i) => holds(made.sha, plan[i].paths)), `A commit recorded for this batch does not hold its ticket's paths. ${ABANDON}`);
     need(head() === (done.length ? done.at(-1).sha : batch.productHead) && done.every((made, i) => parentOf(made.sha) === (i ? done[i - 1].sha : batch.productHead)),
       `The product branch is not the batch's start plus the commits this command made: someone committed, or moved the branch. ${ABANDON}`);
-    const todo = plan.slice(done.length), heldPaths = after.commits.slice(plan.length).flatMap(commit => commit.paths);
-    // What is still to commit must be exactly what after saw: nothing was edited in between.
-    const pending = changedPaths(product).filter(path => !batch.preexisting.includes(path)), expected = [...todo.flatMap(commit => commit.paths), ...heldPaths, ...after.left].sort();
+    const todo = plan.slice(done.length);
+    // What is still to commit must be exactly what after saw, less what resolve removed, plus what its commands wrote.
+    const pending = changedPaths(product).filter(path => !batch.preexisting.includes(path)), expected = [...new Set([...todo.flatMap(commit => commit.paths), ...after.left, ...wrote])].sort();
     need(digest(pending) === digest(expected), `The product repository changed since the batch was closed. ${ABANDON}`);
+    if (reviewed) {
+      const moved = todo.flatMap(commit => { const now = contentOf(product, commit.paths), was = after.tickets.find(ticket => ticket.id === commit.ticket)?.content ?? {}; return commit.paths.filter(path => now[path] !== was[path]); });
+      need(!moved.length, `${moved.slice(0, 5).map(plain).join(', ')} changed since the review; what would be committed is not what was reviewed. ${ABANDON}`);
+    }
 
     for (const commit of todo) {
       // A path a worker already removed from the index has nothing to add; the commit below records its deletion.
@@ -257,9 +283,6 @@ export function commitBatch({ teamRoot, instanceRoot }) {
     let ledgerWritten = true;
     try { appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} BATCH ${batch.runId} COMMITTED on ${plain(batch.branch)}: ${done.length} commit(s)${done.length ? ` (${done.map(commit => `${commit.ticket} ${commit.sha.slice(0, 8)}`).join(', ')})` : ''}; ${left.length} changed path(s) left uncommitted${left.length ? ` (${left.slice(0, 10).map(plain).join(', ')}${left.length > 10 ? ', ...' : ''})` : ''}${held.length ? `; held: ${held.map(entry => `${entry.ticket} (${entry.reason})`).join(', ')}` : ''}${escalations.length ? `; escalated to the owner: ${escalations.map(entry => entry.id).join(', ')}` : ''}. Nothing was pushed.\n`); }
     catch { ledgerWritten = false; }
-    // The commit ends the review: the workers stay closed and the reviewers leave the boundary.
-    const boundary = readBoundary(instance);
-    if (boundary && stateOf(boundary) === 'review') closeBoundary({ teamRoot: instance });
     archiveBatch(instance, batch.runId, { 'commit.json': record }, RECORDS);
     return ledgerWritten ? record : { ...record, warning: `${LEDGER} could not be written; add the COMMITTED line by hand` };
   } catch (error) { return refuse(error); } finally { if (lease) releaseLease({ productRoot: product, lease }); }

@@ -55,7 +55,7 @@ function inReview({ teamRoot, instanceRoot, reviewer }) {
   const brief = briefsOf(instance, reviewer, batch.runId).at(-1), mine = verdicts.filter(entry => entry.reviewer === reviewer);
   need(brief, `${reviewer} has no brief for this batch; make one with: rw-batch.mjs review-brief --reviewer ${reviewer} --instance <instance-root>`);
   need(brief.attempt > (mine.at(-1)?.briefAttempt ?? 0), `${reviewer}'s last brief was already judged; brief again with: rw-batch.mjs review-brief --reviewer ${reviewer} --instance <instance-root>, which carries the reason, and dispatch the reviewer once more`);
-  return { instance, batch, brief, verdicts, mine };
+  return { instance, batch, after, brief, verdicts, mine };
 }
 
 // The text of a transcript entry's content, whether a string or a list of blocks.
@@ -127,7 +127,7 @@ function derive(report, brief, reviewer, product) {
 }
 
 // Records one judgment. The second failed attempt is final: the review was not obtained.
-function record({ instance, batch, brief, verdicts, mine }, reviewer, judged) {
+function record({ instance, batch, after, brief, verdicts, mine }, reviewer, judged) {
   const outcome = !judged.refusals.length ? 'accepted' : mine.length + 1 >= ATTEMPTS ? 'not-obtained' : 'refused', at = new Date().toISOString();
   const reason = judged.refusals.map(item => `${item.code}: ${item.detail}`).join('; ');
   const tickets = outcome === 'accepted' ? judged.tickets : outcome === 'not-obtained' ? brief.tickets.map(item => ({ id: item.id, verdict: 'not-obtained' })) : [];
@@ -135,7 +135,9 @@ function record({ instance, batch, brief, verdicts, mine }, reviewer, judged) {
     outcome, refusals: judged.refusals, transcript: judged.transcript ?? null, reportDigest: judged.reportDigest ?? null, tickets, judgedAt: at });
   // The lines across batches go first: they are written once, so a judgment that died before its verdict is judged again.
   const outcomes = tickets.filter(item => item.verdict !== 'passed').map(item => ({ ticket: item.id, outcome: item.verdict, finding: item.verdict === 'rejected' ? item.finding : said(reason) }));
-  const escalated = outcomes.length ? recordOutcomes({ instance, runId: batch.runId, reviewer, outcomes, tickets: batch.tickets, at }) : [];
+  // An escalation carries the paths the ticket changed, which are the paths of its held patch, not its grants.
+  const changed = batch.tickets.map(ticket => ({ id: ticket.id, paths: after.tickets.find(entry => entry.id === ticket.id)?.changedPaths ?? ticket.paths }));
+  const escalated = outcomes.length ? recordOutcomes({ instance, runId: batch.runId, reviewer, outcomes, tickets: changed, at }) : [];
   const path = join(instance, VERDICTS_FILE);
   writeFileSync(`${path}.tmp`, JSON.stringify({ schemaVersion: 1, runId: batch.runId, entries: [...verdicts, entry] }, null, 2) + '\n'); renameSync(`${path}.tmp`, path);
   const passed = tickets.filter(item => item.verdict === 'passed').map(item => item.id), rejected = tickets.filter(item => item.verdict === 'rejected');
@@ -145,8 +147,8 @@ function record({ instance, batch, brief, verdicts, mine }, reviewer, judged) {
     ? `: passed ${passed.join(', ') || 'none'}; rejected ${rejected.map(item => `${item.id} (${item.fails.join(', ')})`).join(', ') || 'none'}${unchecked.length ? `; not checked: ${unchecked.join(', ')}` : ''}`
     : `: ${judged.refusals.map(item => item.code).join(', ')}${outcome === 'not-obtained' ? `; held: ${tickets.map(item => item.id).join(', ')}` : ''}`}.\n`);
   const next = outcome === 'refused' ? `The report was refused (${reason}). Brief ${reviewer} again with: rw-batch.mjs review-brief --reviewer ${reviewer} --instance <instance-root>, and dispatch it once more with that brief`
-    : outcome === 'not-obtained' ? `The review by ${reviewer} was not obtained; its tickets are not committed. Finish the batch with: rw-batch.mjs commit --instance <instance-root>`
-    : 'The verdict is recorded; once every reviewer is judged, commit with: rw-batch.mjs commit --instance <instance-root>';
+    : outcome === 'not-obtained' ? `The review by ${reviewer} was not obtained; its tickets are not committed. Once every reviewer is judged, run: rw-batch.mjs resolve --instance <instance-root>, then rw-batch.mjs commit --instance <instance-root>`
+    : 'The verdict is recorded; once every reviewer is judged, run: rw-batch.mjs resolve --instance <instance-root>, then rw-batch.mjs commit --instance <instance-root>';
   return { ...entry, escalated, next };
 }
 
@@ -177,10 +179,10 @@ export function recordNoAnswer({ teamRoot, instanceRoot, reviewer, reason }) {
   } catch (error) { return refuse(error); }
 }
 
-// The commit plan once the reviews are over: the planned commits up to the first ticket a review holds. A flagged
-// ticket, by a trigger or an elective brief, needs a passed verdict from each of its reviewers.
+// Why a review holds each planned commit once the reviews are over: null, "rejected" or "review-not-obtained". A
+// flagged ticket, by a trigger or an elective brief, needs a passed verdict from each of its reviewers.
 export function reviewGate(instance, batch, after) {
-  const needs = new Map((after.tickets ?? []).filter(ticket => ticket.review).map(ticket => [ticket.id, new Set(ticket.review.required)]));
+  const needs = new Map((after.tickets ?? []).filter(ticket => ticket.review?.required.length).map(ticket => [ticket.id, new Set(ticket.review.required)]));
   for (const reviewer of batch.review.reviewers) for (const brief of briefsOf(instance, reviewer, batch.runId))
     for (const item of brief.tickets.filter(entry => entry.elective)) needs.set(item.id, new Set([...(needs.get(item.id) ?? []), reviewer]));
   const verdicts = verdictsOf(instance, batch.runId);
@@ -197,7 +199,5 @@ export function reviewGate(instance, batch, after) {
     return outcomes.find(reason => reason === 'rejected') ?? outcomes.find(Boolean) ?? null;
   });
   need(!open.size, `The review of this batch is not over: ${[...open].join(', ')} ${open.size > 1 ? 'have' : 'has'} no verdict. Brief, dispatch and judge with: rw-batch.mjs review-brief --reviewer <reviewer> --instance <instance-root>, then rw-batch.mjs review --reviewer <reviewer> --transcript <agent-*.jsonl> --instance <instance-root> (or review --no-answer "<reason>"), or abort the batch`);
-  const first = reasons.findIndex(Boolean);
-  return { plan: first === -1 ? after.commits : after.commits.slice(0, first),
-    held: first === -1 ? [] : after.commits.slice(first).map((commit, i) => ({ ticket: commit.ticket, reason: reasons[first + i] ?? 'after-held-ticket' })) };
+  return { reasons, flagged: needs.size > 0 };
 }

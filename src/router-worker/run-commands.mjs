@@ -1,9 +1,19 @@
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { digest } from '../loop/contracts.mjs';
+import { boundLimits } from './switch.mjs';
 
 // ADR 0011, decision 11: the kit, not a reviewer, runs the verification commands, and only one that the batch
 // froze and the owner still confirms for the team. Each runs as the PM's user, from the product root.
-const TIMEOUT_MS = 15 * 60 * 1000, TAIL = 4000;
+const TIMEOUT_MS = 15 * 60 * 1000, TAIL = 4000, MODE_FILE = 'profiles/team-mode.json';
+
+// The frozen commands the owner still confirms for the team, by limits a ledger line binds; the others are dropped.
+export function confirmedOf(instance, frozen) {
+  let profile = null; try { profile = JSON.parse(readFileSync(join(instance, MODE_FILE), 'utf8')); } catch { /* no confirmed command */ }
+  const allowed = boundLimits(instance) === digest(profile?.limits) && Array.isArray(profile.limits.allowedCommands) ? profile.limits.allowedCommands : [];
+  return { allowed, commands: frozen.filter(command => allowed.includes(command)), dropped: frozen.filter(command => !allowed.includes(command)) };
+}
 
 export function runCommands({ productRoot, commands, frozen, allowed, timeoutMs = TIMEOUT_MS }) {
   const unfrozen = commands.find(command => !frozen.includes(command)), unconfirmed = commands.find(command => !allowed.includes(command));

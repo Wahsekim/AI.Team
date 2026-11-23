@@ -33,9 +33,10 @@ no network.
 | 3 | PM | `after RESULT.json`, with the engine's return: the run is checked, the write limits close, the lock is released |
 | 4 | PM | `scripts/reconcile-run.mjs RESULT.json .`: lifecycle and message ledgers, as in specialist mode |
 | 5 | PM | `scripts/measure-spawn.mjs <session-dir> --json > METER.json`, then `settle METER.json`: usage per ticket. The next `before` is refused until this is done |
-| 6 | PM | `commit`: one commit per ticket that passed; the batch is archived |
+| 6 | PM | a flagged batch only: `review-brief`, the reviewer's dispatch and `review` per reviewer, then `resolve` (see "Resolve") |
+| 7 | PM | `commit`: one commit per ticket that passed, or per ticket the resolution kept; the batch is archived |
 
-`abort` replaces steps 2 to 6 for a batch that will not be run. `settle` may
+`abort` replaces steps 2 to 7 for a batch that will not be run. `settle` may
 also come after `commit`, with `--run <run id>`, for an archived batch; it
 must come before the next batch.
 
@@ -320,7 +321,9 @@ line to `pm-decisions.md`. It takes the lock for its length. It pushes nothing.
   `GIT_AUTHOR_*` and `GIT_COMMITTER_*`. Every other `GIT_*` variable is ignored.
 - A `commit` that died after archiving the batch is finished by the next call.
 - What is not committed stays in the work tree and is listed (`left`): a ticket
-  that did not pass, a path outside every ticket. The next "before" then
+  that did not pass, a path outside every ticket, a path a verification command
+  wrote during `resolve`. A ticket `resolve` held is a patch, not a change in the
+  work tree. The next "before" then
   refuses until the PM commits or discards those paths, or starts as is.
 
 The commits are made by the PM's session running this command, with the
@@ -390,7 +393,7 @@ a narrower pattern would miss `oauth/` or `authz.js`.
   reviewers, and `next` names `review-brief` for each.
 - **While a batch is in review** "before", a mode switch and a change of limits
   are refused. `abort` closes the review state and archives the batch with
-  nothing committed; `commit` ends the review state once every verdict is in.
+  nothing committed; `resolve` ends the review state once every verdict is in.
 - **`review-brief --reviewer R`** prints the brief the PM gives reviewer R's
   wrapper, and appends it, sealed, to `rw-batch-review-R.json` (one entry per
   attempt: run, reviewer, wrapper, attempt, `briefDigest`, the tickets with
@@ -482,13 +485,11 @@ offline on transcript fixtures.
 - **Commit gate.** `commit` refuses while a reviewer that a planned ticket
   needs has no final verdict. A ticket needs each reviewer a trigger required
   and each reviewer whose brief named it electively (an elective review binds).
-  A ticket rejected, or whose review was not obtained, is held, and so is every
-  ticket after it in the batch; the tickets before it commit. Held tickets stay
-  in the product work tree for now; saving them as patches, removing them and
-  re-running the verification commands comes with decision 15. The commit
-  record carries `held: [{ticket, reason: "rejected"|"review-not-obtained"|"after-held-ticket"}]`
-  and `escalations`, the ledger line names both, and the commit closes the
-  review state. `commit` also refuses when `reviews/tickets.jsonl` holds a
+  A ticket rejected, or whose review was not obtained, is held by `resolve`
+  (next section). `commit` of a flagged batch refuses without a finished
+  resolution and commits `resolution.commits`. The commit record carries
+  `held: [{ticket, reason, patch}]` and `escalations`, and the ledger line names
+  both. `commit` also refuses when `reviews/tickets.jsonl` holds a
   `rejected` or `not-obtained` line for this run that the reviewer's final
   verdict does not show: deleting or rewriting `rw-batch-reviews.json` to have
   a ticket judged again does not reset its rejection. A judgment that died
@@ -501,7 +502,8 @@ offline on transcript fixtures.
   batches is escalated, whether they are two rejections, two reviews not
   obtained, or one of each (PM decision of 2026-11-22): `{id:
   "ESC-<ticket>-<run>", kind: "second-rejection"|"review-not-obtained-again"|"repeated-adverse",
-  ticket, reviewer, runIds, paths, findings, at}` in
+  ticket, reviewer, runIds, paths, findings, at}` (`paths`: the paths the ticket
+  changed in that batch, which are the paths of its held patch) in
   `reviews/escalations.jsonl`, an `ESCALATED` ledger line, and the verdict's
   `escalated` list. Two reviewers rejecting the same ticket in one batch count
   once.
@@ -532,6 +534,70 @@ offline on transcript fixtures.
   after the batch, off the critical path, and writes a text rule only for a
   class the reviewer reports no tool can detect; the Auditor measures the
   controls built from proposed ones (decisions 21 and 22).
+
+## Resolve
+
+[ADR 0011](../../../decisions/0011-router-worker-batch-review.md), decisions 14
+and 15, with the owner's answer of 2026-11-20: decision 15 also applies to a
+ticket held because its review was not obtained.
+
+`rw-batch.mjs resolve --instance <instance-root>` runs once every reviewer of a
+flagged batch has a final verdict, before `commit`. It takes the lock and checks
+that the product is on the batch's branch at the batch's start commit, with no
+Git operation in progress and the same commit hooks, and that every changed path
+of a ticket still to be committed or held has the content `after` pinned
+(`tickets[].content`). Then:
+
+1. **Held patches.** For each ticket rejected or whose review was not obtained,
+   the kit makes a binary patch of the ticket's changed paths against the
+   batch's start, untracked files included, through an index of its own (the
+   paths go to Git literally, on standard input). It is saved under the team
+   folder at `reviews/held/<run id>/<ticket>.patch` with its digest. It applies
+   with `git apply` on the batch's start commit.
+2. **Removal.** The ticket's paths go back to the batch's start: a path the start
+   holds is checked out from it, index included; a new path is unstaged and
+   deleted. The kit checks that none of them still shows as changed.
+3. **Re-verification.** When a ticket after the first removed one is still to be
+   committed, the kit runs the batch's verification commands from the product
+   root, only those that are both frozen in the batch and still in the team's
+   confirmed `allowedCommands` (`/bin/sh -c`, 15 minutes each, output truncated
+   and digested). If one fails or times out, if none could run, or if a command
+   changed the content of a path still to be committed, every ticket after the
+   first removed one is also saved as a patch and removed, with the reason
+   `verification-failed-after-removal`. If a command changed an earlier
+   ticket's path, the holding starts at that ticket. Other paths the commands
+   wrote are recorded as `wrote` and left uncommitted.
+4. The review state closes, a `BATCH <run> RESOLVED` line goes to
+   `pm-decisions.md`, the lock is released.
+
+Exit 0 when nothing is held, 2 when a ticket is held. A second `resolve` returns
+the same record.
+
+**Resolution record** `rw-batch-resolution.json` (archived as
+`resolution.json`): `{stage: "batch-resolved", runId, batchDigest, afterDigest,
+reviewsDigest, resolvedAt, removed: [{ticket, reason:
+"rejected"|"review-not-obtained"|"verification-failed-after-removal", patch,
+patchDigest, paths}], verification: {ran, failed, commands: [{command, exit,
+timedOut, outputDigest, tail}], dropped, changed, wrote}, commits, left}`.
+`commit` checks it against the verdicts (`reviewsDigest`), `after`'s plan (the
+commits are after's commits less the removed tickets, and every ticket a review
+held is removed) and the patches on disk (each at its exact path with its
+digest). The work tree it expects is `after`'s, less the removed paths, plus
+`wrote`, and each path it commits must still have the content the review saw.
+
+**Resume.** While it works the record has `stage: "batch-resolving"` and
+carries each patch as soon as it is saved, the verification outcome once the
+commands ran, the lock's digest and the process id. A `resolve` that died is
+finished by the next one: it takes over the lock when that process is gone,
+checks each saved patch against its digest, removes again what is not yet
+removed, does not run the commands twice, and holds after a recorded failure
+what the failure holds. A ticket a recorded failure holds is not compared with
+its pinned content, since a command may have changed it.
+
+**Abort after resolve** re-applies nothing: the held tickets stay patches under
+`reviews/held/<run id>/`, the removed paths stay removed, and the note says so.
+To take a held ticket back, `git apply reviews/held/<run id>/<ticket>.patch`
+from the product root on the batch's start commit.
 
 ## When the kit will not commit a batch
 
@@ -752,3 +818,14 @@ The limits not being the ones the ledger binds is refused with its own code,
 - **The hook must be loaded** in the PM's session. The command checks that it
   is registered and that its file exists, not that the running session read it.
 - **Nothing has run with real agents** from a batch record.
+
+**Not covered by resolve.**
+
+- A ticket held because a verification command failed is patched from the tree
+  as the commands left it: if a command edited that ticket's files, the patch
+  carries the command's edit with the worker's.
+- A command that deletes or rewrites a path left uncommitted by `after`, or a
+  path that was there before the batch (start as is), is not recorded; the next
+  `commit` then refuses because the product changed, and the batch is aborted.
+- A `resolve` that dies after its ledger line and before its record writes a
+  second `RESOLVED` line when it is finished.

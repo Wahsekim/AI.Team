@@ -24,9 +24,13 @@
 //   Exit 0 when the report is accepted (its tickets passed or rejected), 2 when it is refused or the review not obtained.
 // review --no-answer "<reason>" --reviewer <security|architect> --instance <instance-root>
 //   Records an attempt that brought no answer. A second failed attempt means the review was not obtained.
+// resolve --instance <instance-root>
+//   Once every reviewer is judged: saves each ticket a review rejected or could not judge as a patch under
+//   reviews/held/<run id>/, removes it from the work tree, runs the verification commands again when a later ticket
+//   is still to be committed, and holds the rest if they fail. Ends the review. Exit 2 when a ticket is held.
 // commit --instance <instance-root>
 //   One commit per ticket that passed, on the batch's branch, then archives the batch under batches/<run id>/.
-//   A ticket a review rejected or could not judge, and every ticket after it, stays uncommitted. Ends the review.
+//   A reviewed batch commits what its resolution kept.
 // No model or network. Exit 0 done and clean, 2 refused or in review, 1 usage.
 import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -39,13 +43,16 @@ import { settleBatch, markNotMetered } from '../src/router-worker/batch-settle.m
 import { loadRetryRules } from '../src/router-worker/retries.mjs';
 import { reviewBrief } from '../src/router-worker/review-brief.mjs';
 import { judgeReview, recordNoAnswer } from '../src/router-worker/review-judge.mjs';
+import { resolveBatch } from '../src/router-worker/review-resolve.mjs';
 
 const print = result => { if (result.errors) { console.error(JSON.stringify(result)); process.exitCode = 2; } else process.stdout.write(JSON.stringify(result, null, 2) + '\n'); };
-const USAGE = 'usage: node scripts/rw-batch.mjs before BATCH.json --instance <instance-root> [--start-as-is]\n       node scripts/rw-batch.mjs after RESULT.json --instance <instance-root>\n       node scripts/rw-batch.mjs settle METER.json --instance <instance-root> [--run <run id>]\n       node scripts/rw-batch.mjs settle --not-metered "<reason>" --instance <instance-root> [--run <run id>]\n       node scripts/rw-batch.mjs review-brief --reviewer <security|architect> --instance <instance-root> [--ticket <id> ...]\n       node scripts/rw-batch.mjs review --reviewer <security|architect> --transcript <agent-*.jsonl> --instance <instance-root> [REPORT.json]\n       node scripts/rw-batch.mjs review --no-answer "<reason>" --reviewer <security|architect> --instance <instance-root>\n       node scripts/rw-batch.mjs commit --instance <instance-root>\n       node scripts/rw-batch.mjs abort --instance <instance-root>';
-if (['abort', 'commit'].includes(process.argv[2])) {
+const USAGE = 'usage: node scripts/rw-batch.mjs before BATCH.json --instance <instance-root> [--start-as-is]\n       node scripts/rw-batch.mjs after RESULT.json --instance <instance-root>\n       node scripts/rw-batch.mjs settle METER.json --instance <instance-root> [--run <run id>]\n       node scripts/rw-batch.mjs settle --not-metered "<reason>" --instance <instance-root> [--run <run id>]\n       node scripts/rw-batch.mjs review-brief --reviewer <security|architect> --instance <instance-root> [--ticket <id> ...]\n       node scripts/rw-batch.mjs review --reviewer <security|architect> --transcript <agent-*.jsonl> --instance <instance-root> [REPORT.json]\n       node scripts/rw-batch.mjs review --no-answer "<reason>" --reviewer <security|architect> --instance <instance-root>\n       node scripts/rw-batch.mjs resolve --instance <instance-root>\n       node scripts/rw-batch.mjs commit --instance <instance-root>\n       node scripts/rw-batch.mjs abort --instance <instance-root>';
+if (['abort', 'commit', 'resolve'].includes(process.argv[2])) {
   const [flag, root, ...extra] = process.argv.slice(3);
   if (flag !== '--instance' || !root || extra.length) { console.error(USAGE); process.exit(1); }
-  print((process.argv[2] === 'abort' ? abortBatch : commitBatch)({ teamRoot: join(resolve(root), 'kit'), instanceRoot: resolve(root) }));
+  const done = { abort: abortBatch, commit: commitBatch, resolve: resolveBatch }[process.argv[2]]({ teamRoot: join(resolve(root), 'kit'), instanceRoot: resolve(root) });
+  print(done);
+  if (!done.errors && done.removed?.length) process.exitCode = 2;
   process.exit();
 }
 if (process.argv[2] === 'review-brief') {
