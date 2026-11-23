@@ -134,13 +134,14 @@ export function closeBoundary({ teamRoot }) {
 }
 // ADR 0011, decision 4: a batch whose changes need a review. The workers write and run nothing; each reviewer
 // (`reviewers`: reviewer -> wrapper) is judged too: no product write, no shell, in the team folder only its drafts.
-export function reviewBoundary({ teamRoot, runId, reviewers }) {
+// Decision 7: a periodic review, between batches, enters the same state from a closed boundary.
+export function reviewBoundary({ teamRoot, runId, reviewers, periodic = false }) {
   const open = readBoundary(teamRoot);
-  need(open && ['batch', 'review'].includes(stateOf(open)), 'The write boundary is missing, was changed, or no batch is open');
+  need(open && (periodic ? ['closed', 'review'] : ['batch', 'review']).includes(stateOf(open)), periodic ? 'The write boundary is missing, was changed, or a batch is open' : 'The write boundary is missing, was changed, or no batch is open');
   const workers = Object.entries(open.wrappers).filter(([, entry]) => DUTIES.includes(entry.duty));
   need(Object.values(reviewers).every(name => typeof name === 'string' && name && !workers.some(([worker]) => worker === name)) && new Set(Object.values(reviewers)).size === Object.keys(reviewers).length,
     'Each reviewer needs a wrapper of its own, which is not a worker\'s');
-  const body = { schemaVersion: 1, state: 'review', runId, productRoot: open.productRoot, teamRoot: realpathSync(teamRoot), wrappers: Object.fromEntries([
+  const body = { schemaVersion: 1, state: 'review', runId, ...(periodic ? { periodic: true } : {}), productRoot: open.productRoot, teamRoot: realpathSync(teamRoot), wrappers: Object.fromEntries([
     ...workers.map(([name, entry]) => [name, { duty: entry.duty, writePaths: [], commands: [] }]),
     ...Object.entries(reviewers).map(([reviewer, name]) => [name, { duty: 'review', reviewer, writePaths: [], commands: [], teamWritePaths: REVIEW_TEAM_WRITES[reviewer] ?? [] }])]) };
   writeFileSync(join(teamRoot, BOUNDARY_FILE), JSON.stringify({ ...body, digest: digest(body) }, null, 2) + '\n');

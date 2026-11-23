@@ -7,8 +7,8 @@ state, the reviewer's brief, the judging of its report, the commit gate and the
 escalation to the owner are built ("Review triggers", "Review state and brief",
 "Review verdict, commit gate and escalation"), and so are "Resolve" (held
 tickets saved as patches, the rest verified again), sensitive tickets and the
-cost of each reviewer call, set at "settle". The periodic review is not built
-yet. Not yet used
+cost of each reviewer call, set at "settle", and the periodic review
+("Periodic review"). Not yet used
 on a real team.
 [ADR 0010](../../../decisions/0010-router-worker-second-mode.md), decisions 8 to 12.
 
@@ -21,10 +21,13 @@ node kit/scripts/rw-batch.mjs review --reviewer <security|architect> --transcrip
 node kit/scripts/rw-batch.mjs review --no-answer "<reason>" --reviewer <security|architect> --instance .
 node kit/scripts/rw-batch.mjs commit --instance .
 node kit/scripts/rw-batch.mjs abort --instance .
+node kit/scripts/rw-batch.mjs periodic-brief --reviewer <security|architect> --instance .
+node kit/scripts/rw-batch.mjs periodic --reviewer <security|architect> --transcript <agent-*.jsonl> --instance . [--meter METER.json] [REPORT.json]
+node kit/scripts/rw-batch.mjs periodic --no-answer "<reason>" --reviewer <security|architect> --instance .
 ```
 
 Exit 0 done, 2 refused or (for `after` and `settle`) a batch in review, or (for
-`review`) a report refused or a review not obtained, 1 usage. No model,
+`review` and `periodic`) a report refused or a review not obtained, 1 usage. No model,
 no network.
 
 ## The order of a batch
@@ -620,6 +623,80 @@ its pinned content, since a command may have changed it.
 To take a held ticket back, `git apply reviews/held/<run id>/<ticket>.patch`
 from the product root on the batch's start commit.
 
+## Periodic review
+
+[ADR 0011](../../../decisions/0011-router-worker-batch-review.md), decision 7.
+What no trigger flags is read by Security once and Architect once every
+`HARDENING_INTERVAL` committed tickets.
+
+- **Interval.** The number in the instance's `charter.md` line "At counter =
+  `N`", or the placeholder's default; before bootstrap, `charter.template.md`.
+  The PM can edit the charter, so its value is trusted up to 100: a larger one
+  is clamped to 100, and zero, a negative number, anything that is not a whole
+  number, or no such line gives the kit's default, 25. The interval used and
+  its source (`charter`, `clamped` or `default`) are in the `before` refusal,
+  in the brief record and in each periodic line.
+- **Count, derived and never stored.** For each reviewer: the tickets in the
+  sealed `batches/*/commit.json` records, and, for a batch archived without
+  commit by `abort`, the commits the kit had made before it stopped
+  (`commits.json` of the same run, each named in the sealed `abandoned.json`),
+  whose commit no final periodic line of that reviewer counted. Each commit is
+  counted once. A final line is `accepted`, `not-obtained` or
+  `nothing-to-review`. A refused attempt counts nothing.
+- **Due.** `before` refuses with `PERIODIC_REVIEW_DUE` while any reviewer's count
+  is at the interval or above, and names the commands. It checks this after the
+  settlement of earlier batches, so a PM settles first.
+- **Scope.** `periodic-brief --reviewer R` runs only between batches (no
+  `rw-batch.json` or `rw-batch-after.json`) and only when R is due. Its scope is
+  R's counted tickets less those R's own triggered review passed in their batch
+  (`batches/<run>/reviews.json`). The other reviewer's pass does not remove a
+  ticket. A ticket id committed twice is one entry with both commits. The brief
+  names each ticket's goal and acceptance, its commits and every path those
+  commits changed, as an absolute path to open with Read as it stands now (a
+  deleted one is marked). It carries no diff and no verification output; the
+  rules are R's current rules, with the ADRs and the review protocol.
+- **Review state.** The first brief arms the review state of the write
+  boundary with `periodic: true` and the period id (`periodic-<time>`) as its
+  run id; the hook bounds both reviewers as in a batch review. While it is open
+  no batch, switch or change of limits starts; `settle` of an archived batch
+  still runs. It closes when no reviewer is due any more. `abort` ends it; the
+  review is then still due.
+- **Nothing to review.** When every counted ticket was passed by R's triggered
+  reviews, `periodic-brief` records `nothing-to-review` at once and prints the
+  line instead of a brief.
+- **Judging.** `periodic` applies the evidence rules of a batch review
+  (transcript place, wrapper, brief carried unchanged, a whole Read of each
+  file, every rule per ticket, RED only with a failed rule, a fix and a control
+  per failed rule). A refused report is briefed and dispatched once more; the
+  second failure, or `--no-answer` twice, is `not-obtained`. Attempts are
+  counted per reviewer over the same pending commits, so an `abort` between
+  them, which gives the review a new period id, does not reset the count.
+- **Holds nothing.** No commit is touched. Each RED or AMBER ticket of an
+  accepted report is a finding, with its commits, failed rules, fix and proposed
+  control, for the PM to file as a ticket. Owner answer of 2026-11-20: a review
+  not obtained twice is recorded, written to the ledger as reported to the
+  owner, and stops no batch.
+- **Cost.** `--meter METER.json` (`measure-spawn.mjs --json`) sets the call's
+  tokens from the row of the reviewer's wrapper whose file is the judged
+  transcript, against `authorizationPerReviewerCall`; an overrun is recorded
+  and holds nothing. Without `--meter`, `tokens` and `overrun` are null.
+
+`reviews/periodic.jsonl`, one sealed line per judgment: `{schemaVersion: 1,
+stage: "periodic-review", id, reviewer, attempt, briefAttempt, briefDigest,
+interval, intervalSource, outcome: "accepted"|"refused"|"not-obtained"|"nothing-to-review",
+counted: [sha], scope: [{ticket, runs, shas}], refusals, transcript: {file,
+digest, agentType}|null, reportDigest, tokens, authorizedTokens, overrun,
+findings: [{ticket, shas, verdict, fails, finding, fix?, control?}], at,
+digest}`. A line changed by hand refuses `before` and
+the periodic commands. A last line that a write did not finish refuses them
+too, and the refusal names the recovery: remove that line, and the review it
+was recording becomes due again.
+The brief is kept, sealed per attempt, in `rw-periodic-review-<reviewer>.json`:
+`{id, reviewer, wrapper, attempt, briefDigest, madeAt, interval, intervalSource, counted,
+tickets: [{id, runs, shas, changedPaths, flaggedFiles, content}], ruleIds,
+adrs, retryReason?}`. The ledger gets one `PERIODIC REVIEW <id> <reviewer>`
+line per judgment.
+
 ## When the kit will not commit a batch
 
 A batch that `after` closed and `commit` refuses (all commits held, the branch
@@ -813,10 +890,10 @@ The limits not being the ones the ledger binds is refused with its own code,
   calls are refused in a batch.
 - **Only the three workers are bounded.** The PM's session and the governance
   roles keep the shell their own permissions give them.
-- **The review of [ADR 0011](../../../decisions/0011-router-worker-batch-review.md)
-  has no periodic review yet.** A flagged
-  ticket is never committed without its passed reviews; what no trigger flags
-  is not reviewed until the periodic review exists.
+- **The periodic review reads files as they stand, not each commit's diff.** A
+  path a later ticket changed again is read in its later state, and a path
+  deleted since is not read. Commits made by hand, outside `commit`, are not
+  counted.
 - **The brief's verification runs without the lock.** Nothing else starts while
   the batch is in review, but the PM's own session can still change the product.
 - **A ticket that did not pass keeps its changes in the work tree.** They are

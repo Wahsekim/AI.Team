@@ -31,6 +31,14 @@
 // commit --instance <instance-root>
 //   One commit per ticket that passed, on the batch's branch, then archives the batch under batches/<run id>/.
 //   A reviewed batch commits what its resolution kept.
+// periodic-brief --reviewer <security|architect> --instance <instance-root>
+//   Between batches, when the reviewer's periodic review is due (ADR 0011, decision 7): prints and records its brief over
+//   the tickets committed since its last periodic review that no triggered review of its passed. Enters the review state.
+// periodic --reviewer <security|architect> --transcript <agent-*.jsonl> --instance <instance-root> [--meter METER.json] [REPORT.json]
+//   Judges the periodic report like a batch review and appends it to reviews/periodic.jsonl; holds nothing. Exit 0 when
+//   accepted, 2 when refused or not obtained. --meter (measure-spawn.mjs --json) records the call's tokens.
+// periodic --no-answer "<reason>" --reviewer <security|architect> --instance <instance-root>
+//   Records an attempt that brought no answer. Not obtained twice is reported to the owner and stops no batch.
 // No model or network. Exit 0 done and clean, 2 refused or in review, 1 usage.
 import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -44,9 +52,10 @@ import { loadRetryRules } from '../src/router-worker/retries.mjs';
 import { reviewBrief } from '../src/router-worker/review-brief.mjs';
 import { judgeReview, recordNoAnswer } from '../src/router-worker/review-judge.mjs';
 import { resolveBatch } from '../src/router-worker/review-resolve.mjs';
+import { periodicBrief, judgePeriodic, recordPeriodicNoAnswer } from '../src/router-worker/review-periodic.mjs';
 
 const print = result => { if (result.errors) { console.error(JSON.stringify(result)); process.exitCode = 2; } else process.stdout.write(JSON.stringify(result, null, 2) + '\n'); };
-const USAGE = 'usage: node scripts/rw-batch.mjs before BATCH.json --instance <instance-root> [--start-as-is]\n       node scripts/rw-batch.mjs after RESULT.json --instance <instance-root>\n       node scripts/rw-batch.mjs settle METER.json --instance <instance-root> [--run <run id>]\n       node scripts/rw-batch.mjs settle --not-metered "<reason>" --instance <instance-root> [--run <run id>]\n       node scripts/rw-batch.mjs review-brief --reviewer <security|architect> --instance <instance-root> [--ticket <id> ...]\n       node scripts/rw-batch.mjs review --reviewer <security|architect> --transcript <agent-*.jsonl> --instance <instance-root> [REPORT.json]\n       node scripts/rw-batch.mjs review --no-answer "<reason>" --reviewer <security|architect> --instance <instance-root>\n       node scripts/rw-batch.mjs resolve --instance <instance-root>\n       node scripts/rw-batch.mjs commit --instance <instance-root>\n       node scripts/rw-batch.mjs abort --instance <instance-root>';
+const USAGE = 'usage: node scripts/rw-batch.mjs before BATCH.json --instance <instance-root> [--start-as-is]\n       node scripts/rw-batch.mjs after RESULT.json --instance <instance-root>\n       node scripts/rw-batch.mjs settle METER.json --instance <instance-root> [--run <run id>]\n       node scripts/rw-batch.mjs settle --not-metered "<reason>" --instance <instance-root> [--run <run id>]\n       node scripts/rw-batch.mjs review-brief --reviewer <security|architect> --instance <instance-root> [--ticket <id> ...]\n       node scripts/rw-batch.mjs review --reviewer <security|architect> --transcript <agent-*.jsonl> --instance <instance-root> [REPORT.json]\n       node scripts/rw-batch.mjs review --no-answer "<reason>" --reviewer <security|architect> --instance <instance-root>\n       node scripts/rw-batch.mjs resolve --instance <instance-root>\n       node scripts/rw-batch.mjs commit --instance <instance-root>\n       node scripts/rw-batch.mjs periodic-brief --reviewer <security|architect> --instance <instance-root>\n       node scripts/rw-batch.mjs periodic --reviewer <security|architect> --transcript <agent-*.jsonl> --instance <instance-root> [--meter METER.json] [REPORT.json]\n       node scripts/rw-batch.mjs periodic --no-answer "<reason>" --reviewer <security|architect> --instance <instance-root>\n       node scripts/rw-batch.mjs abort --instance <instance-root>';
 if (['abort', 'commit', 'resolve'].includes(process.argv[2])) {
   const [flag, root, ...extra] = process.argv.slice(3);
   if (flag !== '--instance' || !root || extra.length) { console.error(USAGE); process.exit(1); }
@@ -67,18 +76,30 @@ if (process.argv[2] === 'review-brief') {
   if (made.errors) print(made); else await new Promise(done => process.stdout.write(made.brief, done));
   process.exit();
 }
-if (process.argv[2] === 'review') {
-  const argv = process.argv.slice(3), options = {}, files = [];
+if (process.argv[2] === 'periodic-brief') {
+  const [flag, reviewer, flag2, root, ...extra] = process.argv.slice(3), options = { [flag]: reviewer, [flag2]: root };
+  if (extra.length || !options['--reviewer'] || !options['--instance']) { console.error(USAGE); process.exit(1); }
+  const made = periodicBrief({ teamRoot: join(resolve(options['--instance']), 'kit'), instanceRoot: resolve(options['--instance']), reviewer: options['--reviewer'] });
+  // A brief is long: it is written out in full before the process ends. With nothing to review, the record is printed.
+  if (made.brief) await new Promise(done => process.stdout.write(made.brief, done)); else print(made);
+  process.exit();
+}
+if (process.argv[2] === 'review' || process.argv[2] === 'periodic') {
+  const periodic = process.argv[2] === 'periodic', argv = process.argv.slice(3), options = {}, files = [];
   for (let i = 0; i < argv.length; i++) {
     if (!argv[i].startsWith('--')) { files.push(argv[i]); continue; }
-    if (!['--reviewer', '--transcript', '--instance', '--no-answer'].includes(argv[i]) || argv[i + 1] === undefined || options[argv[i]] !== undefined) { console.error(USAGE); process.exit(1); }
+    if (![...['--reviewer', '--transcript', '--instance', '--no-answer'], ...(periodic ? ['--meter'] : [])].includes(argv[i]) || argv[i + 1] === undefined || options[argv[i]] !== undefined) { console.error(USAGE); process.exit(1); }
     options[argv[i]] = argv[++i];
   }
   const silent = options['--no-answer'] !== undefined;
   if (!options['--reviewer'] || !options['--instance'] || (silent ? options['--transcript'] !== undefined || files.length : !options['--transcript'] || files.length > 1)) { console.error(USAGE); process.exit(1); }
   const root = resolve(options['--instance']), common = { teamRoot: join(root, 'kit'), instanceRoot: root, reviewer: options['--reviewer'] };
-  let report; if (files.length) try { report = JSON.parse(readFileSync(files[0], 'utf8')); } catch { print({ errors: [{ code: 'REVIEW_REFUSED', field: 'review', reason: `${files[0]} is not readable JSON` }] }); process.exit(); }
-  const judged = silent ? recordNoAnswer({ ...common, reason: options['--no-answer'] }) : judgeReview({ ...common, transcript: resolve(options['--transcript']), ...(files.length ? { report } : {}) });
+  if (silent && options['--meter'] !== undefined) { console.error(USAGE); process.exit(1); }
+  let report, meter;
+  for (const [file, set] of [[files[0], value => { report = value; }], [options['--meter'], value => { meter = value; }]]) if (file !== undefined)
+    try { set(JSON.parse(readFileSync(file, 'utf8'))); } catch { print({ errors: [{ code: 'REVIEW_REFUSED', field: 'review', reason: `${file} is not readable JSON` }] }); process.exit(); }
+  const [judge, silence] = periodic ? [judgePeriodic, recordPeriodicNoAnswer] : [judgeReview, recordNoAnswer];
+  const judged = silent ? silence({ ...common, reason: options['--no-answer'] }) : judge({ ...common, transcript: resolve(options['--transcript']), ...(files.length ? { report } : {}), ...(meter ? { meter } : {}) });
   print(judged);
   if (!judged.errors && judged.outcome !== 'accepted') process.exitCode = 2;
   process.exit();

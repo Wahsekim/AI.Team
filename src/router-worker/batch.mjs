@@ -9,6 +9,7 @@ import { observeIsolation } from './isolation.mjs';
 import { limitsOf, COUNT_LIMITS, LATER_LIMITS, boundLimits, rosterWrapper } from './switch.mjs';
 import { loadReview, isReviewListError, triggerChanges, recordFrozen } from './review-triggers.mjs';
 import { blockedTickets } from './escalations.mjs';
+import { periodicDue, periodicDueReason } from './review-periodic.mjs';
 
 // ADR 0010, decisions 8 to 12: the one command a PM runs before a batch in a standing Router/Worker team.
 // It builds the engine's inputs from the PM's tickets, checks the product repository, computes the ceiling,
@@ -202,6 +203,7 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     ({ instance, productRoot } = liveTeam(teamRoot, instanceRoot));
     need(!exists(join(instance, BATCH_FILE)) && !exists(join(instance, AFTER_FILE)), `A batch is already open (${BATCH_FILE}); close it with after and commit, or abort it, before starting another`);
     const standing = readBoundary(instance);
+    need(!standing?.periodic || stateOf(standing) !== 'review', `A periodic review (${plain(standing?.runId)}) is not over: no batch opens until each due reviewer has an outcome. Brief it with: rw-batch.mjs periodic-brief --reviewer <reviewer> --instance <instance-root>, and judge it with: rw-batch.mjs periodic --reviewer <reviewer> --transcript <agent-*.jsonl> --instance <instance-root>`);
     need(!standing || stateOf(standing) !== 'review', `Batch ${plain(standing?.runId ?? '(unnamed)')} is in review: no batch opens until its review is over. Brief each reviewer with: rw-batch.mjs review-brief --reviewer <reviewer> --instance <instance-root>; or abort it with: rw-batch.mjs abort --instance <instance-root>`);
     // ADR 0010, amendment of 2026-11-18: a batch that ran is settled, or marked as not metered, before the next one opens.
     let archives; try { archives = readdirSync(join(instance, ARCHIVE), { withFileTypes: true }).filter(entry => entry.isDirectory()).map(entry => entry.name); } catch { archives = []; }
@@ -224,6 +226,9 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     const staffed = review.reviewers.map(reviewer => [reviewer, rosterWrapper(instance, reviewer)]), unstaffed = staffed.find(([, found]) => !found.name);
     need(!unstaffed, `The reviewer ${unstaffed?.[0]} is not staffed (${unstaffed?.[1].gap}); both reviewers (${review.reviewers.join(', ')}) are needed before a batch opens. Staff it in the Router/Worker team's governance, then switch again. Nothing was started`);
     const reviewWrappers = Object.fromEntries(staffed.map(([reviewer, found]) => [reviewer, found.name]));
+    // ADR 0011, decision 7: a due periodic review is recorded before the next batch; one not obtained counts as recorded.
+    const periodic = periodicDue({ instance, reviewers: review.reviewers });
+    need(!periodic.due.length, periodicDueReason(periodic), 'PERIODIC_REVIEW_DUE');
     checkProduct(productRoot, startAsIs === true);
     const held = readLease({ productRoot });
     need(!(held.status === 'held' && held.lease.teamRoot === instance), 'This team holds the lock on the product repository but has no open batch: another "before" or a change of limits is running, or an earlier one died half-way. If nothing is running, clear it with: rw-batch.mjs abort --instance <instance-root>');

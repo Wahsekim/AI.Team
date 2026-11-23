@@ -19,11 +19,11 @@ const KIT = fileURLToPath(new URL('../../', import.meta.url));
 const PROTOCOL = 'agents/router-worker-review.md', KIT_PROTOCOL = 'config/router-worker/review-protocol.md';
 const DIFF_CAP = 60000;
 // A fence longer than any backtick run in the text, so the text cannot close it.
-const fenced = (text, info = '') => { const fence = '`'.repeat(Math.max(4, ...(text.match(/`+/g) ?? []).map(run => run.length + 1))); return `${fence}${info}\n${text}${text.endsWith('\n') ? '' : '\n'}${fence}`; };
+export const fenced = (text, info = '') => { const fence = '`'.repeat(Math.max(4, ...(text.match(/`+/g) ?? []).map(run => run.length + 1))); return `${fence}${info}\n${text}${text.endsWith('\n') ? '' : '\n'}${fence}`; };
 const need = (condition, reason) => { if (!condition) throw new Refusal(reason); };
 const readJSON = path => { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; } };
 const sealed = body => ({ ...body, digest: digest(body) });
-const lines = value => (Array.isArray(value) ? value : [value]).map(item => `- ${item}`).join('\n');
+export const lines = value => (Array.isArray(value) ? value : [value]).map(item => `- ${item}`).join('\n');
 
 // The ticket paths' change from the batch's start, untracked files included, through an index of its own.
 function diffOf(product, head, paths) {
@@ -37,7 +37,7 @@ function diffOf(product, head, paths) {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 
-const REPORT = (reviewer, briefDigest) => ({ schemaVersion: 1, reviewer, briefDigest,
+export const REPORT = (reviewer, briefDigest) => ({ schemaVersion: 1, reviewer, briefDigest,
   filesRead: [{ path: '<flagged path>', read: true }],
   rules: [{ rule: '<rule id>', ticket: '<ticket id>', result: 'pass|fail|not-checked', file: '<path>', line: 1, note: '<what was checked>' }],
   items: [{ ticket: '<ticket id>', verdict: 'GREEN|AMBER|RED', finding: '<finding>', fix: '<fix>', control: { detects: '<what a control would detect>', variation: '<the variation it must also catch>', toolCanDetect: true } }],
@@ -63,6 +63,11 @@ function render({ batch, reviewer, attempt, tickets, diff, rules, adrs, verifica
     ...(dropped.length ? [`Frozen in the batch but no longer confirmed for the team, so not run: ${dropped.join(' | ')}`] : []),
     '## Report', 'Return your report as JSON in this shape; return it as the last fenced json block of your final message.',
     fenced(JSON.stringify(REPORT(reviewer, '<the briefDigest below>'), null, 2), 'json')].join('\n\n') + '\n';
+}
+
+// The team's own review protocol, or the kit's.
+export function protocolOf(instance) {
+  try { return readFileSync(join(instance, PROTOCOL), 'utf8'); } catch { return readFileSync(join(KIT, KIT_PROTOCOL), 'utf8'); }
 }
 
 export function reviewBrief({ teamRoot, instanceRoot, reviewer, tickets: named = [], run = runCommands }) {
@@ -114,7 +119,7 @@ export function reviewBrief({ teamRoot, instanceRoot, reviewer, tickets: named =
     need(!touched.length, `A verification command changed ${touched.slice(0, 5).map(plain).join(', ')}; the review would not see what is committed. Restore it, or abort the batch`);
 
     const rules = batch.review.rules.filter(rule => rule.reviewer === reviewer), adrs = batch.review.adrs.map(path => join(instance, path));
-    let protocol; try { protocol = readFileSync(join(instance, PROTOCOL), 'utf8'); } catch { protocol = readFileSync(join(KIT, KIT_PROTOCOL), 'utf8'); }
+    const protocol = protocolOf(instance);
     const attempt = entries.length + 1, diff = diffOf(product, batch.productHead, briefed);
     const body = render({ batch, reviewer, attempt, tickets, diff, rules, adrs, verification, dropped, protocol, retryReason }), briefDigest = digest(body);
     const brief = `${body}\nbriefDigest: ${briefDigest}\n`;
