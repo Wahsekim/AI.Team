@@ -16,13 +16,15 @@ const GOVERNANCE = ['architect', 'coach', 'auditor', 'security'];
 const readOnly = { model: 'fixture-governance-model', effort: 'medium', maxTurns: 12, tools: ['Read', 'Grep', 'Glob'] };
 
 // A bootstrapped two-root specialist team with one delivery role (backend) and its wrapper, and a clean product repository.
-export function fixture(t, { roles = 'backend' } = {}) {
+// `blank`: the product holds only what docs/bootstrap-empty-project.md step 6 has the PM create, no code.
+export function fixture(t, { roles = 'backend', blank = false } = {}) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'rw-switch-'))), root = join(base, 'fixture.team'), kit = join(root, 'kit'), product = join(base, 'product');
   t.after(() => rmSync(base, { recursive: true, force: true }));
   const tracked = execFileSync('git', ['-C', ROOT, 'ls-files', '-co', '--exclude-standard'], { encoding: 'utf8' }).split('\n')
     .filter(path => path && !/^(tests|docs\/design|\.github)\//.test(path));
   for (const path of tracked) { mkdirSync(dirname(join(kit, path)), { recursive: true }); cpSync(join(ROOT, path), join(kit, path)); }
-  mkdirSync(join(product, 'src'), { recursive: true }); writeFileSync(join(product, 'src/app.js'), 'export const x = 1;\n');
+  const seeded = blank ? Object.fromEntries(['README.md', 'docs/USAGE.md', 'docs/technical.md', 'docs/functional.md'].map(path => [path, `# ${path}\n`])) : { 'src/app.js': 'export const x = 1;\n' };
+  for (const [path, text] of Object.entries(seeded)) { mkdirSync(dirname(join(product, path)), { recursive: true }); writeFileSync(join(product, path), text); }
   git(product, 'init', '-q');
   // The kit commits with the repository's own identity; a CI runner has none of its own.
   git(product, 'config', 'user.name', 'Fixture PM'); git(product, 'config', 'user.email', 'pm@example.invalid'); git(product, 'add', '-A'); git(product, 'commit', '-q', '-m', 'product');
