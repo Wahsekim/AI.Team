@@ -51,7 +51,7 @@ test('after puts a flagged batch in review: the lock is free, the workers write 
   assert.match(f.after.next.join(' '), /rw-batch\.mjs review-brief --reviewer security --instance <instance-root>.*--reviewer architect/);
   assert.deepEqual(WORKERS.map(name => boundary.wrappers[name]), WORKERS.map((name, i) => ({ duty: ['exec', 'check', 'guard'][i], writePaths: [], commands: [] })));
   assert.deepEqual([boundary.wrappers[SEC].duty, boundary.wrappers[ARCH].duty], ['review', 'review']);
-  assert.deepEqual(f.after.commits.map(commit => commit.ticket), ['US-01', 'US-02', 'US-03'], 'the review does not gate a commit yet');
+  assert.deepEqual(f.after.commits.map(commit => commit.ticket), ['US-01', 'US-02', 'US-03'], 'after plans the commits; commit gates them on the verdicts');
   assert.ok(JSON.parse(f.read('profiles/team-mode.json')).ownFiles.includes('agents/router-worker-review.md'), 'the switch installs the review protocol as a file of the mode, packed with it');
 });
 
@@ -89,18 +89,19 @@ test('before refuses a team whose two reviewers are not both staffed, and starts
 
 test('in review, before, a switch and a change of limits are refused; abort closes the review and the next batch opens', async t => {
   const f = await flagged(t), ledger = () => f.read('pm-decisions.md');
-  assert.equal(commitBatch(f.common).errors, undefined, 'commit is not gated in this unit');
-  assert.equal(markNotMetered({ ...f.common, reason: 'not measured in this test', runId: f.open.runId }).errors, undefined);
-  assert.equal(f.state(), 'review', 'a commit does not end the review');
+  assert.match(refusal(commitBatch(f.common)).reason, /review of this batch is not over/, 'no commit before the verdicts');
+  assert.equal(markNotMetered({ ...f.common, reason: 'not measured in this test' }).errors, undefined);
+  assert.equal(f.state(), 'review');
   const one = batchOf(ticket('US-09', ['src/z.js']));
-  assert.match(refusal(await f.before(one)).reason, /in review.*review-brief.*abort/);
+  assert.match(refusal(await f.before(one)).reason, /already open/, 'the batch in review is still open: commit ends it');
   assert.match(refusal(f.propose('specialist', {})).reason, /in review/);
   assert.match(refusal(proposeLimits({ ...f.common, limits: { attemptsPerTicket: 2 } })).reason, /in review/);
   assert.match(refusal(changeLimits({ ...f.common, limits: { attemptsPerTicket: 2 }, confirm: 'sha256:x', atTerminal: true })).reason, /in review/);
   const aborted = f.abort();
   assert.equal(aborted.errors, undefined, JSON.stringify(aborted.errors)); assert.equal(aborted.runId, f.open.runId);
   assert.equal(f.state(), 'closed'); assert.equal(readBoundary(f.root).wrappers[SEC], undefined, 'the reviewers leave the boundary');
-  assert.match(ledger(), new RegExp(`BATCH ${f.open.runId} ABORTED by rw-batch\\.mjs abort`));
+  assert.match(ledger(), new RegExp(`BATCH ${f.open.runId} ARCHIVED WITHOUT COMMIT by rw-batch\\.mjs abort`));
+  git(f.product, 'clean', '-fdq');
   assert.equal((await f.before(one)).errors, undefined);
 });
 

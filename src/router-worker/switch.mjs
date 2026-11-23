@@ -35,16 +35,16 @@ const LIVE = { active: 'Live: Router/Worker mode of this team, confirmed by the 
 
 // The limits in force are the ones the owner last confirmed (owner decision of 2026-11-20): the digest on the last ledger
 // line of a switch into Router/Worker mode or of a change of limits, confirmed at a terminal. Null when no line carries one.
-const AT_TERMINAL = 'by its code, typed at an interactive terminal';
+export const AT_TERMINAL = 'by its code, typed at an interactive terminal';
 const BINDING = new RegExp(`^\\d{4}-\\d{2}-\\d{2} (?:MODE SWITCH|LIMITS CHANGED): .*; proposal sha256:[a-f0-9]{64} was confirmed ${AT_TERMINAL}(?:\\. .*)?; limits (sha256:[a-f0-9]{64})\\.$`);
 export function boundLimits(instance) {
   let text; try { text = readFileSync(join(instance, LEDGER), 'utf8'); } catch { return null; }
   return text.split(/\r?\n/).reduce((last, line) => BINDING.exec(line)?.[1] ?? last, null);
 }
 
-// Only a person confirms limits: the kit's command reads the code from a real terminal. `node --test` sets NODE_TEST_CONTEXT.
+// Only a person confirms limits or lifts an escalation: the kit's command reads the code from a real terminal. `node --test` sets NODE_TEST_CONTEXT.
 // A faked terminal or test context is not detected (ADR 0010 amendment of 2026-11-20).
-const byPerson = atTerminal => atTerminal === true && (process.stdin.isTTY === true || Boolean(process.env.NODE_TEST_CONTEXT));
+export const byPerson = atTerminal => atTerminal === true && (process.stdin.isTTY === true || Boolean(process.env.NODE_TEST_CONTEXT));
 const NOT_BY_PERSON = 'takes effect only when the owner types its code at an interactive terminal, with: node kit/scripts/team-mode.mjs';
 
 class Refusal extends Error { constructor(code, reason) { super(reason); this.code = code; } }

@@ -114,8 +114,9 @@ switch, not by a run, and a boundary file exists at all times:
 
 A file written before `state` existed is read as `batch` when a worker has a
 write path, otherwise `closed`. "after" moves `batch` to `review` when a ticket
-is flagged for a reviewer, otherwise to `closed`; `abort` moves any state to
-`closed` and drops the reviewers. "before", a mode switch and a change of
+is flagged for a reviewer, otherwise to `closed`; `commit` moves `review` to
+`closed` once every verdict is in; `abort` moves any state to `closed` and drops
+the reviewers. "before", a mode switch and a change of
 limits are refused in `review`.
 
 `armBoundary` still accepts only an activated throwaway copy. In a standing

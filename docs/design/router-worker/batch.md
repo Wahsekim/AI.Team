@@ -3,8 +3,10 @@
 Status: "before", "after", "commit" and "abort" are built and tested offline
 on a bootstrapped fixture, with the real engine run on mock agents; so is
 "settle". Of the review of ADR 0011 the trigger list, the flags, the review
-state and the reviewer's brief are built ("Review triggers", "Review state and
-brief"); no commit is gated by them yet. Not yet used on a real team.
+state, the reviewer's brief, the judging of its report, the commit gate and the
+escalation to the owner are built ("Review triggers", "Review state and brief",
+"Review verdict, commit gate and escalation"); a rejected ticket is not yet
+saved as a patch and removed (it stays in the work tree). Not yet used on a real team.
 [ADR 0010](../../../decisions/0010-router-worker-second-mode.md), decisions 8 to 12.
 
 ```sh
@@ -12,11 +14,14 @@ node kit/scripts/rw-batch.mjs before BATCH.json --instance . [--start-as-is]
 node kit/scripts/rw-batch.mjs after RESULT.json --instance .
 node kit/scripts/rw-batch.mjs settle METER.json --instance . [--run <run id>]
 node kit/scripts/rw-batch.mjs review-brief --reviewer <security|architect> --instance . [--ticket <id> ...]
+node kit/scripts/rw-batch.mjs review --reviewer <security|architect> --transcript <agent-*.jsonl> --instance . [REPORT.json]
+node kit/scripts/rw-batch.mjs review --no-answer "<reason>" --reviewer <security|architect> --instance .
 node kit/scripts/rw-batch.mjs commit --instance .
 node kit/scripts/rw-batch.mjs abort --instance .
 ```
 
-Exit 0 done, 2 refused or (for `after` and `settle`) a batch in review, 1 usage. No model,
+Exit 0 done, 2 refused or (for `after` and `settle`) a batch in review, or (for
+`review`) a report refused or a review not obtained, 1 usage. No model,
 no network.
 
 ## The order of a batch
@@ -59,7 +64,7 @@ must come before the next batch.
 | `estimate` | Input-side tokens for execution, check and rework; their sum may not exceed the authorization per ticket |
 | `sensitivePaths` | Paths no ticket of this batch may write. They are judged against `paths`, which is what bounds the worker, not against the plan: a ticket whose grant covers a sensitive path, or lies under one, is refused. An entry written as a bare folder (`src/auth`) guards everything under it. This lasts until the review of [ADR 0011](../../../decisions/0011-router-worker-batch-review.md) exists |
 | `commitMessage` (optional) | The message of the ticket's commit, one line; by default `<id>: <title>` |
-| `dependsOn` (optional) | Ids of tickets this one builds on: an earlier ticket of the batch, or a ticket of an archived batch. Frozen in the record (`[]` when absent); ADR 0011's escalation will block a ticket whose dependency is blocked |
+| `dependsOn` (optional) | Ids of tickets this one builds on: an earlier ticket of the batch, or a ticket of an archived batch. Frozen in the record (`[]` when absent); an escalated ticket blocks every ticket that depends on it, directly or through others (see "Review verdict, commit gate and escalation") |
 | `runId`, `date` (optional) | Default: `rw-<commit>-L<nextLifecycleNumber>-<time>`, new at every `before`, and today |
 
 The PM does not write a ceiling, a number of rounds, a wrapper name or a
@@ -74,7 +79,9 @@ budget per ticket. Those come from the team.
    limits"), a valid review trigger list (see "Review triggers"), no batch in
    review, and both reviewers staffed: the roster names a wrapper for
    `security` and for `architect` whose file declares that same name (owner
-   decision of 2026-11-20). Every verification command of the batch is one of the commands the
+   decision of 2026-11-20). No ticket of the batch is blocked by an escalation
+   the owner has not acknowledged (see "Review verdict, commit gate and
+   escalation"; refused with `TICKET_ESCALATED`). Every verification command of the batch is one of the commands the
    owner confirmed for the team (`allowedCommands` in its limits).
 2. **The tickets**: each is complete, and no two tickets claim the same file. A
    folder grant claims every file under it; paths are compared without case.
@@ -371,8 +378,7 @@ a narrower pattern would miss `oauth/` or `authz.js`.
 ## Review state and brief
 
 [ADR 0011](../../../decisions/0011-router-worker-batch-review.md), decisions 4,
-11 and 12. Built and tested offline; the judging of the reviewer's report and
-the commit gate come next.
+11 and 12. Built and tested offline.
 
 - **"before"** records the reviewers' wrappers in the batch record
   (`reviewWrappers`, reviewer to wrapper name), read from the roster like the
@@ -383,8 +389,8 @@ the commit gate come next.
   The lock is still released. `status` is `review`, the ledger line names the
   reviewers, and `next` names `review-brief` for each.
 - **While a batch is in review** "before", a mode switch and a change of limits
-  are refused. `abort` closes the review state, before or after the commit. A
-  commit is not gated yet and does not end the review state.
+  are refused. `abort` closes the review state and archives the batch with
+  nothing committed; `commit` ends the review state once every verdict is in.
 - **`review-brief --reviewer R`** prints the brief the PM gives reviewer R's
   wrapper, and appends it, sealed, to `rw-batch-review-R.json` (one entry per
   attempt: run, reviewer, wrapper, attempt, `briefDigest`, the tickets with
@@ -418,6 +424,114 @@ the commit gate come next.
   recorded, before or after the verification commands ran; a brief record that
   was edited.
   `validate-team.sh` checks both parts with the same code.
+
+## Review verdict, commit gate and escalation
+
+[ADR 0011](../../../decisions/0011-router-worker-batch-review.md), decisions 3,
+13, 16, 17 and 19, with the owner's answers of 2026-11-20. Built and tested
+offline on transcript fixtures.
+
+- **`review --reviewer R --transcript T`** judges R's report from R's own
+  session transcript and appends the verdict, sealed, to
+  `rw-batch-reviews.json` (archived as `reviews.json`). The transcript must lie
+  at `<projects>/<project>/<session>/subagents/agent-<id>.jsonl`, where
+  `<projects>` is `$CLAUDE_CONFIG_DIR/projects` or `~/.claude/projects` (an
+  engine workflow's agents lie under `workflows/` and are refused); its
+  `.meta.json` names R's wrapper as `agentType`; its first user entry is not
+  relayed by the workflow harness and carries R's latest brief unchanged (the
+  body between the brief's heading and its `briefDigest:` line has that
+  digest); and it holds a `Read` tool call of the absolute path of every
+  flagged file that exists. A `Read` counts only when the `tool_result` with
+  its `tool_use_id` is in the transcript and is not an error, and it has no
+  `limit` and no `offset` past 1; a partial `Read` is ignored, so it counts
+  only next to a full `Read` of the same path. The Read tool's own default
+  cut of a long file is not detected. The report is the last fenced `json` block of the
+  last assistant message; a `REPORT.json` given must be equal to it.
+- **The verdict is derived by the kit**, per ticket of the brief: every flagged
+  file listed in `filesRead` with `read: true`; every rule of the frozen list
+  reported `pass`, `fail` or `not-checked`; not every rule `not-checked`; a
+  `GREEN`, `AMBER` or `RED` item, `RED` exactly when a rule failed; each failed
+  rule with a fix and a proposed control (`detects`, `variation`,
+  `toolCanDetect`). A rule reported more than once for a ticket with
+  different results, or a ticket listed more than once with different
+  verdicts, is refused. Any gap refuses the report. A failed rule rejects the
+  ticket; `AMBER` does not (the ticket is committed and the PM files the
+  concern, kept as `finding`, as a backlog ticket). A single `not-checked` is
+  recorded in the verdict and the ledger.
+- **Verdict entry**: `{stage: "review-verdict", runId, reviewer, attempt,
+  briefAttempt, briefDigest, outcome: "accepted"|"refused"|"not-obtained",
+  refusals: [{code, detail}], transcript: {file, digest, agentType},
+  reportDigest, tickets: [{id, verdict: "passed"|"rejected"|"not-obtained",
+  item, fails, notChecked, finding, fix?, control?}], judgedAt}`. Each judgment
+  writes a `REVIEW <run> <reviewer> ACCEPTED|REFUSED|NOT OBTAINED` ledger line.
+  Refusal codes: `REVIEW_TRANSCRIPT_PLACE`, `REVIEW_NOT_REVIEWER`,
+  `REVIEW_WORKFLOW_AGENT`, `REVIEW_BRIEF_NOT_FOUND`,
+  `REVIEW_TRANSCRIPT_NO_OPEN`, `REVIEW_NO_REPORT`, `REVIEW_REPORT_MISMATCH`,
+  `REVIEW_REPORT_SHAPE`, `REVIEW_FILE_NOT_READ`, `REVIEW_RULE_CONFLICT`,
+  `REVIEW_ITEM_CONFLICT`, `REVIEW_RULE_MISSING`,
+  `REVIEW_ALL_NOT_CHECKED`, `REVIEW_ITEM_MISSING`, `REVIEW_VERDICT_MISMATCH`,
+  `REVIEW_CONTROL_MISSING`, `REVIEW_NO_ANSWER`. A transcript that cannot be
+  read, one already judged, or a flagged file changed since the brief is
+  refused without recording an attempt.
+- **One more attempt.** After a refused report the next `review` needs a new
+  brief: `review-brief` makes attempt 2 with the refusal reasons in the brief
+  (`retryReason`). A second refused report, or `review --no-answer` on the
+  second attempt, records `not-obtained` for every ticket of R's brief. A
+  reviewer is judged once: after `accepted` or `not-obtained` no brief or
+  verdict is made for it in this batch.
+- **Commit gate.** `commit` refuses while a reviewer that a planned ticket
+  needs has no final verdict. A ticket needs each reviewer a trigger required
+  and each reviewer whose brief named it electively (an elective review binds).
+  A ticket rejected, or whose review was not obtained, is held, and so is every
+  ticket after it in the batch; the tickets before it commit. Held tickets stay
+  in the product work tree for now; saving them as patches, removing them and
+  re-running the verification commands comes with decision 15. The commit
+  record carries `held: [{ticket, reason: "rejected"|"review-not-obtained"|"after-held-ticket"}]`
+  and `escalations`, the ledger line names both, and the commit closes the
+  review state. `commit` also refuses when `reviews/tickets.jsonl` holds a
+  `rejected` or `not-obtained` line for this run that the reviewer's final
+  verdict does not show: deleting or rewriting `rw-batch-reviews.json` to have
+  a ticket judged again does not reset its rejection. A judgment that died
+  after that line and before its verdict, then passed on a new attempt, is
+  refused the same way; the batch is aborted.
+- **Across batches.** Each final outcome that is not a pass is appended to
+  `reviews/tickets.jsonl` as `{ticket, runId, reviewer, outcome:
+  "rejected"|"not-obtained", finding, at}`, once per ticket, run and reviewer.
+  A ticket id (compared without case) with two such outcomes in two distinct
+  batches is escalated, whether they are two rejections, two reviews not
+  obtained, or one of each (PM decision of 2026-11-22): `{id:
+  "ESC-<ticket>-<run>", kind: "second-rejection"|"review-not-obtained-again"|"repeated-adverse",
+  ticket, reviewer, runIds, paths, findings, at}` in
+  `reviews/escalations.jsonl`, an `ESCALATED` ledger line, and the verdict's
+  `escalated` list. Two reviewers rejecting the same ticket in one batch count
+  once.
+- **What an escalation blocks** (owner rule of 2026-11-20: report to the human,
+  block what is related, replan the rest). "before" refuses a batch that holds
+  the escalated ticket, a ticket whose paths overlap the escalated ticket's
+  paths (the same comparison as two tickets claiming one file), or a ticket
+  that depends on a blocked ticket, directly or through others, in this batch
+  or an archived one. Every other batch opens. A ticket that depends on an
+  archived ticket whose paths overlap the escalated ticket's paths is not
+  blocked: the archived ticket was committed after its own review, and only
+  the tickets of the batch are compared by path.
+- **The owner lifts an escalation** with `node kit/scripts/team-mode.mjs
+  acknowledge <escalation id> --instance <instance-root>`, confirmed like a
+  limit change by typing the code at an interactive terminal: a call that does
+  not say the code was typed at a terminal, or whose process has none, is
+  refused, with the same `node --test` exception. It appends
+  `{id, escalationDigest, acknowledgedAt, atTerminal: true}` to
+  `reviews/acknowledged.jsonl` and an `ESCALATION ... ACKNOWLEDGED` ledger line
+  that says "typed at an interactive terminal". Only a line with
+  `atTerminal: true` whose `escalationDigest` is the digest of the escalation
+  as it stands lifts it. A PM session that fakes a terminal, sets
+  `NODE_TEST_CONTEXT`, or appends a forged line with the right digest is not
+  detected (see "What these commands trust").
+- The kit checks the transcript's place, shape and content; it cannot prove that
+  the reviewer, and not the PM's session, wrote it.
+- The Coach takes the findings from `reviews/tickets.jsonl` and the verdicts
+  after the batch, off the critical path, and writes a text rule only for a
+  class the reviewer reports no tool can detect; the Auditor measures the
+  controls built from proposed ones (decisions 21 and 22).
 
 ## When the kit will not commit a batch
 
@@ -628,7 +742,8 @@ The limits not being the ones the ledger binds is refused with its own code,
   `init.defaultBranch`, `main`, `master`. A repository with no remote whose
   default branch has another name (`develop`) is not recognised.
 - **A faked terminal, a faked test context or a forged ledger line is not
-  detected** (above).
+  detected** (above); nor is a forged acknowledgement line that carries the
+  escalation's digest.
 - **The estimated output** the engine is told is half the ceiling. It is a
   figure the kit sets so that the engine's own checks on the ceiling hold; it
   is not a forecast.

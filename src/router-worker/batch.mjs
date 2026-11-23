@@ -8,6 +8,7 @@ import { openBoundary, closeBoundary, readBoundary, quotable, stateOf, UNQUOTABL
 import { observeIsolation } from './isolation.mjs';
 import { limitsOf, COUNT_LIMITS, boundLimits, rosterWrapper } from './switch.mjs';
 import { loadReview, isReviewListError, triggerChanges, recordFrozen } from './review-triggers.mjs';
+import { blockedTickets } from './escalations.mjs';
 
 // ADR 0010, decisions 8 to 12: the one command a PM runs before a batch in a standing Router/Worker team.
 // It builds the engine's inputs from the PM's tickets, checks the product repository, computes the ceiling,
@@ -15,8 +16,8 @@ import { loadReview, isReviewListError, triggerChanges, recordFrozen } from './r
 export const BATCH_FILE = 'rw-batch.json', AFTER_FILE = 'rw-batch-after.json', PROGRESS_FILE = 'rw-batch-commits.json', RETURN_FILE = 'rw-batch-return.json', SETTLE_FILE = 'rw-batch-settlement.json', ARCHIVE = 'batches';
 // What a batch leaves in the team's root, by the name it takes in the archive. The root is cleared in this
 // order: the files that name the run go last, so a clearing that died is finished by the next commit.
-export const REVIEW_FILE = reviewer => `rw-batch-review-${reviewer}.json`;
-export const RECORDS = { 'review-security.json': REVIEW_FILE('security'), 'review-architect.json': REVIEW_FILE('architect'), 'return.json': RETURN_FILE, 'settlement.json': SETTLE_FILE, 'batch.json': BATCH_FILE, 'after.json': AFTER_FILE, 'commits.json': PROGRESS_FILE };
+export const REVIEW_FILE = reviewer => `rw-batch-review-${reviewer}.json`, VERDICTS_FILE = 'rw-batch-reviews.json';
+export const RECORDS = { 'review-security.json': REVIEW_FILE('security'), 'review-architect.json': REVIEW_FILE('architect'), 'reviews.json': VERDICTS_FILE, 'return.json': RETURN_FILE, 'settlement.json': SETTLE_FILE, 'batch.json': BATCH_FILE, 'after.json': AFTER_FILE, 'commits.json': PROGRESS_FILE };
 export const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/, TICKET_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/;
 // Line and paragraph separators break a line too; bidi controls make a ledger line read other than it is.
 const UNSAFE = /[\x00-\x1f\x7f-\x9f\u061c\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]/g;
@@ -43,7 +44,7 @@ const ref = (id, value) => ({ id, digest: digest(value) });
 const settles = (record, id) => ['batch-settled', 'batch-not-metered'].includes(record?.stage) && record.runId === id && (({ digest: sealed, ...body }) => sealed === digest(body))(record);
 // Compared without case: on a case-insensitive file system src/A.js and src/a.js are one file.
 export const covers = (grant, other) => { const [g, o] = [grant.toLowerCase(), other.toLowerCase()]; return g.endsWith('/**') ? o === g || o.startsWith(g.slice(0, -2)) : o === g; };
-const overlap = (a, b) => covers(a, b) || covers(b, a);
+export const overlap = (a, b) => covers(a, b) || covers(b, a);
 // A sensitive entry written as a bare folder guards everything under it.
 const guards = (guarded, path) => overlap(path, guarded) || (!guarded.endsWith('/**') && overlap(path, `${guarded}/**`));
 export const plain = text => String(text).replace(UNSAFE, '?');
@@ -199,10 +200,14 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     let archives; try { archives = readdirSync(join(instance, ARCHIVE), { withFileTypes: true }).filter(entry => entry.isDirectory()).map(entry => entry.name); } catch { archives = []; }
     const unsettled = archives.filter(id => !id.startsWith('.') && exists(join(instance, ARCHIVE, id, 'after.json')) && !settles(readJSON(join(instance, ARCHIVE, id, 'settlement.json')), id)).sort();
     need(!unsettled.length, `The usage of ${unsettled.length === 1 ? 'batch' : 'batches'} ${unsettled.slice(0, 5).map(plain).join(', ')} was not settled. Settle it first: rw-batch.mjs settle METER.json --instance <instance-root> --run ${plain(unsettled[0])}; if it cannot be measured: rw-batch.mjs settle --not-metered "<reason>" --instance <instance-root> --run ${plain(unsettled[0])}`);
-    const archived = archives.filter(id => !id.startsWith('.')).map(id => readJSON(join(instance, ARCHIVE, id, 'batch.json'))).filter(record => record && typeof record === 'object');
-    checkBatch(batch, new Set(archived.flatMap(record => Array.isArray(record.tickets) ? record.tickets : []).map(entry => entry?.id).filter(id => typeof id === 'string').map(id => id.toLowerCase())));
+    const archivedRecords = archives.filter(id => !id.startsWith('.')).map(id => readJSON(join(instance, ARCHIVE, id, 'batch.json'))).filter(record => record && typeof record === 'object');
+    const archived = archivedRecords.flatMap(record => Array.isArray(record.tickets) ? record.tickets : []).filter(entry => typeof entry?.id === 'string');
+    checkBatch(batch, new Set(archived.map(entry => entry.id.toLowerCase())));
+    // Owner rule of 2026-11-20: an escalated ticket blocks only itself and the tickets related to it; the rest of the plan goes on.
+    const blocked = blockedTickets({ instance, tickets: batch.tickets, archived });
+    need(!blocked.length, `These tickets are blocked by an escalation the owner has not acknowledged: ${blocked.slice(0, 10).map(entry => `${plain(entry.ticket)} (${plain(entry.escalation)})`).join(', ')}. A ticket is blocked when it is the escalated ticket, its paths overlap that ticket's paths, or it depends on a blocked ticket. Report the escalation to the owner and replan: a batch without these tickets opens. The owner lifts an escalation at an interactive terminal with: team-mode.mjs acknowledge <escalation id> --instance <instance-root>`, 'TICKET_ESCALATED');
     // Removals are judged against the archive, which a commit's record points to; a batch aborted before after is not archived.
-    const lastFrozen = archived.filter(record => typeof record.openedAt === 'string').sort((a, b) => a.openedAt.localeCompare(b.openedAt)).at(-1)?.review;
+    const lastFrozen = archivedRecords.filter(record => typeof record.openedAt === 'string').sort((a, b) => a.openedAt.localeCompare(b.openedAt)).at(-1)?.review;
     // ADR 0011, decision 10: the trigger list is frozen into the batch; a change since the last batch is logged once it opens.
     let review;
     try { review = loadReview({ instance }); } catch (error) { if (isReviewListError(error)) need(false, `${error.message}. Nothing was started`); throw error; }
@@ -268,7 +273,7 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
       launchManifest: manifest ? 'chained' : 'absent', runRecord: frozen.record, args: frozen.args };
     const record = { ...body, digest: digest(body) };
     // No batch is open: a record of an earlier one still in the root must not be read or archived as this one's.
-    for (const file of [PROGRESS_FILE, RETURN_FILE, SETTLE_FILE, ...review.reviewers.map(REVIEW_FILE)]) rmSync(join(instance, file), { force: true });
+    for (const file of [PROGRESS_FILE, RETURN_FILE, SETTLE_FILE, VERDICTS_FILE, ...review.reviewers.map(REVIEW_FILE)]) rmSync(join(instance, file), { force: true });
     writeFileSync(join(instance, BATCH_FILE), JSON.stringify(record, null, 2) + '\n', { flag: 'wx' });
     // Decision 11: starting on a repository that is not clean is the PM's explicit choice, and it is logged.
     if (record.startedAsIs && product.preexisting.length) {
