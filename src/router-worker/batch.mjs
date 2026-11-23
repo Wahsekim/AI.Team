@@ -6,7 +6,7 @@ import { git, isRepositoryRoot, acquireLease, releaseLease, readLease } from './
 import { freezeRun } from './run-args.mjs';
 import { openBoundary, closeBoundary, readBoundary, quotable, stateOf, UNQUOTABLE } from './write-boundary.mjs';
 import { observeIsolation } from './isolation.mjs';
-import { limitsOf, COUNT_LIMITS, LATER_LIMITS, boundLimits, rosterWrapper } from './switch.mjs';
+import { limitsOf, COUNT_LIMITS, LATER_LIMITS, boundLimits, rosterWrapper, GATE_PATH_OFF } from './switch.mjs';
 import { loadReview, isReviewListError, triggerChanges, recordFrozen } from './review-triggers.mjs';
 import { blockedTickets } from './escalations.mjs';
 import { periodicDue, periodicDueReason } from './review-periodic.mjs';
@@ -184,6 +184,8 @@ function liveTeam(teamRoot, instanceRoot) {
   const profile = readJSON(join(instance, MODE_FILE));
   need(profile?.mode === 'router-worker' && profile.status === 'live', 'The team is not live in Router/Worker mode');
   need(profile.dispatch === 'engine', 'This team is not set to run its batches through the count engine');
+  // A team switched before the setting existed lacks it: off, the default. Anything else is a hand edit.
+  need(profile.gatePath === undefined || profile.gatePath === false, `${MODE_FILE} sets gatePath to ${JSON.stringify(profile.gatePath)}; nothing was started. ${GATE_PATH_OFF}. Set it back to false; only the switch writes it`, 'GATE_PATH_REFUSED');
   need(!exists(join(instance, JOURNAL)), 'A mode switch was interrupted; roll it back first with: team-mode.mjs switch recover --instance <instance-root>');
   const productRoot = profile.spec?.project?.productRoot;
   need(typeof productRoot === 'string', 'The mode profile does not name the product repository');
