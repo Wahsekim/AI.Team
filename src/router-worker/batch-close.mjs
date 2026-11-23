@@ -139,8 +139,9 @@ export function afterBatch({ teamRoot, instanceRoot, result }) {
     const tickets = batch.tickets.map((ticket, i) => ({ id: ticket.id, ...outcomeOf(result.results[i]), changedPaths: files.filter(path => within(path, ticket.paths)) }));
     // ADR 0011, decision 3: the reviewers each passed ticket's changes require, by the list frozen at "before"; commit is gated on their verdicts.
     // Every changed path is pinned, flagged or not: an elective review reads what after saw, not what is there later.
+    // A passed ticket that changed nothing is not committed, so it is not flagged, even when it declared itself sensitive.
     for (const ticket of tickets.filter(entry => entry.status === 'passed' && entry.changedPaths.length)) {
-      ticket.review = flagPaths(batch.review, ticket.changedPaths);
+      ticket.review = flagPaths(batch.review, ticket.changedPaths, batch.tickets.find(entry => entry.id === ticket.id).declared ?? []);
       ticket.content = contentOf(product, ticket.changedPaths);
     }
     const reviews = Object.fromEntries(batch.review.reviewers.map(name => [name, { tickets: tickets.filter(ticket => ticket.review?.required.includes(name)).map(ticket => ticket.id) }]).filter(([, entry]) => entry.tickets.length));

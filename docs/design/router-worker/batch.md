@@ -5,8 +5,10 @@ on a bootstrapped fixture, with the real engine run on mock agents; so is
 "settle". Of the review of ADR 0011 the trigger list, the flags, the review
 state, the reviewer's brief, the judging of its report, the commit gate and the
 escalation to the owner are built ("Review triggers", "Review state and brief",
-"Review verdict, commit gate and escalation"); a rejected ticket is not yet
-saved as a patch and removed (it stays in the work tree). Not yet used on a real team.
+"Review verdict, commit gate and escalation"), and so are "Resolve" (held
+tickets saved as patches, the rest verified again) and sensitive tickets. The
+reviewer's cost limit and the periodic review are not built yet. Not yet used
+on a real team.
 [ADR 0010](../../../decisions/0010-router-worker-second-mode.md), decisions 8 to 12.
 
 ```sh
@@ -63,7 +65,8 @@ must come before the next batch.
 | `paths` | What the ticket's worker may write: a file, or a folder grant ending in `/**`. Never under `.git` or `.claude`. At most 100 paths over the whole batch |
 | `expectedPaths` | The files the worker is expected to touch; by default the `paths` that are files. Required when a ticket grants only folders |
 | `estimate` | Input-side tokens for execution, check and rework; their sum may not exceed the authorization per ticket |
-| `sensitivePaths` | Paths no ticket of this batch may write. They are judged against `paths`, which is what bounds the worker, not against the plan: a ticket whose grant covers a sensitive path, or lies under one, is refused. An entry written as a bare folder (`src/auth`) guards everything under it. This lasts until the review of [ADR 0011](../../../decisions/0011-router-worker-batch-review.md) exists |
+| `sensitivePaths` | Paths whose tickets Security always reviews ([ADR 0011](../../../decisions/0011-router-worker-batch-review.md), decision 6). They are judged against `paths`, which is what bounds the worker, not against the plan: a ticket whose grant covers a sensitive path, or lies under one, is declared sensitive (`sensitivePath:<entry>`). An entry written as a bare folder (`src/auth`) guards everything under it. At least one entry |
+| `riskFlags` (optional) | 1 to 10 plain names (`auth`, `payments`), each named once. Each declares the ticket sensitive (`riskFlag:<name>`). What a ticket declares is frozen in the record as its `declared` list. A declared-sensitive ticket that passed and changed something is flagged for Security on every changed path, even when no trigger matches, and is not committed without a passed Security verdict; one that changed nothing is not committed, so it is not flagged |
 | `commitMessage` (optional) | The message of the ticket's commit, one line; by default `<id>: <title>` |
 | `dependsOn` (optional) | Ids of tickets this one builds on: an earlier ticket of the batch, or a ticket of an archived batch. Frozen in the record (`[]` when absent); an escalated ticket blocks every ticket that depends on it, directly or through others (see "Review verdict, commit gate and escalation") |
 | `runId`, `date` (optional) | Default: `rw-<commit>-L<nextLifecycleNumber>-<time>`, new at every `before`, and today |
@@ -332,8 +335,8 @@ repository's Git identity ([ADR 0007](../../../decisions/0007-pm-only-commits.md
 ## Review triggers
 
 [ADR 0011](../../../decisions/0011-router-worker-batch-review.md), decisions 1,
-3 and 8 to 10. **Not yet gating**: the flags are recorded, and `commit` commits
-a flagged ticket as it commits any other.
+3 and 8 to 10. The flags gate the commit: see "Review verdict, commit gate and
+escalation" and "Resolve".
 
 The list has two parts of the same shape:
 
@@ -374,7 +377,8 @@ a narrower pattern would miss `oauth/` or `authz.js`.
   refuses it. A batch left open across a kit upgrade is aborted and run again.
 - **"after"** gives each ticket that passed and changed something a
   `review`: `required` (reviewers, in the kit's order), `because` (reviewer,
-  trigger, path) and `flaggedFiles`, and a `content` (a digest of each of its
+  trigger, path; or reviewer `security`, `declared`, path for each changed path
+  of a ticket that declared itself sensitive) and `flaggedFiles`, and a `content` (a digest of each of its
   changed paths, flagged or not, as after saw it). `reviews` lists, per
   reviewer, the tickets it must review.
 
@@ -730,8 +734,7 @@ kept out of the tickets' commits by the "after" command.
   listed), or changed while the batch was being prepared.
 - The lock is held. If this team holds it with no batch open, the message names
   `abort`.
-- The batch cannot be frozen: an estimate above the authorization, a planned
-  path under a sensitive path, a roster that does not staff the three workers.
+- The batch cannot be frozen: an estimate above the authorization, a roster that does not staff the three workers.
 - The launch preflight or the isolation check does not pass.
 
 The limits not being the ones the ledger binds is refused with its own code,
@@ -791,10 +794,9 @@ The limits not being the ones the ledger binds is refused with its own code,
 - **Only the three workers are bounded.** The PM's session and the governance
   roles keep the shell their own permissions give them.
 - **The review of [ADR 0011](../../../decisions/0011-router-worker-batch-review.md)
-  is not built** beyond its triggers, review state and brief. Until then a
-  ticket that passed its check is committed with no security or architecture
-  review, even when flagged, and a ticket that could write a sensitive path is
-  refused by "before".
+  has no cost limit per reviewer call and no periodic review yet.** A flagged
+  ticket is never committed without its passed reviews; what no trigger flags
+  is not reviewed until the periodic review exists.
 - **The brief's verification runs without the lock.** Nothing else starts while
   the batch is in review, but the PM's own session can still change the product.
 - **A ticket that did not pass keeps its changes in the work tree.** They are

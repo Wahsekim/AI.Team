@@ -35,9 +35,9 @@ export function live(t, { commands = COMMANDS } = {}) {
     lines: file => existsSync(join(f.root, file)) ? f.read(file).split('\n').filter(Boolean).map(line => JSON.parse(line)) : [] };
 }
 export const changed = f => git(f.product, 'status', '--porcelain', '--untracked-files=all').split('\n').filter(Boolean).map(line => line.slice(3)).sort();
-// A batch run by the real engine with mock agents; `edits` is what the workers leave in the product.
-export async function runBatch(f, tickets, edits) {
-  const open = await f.before({ ...batchOf(...tickets), verificationCommands: f.commands });
+// A batch run by the real engine with mock agents; `edits` is what the workers leave in the product, `fields` other batch fields.
+export async function runBatch(f, tickets, edits, fields = {}) {
+  const open = await f.before({ ...batchOf(...tickets), verificationCommands: f.commands, ...fields });
   assert.equal(open.errors, undefined, JSON.stringify(open.errors));
   const { result } = await runWorkflow({ scriptPath: join(f.root, '.claude/workflows/run-n-rounds.js'), args: open.args, agentImpl: makeAgentImpl(agentsOf(f.commands)) });
   for (const [path, text] of Object.entries(edits)) { mkdirSync(join(f.product, path, '..'), { recursive: true }); writeFileSync(join(f.product, path), text); }

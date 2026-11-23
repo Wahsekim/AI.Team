@@ -86,6 +86,19 @@ const failures = [
   ['wrong budget unit', x => { x.policy.budgetUnit = 'USD'; }, 'INVALID_INPUT'],
   ['multiline command', x => { x.policy.verificationCommands = ['test\nother-command']; }, 'INVALID_INPUT'],
 ];
+// ADR 0011, decision 6: a standing batch's review covers a declared-sensitive ticket; no other caller may skip the check.
+test('the standing-batch review lets a risk flag or a sensitive planned path through; an unknown review value is refused', () => {
+  const standing = x => { x.policy.securityReview = 'standing-batch'; return rebindPolicy(x); };
+  const flagged = standing(inputFixture()); flagged.ticket.riskFlags = ['auth'];
+  const asBatch = { standingBatch: true };
+  assert.equal(compile(flagged, asBatch).errors, undefined, JSON.stringify(compile(flagged, asBatch).errors));
+  const sensitive = inputFixture(); sensitive.policy.sensitivePaths.push('src/api/tags.ts'); standing(sensitive);
+  assert.equal(compile(sensitive, asBatch).errors, undefined);
+  assert.match(compile(flagged).errors[0].reason, /Only a standing batch/, 'an input cannot vouch for itself');
+  const other = inputFixture(); other.ticket.riskFlags = ['auth']; other.policy.securityReview = 'later'; rebindPolicy(other);
+  assert.equal(compile(other, asBatch).errors[0].code, 'INVALID_INPUT');
+});
+
 for (const [name, mutate, code] of failures) test(`rejects ${name} with no partial artifacts`, () => {
   const input = inputFixture(); mutate(input);
   const output = compile(input);
