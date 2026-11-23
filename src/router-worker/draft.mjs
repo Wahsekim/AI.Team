@@ -21,6 +21,7 @@ const AUTHORITY = ['CLAUDE.md', 'agents/pm.md', 'agents/_shared/meta-rules.md', 
   'docs/workflow-catalog.md', 'docs/owner-contract.md', 'agents/coach.md', 'agents/auditor.md',
   'agents/security.md', 'agents/chaos.md', 'agents/architect.md', 'agents/lessons.template.md',
   'decisions/0007-pm-only-commits.md', 'decisions/0008-router-worker-topology.md'];
+const REVIEW_PROTOCOL = 'config/router-worker/review-protocol.md';
 const INSTANCE_AUTHORITY = ['charter.md', 'kit.lock', 'profiles/project.md', 'profiles/stack.md'];
 const LOCAL_TOOLS = ['Read', 'Grep', 'Glob', 'Bash', 'Write', 'Edit'];
 
@@ -122,7 +123,7 @@ export function draftTeam(input, { teamRoot = ROOT, instanceRoot } = {}) {
     const instance = instanceOf(root, instanceRoot), coverageOptions = instance ? { instanceRoot: instance } : {};
     const loaded = loadCoverage(root, coverageOptions), coverage = coverageReport(spec.workflowStates, loaded);
     // An existing instance keeps its own charter and profiles; only a fresh-kit draft instantiates seeds.
-    const paths = [...new Set([...AUTHORITY, 'scripts/bootstrap-team.sh', ...(instance ? [] : [...SEEDS.map(([seed]) => seed),
+    const paths = [...new Set([...AUTHORITY, 'scripts/bootstrap-team.sh', REVIEW_PROTOCOL, ...(instance ? [] : [...SEEDS.map(([seed]) => seed),
       ...(spec.project.ui ? ['agents/_shared/browser-access.template.md'] : [])])])];
     const read = path => readSource(instance && existsIn(instance, path) ? instance : root, path);
     const source = Object.fromEntries(paths.map(path => [path, read(path)]));
@@ -130,6 +131,8 @@ export function draftTeam(input, { teamRoot = ROOT, instanceRoot } = {}) {
     const base = instance ? { files: {}, verdict: 'existing-instance', gateStatus: 'not-run-in-draft' } : instantiate(spec, source);
     const files = { ...base.files };
     files['agents/router-worker-contract.md'] = '# Router/Worker common protocol\n\nINACTIVE DRAFT. Retain the original charter and M1-M6; only the PM commits. Skills are methods, never permissions. Exec and check are independent calls; guardian retains the original chaos obligations. Budgets, counters, stops and governance triggers are not reset by topology changes. Runtime isolation, full read closure and owner-ratified responsibility mappings are mandatory before use.\n';
+    // ADR 0011: the batch-review protocol is this mode's own file, so it is packed with the mode.
+    files['agents/router-worker-review.md'] = source[REVIEW_PROTOCOL];
     files['agents/router-worker-router.md'] = '# PM routing supplement\n\nINACTIVE DRAFT. Keep agents/pm.md as the persistent PM protocol. Route by bounded outcome, not FE/BE identity. Compile and preflight frozen assignments; preserve all original lifecycle, retry, verification, count, budget and governance gates. Unknown coverage or owner decisions block activation. This supplement does not authorize direct implementation or change the narrow direct-verify exception.\n';
     const rows = ['# Router/Worker draft roster', '', 'INACTIVE: ADR 0008 ratifies topology equivalence, not this deployment; project coverage and runtime evidence remain required.', '',
       '| Role id | Role file | Wrapper file | Model | Reasoning | Status |', '|---|---|---|---|---|---|',

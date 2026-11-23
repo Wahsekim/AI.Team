@@ -8,7 +8,7 @@ import { stageTeam } from './stage.mjs';
 import { makeLive } from './activate.mjs';
 import { instanceOf } from './roots.mjs';
 import { git, isRepositoryRoot, readLease, acquireLease, releaseLease } from './lease.mjs';
-import { standBoundary, dropBoundary, closeBoundary, readBoundary, settingsGap, hookGap, quotable, UNQUOTABLE, BOUNDARY_FILE } from './write-boundary.mjs';
+import { standBoundary, dropBoundary, closeBoundary, readBoundary, settingsGap, hookGap, stateOf, quotable, UNQUOTABLE, BOUNDARY_FILE } from './write-boundary.mjs';
 import { randomBytes } from 'node:crypto';
 
 // ADR 0010: a deployed team is switched between specialist and Router/Worker mode. The live mode's own
@@ -59,7 +59,7 @@ const GOVERNANCE_FILES = SHARED_ROLES.map(role => `agents/${role}.md`);
 // What may be a mode's own file. Anything else named by a profile or a manifest is refused, not moved.
 const OWN = {
   specialist: path => path === ROSTER || path === MODE_FILE || inRegistry(path) || (/^agents\/[^/]+\.md$/.test(path) && !SHARED_AGENT_FILES.includes(path)),
-  'router-worker': path => path === ROSTER || path === MODE_FILE || inRegistry(path) || /^agents\/(worker-(exec|check|guard)|router-worker-(contract|router))\.md$/.test(path),
+  'router-worker': path => path === ROSTER || path === MODE_FILE || inRegistry(path) || /^agents\/(worker-(exec|check|guard)|router-worker-(contract|router|review))\.md$/.test(path),
 };
 // What a first switch into Router/Worker may create: the mode's own files, and a governance role file that is missing.
 const installable = path => OWN['router-worker'](path) || GOVERNANCE_FILES.includes(path);
@@ -163,6 +163,7 @@ function plan({ to, request, teamRoot, instanceRoot, productRoot }) {
   need(!exists(join(instance, JOURNAL)), 'An earlier switch was interrupted; roll it back first with: team-mode.mjs switch recover --instance <instance-root>', 'SWITCH_INTERRUPTED');
   const live = currentMode(instance);
   need(live.name !== to, `The team is already in ${to} mode`);
+  need(live.name !== 'router-worker' || !inReview(instance), IN_REVIEW);
 
   // The live mode's own files, which go on holiday.
   let pack;
@@ -252,18 +253,27 @@ function setWriteLimits(instance, kit, to, productRoot, backupName) {
   if (to === 'specialist') return dropBoundary({ teamRoot: instance });
   standBoundary({ teamRoot: instance, productRoot, hookPath: join(kit, HOOK), wrappers: workerWrappers(instance) });
 }
+// The wrapper the live roster names for a role, by the name its file declares: {name}, or {gap} saying why there is none.
+export function rosterWrapper(instance, role) {
+  let roster; try { roster = readFileSync(join(instance, ROSTER), 'utf8'); } catch { return { gap: `${ROSTER} cannot be read` }; }
+  const row = roster.split('\n').filter(line => line.startsWith('|')).map(line => line.split('|').slice(1, -1).map(cell => cell.trim())).find(cells => cells[0] === role);
+  const name = /^\.claude\/agents\/([A-Za-z0-9._-]+)\.md$/.exec(row?.[2] ?? '')?.[1];
+  if (!name || !isFile(join(instance, REGISTRY, `${name}.md`))) return { gap: `The roster does not name a wrapper file for ${role}` };
+  // The runtime knows an agent by the name in its frontmatter; the boundary must carry that same name.
+  const declared = /^---\n[\s\S]*?^name:\s*"?([^"\n]+?)"?\s*$[\s\S]*?^---$/m.exec(readFileSync(join(instance, REGISTRY, `${name}.md`), 'utf8'))?.[1];
+  return declared === name ? { name } : { gap: `${REGISTRY}/${name}.md declares the name ${declared ?? '(none)'}; a wrapper file and its name must be the same` };
+}
 // The three workers as the live roster names them, whatever their wrappers are called.
 function workerWrappers(instance) {
-  const rows = readFileSync(join(instance, ROSTER), 'utf8').split('\n').filter(line => /^\| worker-/.test(line)).map(line => line.split('|').slice(1, -1).map(cell => cell.trim()));
   return Object.fromEntries(['exec', 'check', 'guard'].map(duty => {
-    const name = /^\.claude\/agents\/([A-Za-z0-9._-]+)\.md$/.exec(rows.find(cells => cells[0] === `worker-${duty}`)?.[2] ?? '')?.[1];
-    need(name && isFile(join(instance, REGISTRY, `${name}.md`)), `The roster does not name a wrapper file for worker-${duty}; the write limits could not name that worker`);
-    // The runtime knows an agent by the name in its frontmatter; the boundary must carry that same name.
-    const declared = /^---\n[\s\S]*?^name:\s*"?([^"\n]+?)"?\s*$[\s\S]*?^---$/m.exec(readFileSync(join(instance, REGISTRY, `${name}.md`), 'utf8'))?.[1];
-    need(declared === name, `${REGISTRY}/${name}.md declares the name ${declared ?? '(none)'}; a worker's wrapper file and its name must be the same`);
-    return [duty, name];
+    const found = rosterWrapper(instance, `worker-${duty}`);
+    need(found.name, `${found.gap}; the write limits could not name that worker`);
+    return [duty, found.name];
   }));
 }
+// A batch in review keeps the team as it is until its review is over (ADR 0011, decision 4).
+const IN_REVIEW = 'A batch of this team is in review; finish the review with rw-batch.mjs review-brief, or abort the batch with: rw-batch.mjs abort --instance <instance-root>';
+const inReview = instance => { const boundary = readBoundary(instance); return Boolean(boundary) && stateOf(boundary) === 'review'; };
 function restoreWriteLimits(instance, backupName) {
   if (typeof backupName !== 'string' || !/^\.switch-backup-[a-f0-9]+$/.test(backupName)) return;
   const backup = join(instance, HOLIDAY, backupName), present = readJSON(join(backup, 'complete'));
@@ -412,6 +422,7 @@ function planLimits({ teamRoot, instanceRoot, limits }) {
   if (exists(join(instance, JOURNAL))) no('A switch was interrupted; roll it back first with: team-mode.mjs switch recover --instance <instance-root>');
   const live = currentMode(instance);
   if (live.name !== 'router-worker') no('The team is not in Router/Worker mode; limits are set with the switch');
+  if (inReview(instance)) no(IN_REVIEW);
   const stored = live.profile.limits;
   if (!stored || typeof stored !== 'object' || COUNT_LIMITS.some(key => !Object.hasOwn(stored, key))) no('profiles/team-mode.json does not hold the four limits of this team');
   const from = checked(stored, 'The limits in profiles/team-mode.json are not valid');

@@ -4,7 +4,7 @@ import { digest } from '../loop/contracts.mjs';
 import { instanceOf } from './roots.mjs';
 import { git, gitRun, acquireLease, releaseLease, readLease } from './lease.mjs';
 import { accountRun } from './run-args.mjs';
-import { readBoundary, closeBoundary, within, LOG_FILE } from './write-boundary.mjs';
+import { readBoundary, closeBoundary, reviewBoundary, stateOf, within, LOG_FILE } from './write-boundary.mjs';
 import { flagPaths } from './review-triggers.mjs';
 import { BATCH_FILE, AFTER_FILE, PROGRESS_FILE, RETURN_FILE, RECORDS, ARCHIVE, RUN_ID, TICKET_ID, oneLine, changedPaths, contentOf, hooksOf, archiveBatch, plain, proposedTokens } from './batch.mjs';
 
@@ -19,18 +19,18 @@ export const HOLD_ALL = ['BOUNDARY_CHANGED', 'PRODUCT_HEAD_MOVED', 'PRODUCT_BRAN
 const CLAIM_MS = 60000;
 const ABANDON = 'If the batch cannot be committed by the kit, archive it with: rw-batch.mjs abort --instance <instance-root>, then commit or discard its changes by hand';
 
-class Refusal extends Error {}
+export class Refusal extends Error {}
 const need = (condition, reason) => { if (!condition) throw new Refusal(reason); };
 const refuse = error => ({ errors: [{ code: 'BATCH_REFUSED', field: 'batch', reason: error instanceof Refusal ? error.message : `The batch could not be closed: ${error?.code ?? error?.message}` }] });
 const exists = path => Boolean(lstatSync(path, { throwIfNoEntry: false }));
 const readJSON = path => { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; } };
-const intact = (value, stage) => { if (!value || typeof value !== 'object') return false; const { digest: recorded, ...body } = value; return recorded === digest(body) && value.stage === stage; };
+export const intact = (value, stage) => { if (!value || typeof value !== 'object') return false; const { digest: recorded, ...body } = value; return recorded === digest(body) && value.stage === stage; };
 const sealed = body => ({ ...body, digest: digest(body) });
 const replace = (path, record) => { writeFileSync(`${path}.tmp`, JSON.stringify(record, null, 2) + '\n'); renameSync(`${path}.tmp`, path); };
 
 // The open batch of this team. Its record is a file the PM can write: what reaches a path, the ledger or a
 // commit message is checked again here, whatever its digest says.
-function openBatch(teamRoot, instanceRoot) {
+export function openBatch(teamRoot, instanceRoot) {
   let instance;
   try { instance = instanceOf(resolve(teamRoot), instanceRoot); } catch (error) { need(false, `The two-root layout is required (${error.message})`); }
   need(instance, 'An instance root is required');
@@ -95,7 +95,8 @@ export function afterBatch({ teamRoot, instanceRoot, result }) {
     // A return that is not this batch's return changes nothing: the lock stays held and the boundary open.
     const account = accountRun({ args: batch.args, record: batch.runRecord, result });
     need(account.status === 'accounted', `The engine return is not the return of this batch: ${account.findings.join(', ')}`);
-    need(Array.isArray(batch.review?.triggers) && Array.isArray(batch.review.reviewers), `${BATCH_FILE} holds no frozen review trigger list: an earlier kit opened it. ${ABANDON}`);
+    need(Array.isArray(batch.review?.triggers) && Array.isArray(batch.review.reviewers) && batch.review.reviewers.every(reviewer => typeof batch.reviewWrappers?.[reviewer] === 'string'),
+      `${BATCH_FILE} holds no frozen review trigger list or reviewer wrappers: an earlier kit opened it. ${ABANDON}`);
     // The close is claimed before anything is changed, so two calls never close the same batch together and
     // one that died is taken up again, not judged as if someone had tampered with the batch.
     const earlier = readJSON(afterPath), claim = () => ({ stage: 'batch-closing', runId: batch.runId, claimedAt: new Date().toISOString() });
@@ -113,7 +114,8 @@ export function afterBatch({ teamRoot, instanceRoot, result }) {
     const findings = [], boundary = readBoundary(instance);
     // A resumed close may find its own work done: the boundary already closed, the lock already released.
     const workers = [batch.args.plan[0].agentType, batch.args.plan[0].verifierAgentType, batch.args.guardianAgentType].sort();
-    const ownClosed = resumed && boundary && boundary.productRoot === product && digest(Object.keys(boundary.wrappers).sort()) === digest(workers) && Object.values(boundary.wrappers).every(entry => entry.writePaths.length === 0);
+    const ownClosed = resumed && boundary && boundary.productRoot === product && stateOf(boundary) !== 'batch'
+      && digest(Object.entries(boundary.wrappers).filter(([, entry]) => entry.duty !== 'review').map(([name]) => name).sort()) === digest(workers);
     if (boundary?.digest !== batch.boundaryDigest && !ownClosed) findings.push({ code: 'BOUNDARY_CHANGED' });
     if ((git(product, 'rev-parse', 'HEAD')?.trim() ?? null) !== batch.productHead) findings.push({ code: 'PRODUCT_HEAD_MOVED' });
     if ((git(product, 'symbolic-ref', '--short', '-q', 'HEAD')?.trim() ?? null) !== batch.branch) findings.push({ code: 'PRODUCT_BRANCH_CHANGED' });
@@ -133,9 +135,10 @@ export function afterBatch({ teamRoot, instanceRoot, result }) {
     if (rechanged.length) findings.push({ code: 'PREEXISTING_PATH_CHANGED', paths: rechanged });
     const tickets = batch.tickets.map((ticket, i) => ({ id: ticket.id, ...outcomeOf(result.results[i]), changedPaths: files.filter(path => within(path, ticket.paths)) }));
     // ADR 0011, decision 3: the reviewers each passed ticket's changes require, by the list frozen at "before". Not a gate yet.
+    // Every changed path is pinned, flagged or not: an elective review reads what after saw, not what is there later.
     for (const ticket of tickets.filter(entry => entry.status === 'passed' && entry.changedPaths.length)) {
-      const flags = flagPaths(batch.review, ticket.changedPaths);
-      ticket.review = { ...flags, content: contentOf(product, flags.flaggedFiles) };
+      ticket.review = flagPaths(batch.review, ticket.changedPaths);
+      ticket.content = contentOf(product, ticket.changedPaths);
     }
     const reviews = Object.fromEntries(batch.review.reviewers.map(name => [name, { tickets: tickets.filter(ticket => ticket.review?.required.includes(name)).map(ticket => ticket.id) }]).filter(([, entry]) => entry.tickets.length));
     const outside = files.filter(path => !batch.tickets.some(ticket => within(path, ticket.paths)));
@@ -143,8 +146,12 @@ export function afterBatch({ teamRoot, instanceRoot, result }) {
     const { refused, ...hook } = hookSeen(instance, batch.args.allowedAgentTypes, batch.openedAt);
     if (changed.length && hook.workerCalls === 0) findings.push({ code: 'HOOK_SAW_NO_WORKER' });
 
+    // ADR 0011, decision 4: a batch whose changes need a review leaves the workers closed and the reviewers judged.
     let boundaryClosed = false;
-    try { closeBoundary({ teamRoot: instance }); boundaryClosed = true; } catch { findings.push({ code: 'BOUNDARY_NOT_RESTORED' }); }
+    try {
+      if (Object.keys(reviews).length) reviewBoundary({ teamRoot: instance, runId: batch.runId, reviewers: batch.reviewWrappers }); else closeBoundary({ teamRoot: instance });
+      boundaryClosed = true;
+    } catch { findings.push({ code: 'BOUNDARY_NOT_RESTORED' }); }
     const lease = readLease({ productRoot: product }), ours = lease.status === 'held' && lease.lease.digest === batch.lease, alreadyFree = resumed && lease.status === 'free';
     const leaseReleased = alreadyFree || (ours && !releaseLease({ productRoot: product, lease: batch.lease }).errors);
     if (!leaseReleased) findings.push({ code: ours ? 'LOCK_RELEASE_FAILED' : 'LOCK_NOT_HELD_BY_THIS_BATCH' });
@@ -158,8 +165,10 @@ export function afterBatch({ teamRoot, instanceRoot, result }) {
     if (!boundaryClosed) next.push('The write-boundary file is missing or was changed: every subagent write and shell command is refused until a mode switch to specialist and back rebuilds it');
     if (holdAll) next.push(`No ticket of this batch is committed by the kit. ${ABANDON}`);
     if (!holdAll && left.length) next.push('Paths are left uncommitted in the product; the next batch refuses until they are committed or discarded by hand, or it is started as is');
-    const status = () => findings.length || account.blockers.length ? 'review' : 'clean';
-    try { appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} BATCH ${batch.runId} CLOSED (${status()}): ${passed} of ${tickets.length} ticket(s) passed; ${commits.length} to commit, ${left.length} changed path(s) left${findings.length ? `; findings: ${findings.map(finding => finding.code).join(', ')}` : ''}.\n`); }
+    const reviewers = Object.keys(reviews);
+    if (reviewers.length) next.push(`The batch is in review: brief each reviewer with ${reviewers.map(reviewer => `rw-batch.mjs review-brief --reviewer ${reviewer} --instance <instance-root>`).join(', and ')}; no batch, switch or change of limits starts until the review is over`);
+    const status = () => findings.length || account.blockers.length || reviewers.length ? 'review' : 'clean';
+    try { appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} BATCH ${batch.runId} CLOSED (${status()}): ${passed} of ${tickets.length} ticket(s) passed; ${commits.length} to commit, ${left.length} changed path(s) left${reviewers.length ? `; review required by ${reviewers.join(', ')}` : ''}${findings.length ? `; findings: ${findings.map(finding => finding.code).join(', ')}` : ''}.\n`); }
     catch { findings.push({ code: 'LEDGER_NOT_WRITTEN' }); }
     // The engine's return is kept beside the record, which carries its digest: the settlement of usage needs it, and so does anyone who audits the batch.
     const kept = JSON.parse(JSON.stringify(result));

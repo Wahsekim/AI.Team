@@ -4,9 +4,9 @@ import { digest, bytesDigest } from '../loop/contracts.mjs';
 import { instanceOf } from './roots.mjs';
 import { git, isRepositoryRoot, acquireLease, releaseLease, readLease } from './lease.mjs';
 import { freezeRun } from './run-args.mjs';
-import { openBoundary, closeBoundary, readBoundary, quotable, UNQUOTABLE } from './write-boundary.mjs';
+import { openBoundary, closeBoundary, readBoundary, quotable, stateOf, UNQUOTABLE } from './write-boundary.mjs';
 import { observeIsolation } from './isolation.mjs';
-import { limitsOf, COUNT_LIMITS, boundLimits } from './switch.mjs';
+import { limitsOf, COUNT_LIMITS, boundLimits, rosterWrapper } from './switch.mjs';
 import { loadReview, isReviewListError, triggerChanges, recordFrozen } from './review-triggers.mjs';
 
 // ADR 0010, decisions 8 to 12: the one command a PM runs before a batch in a standing Router/Worker team.
@@ -15,7 +15,8 @@ import { loadReview, isReviewListError, triggerChanges, recordFrozen } from './r
 export const BATCH_FILE = 'rw-batch.json', AFTER_FILE = 'rw-batch-after.json', PROGRESS_FILE = 'rw-batch-commits.json', RETURN_FILE = 'rw-batch-return.json', SETTLE_FILE = 'rw-batch-settlement.json', ARCHIVE = 'batches';
 // What a batch leaves in the team's root, by the name it takes in the archive. The root is cleared in this
 // order: the files that name the run go last, so a clearing that died is finished by the next commit.
-export const RECORDS = { 'return.json': RETURN_FILE, 'settlement.json': SETTLE_FILE, 'batch.json': BATCH_FILE, 'after.json': AFTER_FILE, 'commits.json': PROGRESS_FILE };
+export const REVIEW_FILE = reviewer => `rw-batch-review-${reviewer}.json`;
+export const RECORDS = { 'review-security.json': REVIEW_FILE('security'), 'review-architect.json': REVIEW_FILE('architect'), 'return.json': RETURN_FILE, 'settlement.json': SETTLE_FILE, 'batch.json': BATCH_FILE, 'after.json': AFTER_FILE, 'commits.json': PROGRESS_FILE };
 export const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/, TICKET_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/;
 // Line and paragraph separators break a line too; bidi controls make a ledger line read other than it is.
 const UNSAFE = /[\x00-\x1f\x7f-\x9f\u061c\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]/g;
@@ -192,6 +193,8 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
   try {
     ({ instance, productRoot } = liveTeam(teamRoot, instanceRoot));
     need(!exists(join(instance, BATCH_FILE)) && !exists(join(instance, AFTER_FILE)), `A batch is already open (${BATCH_FILE}); close it with after and commit, or abort it, before starting another`);
+    const standing = readBoundary(instance);
+    need(!standing || stateOf(standing) !== 'review', `Batch ${plain(standing?.runId ?? '(unnamed)')} is in review: no batch opens until its review is over. Brief each reviewer with: rw-batch.mjs review-brief --reviewer <reviewer> --instance <instance-root>; or abort it with: rw-batch.mjs abort --instance <instance-root>`);
     // ADR 0010, amendment of 2026-11-18: a batch that ran is settled, or marked as not metered, before the next one opens.
     let archives; try { archives = readdirSync(join(instance, ARCHIVE), { withFileTypes: true }).filter(entry => entry.isDirectory()).map(entry => entry.name); } catch { archives = []; }
     const unsettled = archives.filter(id => !id.startsWith('.') && exists(join(instance, ARCHIVE, id, 'after.json')) && !settles(readJSON(join(instance, ARCHIVE, id, 'settlement.json')), id)).sort();
@@ -203,6 +206,10 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     // ADR 0011, decision 10: the trigger list is frozen into the batch; a change since the last batch is logged once it opens.
     let review;
     try { review = loadReview({ instance }); } catch (error) { if (isReviewListError(error)) need(false, `${error.message}. Nothing was started`); throw error; }
+    // Owner decision of 2026-11-20: every reviewer of the kit is staffed before a batch can need it.
+    const staffed = review.reviewers.map(reviewer => [reviewer, rosterWrapper(instance, reviewer)]), unstaffed = staffed.find(([, found]) => !found.name);
+    need(!unstaffed, `The reviewer ${unstaffed?.[0]} is not staffed (${unstaffed?.[1].gap}); both reviewers (${review.reviewers.join(', ')}) are needed before a batch opens. Staff it in the Router/Worker team's governance, then switch again. Nothing was started`);
+    const reviewWrappers = Object.fromEntries(staffed.map(([reviewer, found]) => [reviewer, found.name]));
     checkProduct(productRoot, startAsIs === true);
     const held = readLease({ productRoot });
     need(!(held.status === 'held' && held.lease.teamRoot === instance), 'This team holds the lock on the product repository but has no open batch: another "before" or a change of limits is running, or an earlier one died half-way. If nothing is running, clear it with: rw-batch.mjs abort --instance <instance-root>');
@@ -221,7 +228,7 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     need(!mixed.length, `These paths are already changed and lie where a ticket of this batch writes (${mixed.slice(0, 5).map(plain).join(', ')}); they could not be kept out of its commit. Commit or discard them first`);
     const closed = readBoundary(instance);
     need(closed && closed.productRoot === productRoot, 'The write-boundary file is missing or was changed. It is rebuilt by a mode switch: team-mode.mjs switch specialist, then switch router-worker');
-    need(Object.values(closed.wrappers).every(entry => entry.writePaths.length === 0), 'The write boundary is open: an earlier batch was not closed. Clear it with: rw-batch.mjs abort --instance <instance-root>');
+    need(stateOf(closed) === 'closed', 'The write boundary is open: an earlier batch was not closed. Clear it with: rw-batch.mjs abort --instance <instance-root>');
     const hooks = hooksOf(productRoot), hooked = batch.tickets.flatMap(ticket => ticket.paths.filter(path => hooks.guarded.some(guard => overlap(path, guard) || overlap(path, `${guard}/**`))));
     need(!hooked.length, `The repository's commit hooks live in ${hooks.guarded.join(', ')}; no ticket writes there (${hooked.slice(0, 5).join(', ')}): a hook runs as the PM at the next commit`);
     const wrappers = Object.fromEntries(Object.entries(closed.wrappers).map(([name, entry]) => [entry.duty, name]));
@@ -256,12 +263,12 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     const body = { schemaVersion: 1, stage: 'batch-open', runId: frozen.args.runId, openedAt: at, productRoot, productHead: product.head, branch: product.branch,
       startedAsIs: startAsIs === true, preexisting: product.preexisting, preexistingContent: contentOf(productRoot, product.preexisting), hooks, lease, boundaryDigest: boundary.digest, isolationDigest: isolation.digest,
       limits, ceiling: { outputTokens: ceiling, stopLine: Math.floor(ceiling * 4 / 5) },
-      tickets: batch.tickets.map((ticket, i) => ({ id: ticket.id, title: ticket.title, commitMessage: ticket.commitMessage ?? `${ticket.id}: ${ticket.title}`, paths: ticket.paths, expectedPaths: inputs[i].proposal.expectedPaths, dependsOn: ticket.dependsOn ?? [] })),
-      sensitivePaths: batch.sensitivePaths, verificationCommands: batch.verificationCommands, review, triggerChanges: triggerChanges(lastFrozen, review),
+      tickets: batch.tickets.map((ticket, i) => ({ id: ticket.id, title: ticket.title, goal: ticket.goal, acceptance: ticket.acceptance, commitMessage: ticket.commitMessage ?? `${ticket.id}: ${ticket.title}`, paths: ticket.paths, expectedPaths: inputs[i].proposal.expectedPaths, dependsOn: ticket.dependsOn ?? [] })),
+      sensitivePaths: batch.sensitivePaths, verificationCommands: batch.verificationCommands, review, reviewWrappers, triggerChanges: triggerChanges(lastFrozen, review),
       launchManifest: manifest ? 'chained' : 'absent', runRecord: frozen.record, args: frozen.args };
     const record = { ...body, digest: digest(body) };
     // No batch is open: a record of an earlier one still in the root must not be read or archived as this one's.
-    for (const file of [PROGRESS_FILE, RETURN_FILE, SETTLE_FILE]) rmSync(join(instance, file), { force: true });
+    for (const file of [PROGRESS_FILE, RETURN_FILE, SETTLE_FILE, ...review.reviewers.map(REVIEW_FILE)]) rmSync(join(instance, file), { force: true });
     writeFileSync(join(instance, BATCH_FILE), JSON.stringify(record, null, 2) + '\n', { flag: 'wx' });
     // Decision 11: starting on a repository that is not clean is the PM's explicit choice, and it is logged.
     if (record.startedAsIs && product.preexisting.length) {
@@ -291,7 +298,7 @@ export function abortBatch({ teamRoot, instanceRoot }) {
     need(profile?.mode === 'router-worker' && profile.status === 'live' && typeof productRoot === 'string', 'The team is not live in Router/Worker mode');
     need(!exists(join(instance, JOURNAL)), 'A mode switch was interrupted; roll it back first with: team-mode.mjs switch recover --instance <instance-root>');
     const record = readJSON(join(instance, BATCH_FILE)), held = readLease({ productRoot }), boundary = readBoundary(instance);
-    const ours = held.status === 'held' && held.lease.teamRoot === instance, open = boundary ? Object.values(boundary.wrappers).some(entry => entry.writePaths.length > 0) : false;
+    const ours = held.status === 'held' && held.lease.teamRoot === instance, open = boundary ? stateOf(boundary) !== 'closed' : false;
     // A batch that after claimed or closed and commit cannot finish: the boundary is closed and the lock released
     // if after did not get that far, its records are archived, and nothing is committed.
     if (exists(join(instance, AFTER_FILE))) {
@@ -311,7 +318,7 @@ export function abortBatch({ teamRoot, instanceRoot }) {
     if (open) closeBoundary({ teamRoot: instance });
     if (ours) { const released = releaseLease({ productRoot, lease: held.lease.digest }); need(!released.errors, `The lock could not be released: ${released.errors?.[0]?.reason}`); }
     // The record is a file the PM can write; only a well-formed id reaches the ledger.
-    const at = new Date().toISOString(), runId = typeof record?.runId === 'string' && /^[A-Za-z0-9._-]{1,64}$/.test(record.runId) ? record.runId : null;
+    const named = record?.runId ?? boundary?.runId, at = new Date().toISOString(), runId = typeof named === 'string' && /^[A-Za-z0-9._-]{1,64}$/.test(named) ? named : null;
     // A boundary that is missing or was changed refuses every subagent's write and shell command. This command cannot rebuild it; a mode switch does.
     appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} BATCH ${runId ?? '(no readable record)'} ABORTED by rw-batch.mjs abort: ${boundary ? 'the write boundary is closed' : 'the write boundary is missing or was changed and was NOT restored'}${ours ? ', the lock released' : ''}. Nothing about the work was checked.\n`);
     rmSync(join(instance, BATCH_FILE), { recursive: true, force: true });
