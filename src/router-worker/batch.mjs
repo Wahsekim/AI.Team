@@ -6,7 +6,7 @@ import { git, isRepositoryRoot, acquireLease, releaseLease, readLease } from './
 import { freezeRun } from './run-args.mjs';
 import { openBoundary, closeBoundary, readBoundary, quotable, stateOf, UNQUOTABLE } from './write-boundary.mjs';
 import { observeIsolation } from './isolation.mjs';
-import { limitsOf, COUNT_LIMITS, boundLimits, rosterWrapper } from './switch.mjs';
+import { limitsOf, COUNT_LIMITS, LATER_LIMITS, boundLimits, rosterWrapper } from './switch.mjs';
 import { loadReview, isReviewListError, triggerChanges, recordFrozen } from './review-triggers.mjs';
 import { blockedTickets } from './escalations.mjs';
 
@@ -188,7 +188,10 @@ function liveTeam(teamRoot, instanceRoot) {
   need(typeof productRoot === 'string', 'The mode profile does not name the product repository');
   let limits;
   try { limits = limitsOf({ limits: profile.limits }); } catch (error) { need(false, `The limits in ${MODE_FILE} are not valid (${error.message}); set them with: team-mode.mjs limits`); }
-  need(COUNT_LIMITS.every(key => Object.hasOwn(profile.limits ?? {}, key)), `${MODE_FILE} does not hold the four limits of this team`);
+  const missing = COUNT_LIMITS.filter(key => !Object.hasOwn(profile.limits ?? {}, key));
+  need(missing.every(key => LATER_LIMITS.includes(key)), `${MODE_FILE} does not hold the limits of this team`);
+  // Every batch may need a review, so every batch needs the authorization of a reviewer call.
+  need(!missing.length, `${MODE_FILE} does not hold ${missing.join(', ')}, added to the kit after this team went live. Only the owner decides the limits; nothing was started. The owner adds it at an interactive terminal with: team-mode.mjs limits <LIMITS.json> --instance <instance-root>   (LIMITS.json: {} adds it at its default, or the value to set)`, 'LIMITS_NOT_BOUND');
   need(boundLimits(instance) === digest(profile.limits), `The limits in ${MODE_FILE} are not the limits the owner last confirmed: no line of ${LEDGER} binds them. They were edited by hand, or the team went live before limits were bound. Only the owner decides the limits; nothing was started. The owner confirms them at an interactive terminal with: team-mode.mjs limits <LIMITS.json> --instance <instance-root>   (LIMITS.json: {} re-confirms them as they stand, or the limits to change)`, 'LIMITS_NOT_BOUND');
   return { instance, profile, productRoot, limits };
 }

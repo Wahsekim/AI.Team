@@ -39,12 +39,14 @@ export const changed = f => git(f.product, 'status', '--porcelain', '--untracked
 export async function runBatch(f, tickets, edits, fields = {}) {
   const open = await f.before({ ...batchOf(...tickets), verificationCommands: f.commands, ...fields });
   assert.equal(open.errors, undefined, JSON.stringify(open.errors));
-  const { result } = await runWorkflow({ scriptPath: join(f.root, '.claude/workflows/run-n-rounds.js'), args: open.args, agentImpl: makeAgentImpl(agentsOf(f.commands)) });
+  // The Guardian's brief names the run; settle reads it from the Guardian's transcript.
+  let guardianBrief = null; const mock = makeAgentImpl(agentsOf(f.commands)), agentImpl = (prompt, opts, index) => { if (opts?.schema?.required?.includes('runawayDetected')) guardianBrief = prompt; return mock(prompt, opts, index); };
+  const { result } = await runWorkflow({ scriptPath: join(f.root, '.claude/workflows/run-n-rounds.js'), args: open.args, agentImpl });
   for (const [path, text] of Object.entries(edits)) { mkdirSync(join(f.product, path, '..'), { recursive: true }); writeFileSync(join(f.product, path), text); }
   appendFileSync(join(f.root, '.claude/rw-write-boundary.log.jsonl'), JSON.stringify({ at: new Date().toISOString(), tool: 'Edit', agentType: WORKER, judged: true, decision: 'allow' }) + '\n');
   const after = afterBatch({ ...f.common, result });
   assert.equal(after.errors, undefined, JSON.stringify(after.errors));
-  return { open, after };
+  return { open, after, guardianBrief };
 }
 export const edits = paths => Object.fromEntries(paths.map(path => [path, `// ${path}\n`]));
 

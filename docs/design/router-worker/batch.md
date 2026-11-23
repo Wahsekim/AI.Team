@@ -6,8 +6,9 @@ on a bootstrapped fixture, with the real engine run on mock agents; so is
 state, the reviewer's brief, the judging of its report, the commit gate and the
 escalation to the owner are built ("Review triggers", "Review state and brief",
 "Review verdict, commit gate and escalation"), and so are "Resolve" (held
-tickets saved as patches, the rest verified again) and sensitive tickets. The
-reviewer's cost limit and the periodic review are not built yet. Not yet used
+tickets saved as patches, the rest verified again), sensitive tickets and the
+cost of each reviewer call, set at "settle". The periodic review is not built
+yet. Not yet used
 on a real team.
 [ADR 0010](../../../decisions/0010-router-worker-second-mode.md), decisions 8 to 12.
 
@@ -254,6 +255,22 @@ one `authorizationPerTicket` entry when a ticket used more than 80% of its
 authorization: the largest usage observed, the tickets, and a proposal; empty
 otherwise. `status` is `clear`
 or `review`; exit 2 on review. A batch is settled once.
+
+**Reviewer calls**
+([ADR 0011](../../../decisions/0011-router-worker-batch-review.md), decision 23).
+`settle` refuses while the batch is in review. Each judged reviewer call (each
+verdict made from a transcript) is set against `authorizationPerReviewerCall`,
+frozen in the batch record's `limits` by `before`. Its usage is the meter row of
+a main-session agent of that reviewer's wrapper whose transcript is the file the
+verdict was judged from. The record's `reviews` list has one entry per call:
+`reviewer`, `attempt`, `transcript`, `spentTokens`, `authorizedTokens`,
+`overrun`. `reviewCost` is their total, apart from the tickets' usage, and the
+ledger line states both. A call over its authorization puts the batch in
+`review` and adds an `authorizationPerReviewerCall` entry to `limits` with a
+proposal; nothing is held or undone, as the reviewer's turn limit was the brake
+during the call. A judged call the meter does not hold is a finding,
+`REVIEW_NOT_METERED`, with null usage. A reviewed batch whose verdicts are
+missing is refused.
 
 `settle` takes no lock. With `--run` it settles an archived batch, committed
 or abandoned; without it, a batch whose archive already exists is settled in
@@ -690,7 +707,10 @@ terminal. Four mechanisms hold that:
   live before lines carried a digest is refused the same way; the owner binds
   its limits with `team-mode.mjs limits` and `{}`, a request that changes
   nothing, which is accepted only while the limits are unbound. The proposal
-  then says so (`unbound`).
+  then says so (`unbound`). Bound limits that lack a limit the kit added later
+  (`authorizationPerReviewerCall`) are refused with the same code, on every
+  batch, since any batch may need a review; `{}` then proposes the missing
+  limit at its default as a change.
 - **No file tool writes them.** The hook refuses a Write, Edit, MultiEdit or
   NotebookEdit of the team's `profiles/team-mode.json` from any session, the
   PM's included, whatever path, case or link names it. A shell command that
@@ -794,7 +814,7 @@ The limits not being the ones the ledger binds is refused with its own code,
 - **Only the three workers are bounded.** The PM's session and the governance
   roles keep the shell their own permissions give them.
 - **The review of [ADR 0011](../../../decisions/0011-router-worker-batch-review.md)
-  has no cost limit per reviewer call and no periodic review yet.** A flagged
+  has no periodic review yet.** A flagged
   ticket is never committed without its passed reviews; what no trigger flags
   is not reviewed until the periodic review exists.
 - **The brief's verification runs without the lock.** Nothing else starts while

@@ -8,13 +8,13 @@ import { beforeBatch, abortBatch, BATCH_FILE, AFTER_FILE, RECORDS } from '../src
 import { afterBatch, commitBatch, HOLD_ALL } from '../src/router-worker/batch-close.mjs';
 import { settleBatch, markNotMetered } from '../src/router-worker/batch-settle.mjs';
 import { loadRetryRules } from '../src/router-worker/retries.mjs';
-import { fileURLToPath } from 'node:url';
 import { runWorkflow, makeAgentImpl } from '../scripts/lib/workflow-harness.mjs';
 import { readLease, acquireLease, releaseLease } from '../src/router-worker/lease.mjs';
 import { observeIsolation } from '../src/router-worker/isolation.mjs';
 import { readBoundary, decideCall, closeBoundary } from '../src/router-worker/write-boundary.mjs';
 import { DEFAULT_LIMITS, proposeLimits, changeLimits, boundLimits } from '../src/router-worker/switch.mjs';
 import { fixture, git } from './fixtures/router-worker/standing-team.mjs';
+import { meterOf } from './fixtures/router-worker/meter.mjs';
 import { digest } from '../src/loop/contracts.mjs';
 
 const refusal = result => result.errors?.[0];
@@ -100,10 +100,10 @@ test('in a batch a worker\'s shell runs the confirmed verification commands from
   const oldShell = () => decideCall({ boundary: readBoundary(old.root), input: { tool_name: 'Bash', agent_type: exec, cwd: old.root, tool_input: { command: 'ls' } } }).decision;
   assert.equal(oldShell(), 'allow');
   const added = proposeLimits({ teamRoot: old.kit, instanceRoot: old.root, limits: { allowedCommands: ['npm test'] } });
-  assert.equal(added.errors, undefined, JSON.stringify(added.errors)); assert.deepEqual([added.from.allowedCommands, added.to.allowedCommands], [[], ['npm test']]);
+  assert.equal(added.errors, undefined, JSON.stringify(added.errors)); assert.deepEqual([added.from.allowedCommands, added.to.allowedCommands], [undefined, ['npm test']], 'a limit the old profile lacks is shown unset');
   assert.equal(changeLimits({ teamRoot: old.kit, instanceRoot: old.root, limits: { allowedCommands: ['npm test'] }, confirm: added.digest, atTerminal: true }).errors, undefined);
   assert.equal(oldShell(), 'deny', 'the change of limits closes the shell of a team that had no list');
-  assert.match(old.read('pm-decisions.md'), /LIMITS CHANGED: allowedCommands \[\] -> \["npm test"\];/); assert.equal((await old.before(one)).errors, undefined);
+  assert.match(old.read('pm-decisions.md'), /LIMITS CHANGED: allowedCommands unset -> \["npm test"\];/); assert.equal((await old.before(one)).errors, undefined);
 });
 
 test('before refuses a product repository whose path a quoted shell command cannot hold', async t => {
@@ -615,26 +615,6 @@ test('abort after a claimed or closed batch always frees the team; a forged arch
   const left = abortBatch({ teamRoot: partial.kit, instanceRoot: partial.root });
   assert.equal(left.commitsMade.length, 1); assert.match(left.next, /1 commit\(s\) were already made by the kit and stay on the branch/); assert.match(partial.read('pm-decisions.md'), /ARCHIVED WITHOUT COMMIT.*1 commit\(s\) were already made/);
 });
-
-// The session's transcripts as the runtime leaves them, read by the kit's meter: one agent per call, in the engine's order.
-const METER = fileURLToPath(new URL('../scripts/measure-spawn.mjs', import.meta.url));
-function meterOf(f, tokens, { briefOf = brief => brief, guardBrief = f.guardianBrief, request = 'run the batch', session = 'sess', wf = 'wf_1', ticketsRun = f.open.args.plan.length } = {}) {
-  const jsonl = rows => rows.map(row => JSON.stringify(row)).join('\n') + '\n', dir = join(f.base, 'projects'), folder = join(dir, `${session}/subagents/workflows/${wf}`);
-  const usage = (id, agentId, create) => ({ type: 'assistant', isSidechain: Boolean(agentId), agentId, requestId: `req_${id}`, message: { id: `msg_${id}`, model: 'm', role: 'assistant', content: [],
-    usage: { input_tokens: 10, cache_creation_input_tokens: create, cache_read_input_tokens: 0, output_tokens: 100 } } });
-  const indented = text => text.split('\n').map(line => '  ' + line).join('\n'), relayed = text => ({ type: 'user', message: { role: 'user', content: `[Workflow harness — computed task] The task text follows:\n${indented(text)}\n  ` } });
-  const asked = { type: 'user', message: { role: 'user', content: `[Workflow harness — user request] The harness relays what the user asked:\n${indented(request)}` } };
-  const agents = [...f.open.args.plan.slice(0, ticketsRun).flatMap((item, i) => [[`${wf}-exec${i}`, item.agentType, briefOf(item.brief)], [`${wf}-check${i}`, item.verifierAgentType, briefOf(item.verifierBrief)]]), [`${wf}-guard`, f.open.args.guardianAgentType, guardBrief]];
-  mkdirSync(folder, { recursive: true }); writeFileSync(join(dir, `${session}.jsonl`), jsonl([usage('main', undefined, 7000)]));
-  agents.forEach(([id, agentType, brief], i) => {
-    writeFileSync(join(folder, `agent-${id}.jsonl`), jsonl([asked, relayed(brief), usage(id, id, tokens[i])]));
-    writeFileSync(join(folder, `agent-${id}.meta.json`), JSON.stringify({ agentType, description: id }));
-  });
-  writeFileSync(join(folder, 'journal.jsonl'), jsonl([{ type: 'launched' }, ...agents.flatMap(([agentId]) => [{ type: 'started', agentId }, { type: 'result', agentId, result: {} }])]));
-  const run = spawnSync(process.execPath, [METER, join(dir, session), '--json'], { encoding: 'utf8' });
-  assert.equal(run.status, 0, run.stderr);
-  return JSON.parse(run.stdout);
-}
 
 test('settle sets each ticket\'s measured usage against its authorization, before or after the commit, and reports a ticket over it', async t => {
   const f = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n', 'src/api/tags.js': 't\n' } }), rules = loadRetryRules({ teamRoot: f.kit, instanceRoot: f.root });
