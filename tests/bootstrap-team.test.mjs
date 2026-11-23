@@ -315,6 +315,7 @@ test('R-09: no render-tmp litter is left behind after a successful run', async (
 const KIT_ONLY = {
   'CLAUDE.instance.template.md': 'Instance primer. Say `start {{PROJECT_NAME | localized at bootstrap}}`.\n',
   '.claude/workflows/run-n-rounds.js': '// engine {{PROJECT_NAME}}\n',
+  'profiles/review.template.json': '{"schemaVersion": 1, "triggers": [], "rules": [], "adrs": []}\n',
   'agents/lifecycle.template.md': '# Lifecycle\n## [NNN] {{ROLE_DISPLAY_NAME}}\nNext NNN to assign: **001**\n',
   'agents/lessons.template.md': '# Lessons Index\n',
   'memory/pm.template.md': '# PM Memory\n',

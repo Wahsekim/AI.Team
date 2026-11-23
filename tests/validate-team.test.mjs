@@ -7,6 +7,7 @@ import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
+import { readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -911,5 +912,23 @@ test('ADR 0009: open kit-upgrade review items fail the deployment until each is 
     await mkdir(join(root, 'kit-upgrade-review.md'))
     const { code, out } = await runValidator(root, '--mode', 'deployment')
     assert.equal(code, 1, out); assert.match(out, /FAIL - kit-review: .*not a readable file/)
+  })
+})
+
+test('ADR 0011: the deployment fails on a project review trigger list the kit code refuses, and warns when it is missing', async () => {
+  const kitFile = path => readFileSync(fileURLToPath(new URL(`../${path}`, import.meta.url)), 'utf8')
+  const kit = Object.fromEntries(['src/router-worker/review-triggers.mjs', 'src/loop/contracts.mjs', 'src/loop/display.mjs', 'config/router-worker/review.json'].map(path => [`kit/${path}`, kitFile(path)]))
+  const project = review => ({ ...TWO_ROOT, ...kit, 'profiles/review.json': JSON.stringify(review) })
+  await withFixture(project({ schemaVersion: 1, triggers: [{ id: 'billing', reviewers: ['security'], match: { glob: ['src/billing/**'] } }], rules: [], adrs: [] }), async root => {
+    const { code, out } = await runValidator(root, '--mode', 'deployment')
+    assert.equal(code, 0, out); assert.match(out, /PASS - review-triggers: kit and project lists valid: 6 trigger\(s\)/)
+  })
+  await withFixture(project({ schemaVersion: 1, triggers: [{ id: 'billing', reviewers: ['coach'], match: { glob: ['src/billing/**'] } }], rules: [], adrs: [] }), async root => {
+    const { code, out } = await runValidator(root, '--mode', 'deployment')
+    assert.equal(code, 1, out); assert.match(out, /FAIL - review-triggers: profiles\/review\.json is not valid: trigger billing: .*reviewer coach is not one/)
+  })
+  await withFixture({ ...TWO_ROOT, ...kit }, async root => {
+    const { code, out } = await runValidator(root, '--mode', 'deployment')
+    assert.equal(code, 0, out); assert.match(out, /WARN - review-triggers: profiles\/review\.json missing/)
   })
 })

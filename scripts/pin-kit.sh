@@ -70,6 +70,7 @@ if [ "$OLD" != "unversioned" ] && git -C "$KIT" cat-file -e "$OLD^{commit}" 2>/d
     case "$seed" in
       CLAUDE.instance.template.md) target="CLAUDE.md" ;;
       *.template.md) target="${seed%.template.md}.md" ;;
+      *.template.json) target="${seed%.template.json}.json" ;;
       agents/*.md) target="$seed" ;;
       *) continue ;;
     esac

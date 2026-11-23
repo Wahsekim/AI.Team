@@ -83,7 +83,7 @@ fi
 # Verbatim copies: ledgers and role files hold format examples that must not be
 # substituted. The kit ships ledgers as seeds only, so both layouts create them.
 # Two-root adds the engine copy (the runtime loads workflows from the session
-# directory) and makes every seed mandatory; single-root skips absent seeds.
+# directory) and the project's review trigger list (ADR 0011), and makes every seed mandatory; single-root skips absent seeds.
 LEDGER_PAIRS="
 agents/lifecycle.template.md:agents/lifecycle.md
 agents/lessons.template.md:agents/lessons.md
@@ -99,6 +99,7 @@ $pair"
 else
   COPY_PAIRS="
 .claude/workflows/run-n-rounds.js:.claude/workflows/run-n-rounds.js
+profiles/review.template.json:profiles/review.json
 $LEDGER_PAIRS"
   case ",$ROLES," in *,,*) [ -z "$ROLES" ] || failboot "args: --roles has an empty role name" ;; esac
   for role in $(printf '%s' "$ROLES" | tr ',' ' '); do

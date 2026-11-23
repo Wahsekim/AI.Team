@@ -2,7 +2,8 @@
 
 Status: "before", "after", "commit" and "abort" are built and tested offline
 on a bootstrapped fixture, with the real engine run on mock agents; so is
-"settle". The review of ADR 0011 is not built. Not yet used on a real team.
+"settle". Of the review of ADR 0011 only the trigger list and the flags are
+built ("Review triggers"); nothing is gated by them yet. Not yet used on a real team.
 [ADR 0010](../../../decisions/0010-router-worker-second-mode.md), decisions 8 to 12.
 
 ```sh
@@ -56,6 +57,7 @@ must come before the next batch.
 | `estimate` | Input-side tokens for execution, check and rework; their sum may not exceed the authorization per ticket |
 | `sensitivePaths` | Paths no ticket of this batch may write. They are judged against `paths`, which is what bounds the worker, not against the plan: a ticket whose grant covers a sensitive path, or lies under one, is refused. An entry written as a bare folder (`src/auth`) guards everything under it. This lasts until the review of [ADR 0011](../../../decisions/0011-router-worker-batch-review.md) exists |
 | `commitMessage` (optional) | The message of the ticket's commit, one line; by default `<id>: <title>` |
+| `dependsOn` (optional) | Ids of tickets this one builds on: an earlier ticket of the batch, or a ticket of an archived batch. Frozen in the record (`[]` when absent); ADR 0011's escalation will block a ticket whose dependency is blocked |
 | `runId`, `date` (optional) | Default: `rw-<commit>-L<nextLifecycleNumber>-<time>`, new at every `before`, and today |
 
 The PM does not write a ceiling, a number of rounds, a wrapper name or a
@@ -67,7 +69,7 @@ budget per ticket. Those come from the team.
    engine, no interrupted mode switch, no batch already open, every archived
    batch that ran settled or marked as not metered, limits that are
    valid and are the ones the last ledger line binds (see "What decides the
-   limits"). Every verification command of the batch is one of the commands the
+   limits"), a valid review trigger list (see "Review triggers"). Every verification command of the batch is one of the commands the
    owner confirmed for the team (`allowedCommands` in its limits).
 2. **The tickets**: each is complete, and no two tickets claim the same file. A
    folder grant claims every file under it; paths are compared without case.
@@ -310,6 +312,55 @@ line to `pm-decisions.md`. It takes the lock for its length. It pushes nothing.
 The commits are made by the PM's session running this command, with the
 repository's Git identity ([ADR 0007](../../../decisions/0007-pm-only-commits.md)).
 
+## Review triggers
+
+[ADR 0011](../../../decisions/0011-router-worker-batch-review.md), decisions 1,
+3 and 8 to 10. **Not yet gating**: the flags are recorded, and `commit` commits
+a flagged ticket as it commits any other.
+
+The list has two parts of the same shape:
+
+| Part | File | Owner |
+|---|---|---|
+| General | `kit/config/router-worker/review.json`: the reviewers (`security`, `architect`) and the kit's triggers and rules, ids starting with `kit.` | the kit |
+| Project | `profiles/review.json` in the team's folder, instantiated by bootstrap from `kit/profiles/review.template.json` (empty); ids never start with `kit.` | Security and Architect propose, the owner confirms |
+
+```json
+{ "schemaVersion": 1,
+  "triggers": [{ "id": "billing", "reviewers": ["security"], "match": { "glob": ["src/billing/**"], "contains": ["invoice"] } }],
+  "rules": [{ "id": "no-raw-sql", "reviewer": "security", "text": "Queries go through the repository layer." }],
+  "adrs": ["decisions/0003-auth.md"] }
+```
+
+A `glob` matches the whole path (`**/` any folders, `*` and `?` inside one);
+`contains` is a substring of the path. Both ignore case. Adding a reviewer is
+one entry in the kit's `reviewers` plus its triggers. The kit's triggers: a
+dependency manifest, lock file or registry setting (Security and Architect), a
+path containing auth, session, token, crypto, secret or credential (Security), a
+database migration (Architect and Security), a CI or deployment file at any
+depth (Security), lint and test configuration (Architect). `auth` also flags
+paths such as `author.md`: a substring over-flags, which costs a review, where
+a narrower pattern would miss `oauth/` or `authz.js`.
+
+- **"before"** refuses a batch when `profiles/review.json` is missing or not
+  valid, and says how to fix it. It freezes the merged list with its digest
+  in the batch record (`review`). `triggerChanges` in the record names each
+  pattern, rule and ADR added or removed since the list frozen by the newest
+  archived batch (by `openedAt`), and the ledger gets
+  `REVIEW TRIGGERS ADDED: ...` and `REVIEW TRIGGERS REMOVED (owner spot review): ...`.
+  A narrowed trigger shows as the patterns it lost; a rule whose text changed
+  is both removed and added. With no archived list, or one of the wrong
+  shape or digest, the whole list is logged as `FROZEN ... (owner spot
+  review)`. A batch aborted before `after` is not archived, so the next batch
+  is compared with the same archived list and logs the same changes again.
+- A batch opened by a kit older than this list holds no `review`; `after`
+  refuses it. A batch left open across a kit upgrade is aborted and run again.
+- **"after"** gives each ticket that passed and changed something a
+  `review`: `required` (reviewers, in the kit's order), `because` (reviewer,
+  trigger, path), `flaggedFiles` and `content` (a digest of each flagged file
+  as after saw it). `reviews` lists, per reviewer, the tickets it must review.
+  `validate-team.sh` checks both parts with the same code.
+
 ## When the kit will not commit a batch
 
 A batch that `after` closed and `commit` refuses (all commits held, the branch
@@ -502,9 +553,9 @@ The limits not being the ones the ledger binds is refused with its own code,
 - **Only the three workers are bounded.** The PM's session and the governance
   roles keep the shell their own permissions give them.
 - **The review of [ADR 0011](../../../decisions/0011-router-worker-batch-review.md)
-  is not built.** Until then a ticket that passed its check is committed with
-  no security or architecture review, and a ticket that could write a sensitive
-  path is refused by "before".
+  is not built** beyond its triggers. Until then a ticket that passed its check
+  is committed with no security or architecture review, even when flagged, and
+  a ticket that could write a sensitive path is refused by "before".
 - **A ticket that did not pass keeps its changes in the work tree.** They are
   not saved aside and removed; ADR 0011 does that for a rejected ticket.
 - **Git-ignored files a worker wrote are invisible**, inside or outside the
