@@ -13,7 +13,7 @@ import { runWorkflow, makeAgentImpl } from '../scripts/lib/workflow-harness.mjs'
 import { readLease, acquireLease, releaseLease } from '../src/router-worker/lease.mjs';
 import { observeIsolation } from '../src/router-worker/isolation.mjs';
 import { readBoundary, decideCall, closeBoundary } from '../src/router-worker/write-boundary.mjs';
-import { DEFAULT_LIMITS, proposeLimits, changeLimits } from '../src/router-worker/switch.mjs';
+import { DEFAULT_LIMITS, proposeLimits, changeLimits, boundLimits } from '../src/router-worker/switch.mjs';
 import { fixture, git } from './fixtures/router-worker/standing-team.mjs';
 import { digest } from '../src/loop/contracts.mjs';
 
@@ -80,8 +80,8 @@ test('in a batch a worker\'s shell runs the confirmed verification commands from
   assert.equal(abortBatch({ teamRoot: f.kit, instanceRoot: f.root }).errors, undefined);
   assert.match(shell(exec, `cd "${f.product}" && npm test`).reason, /no batch is open/);
   // A "before" that fails after it opened the boundary takes the commands back.
-  writeFileSync(join(f.product, 'stray.txt'), 'x\n'); const ledger = f.read('pm-decisions.md'); rmSync(join(f.root, 'pm-decisions.md')); mkdirSync(join(f.root, 'pm-decisions.md'));
-  assert.equal(refusal(await f.before(one, { startAsIs: true })).code, 'BATCH_REFUSED'); rmSync(join(f.root, 'pm-decisions.md'), { recursive: true }); writeFileSync(join(f.root, 'pm-decisions.md'), ledger); rmSync(join(f.product, 'stray.txt'));
+  writeFileSync(join(f.product, 'stray.txt'), 'x\n'); chmodSync(join(f.root, 'pm-decisions.md'), 0o444);
+  assert.equal(refusal(await f.before(one, { startAsIs: true })).code, 'BATCH_REFUSED'); chmodSync(join(f.root, 'pm-decisions.md'), 0o644); rmSync(join(f.product, 'stray.txt'));
   f.untouched(); assert.match(shell(exec, `cd "${f.product}" && npm test`).reason, /no batch is open/);
   // With no readable boundary nobody knows who the workers are: no subagent's shell runs, and the main session is not judged.
   const lost = (agent, command) => decideCall({ boundary: null, input: { tool_name: 'Bash', ...(agent ? { agent_type: agent } : {}), cwd: f.root, tool_input: { command } } });
@@ -93,7 +93,7 @@ test('in a batch a worker\'s shell runs the confirmed verification commands from
   // A team that went live before the list existed holds none in its limits: no batch opens until the owner confirms one.
   const old = live(t), profile = JSON.parse(old.read('profiles/team-mode.json')), { allowedCommands: _none, ...counts } = profile.limits;
   writeFileSync(join(old.root, 'profiles/team-mode.json'), JSON.stringify({ ...profile, limits: counts }));
-  assert.match(refusal(await old.before(one)).reason, /not among the commands the owner confirmed/);
+  assert.equal(refusal(await old.before(one)).code, 'LIMITS_NOT_BOUND');
   // Its boundary carries no command list either, so its workers' shell is not judged until the owner confirms one.
   const stood = readBoundary(old.root), bare = sealAgain({ schemaVersion: 1, productRoot: stood.productRoot, wrappers: Object.fromEntries(Object.entries(stood.wrappers).map(([name, entry]) => [name, { duty: entry.duty, writePaths: [] }])) });
   writeFileSync(join(old.root, '.claude/rw-write-boundary.json'), JSON.stringify(bare));
@@ -101,7 +101,7 @@ test('in a batch a worker\'s shell runs the confirmed verification commands from
   assert.equal(oldShell(), 'allow');
   const added = proposeLimits({ teamRoot: old.kit, instanceRoot: old.root, limits: { allowedCommands: ['npm test'] } });
   assert.equal(added.errors, undefined, JSON.stringify(added.errors)); assert.deepEqual([added.from.allowedCommands, added.to.allowedCommands], [[], ['npm test']]);
-  assert.equal(changeLimits({ teamRoot: old.kit, instanceRoot: old.root, limits: { allowedCommands: ['npm test'] }, confirm: added.digest }).errors, undefined);
+  assert.equal(changeLimits({ teamRoot: old.kit, instanceRoot: old.root, limits: { allowedCommands: ['npm test'] }, confirm: added.digest, atTerminal: true }).errors, undefined);
   assert.equal(oldShell(), 'deny', 'the change of limits closes the shell of a team that had no list');
   assert.match(old.read('pm-decisions.md'), /LIMITS CHANGED: allowedCommands \[\] -> \["npm test"\];/); assert.equal((await old.before(one)).errors, undefined);
 });
@@ -122,7 +122,7 @@ test('a change of limits that cannot close the boundary of a team without a comm
   const saved = old.read('profiles/team-mode.json'), ledger = old.read('pm-decisions.md');
   const proposal = proposeLimits({ teamRoot: old.kit, instanceRoot: old.root, limits: { allowedCommands: ['npm test'] } });
   chmodSync(boundaryFile, 0o444);
-  const changed = changeLimits({ teamRoot: old.kit, instanceRoot: old.root, limits: { allowedCommands: ['npm test'] }, confirm: proposal.digest });
+  const changed = changeLimits({ teamRoot: old.kit, instanceRoot: old.root, limits: { allowedCommands: ['npm test'] }, confirm: proposal.digest, atTerminal: true });
   chmodSync(boundaryFile, 0o644);
   assert.equal(refusal(changed).code, 'LIMITS_REFUSED');
   assert.equal(old.read('profiles/team-mode.json'), saved, 'the limits are not in force'); assert.equal(old.read('pm-decisions.md'), ledger, 'no ledger line for a change that did not happen');
@@ -156,6 +156,35 @@ test('abort clears a batch that will not run, and what a before that died left b
   assert.equal(readLease({ productRoot: f.product }).status, 'free'); assert.equal(existsSync(join(f.root, BATCH_FILE)), false);
   assert.ok(!f.read('pm-decisions.md').includes('OWNER APPROVED'), 'a record\'s text never reaches the ledger as a line of its own');
   assert.match(f.read('pm-decisions.md'), /BATCH \(no readable record\) ABORTED.*NOT restored/);
+});
+
+test('the limits in force are the ones the last ledger line binds: a hand edit, or a team that went live unbound, stops before until the owner confirms them', async t => {
+  const f = live(t), one = batchOf(ticket('US-01', ['src/a.js'])), profilePath = join(f.root, 'profiles/team-mode.json'), stored = readFileSync(profilePath, 'utf8');
+  const bound = JSON.parse(stored).limits, common = { teamRoot: f.kit, instanceRoot: f.root };
+  assert.match(f.read('pm-decisions.md'), new RegExp(`MODE SWITCH: from specialist to router-worker; .*; limits ${digest(bound)}\\.\\n`));
+  // Lines that are not a switch or a change of limits never bind, whatever they quote.
+  appendFileSync(join(f.root, 'pm-decisions.md'), `2026-11-20 BATCH x ABORTED: limits ${digest({ ...bound, attemptsPerTicket: 3 })}.\nfree text; limits sha256:${'0'.repeat(64)}.\n`
+    + `2026-11-20 LIMITS CHANGED: attemptsPerTicket 1 -> 3; proposal sha256:${'1'.repeat(64)} was confirmed by a program that called the change directly, not at a terminal; limits ${digest({ ...bound, attemptsPerTicket: 3 })}.\n`);
+  writeFileSync(profilePath, JSON.stringify({ ...JSON.parse(stored), limits: { ...bound, attemptsPerTicket: 3 } }));
+  const stopped = refusal(await f.before(one));
+  assert.equal(stopped.code, 'LIMITS_NOT_BOUND'); assert.match(stopped.reason, /not the limits the owner last confirmed.*team-mode\.mjs limits <LIMITS\.json> --instance <instance-root>/); f.untouched();
+  // The owner re-confirms the limits as they stand: the proposal changes nothing, the ledger line binds them.
+  const again = proposeLimits({ ...common, limits: {} });
+  assert.equal(again.errors, undefined, JSON.stringify(again.errors)); assert.deepEqual(again.from, again.to); assert.equal(again.to.attemptsPerTicket, 3);
+  assert.equal(changeLimits({ ...common, limits: {}, confirm: again.digest, atTerminal: true }).errors, undefined);
+  assert.match(f.read('pm-decisions.md'), new RegExp(`LIMITS CHANGED: none, the limits in force re-confirmed as they stand; .*; limits ${digest(again.to)}\\.\\n`));
+  assert.match(refusal(proposeLimits({ ...common, limits: {} })).reason, /already has/, 'bound limits are not re-confirmed');
+  const opened = await f.before(one); assert.equal(opened.errors, undefined, JSON.stringify(opened.errors)); assert.equal(opened.limits.attemptsPerTicket, 3);
+  assert.equal(abortBatch(common).errors, undefined);
+  writeFileSync(join(f.root, 'pm-decisions.md'), f.read('pm-decisions.md').replace(/\n/g, '\r\n'));
+  assert.equal(boundLimits(f.root), digest(again.to), 'a ledger saved with CRLF line ends');
+  // A team that went live before the ledger bound its limits.
+  const old = live(t), ledgerPath = join(old.root, 'pm-decisions.md');
+  writeFileSync(ledgerPath, old.read('pm-decisions.md').replace(/; limits sha256:[a-f0-9]{64}\./g, '.'));
+  assert.equal(refusal(await old.before(one)).code, 'LIMITS_NOT_BOUND'); old.untouched();
+  const legacy = proposeLimits({ teamRoot: old.kit, instanceRoot: old.root, limits: {} }); assert.equal(legacy.errors, undefined, JSON.stringify(legacy.errors));
+  assert.equal(changeLimits({ teamRoot: old.kit, instanceRoot: old.root, limits: {}, confirm: legacy.digest, atTerminal: true }).errors, undefined);
+  assert.equal((await old.before(one)).errors, undefined);
 });
 
 test('the isolation check accepts for a standing team only what the decisions accept', t => {
@@ -271,6 +300,7 @@ test('after matches the engine return, closes the boundary and frees the lock; c
   assert.equal(closed.errors, undefined, JSON.stringify(closed.errors)); assert.equal(closed.stage, 'batch-closed'); assert.equal(closed.status, 'clean', JSON.stringify(closed.findings) + JSON.stringify(closed.account.blockers));
   assert.deepEqual(closed.tickets.map(entry => [entry.id, entry.status, entry.changedPaths]), [['US-01', 'passed', ['src/app.js', 'src/list/view.js']], ['US-02', 'passed', ['src/api/tags.js']]]);
   assert.deepEqual(closed.commits.map(entry => [entry.ticket, entry.message]), [['US-01', 'US-01: Ticket US-01'], ['US-02', 'feat(api): tags endpoint']]); assert.deepEqual(closed.left, []);
+  assert.deepEqual(closed.limits, [], 'no limit stopped the work');
   assert.equal(readLease({ productRoot: f.product }).status, 'free'); assert.ok(Object.values(readBoundary(f.root).wrappers).every(entry => entry.writePaths.length === 0), 'no worker may write any more');
   assert.match(refusal(f.after()).reason, /already closed/); assert.match(refusal(await f.before(batchOf(ticket('US-09', ['src/z.js'])))).reason, /already open/);
   assert.equal(git(f.product, 'rev-parse', 'HEAD').trim(), f.open.productHead, 'after commits nothing');
@@ -327,6 +357,31 @@ test('after refuses a return that is not this batch\'s and changes nothing; find
   const edited = await ran(t, { tickets: two, edits: { 'src/app.js': 'export const x = 2;\n' } });
   writeFileSync(join(edited.root, BATCH_FILE), JSON.stringify({ ...edited.open, branch: 'main' }));
   assert.match(refusal(edited.after()).reason, /was changed after the batch opened/);
+});
+
+test('after reports, and does not change, each limit that stopped work: the output ceiling, the attempts, a refused command', async t => {
+  const failed = { pass: false, staticPass: false, e2ePass: false, summary: 'broken', commandsRun: [{ command: 'npm test', exitCode: 1 }], failures: ['the test fails'] };
+  const f = await ran(t, { tickets: two, agents: { verifier: () => failed } }), exec = 'tag-list-fixture-worker-exec';
+  // A worker's shell command the hook refused during the batch, as the runtime runs the hook.
+  const hook = command => spawnSync('sh', ['-c', JSON.parse(f.read('.claude/settings.json')).hooks.PreToolUse.at(-1).hooks[0].command], { encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: f.root },
+    input: JSON.stringify({ tool_name: 'Bash', agent_type: exec, cwd: f.product, tool_input: { command } }) });
+  for (const command of ['npm run e2e', 'npm run e2e', 'npm test']) hook(command);
+  const profile = f.read('profiles/team-mode.json');
+  const tripped = { ...f.result, budgetGateTripped: true, budgetStatus: { ...f.result.budgetStatus, loopSpent: 30000, tripped: true }, guardianTokens: 2000 };
+  const closed = afterBatch({ teamRoot: f.kit, instanceRoot: f.root, result: tripped });
+  assert.equal(closed.errors, undefined, JSON.stringify(closed.errors));
+  assert.deepEqual(closed.limits, [
+    { limit: 'outputAllowancePerTicket', observed: 28000, current: 15000, proposal: { outputAllowancePerTicket: 36000 } },
+    { limit: 'attemptsPerTicket', observed: 1, current: 1, proposal: { attemptsPerTicket: 2 }, tickets: ['US-01'] },
+    { limit: 'allowedCommands', observed: 'npm run e2e', current: ['npm test', 'npm run lint'], proposal: null }]);
+  assert.equal(f.read('profiles/team-mode.json'), profile, 'nothing writes the limits');
+  // The ceiling is the tickets' allowances plus the Guardian's share: the proposal is for the share that ran out.
+  const closeAgain = result => { writeFileSync(join(f.root, AFTER_FILE), JSON.stringify({ stage: 'batch-closing', runId: f.open.runId, claimedAt: '2000-01-01T00:00:00.000Z' }));
+    const again = afterBatch({ teamRoot: f.kit, instanceRoot: f.root, result }); assert.equal(again.errors, undefined, JSON.stringify(again.errors)); return again.limits[0]; };
+  assert.deepEqual(closeAgain({ ...tripped, guardianTokens: 20000 }), { limit: 'guardianOutputShare', observed: 20000, current: 6000, proposal: { guardianOutputShare: 26000 } });
+  const { guardianTokens, ...unsplit } = tripped;
+  assert.deepEqual(closeAgain(unsplit), { limit: 'outputAllowancePerTicket', observed: 30000, current: 15000, proposal: { outputAllowancePerTicket: 38000 },
+    note: 'The engine return does not give the Guardian\'s spend apart: the figure per ticket includes it' });
 });
 
 test('commit refuses when the product changed after the batch was closed, keeps paths changed before the batch out of every commit, and resumes after a failure', async t => {
@@ -628,7 +683,8 @@ test('settle sets each ticket\'s measured usage against its authorization, befor
   const settled = settle(full); assert.ok(settled.calls?.every(call => call.agentId.startsWith('wf_1-')), JSON.stringify(settled.errors));
   assert.equal(settled.errors, undefined, JSON.stringify(settled.errors)); assert.equal(settled.stage, 'batch-settled');
   assert.deepEqual(settled.tickets.map(entry => [entry.ticket, entry.authorizedTokens, entry.spentTokens, entry.budgetGate]), [['US-01', 200000, 18020, 'clear'], ['US-02', 200000, 210020, 'blocked']]);
-  assert.equal(settled.status, 'review', 'a ticket over its authorization puts the batch in review'); assert.equal(settled.calls.length, 5); assert.equal(settled.mainSessionTokens, 7010);
+  assert.equal(settled.status, 'review', 'a ticket over its authorization puts the batch in review');
+  assert.deepEqual(settled.limits, [{ limit: 'authorizationPerTicket', observed: 210020, current: 200000, proposal: { authorizationPerTicket: 263000 }, tickets: ['US-02'] }]); assert.equal(settled.calls.length, 5); assert.equal(settled.mainSessionTokens, 7010);
   assert.match(refusal(settle(meterOf(f, [1, 1, 1, 1, 1]))).reason, /already settled/);
   assert.match(f.read('pm-decisions.md'), /BATCH \S+ SETTLED \(review\): 228040 token\(s\) on 2 ticket\(s\) of 400000 authorized, Guardian 5010/);
   // Cost is reported, not enforced: the commits are made, and the settlement is archived with the batch.
@@ -670,10 +726,11 @@ test('settle sets each ticket\'s measured usage against its authorization, befor
   assert.deepEqual(Object.values(RECORDS).slice(-3), ['rw-batch.json', 'rw-batch-after.json', 'rw-batch-commits.json']);
   // A commit that archives the batch while it is being settled: the settlement follows the batch into the archive.
   const raced = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n' } }); assert.equal(raced.after().errors, undefined);
-  const during = meterOf(raced, [12000, 6000, 12000, 6000, 5000]), list = during.subagents; let seen = 0;
+  const during = meterOf(raced, [12000, 6000, 150000, 10000, 5000]), list = during.subagents; let seen = 0;
   Object.defineProperty(during, 'subagents', { get() { if (!seen++) assert.equal(raced.commit().errors, undefined); return list; } });
   const moved = settleBatch({ teamRoot: raced.kit, instanceRoot: raced.root, meter: during, rules: loadRetryRules({ teamRoot: raced.kit, instanceRoot: raced.root }) });
   assert.equal(moved.errors, undefined, JSON.stringify(moved.errors)); assert.equal(existsSync(join(raced.root, 'rw-batch-settlement.json')), false);
+  assert.deepEqual(moved.limits, [{ limit: 'authorizationPerTicket', observed: 160020, current: 200000, proposal: { authorizationPerTicket: 201000 }, tickets: ['US-02'] }], 'above 80% of the authorization is reported too');
   assert.equal(JSON.parse(readFileSync(join(raced.root, 'batches', raced.open.runId, 'settlement.json'), 'utf8')).digest, moved.digest);
   // CLI
   const cli = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n' } }); assert.equal(cli.after().errors, undefined);
@@ -683,7 +740,7 @@ test('settle sets each ticket\'s measured usage against its authorization, befor
   const unread = run('settle', join(cli.base, 'absent.json'), '--instance', cli.root);
   assert.equal(unread.status, 2); assert.match(unread.stderr, /absent\.json is not readable JSON/);
   const done = run('settle', meterFile, '--instance', cli.root);
-  assert.equal(done.status, 0, done.stdout + done.stderr); assert.equal(JSON.parse(done.stdout).status, 'clear');
+  assert.equal(done.status, 0, done.stdout + done.stderr); assert.equal(JSON.parse(done.stdout).status, 'clear'); assert.deepEqual(JSON.parse(done.stdout).limits, []);
   const again = run('settle', meterFile, '--instance', cli.root); assert.equal(again.status, 2); assert.match(again.stderr, /already settled/);
 });
 

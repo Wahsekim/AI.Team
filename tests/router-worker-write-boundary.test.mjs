@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { armBoundary, decideCall, logEntry, quotable } from '../src/router-worker/write-boundary.mjs';
+import { armBoundary, decideCall, logEntry, quotable, redacted } from '../src/router-worker/write-boundary.mjs';
 import { digest } from '../src/loop/contracts.mjs';
 import { inputFixture } from './fixtures/router-worker/input.mjs';
 
@@ -102,6 +102,30 @@ test('the hook process exits 0 to allow and 2 with a reason to deny; it fails cl
   assert.equal(runHook(f, call(f, 'sample-auditor', 'Write', join(f.team, 'audit.md'))).status, 2, 'no boundary: any subagent write is refused');
 });
 
+test('no session writes the team\'s limits with a file tool, the PM\'s included: the owner changes them with team-mode.mjs limits', t => {
+  const f = fixture(t); arm(f);
+  const limits = join(f.team, 'profiles/team-mode.json'), at = (path, cwd = f.team) => ({ ...call(f, undefined, 'Edit', path), cwd });
+  for (const [input, why] of [[at(limits), 'the PM\'s session, absolute'], [at('profiles/team-mode.json'), 'relative to the team'], [at('../profiles/team-mode.json', join(f.team, '.claude')), 'through ..'],
+    [at('PROFILES/Team-Mode.json'), 'another case'], [{ ...at(limits), agent_type: 'sample-auditor' }, 'a governance role'], [{ ...at(limits), agent_type: 'sample-worker-exec' }, 'a worker'],
+    [{ ...call(f, undefined, 'MultiEdit', limits), cwd: f.team }, 'MultiEdit'], [{ ...call(f, undefined, 'Write', limits), cwd: f.team }, 'Write'], [{ ...call(f, undefined, 'NotebookEdit', limits), cwd: f.team }, 'NotebookEdit']]) {
+    const denied = runHook(f, input);
+    assert.equal(denied.status, 2, why); assert.match(denied.stderr, /only the owner changes them, with: node kit\/scripts\/team-mode\.mjs limits <LIMITS\.json> --instance <instance-root>, at an interactive terminal/, why);
+  }
+  symlinkSync(join(f.team, 'profiles'), join(f.base, 'linked')); assert.equal(runHook(f, at(join(f.base, 'linked/team-mode.json'))).status, 2, 'through a symbolic link');
+  symlinkSync(join(f.base, 'nowhere.json'), join(f.team, 'dangling.json'));
+  for (const [path, why] of [[join(f.team, 'dangling.json'), 'a dangling symbolic link'], [join(f.team, 'profiles/project.md/x'), 'under a file']]) {
+    const written = runHook(f, { ...call(f, undefined, 'Write', path), cwd: f.team });
+    assert.equal(written.status, 0, `${why}: ${written.stderr}`);
+  }
+  rmSync(limits); symlinkSync(limits, join(f.base, 'to-limits.json'));
+  assert.equal(runHook(f, { ...call(f, undefined, 'Write', join(f.base, 'to-limits.json')), cwd: f.team }).status, 2, 'a dangling link that would create the missing limits file');
+  assert.equal(runHook(f, at(join(f.team, 'profiles/project.md'))).status, 0, 'another file of the team');
+  assert.equal(runHook(f, { ...call(f, undefined, 'Read', limits), cwd: f.team }).status, 0, 'reading it');
+  assert.equal(runHook(f, { ...call(f, undefined, 'Bash'), cwd: f.team, tool_input: { command: 'cat profiles/team-mode.json' } }).status, 0, 'the PM\'s shell is not judged');
+  rmSync(join(f.team, '.claude/rw-write-boundary.json')); assert.equal(runHook(f, at(limits)).status, 2, 'with no boundary file');
+  assert.equal(decideCall({ input: at(limits), boundary: null, projectDir: f.team }).decision, 'deny');
+});
+
 test('every hook call is logged without paths or commands, so a write that got through can be explained', t => {
   const f = fixture(t); arm(f);
   const secret = 'echo TOP-SECRET > /somewhere/else';
@@ -131,6 +155,23 @@ test('CLI arms from RUN.json, prints the record, exits 2 on refusal and 1 on usa
   assert.match(JSON.parse(readFileSync(join(f.team, '.claude/settings.json'), 'utf8')).hooks.PreToolUse[0].hooks[0].command, /scripts\/hooks\/rw-write-boundary\.mjs"$/);
   assert.equal(run(file, '--team-root', f.team, '--product-root', join(f.base, 'nope')).status, 2);
   assert.equal(run(file).status, 1);
+});
+
+test('a refused command is logged with the values that look like secrets redacted', () => {
+  const cases = [
+    ['API_TOKEN=abc123 npm test', 'API_TOKEN=<redacted> npm test'],
+    ['DB_PASSWORD="p w" make check', 'DB_PASSWORD=<redacted> make check'],
+    ['TOKEN=abc npm test', 'TOKEN=<redacted> npm test'],
+    ['PASSWORD=x SECRET=s KEY=k make', 'PASSWORD=<redacted> SECRET=<redacted> KEY=<redacted> make'],
+    ['export PASS=x; npm test', 'export PASS=<redacted>; npm test'],
+    ['API_KEY=k&&npm test', 'API_KEY=<redacted>&&npm test'],
+    ['curl -H "Authorization: Bearer xyz" https://example.test', 'curl -H "Authorization: <redacted>" https://example.test'],
+    ['git clone https://user:pa55@example.test/r.git', 'git clone https://<redacted>@example.test/r.git'],
+    ['echo ghp_0123456789abcdefghijklmnopqrstuvwxyz', 'echo <redacted>'],
+    ['node --test tests/router-worker/components/a-rather-long-file-name.test.mjs', 'node --test tests/router-worker/components/a-rather-long-file-name.test.mjs'],
+    ['npm run test:tag-list', 'npm run test:tag-list'],
+  ];
+  for (const [command, expected] of cases) assert.equal(redacted(command), expected, command);
 });
 
 test('a product root is quotable unless it holds a character a double-quoted shell word would read', () => {

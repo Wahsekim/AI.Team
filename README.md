@@ -227,7 +227,10 @@ frozen, finds what was written outside the tickets' paths and closes the batch;
 `commit` makes one commit per ticket that passed; `abort` clears a batch that
 will not run; `settle` sets each ticket's measured usage against its
 authorization, and the next batch does not open until that is done or the batch
-is marked as not metered with a reason ([details](docs/design/router-worker/batch.md)). Nothing has run
+is marked as not metered with a reason ([details](docs/design/router-worker/batch.md)). Only the owner
+changes the limits: the ledger line of the switch or of `team-mode.mjs limits` binds them, `before` refuses limits
+no line binds, the hook refuses any session's file-tool write of `profiles/team-mode.json`, and `after` and
+`settle` report each limit that stopped work with a proposal the owner may confirm. Nothing has run
 on a real team, so batches with real
 agents still run only in a throwaway copy of the team
 with a clone of the product, as described below.

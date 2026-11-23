@@ -224,3 +224,51 @@ being enforcement with a logged way out):
 
 Merging the pull request that adds this amendment ratifies it.
 
+
+### 2026-11-20: who changes the limits
+
+The limits of a Router/Worker team (`attemptsPerTicket`,
+`outputAllowancePerTicket`, `guardianOutputShare`, `authorizationPerTicket`,
+`allowedCommands`) were confirmed by the owner at the switch or with
+`team-mode.mjs limits`, but stored in `profiles/team-mode.json`, a file a PM
+session could edit with nothing to detect it. The owner decided in session on
+2026-11-20: "only human user, human tells router to change." and "router can
+report to human any case like token limit not enough etc... decision is made by
+human."
+
+- **The ledger binds the limits.** The `MODE SWITCH` line of a switch into
+  Router/Worker mode and every `LIMITS CHANGED` line end with
+  `limits <digest>`, the digest of the limits confirmed. "before" refuses a
+  batch (`LIMITS_NOT_BOUND`) when the limits in the profile are not the ones
+  the last such line binds, and names the owner's command. A team that went
+  live before lines carried a digest is refused the same way; the owner binds
+  its limits as they stand with `team-mode.mjs limits` and a request that
+  changes nothing, which is accepted only while the limits are unbound.
+- **Only a terminal confirms them.** `changeLimits`, and `switchMode` into
+  Router/Worker mode, refuse unless the caller says the code was typed at a
+  terminal and the process has one (`process.stdin.isTTY`), or runs under
+  `node --test` (`NODE_TEST_CONTEXT`). A PM session that imports the kit and
+  calls them changes nothing. Only a line that says the code was "typed at an
+  interactive terminal" binds limits.
+- **No session's file tool writes the limits.** The PreToolUse hook refuses a
+  Write, Edit, MultiEdit or NotebookEdit of the team's
+  `profiles/team-mode.json` from any session, the PM's own included, and names
+  `team-mode.mjs limits`, run by the owner. A shell command that writes the
+  file is not judged by the hook; the ledger digest is what catches it.
+- **The kit reports, the owner decides.** The records of "after" and "settle"
+  carry a `limits` list: each limit that stopped or nearly stopped work in the
+  batch, what was observed, the current value and a proposal the owner may
+  confirm. Nothing in the kit writes a limit from that list.
+
+Not covered: a PM that fakes a terminal (`script`, a pseudo-terminal of its
+own, or one line setting `process.stdin.isTTY` in a program that imports the
+kit) or sets `NODE_TEST_CONTEXT` gets past the terminal check; the profile
+packed under `holiday/` is not guarded and binds at the next switch back,
+where the owner sees it in the proposal; and a PM that
+forges a ledger line together with the digest of the limits it wrote is not
+detected. Nothing detects either. As for the batch records, the digests detect
+an accidental or careless edit, not a deliberate one by a session that can
+write the team's files; the owner's spot review of `pm-decisions.md` is the
+check on that.
+
+Merging the pull request that adds this amendment ratifies it.
