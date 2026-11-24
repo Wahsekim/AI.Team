@@ -6,7 +6,7 @@
   "topologyOnly": true,
   "executionMode": "wrappers",
   "maxConcurrentExec": 1,
-  "coverageDigest": "sha256:94b8d739583c530ce0f2ba55c723903b3e5a523296204af7748e7f216d0e37de",
+  "coverageDigest": "sha256:5cf3416ef1bac2824e1c456f7bee0744c99bf2fc16949e8a15308036798ea880",
   "dispatch": "engine",
   "gatePath": false,
   "limits": {
@@ -16,9 +16,9 @@
     "authorizationPerTicket": 200000,
     "authorizationPerReviewerCall": 300000,
     "allowedCommands": [
-      "fvm dart format --set-exit-if-changed .",
-      "fvm flutter analyze",
-      "fvm flutter test"
+      "npm run format:check",
+      "npm run lint",
+      "npm test"
     ]
   },
   "staffing": {
@@ -105,8 +105,8 @@
     "schemaVersion": 1,
     "mode": "router-worker",
     "project": {
-      "name": "UHF Locator POC",
-      "slug": "uhf-locator-poc",
+      "name": "Sample Project",
+      "slug": "sample-project",
       "productRoot": "<product-root>",
       "ui": true
     },
@@ -260,7 +260,7 @@
       },
       "WF-13": {
         "status": "enabled",
-        "reason": "pubspec.lock / pub cache first; web search needs owner ack",
+        "reason": "lockfile / package cache first; web search needs owner ack",
         "decisionRef": null
       },
       "WF-14": {
@@ -280,7 +280,7 @@
       },
       "WF-17": {
         "status": "deferred",
-        "reason": "POC horizon",
+        "reason": "early-stage horizon",
         "decisionRef": null
       },
       "WF-18": {
@@ -310,12 +310,12 @@
       },
       "WF-23": {
         "status": "enabled",
-        "reason": "chaos (Cass) hired 2026-09-24, ADR 0002",
+        "reason": "chaos role hired 2026-09-24, team ADR",
         "decisionRef": null
       },
       "WF-24": {
         "status": "enabled",
-        "reason": "product ADRs in ../uhf_locator_poc/docs/adr/, team ADRs in decisions/",
+        "reason": "product ADRs in <product-root>/docs/adr/, team ADRs in decisions/",
         "decisionRef": null
       },
       "WF-25": {
@@ -325,7 +325,7 @@
       },
       "WF-26": {
         "status": "enabled",
-        "reason": "emulator/simulator per agents/_shared/browser-access.md",
+        "reason": "browser per agents/_shared/browser-access.md",
         "decisionRef": null
       },
       "WF-27": {
@@ -350,22 +350,22 @@
       },
       "WF-31": {
         "status": "enabled",
-        "reason": "first count directive 2026-09-24 (10 rounds); runtime compat PASS; guardian = Cass",
+        "reason": "first count directive 2026-09-24 (10 rounds); runtime compat PASS; guardian = chaos role",
         "decisionRef": null
       }
     }
   },
-  "specDigest": "sha256:e3c8613eacb271176af89d7d30abcce242b515312ebf4a2cb3346622c6c2af3f",
-  "draftDigest": "sha256:e724cc9fc9345d6adceae745c469cd755962a3db1054e8136a9edd4e113ef022",
-  "confirmedProposal": "sha256:975f56bdc5e4da5b0238f4ddcafb2bb7f264d4d5a71e95f588260cb39e09b6d6",
+  "specDigest": "sha256:fdb24e442ac3ed2babebf9f93491edd90ccff8227713a25753f196db09fe537d",
+  "draftDigest": "sha256:abad6e9350a8ecaa205a1155c12eff8fc9952ce3b14b8d7bf6a5ea39bd8ae53d",
+  "confirmedProposal": "sha256:da74ec073a8b290bd1b4d5b4a42f73e7bff0af8d2831089572f7f92ee9b945ff",
   "ownFiles": [
-    ".claude/agents/uhf-locator-poc-architect.md",
-    ".claude/agents/uhf-locator-poc-auditor.md",
-    ".claude/agents/uhf-locator-poc-coach.md",
-    ".claude/agents/uhf-locator-poc-security.md",
-    ".claude/agents/uhf-locator-poc-worker-check.md",
-    ".claude/agents/uhf-locator-poc-worker-exec.md",
-    ".claude/agents/uhf-locator-poc-worker-guard.md",
+    ".claude/agents/sample-project-architect.md",
+    ".claude/agents/sample-project-auditor.md",
+    ".claude/agents/sample-project-coach.md",
+    ".claude/agents/sample-project-security.md",
+    ".claude/agents/sample-project-worker-check.md",
+    ".claude/agents/sample-project-worker-exec.md",
+    ".claude/agents/sample-project-worker-guard.md",
     "agents/roster.md",
     "agents/router-worker-contract.md",
     "agents/router-worker-review.md",

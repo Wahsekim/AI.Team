@@ -174,6 +174,5 @@ open engine batch. Main-session dispatch (`rw-dispatch.jsonl`) is not read.
 ## Tests
 
 `node --test tests/dashboard.test.mjs`. The fixture
-`tests/fixtures/dashboard/rw-instance/` is the real US-61 batch of the UHF
-instance with host paths replaced by `<instance>`, `<product-root>` and
-`<home>`.
+`tests/fixtures/dashboard/rw-instance/` is a synthetic batch shaped like a real one, with
+host paths written as `<instance>`, `<product-root>` and `<home>`.

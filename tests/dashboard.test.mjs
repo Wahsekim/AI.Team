@@ -1,5 +1,5 @@
 // Tests for the read-only dashboard (scripts/dashboard.mjs, src/dashboard/).
-// Fixture: the real US-61 Router/Worker batch of the UHF instance, host paths replaced.
+// Fixture: a synthetic Router/Worker batch shaped like a real one.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
@@ -12,7 +12,7 @@ import { render } from '../src/dashboard/render.mjs'
 
 const FIXTURES = fileURLToPath(new URL('./fixtures/dashboard/', import.meta.url))
 const SCRIPT = fileURLToPath(new URL('../scripts/dashboard.mjs', import.meta.url))
-const RUN = 'rw-16a5df77-L101-mwuxucug'
+const RUN = 'rw-3c9e1a42-L101-n2k8q4vz'
 const NOW = new Date('2026-11-24T18:00:00Z')
 const OPTS = { now: NOW, timezone: 'UTC' }
 
@@ -28,17 +28,17 @@ const editJSON = (path, edit) => writeFileSync(path, JSON.stringify(edit(readJSO
 const page = (inst, opts = {}) => render(collect(inst, { ...OPTS, ...opts }))
 const ticket = snap => snap.batch.value.tickets[0]
 
-test('collects the real US-61 batch values with their sources', () => {
+test('collects the fixture batch values with their sources', () => {
   const snap = collect(join(FIXTURES, 'rw-instance'), OPTS)
   const batch = snap.batch.value, t = ticket(snap)
-  assert.equal(snap.project.name.value, 'UHF Locator POC')
+  assert.equal(snap.project.name.value, 'Sample Project')
   assert.equal(batch.runId, RUN)
   assert.equal(batch.phase, 'archived')
   assert.deepEqual([batch.roundCurrent.value, batch.roundCeiling.value, batch.ticketTotal.value, batch.acceptedCount.value], [1, 1, 1, 0])
   assert.equal(batch.tokens.value, 148758)
   assert.equal(batch.unattributed.guardian.value, 17589)
   assert.equal(batch.unattributed.mainSession.value, 137732)
-  assert.equal(batch.activeTicketId, 'US-61')
+  assert.equal(batch.activeTicketId, 'T-1')
   assert.equal(batch.activeKind, 'last-executed')
   assert.equal(t.status, 'blocked')
   assert.equal(t.tokens.value, 131169)
