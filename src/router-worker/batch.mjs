@@ -378,6 +378,8 @@ export function abortBatch({ teamRoot, instanceRoot }) {
     need(!exists(join(instance, JOURNAL)), 'A mode switch was interrupted; roll it back first with: team-mode.mjs switch recover --instance <instance-root>');
     const record = readJSON(join(instance, BATCH_FILE)), held = readLease({ productRoot }), boundary = readBoundary(instance);
     const ours = held.status === 'held' && held.lease.teamRoot === instance, open = boundary ? stateOf(boundary) !== 'closed' : false;
+    // After releases the lock when it closes a batch: a free lock is reported as such, not as a release that failed.
+    const lockReleased = ours || (held.status === 'free' ? 'already-free' : false);
     // A batch that after claimed or closed and commit cannot finish: the boundary is closed and the lock released
     // if after did not get that far, its records are archived, and nothing is committed.
     if (exists(join(instance, AFTER_FILE))) {
@@ -389,7 +391,7 @@ export function abortBatch({ teamRoot, instanceRoot }) {
       // A resolve already took the held tickets out of the work tree; their patches stay where it saved them.
       const patches = Array.isArray(readJSON(join(instance, RESOLUTION_FILE))?.removed) && !id.startsWith('unreadable-') ? `; the tickets resolve held are patches under reviews/held/${id}/ and are not put back` : '';
       const work = (made.length ? `${made.length} commit(s) were already made by the kit and stay on the branch (${made.join(', ')}); the rest of what the batch changed is still in the product work tree` : 'Nothing was committed by the kit; what the batch changed is still in the product work tree') + patches;
-      const stamp = new Date().toISOString(), note = { schemaVersion: 1, stage: 'batch-archived-without-commit', runId: id, archivedAt: stamp, commitsMade: made, boundary: boundary ? 'closed' : 'not-restored', lockReleased: ours,
+      const stamp = new Date().toISOString(), note = { schemaVersion: 1, stage: 'batch-archived-without-commit', runId: id, archivedAt: stamp, commitsMade: made, boundary: boundary ? 'closed' : 'not-restored', lockReleased,
         next: `${work}: commit it by hand on the working branch, or discard it.${boundary ? '' : ' The write-boundary file is missing or was changed: a mode switch to specialist and back rebuilds it.'}` };
       appendFileSync(join(instance, LEDGER), `${stamp.slice(0, 10)} BATCH ${id} ARCHIVED WITHOUT COMMIT by rw-batch.mjs abort: the batch was not finished by the kit. ${work}.\n`);
       archiveBatch(instance, id, { 'abandoned.json': { ...note, digest: digest(note) } }, RECORDS);
@@ -403,7 +405,7 @@ export function abortBatch({ teamRoot, instanceRoot }) {
     // A boundary that is missing or was changed refuses every subagent's write and shell command. This command cannot rebuild it; a mode switch does.
     appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} BATCH ${runId ?? '(no readable record)'} ABORTED by rw-batch.mjs abort: ${boundary ? 'the write boundary is closed' : 'the write boundary is missing or was changed and was NOT restored'}${ours ? ', the lock released' : ''}. Nothing about the work was checked.\n`);
     rmSync(join(instance, BATCH_FILE), { recursive: true, force: true });
-    const body = { schemaVersion: 1, stage: 'batch-aborted', runId, boundary: boundary ? 'closed' : 'not-restored', lockReleased: ours, abortedAt: at,
+    const body = { schemaVersion: 1, stage: 'batch-aborted', runId, boundary: boundary ? 'closed' : 'not-restored', lockReleased, abortedAt: at,
       ...(boundary ? {} : { next: 'The write boundary is missing or was changed: every subagent write and shell command is refused until a mode switch to specialist and back rebuilds it' }) };
     return { ...body, digest: digest(body) };
   } catch (error) {

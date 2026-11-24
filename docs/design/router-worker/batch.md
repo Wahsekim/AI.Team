@@ -821,6 +821,10 @@ it.
 A "before" that finds this team's lock with no batch record, or a boundary
 that is not closed, refuses and names `abort`.
 
+Its output's `lockReleased` is `true` when it released this team's lock,
+`"already-free"` when no lock was held (`after` releases it when it closes a
+batch), and `false` when the lock is held by another team or cannot be read.
+
 ## What decides the limits
 
 The ceiling, the attempts, the authorization, the tools and the workers come

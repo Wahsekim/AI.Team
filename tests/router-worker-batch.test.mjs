@@ -344,6 +344,7 @@ test('after refuses a return that is not this batch\'s and changes nothing; find
   // The way out of a closed batch the kit will not commit: its records are archived, the work stays in the tree.
   const out = abortBatch({ teamRoot: f.kit, instanceRoot: f.root });
   assert.equal(out.errors, undefined, JSON.stringify(out.errors)); assert.equal(out.stage, 'batch-archived-without-commit');
+  assert.equal(out.lockReleased, 'already-free', 'after had released the lock; abort does not say it failed to');
   assert.deepEqual(readdirSync(join(f.root, 'batches', f.open.runId)).sort(), ['abandoned.json', 'after.json', 'batch.json', 'return.json']); assert.equal(existsSync(join(f.root, BATCH_FILE)), false);
   assert.match(f.read('pm-decisions.md'), /ARCHIVED WITHOUT COMMIT by rw-batch\.mjs abort/); assert.ok(f.status().includes('src/app.js'), 'the work is still there');
   f.unmetered(); assert.equal((await f.before(batchOf(ticket('US-07', ['src/q.js'])), { startAsIs: true })).errors, undefined, 'and the team can open its next batch');
