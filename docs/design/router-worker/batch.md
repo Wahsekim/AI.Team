@@ -429,14 +429,17 @@ a narrower pattern would miss `oauth/` or `authz.js`.
   nothing committed; `resolve` ends the review state once every verdict is in.
 - **`review-brief --reviewer R`** prints the brief the PM gives reviewer R's
   wrapper, and appends it, sealed, to `rw-batch-review-R.json` (one entry per
-  attempt: run, reviewer, wrapper, attempt, `briefDigest`, `madeAt`,
-  `treeDigest` (every changed path of the work tree with its content, taken
-  before the commands run), the tickets with
+  attempt: run, reviewer, wrapper, attempt, `seq` (one more than the highest
+  `seq` among the briefs of this batch, every reviewer's), `briefDigest`,
+  `madeAt`, the tickets with
   their goal, acceptance, changed and flagged paths and content digests, the
   rule ids, the ADRs, each verification command's exit and output digest).
   When a command failed or timed out, it also says so on standard error (the
   result's `notice`) and tells the PM to brief again before dispatching the
-  reviewer if the failure is flaky or its cause is gone. The
+  reviewer if the failure is flaky or its cause is gone. `review-brief` takes
+  no lock around reading the briefs and writing its own: two briefs made at the
+  same time for different reviewers can get the same `seq`, and two for the
+  same reviewer can lose one. The
   brief holds, for each ticket R must review: the goal and acceptance, the
   reason it was flagged, and the flagged files as absolute paths to open with
   the Read tool; the diff of those tickets from the batch's start, untracked
@@ -589,16 +592,19 @@ that the product is on the batch's branch at the batch's start commit, with no
 Git operation in progress and the same commit hooks, and that every changed path
 of a ticket still to be committed or held has the content `after` pinned
 (`tickets[].content`). It also reads the verification commands the kit ran when
-the reviews were briefed. On each work tree (`treeDigest`) the latest brief by
-`madeAt` decides, whichever reviewer it was for: a later run that passed clears
-an earlier failure, and a later failure stands. When that latest run on the work
-tree as it is now failed or timed out and the tree is exactly what would be
-committed (nothing changed before the batch, `after` left no path, and no review
-holds a ticket), it refuses and names the command, and `abort` is the way out.
-Every other such failure is recorded in the resolution (`failedAtBrief`) and on
-its ledger line. A brief that ran no command (the batch freezes none, or none
-is still confirmed for the team) has nothing that failed, so a batch whose
-verification commands list is empty is never held here. A reviewer's verdict is
+the reviews were briefed. Across every reviewer's briefs of the batch, the most
+recent run decides: the brief with the highest `seq`, never the wall clock. A
+brief recorded before `seq` existed comes before every numbered one, and such
+briefs are ordered by `madeAt` among themselves. A later run that passed clears
+an earlier failure, and a later failure stands, whatever the commands wrote in
+between. When the most recent run failed or timed out and the tree is exactly
+what would be committed (nothing changed before the batch, `after` left no
+path, and no review holds a ticket), it refuses and names the command, and
+`abort` is the way out. Otherwise every failure at a brief is recorded in the
+resolution (`failedAtBrief`) and on its ledger line. A brief that ran no
+command (the batch freezes none, or none is still confirmed for the team) has
+nothing that failed, so a batch whose verification commands list is empty is
+never held here. A reviewer's verdict is
 never changed by it. Then:
 
 1. **Held patches.** For each ticket rejected or whose review was not obtained,

@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { writeFileSync, readFileSync, existsSync, rmSync, mkdirSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { bytesDigest } from '../src/loop/contracts.mjs';
+import { bytesDigest, digest } from '../src/loop/contracts.mjs';
 import { abortBatch, beforeBatch } from '../src/router-worker/batch.mjs';
 import { afterBatch } from '../src/router-worker/batch-close.mjs';
 import { runWorkflow, makeAgentImpl } from '../scripts/lib/workflow-harness.mjs';
@@ -164,7 +164,7 @@ test('a command that failed when the review was briefed on a tree holding more t
   assert.deepEqual(f.commit().commits.map(commit => commit.ticket), ['US-01']);
 });
 
-test('the latest run of the commands on the work tree decides: a later passing brief of another reviewer clears a failure, a later failing one holds; review-brief tells the PM of a failure', async t => {
+test('the most recent run of the commands decides, whichever reviewer it was briefed for: a later passing brief clears an earlier failure, which is recorded; review-brief tells the PM of a failure', async t => {
   const f = live(t, { commands: GATE });
   await runBatch(f, [ticket('US-01', ['src/authz.js'])], { 'src/authz.js': 'export const x = 2;\n' });
   writeFileSync(join(f.base, 'gate-fails'), '');
@@ -175,21 +175,59 @@ test('the latest run of the commands on the work tree decides: a later passing b
   rmSync(join(f.base, 'gate-fails'));
   const passed = f.brief('architect', ['US-01']);
   assert.equal(passed.record.verification[0].exit, 0); assert.equal(passed.notice, undefined, 'a brief whose commands passed carries no notice');
-  assert.equal(passed.record.treeDigest, failed.treeDigest, 'both briefs ran on the same work tree');
+  assert.deepEqual([failed.seq, passed.record.seq], [1, 2], 'the briefs of a batch are numbered across reviewers');
   assert.equal(f.judge('security', transcriptOf(f, { brief: cli.stdout, record: failed })).outcome, 'accepted');
   assert.equal(f.judge('architect', transcriptOf(f, passed)).outcome, 'accepted');
   const resolved = f.resolve();
-  assert.equal(resolved.errors, undefined, JSON.stringify(resolved.errors)); assert.deepEqual(resolved.failedAtBrief, []);
+  assert.equal(resolved.errors, undefined, JSON.stringify(resolved.errors));
+  assert.deepEqual(resolved.failedAtBrief, [{ reviewer: 'security', attempt: 1, command: f.commands[0], exit: 1, timedOut: false }], 'the earlier failure is recorded');
+  assert.match(f.ledger(), /verification failed when the review was briefed: .*gate-fails.* \(security's brief 1: exit 1\)/);
   assert.deepEqual(f.commit().commits.map(commit => commit.ticket), ['US-01']);
+});
 
-  const g = live(t, { commands: GATE });
-  await runBatch(g, [ticket('US-01', ['src/authz.js'])], { 'src/authz.js': 'export const x = 2;\n' });
-  const first = g.brief('security');
-  writeFileSync(join(g.base, 'gate-fails'), '');
-  const last = g.brief('architect', ['US-01']);
+// A reviewer's brief records rewritten and sealed again, as a record of another kit version or clock would be.
+function rewritten(f, reviewer, made, change) {
+  const path = join(f.root, `rw-batch-review-${reviewer}.json`), kept = JSON.parse(readFileSync(path, 'utf8'));
+  kept.entries = kept.entries.map(({ digest: _digest, ...body }) => { const next = change(body); return { ...next, digest: digest(next) }; });
+  writeFileSync(path, JSON.stringify(kept, null, 2) + '\n');
+  return { brief: made.brief, record: kept.entries.at(-1) };
+}
+
+test('a later failure after an earlier pass holds resolve, even when the clock stepped back between the briefs', async t => {
+  const f = live(t, { commands: GATE });
+  await runBatch(f, [ticket('US-01', ['src/authz.js'])], { 'src/authz.js': 'export const x = 2;\n' });
+  const first = f.brief('security');
+  writeFileSync(join(f.base, 'gate-fails'), '');
+  const last = f.brief('architect', ['US-01']);
   assert.match(last.notice, /failed or timed out when this brief was made/);
-  assert.equal(g.judge('security', transcriptOf(g, first)).outcome, 'accepted'); assert.equal(g.judge('architect', transcriptOf(g, last)).outcome, 'accepted');
-  assert.match(refusal(g.resolve()).reason, /failed when the review was briefed.*architect's brief 1: exit 1/);
+  const stepped = rewritten(f, 'architect', last, body => ({ ...body, madeAt: '2000-01-01T00:00:00.000Z' }));
+  assert.equal(f.judge('security', transcriptOf(f, first)).outcome, 'accepted'); assert.equal(f.judge('architect', transcriptOf(f, stepped)).outcome, 'accepted');
+  assert.match(refusal(f.resolve()).reason, /failed when the review was briefed.*architect's brief 1: exit 1/);
+});
+
+test('a failing command that writes an untracked file still holds resolve', async t => {
+  const f = live(t, { commands: base => [`test ! -f "${base}/gate-fails" || { echo log > out.log; exit 1; }`] });
+  await runBatch(f, [ticket('US-01', ['src/authz.js'])], { 'src/authz.js': 'export const x = 2;\n' });
+  writeFileSync(join(f.base, 'gate-fails'), '');
+  const made = f.brief('security');
+  assert.equal(made.record.verification[0].exit, 1); assert.ok(existsSync(join(f.product, 'out.log')), 'the failing command wrote its log');
+  assert.equal(f.judge('security', transcriptOf(f, made)).outcome, 'accepted');
+  assert.match(refusal(f.resolve()).reason, /failed when the review was briefed.*security's brief 1: exit 1/);
+  rmSync(join(f.product, 'out.log'));
+  assert.match(refusal(f.resolve()).reason, /failed when the review was briefed/, 'removing the log does not clear the failure');
+  assert.match(refusal(f.commit()).reason, /resolve it first/);
+});
+
+test('brief records made before they were numbered are ordered by madeAt, and the latest one still holds', async t => {
+  const f = live(t, { commands: GATE });
+  await runBatch(f, [ticket('US-01', ['src/authz.js'])], { 'src/authz.js': 'export const x = 2;\n' });
+  const first = f.brief('security');
+  writeFileSync(join(f.base, 'gate-fails'), '');
+  const last = f.brief('architect', ['US-01']);
+  const unnumbered = (reviewer, made) => rewritten(f, reviewer, made, ({ seq: _seq, ...body }) => body);
+  assert.equal(f.judge('security', transcriptOf(f, unnumbered('security', first))).outcome, 'accepted');
+  assert.equal(f.judge('architect', transcriptOf(f, unnumbered('architect', last))).outcome, 'accepted');
+  assert.match(refusal(f.resolve()).reason, /failed when the review was briefed.*architect's brief 1: exit 1/);
 });
 
 test('a batch started as is holds more than what would be committed: a failure when the review was briefed is recorded, not held on', async t => {
