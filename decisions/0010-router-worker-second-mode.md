@@ -297,15 +297,18 @@ authority.
 - From each, "before" derives one exact command:
   `git --literal-pathspecs mv -- "<from>" "<to>"`, prefixed with
   `mkdir -p -- "<folder>" && ` when that folder does not exist, or
-  `git --literal-pathspecs rm -q -- "<path>"`. A worker may run exactly those commands, inside
-  its grant, for that batch only. They are added to the exec worker's command
-  list in the write boundary, not to the checker's or the Guardian's, and the
-  hook judges them like the verification commands: the exact text, from the
-  product root, inside the sandbox if there is one.
+  `git --literal-pathspecs rm -q -- "<path>"`. The exec worker's command list
+  in the write boundary holds the batch's declared moves and deletions, all
+  tickets together, as its write paths hold all tickets' `paths`; the
+  checker's and the Guardian's lists hold none. The hook judges them like the
+  verification commands: the exact text, from the product root, inside the
+  sandbox if there is one, for that batch only.
 - The exec brief states the real grant (`writePaths`, the ticket's `paths`),
-  the planned paths and the ticket's own commands, and says the worker runs no
-  other command, Git included. A brief compiled for a standing batch no longer
-  opens with the offline-preview line.
+  the planned paths and the ticket's own commands. It tells the worker to run
+  only those, says the host also accepts the other tickets' moves and
+  deletions and that they are not the worker's to run, and says the worker
+  runs no other command, Git included. A brief compiled for a standing batch
+  no longer opens with the offline-preview line.
 
 This widens the amendment of 2026-11-18 by those commands only. They are not
 confirmed by the owner one by one: the PM declares them in the ticket, and the

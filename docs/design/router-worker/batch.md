@@ -212,7 +212,7 @@ their shell:
 | Call | Decision |
 |---|---|
 | exec worker or checker, `cd "<product root>" && <command>` with a command of the batch | approved: no permission prompt |
-| exec worker, the same with a Git command of a ticket's `moves` or `deletes` (see "Moves and deletions") | approved; the checker and the Guardian are refused it |
+| exec worker, the same with a Git command of the batch's declared `moves` or `deletes` (see "Moves and deletions") | approved; the checker and the Guardian are refused it |
 | the same with the product root unquoted, when its path needs no quotes | approved |
 | the same command alone, when the shell is at the product root | approved |
 | any other text: an argument added, two commands joined, a pipe, another folder, a command of the team's list that is not this batch's | refused, and the refusal names the commands that run |
@@ -224,8 +224,8 @@ their shell:
 
 The text must be the confirmed command exactly; only spaces and line breaks
 around it are ignored. A worker reads files with its file tools; it has no
-`ls`, `cat` or `git` in a batch, apart from the exact Git commands of its
-tickets' moves and deletions. A command a ticket needs and the list lacks is
+`ls`, `cat` or `git` in a batch, apart from the exact Git commands of the
+batch's declared moves and deletions. A command a ticket needs and the list lacks is
 the owner's to add, before the batch.
 
 ### Moves and deletions
@@ -254,8 +254,9 @@ With its file tools a worker can write a file but not rename or delete one
 No move lands in a submodule: a product whose index holds one opens no batch
 at all (`SUBMODULE_PRESENT`, step 6).
 
-From each it derives one exact command, given to the exec worker's shell for
-that batch only, and to no other worker:
+From each it derives one exact command. The exec worker's shell accepts the
+commands of the whole batch, all tickets together, as its write paths are all
+tickets' `paths`, for that batch only; no other worker's shell accepts them:
 
 | Declared | Command |
 |---|---|
@@ -266,8 +267,10 @@ that batch only, and to no other worker:
 Git takes each path as written, never as a pattern, as `commit` does.
 
 The exec brief lists the ticket's own commands as `gitCommands`, beside its
-`writePaths` (the ticket's `paths`) and `plannedPaths`, and says that the worker
-runs no other command, Git included. A worker that runs another `git mv`, the
+`writePaths` (the ticket's `paths`) and `plannedPaths`. It tells the worker to
+run only those, says that the other tickets' moves and deletions are not its
+to run though the host accepts them, and that it runs no other command, Git
+included. A worker that runs another `git mv`, the
 same one with a flag added, or one of these commands from the checker is
 refused like any other command. "after" and `commit` treat the result as any
 other change: both sides of a rename and the deleted path lie in the ticket's

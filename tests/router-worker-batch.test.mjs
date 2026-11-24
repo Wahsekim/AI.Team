@@ -72,7 +72,7 @@ test('in a batch a worker\'s shell runs the confirmed verification commands from
   const hook = (agent, command) => spawnSync('sh', ['-c', JSON.parse(f.read('.claude/settings.json')).hooks.PreToolUse.at(-1).hooks[0].command], { encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: f.root },
     input: JSON.stringify({ tool_name: 'Bash', agent_type: agent, cwd: f.root, tool_input: { command } }) });
   const approved = hook(exec, `cd "${f.product}" && npm test`);
-  assert.equal(approved.status, 0, approved.stderr); assert.deepEqual(JSON.parse(approved.stdout).hookSpecificOutput, { hookEventName: 'PreToolUse', permissionDecision: 'allow', permissionDecisionReason: 'A command frozen for this batch: a verification command the owner confirmed, or a move or deletion its ticket declared' });
+  assert.equal(approved.status, 0, approved.stderr); assert.deepEqual(JSON.parse(approved.stdout).hookSpecificOutput, { hookEventName: 'PreToolUse', permissionDecision: 'allow', permissionDecisionReason: 'A command frozen for this batch: a verification command the owner confirmed, or a move or deletion a ticket of this batch declared' });
   const refused = hook(exec, 'curl example.invalid'); assert.equal(refused.status, 2); assert.equal(refused.stdout, ''); assert.match(refused.stderr, /only the verification commands confirmed for this team/);
   const unjudged = hook('tag-list-fixture-architect', 'ls'); assert.equal(unjudged.status, 0); assert.equal(unjudged.stdout, '', 'no decision is given for an agent that is not a worker');
   assert.deepEqual(f.read('.claude/rw-write-boundary.log.jsonl').trim().split('\n').map(line => JSON.parse(line)).map(line => [line.decision, line.judged]), [['approve', true], ['deny', true], ['allow', false]]);

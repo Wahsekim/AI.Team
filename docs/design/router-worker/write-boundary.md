@@ -108,7 +108,7 @@ switch, not by a run, and a boundary file exists at all times:
 | State (`state`) | Boundary file | Workers | Reviewers | Other agents |
 |---|---|---|---|---|
 | no batch open (`closed`) | the three workers, no write path | every write and command refused | not judged | not judged |
-| batch open (`batch`) | the three workers, exec with the batch's write paths | exec inside its paths only; exec and the checker the confirmed commands, exec also the Git moves and deletions its tickets declare | not judged | not judged |
+| batch open (`batch`) | the three workers, exec with the batch's write paths | exec inside its paths only; exec and the checker the confirmed commands, exec also the Git moves and deletions the batch's tickets declare, all tickets together | not judged | not judged |
 | batch in review (`review`, ADR 0011) | the three workers with nothing, each reviewer's wrapper with `duty: "review"`, the run id and the team root | every write and command refused | no product write, no shell; the Architect writes `decisions/drafts/**` of the team folder only | not judged |
 | file missing or edited | none readable | every write refused | every write refused | every write refused |
 

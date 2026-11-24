@@ -112,6 +112,7 @@ test('a standing batch brief states the ticket\'s grant and the exact git comman
   assert.deepEqual(taskData(exec).plannedPaths, standing.proposal.expectedPaths);
   assert.deepEqual(taskData(exec).gitCommands, commands);
   assert.match(exec, /run no other command, Git included/);
+  assert.match(exec, /this ticket's own gitCommands/); assert.match(exec, /the other tickets of this batch[^.]*not yours to run/, 'the boundary is batch-wide; the brief says which commands are this worker\'s');
   assert.equal(taskData(check).gitCommands, undefined); assert.ok(!check.includes('git mv'), 'the checker is not given the moves');
   const none = compile(inputFixture(), { standingBatch: true });
   assert.deepEqual(taskData(none.renderedBriefs.exec).gitCommands, [], 'a ticket that declares no move runs no git command');

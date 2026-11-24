@@ -173,7 +173,7 @@ const HEADER = {
   standing: 'Router/Worker batch brief, frozen when the PM opened this batch. It is your assignment: do it now, inside the limits below, which the host enforces.',
   offline: 'Frozen Router/Worker offline preview. This document is not dispatch authority.',
 };
-const SHELL = 'Run only the verificationCommands and gitCommands listed here, each exactly as written, from the product root; run no other command, Git included. Move or delete a tracked file only with its gitCommands.';
+const SHELL = 'Run only the verificationCommands and this ticket\'s own gitCommands listed here, each exactly as written, from the product root; run no other command, Git included. The host also accepts the moves and deletions the other tickets of this batch declare: they are not yours to run. Move or delete a tracked file only with these gitCommands.';
 
 function render(input, duty, methods, standingBatch) {
   const { ticket: t, mandate: m, proposal: p, policy, baseline } = input;
