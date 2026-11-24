@@ -1,10 +1,10 @@
-import { readFileSync, statSync, writeSync, readSync, openSync } from 'node:fs';
+import { readFileSync, statSync, writeSync, readSync, openSync, existsSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { parseJSON } from '../src/loop/contracts.mjs';
 import { draftTeam, writeDraft, verifyDraft } from '../src/router-worker/draft.mjs';
 import { stageTeam } from '../src/router-worker/stage.mjs';
 
-import { proposeSwitch, switchMode, recoverSwitch, proposeLimits, changeLimits } from '../src/router-worker/switch.mjs';
+import { proposeSwitch, switchMode, recoverSwitch, proposeLimits, changeLimits, recordedProduct } from '../src/router-worker/switch.mjs';
 import { draftRequest } from '../src/router-worker/request.mjs';
 import { proposeAcknowledge, acknowledgeEscalation } from '../src/router-worker/escalations.mjs';
 
@@ -74,26 +74,29 @@ if (process.argv[2] === 'acknowledge') {
   finish(acknowledgeEscalation({ ...common, confirm: proposal.digest, atTerminal: true }), true);
 }
 
-// switch <specialist|router-worker> <REQUEST.json> --instance <root> --product-root <product>
+// switch <specialist|router-worker|rw> [REQUEST.json] [--instance <root>] [--product-root <product>]
 //   Prints the proposal. At an interactive terminal it then asks for the proposal's code and switches when it is
 //   typed; anywhere else it changes nothing (exit 2). A session that runs commands without a terminal cannot confirm.
-// switch recover --instance <root>
+//   Defaults: the request {}, the current folder as instance, the product_repo_path of its profiles/project.md.
+// switch recover [--instance <root>]
 //   Rolls back a switch that was interrupted.
 if (process.argv[2] === 'switch') {
-  const [, to, ...tail] = process.argv.slice(2), recover = to === 'recover', [file, ...rest] = recover ? [null, ...tail] : tail, options = {};
-  let wellFormed = rest.length % 2 === 0;
-  for (let i = 0; i < rest.length; i += 2) { if (Object.hasOwn(options, rest[i]) || !rest[i + 1]) wellFormed = false; options[rest[i]] = rest[i + 1]; }
-  const allowed = recover ? ['--instance'] : ['--instance', '--product-root'];
-  if (!wellFormed || !Object.keys(options).every(key => allowed.includes(key)) || !options['--instance'] || (!recover && (!['specialist', 'router-worker'].includes(to) || !file || !options['--product-root']))) {
-    console.error('usage: node scripts/team-mode.mjs switch <specialist|router-worker> <REQUEST.json> --instance <instance-root> --product-root <product-root>   (REQUEST.json; confirmed by typing a code at an interactive terminal: {"spec"?: {...}, "limits"?: {...}})\n'
-      + '       node scripts/team-mode.mjs switch recover --instance <instance-root>   (rolls back an interrupted switch)');
+  const [mode, ...tail] = process.argv.slice(3), to = mode === 'rw' ? 'router-worker' : mode, recover = to === 'recover';
+  const file = !recover && tail[0] && !tail[0].startsWith('--') ? tail[0] : null;
+  const options = flags(file ? tail.slice(1) : tail, recover ? ['--instance'] : ['--instance', '--product-root']);
+  if (!options || (!recover && !['specialist', 'router-worker'].includes(to))) {
+    console.error('usage: node kit/scripts/team-mode.mjs switch <specialist|router-worker|rw> [REQUEST.json] [--instance <instance-root>] [--product-root <product-root>]   (run from the instance root; REQUEST.json defaults to {}: {"spec"?: {...}, "limits"?: {...}}; confirmed by typing a code at an interactive terminal)\n'
+      + '       node kit/scripts/team-mode.mjs switch recover [--instance <instance-root>]   (rolls back an interrupted switch)');
     process.exit(1);
   }
-  const instanceRoot = resolve(options['--instance']), teamRoot = join(instanceRoot, 'kit');
+  const instanceRoot = resolve(options['--instance'] ?? '.'), teamRoot = join(instanceRoot, 'kit');
   if (recover) { const result = recoverSwitch({ teamRoot, instanceRoot }); finish(result, true); }
+  if (!existsSync(join(instanceRoot, 'kit.lock'))) finish({ errors: [{ code: 'SWITCH_REFUSED', field: 'switch', reason: `${instanceRoot} is not an instance root (no kit.lock); run from the instance root or pass --instance <instance-root>` }] }, false);
+  const productRoot = options['--product-root'] ? resolve(options['--product-root']) : recordedProduct(instanceRoot);
+  if (!productRoot) finish({ errors: [{ code: 'SWITCH_REFUSED', field: 'switch', reason: 'profiles/project.md records no product_repo_path; pass --product-root <product-root>' }] }, false);
   let request;
-  try { request = JSON.parse(readFileSync(file, 'utf8')); } catch { request = null; }
-  const common = { to, request, teamRoot, instanceRoot, productRoot: resolve(options['--product-root']) };
+  try { request = file ? JSON.parse(readFileSync(file, 'utf8')) : {}; } catch { request = null; }
+  const common = { to, request, teamRoot, instanceRoot, productRoot };
   const result = request === null ? { errors: [{ code: 'SWITCH_REFUSED', field: 'switch', reason: 'REQUEST.json is not readable JSON' }] }
     : proposeSwitch(common);
   if (result.errors) finish(result, false);

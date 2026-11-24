@@ -5,12 +5,21 @@ used on a real team. It changes which team is live; it does not run a batch.
 [ADR 0010](../../../decisions/0010-router-worker-second-mode.md), decisions 4 to 7.
 
 ```sh
-node kit/scripts/team-mode.mjs switch router-worker REQUEST.json --instance . --product-root <product>
-node kit/scripts/team-mode.mjs switch specialist    REQUEST.json --instance . --product-root <product>
-node kit/scripts/team-mode.mjs switch recover --instance .
+# from the instance root
+node kit/scripts/team-mode.mjs switch rw REQUEST.json   # first time: REQUEST.json carries the spec
+node kit/scripts/team-mode.mjs switch rw                # later: the packed team comes back
+node kit/scripts/team-mode.mjs switch specialist
+node kit/scripts/team-mode.mjs switch recover
 node kit/scripts/team-mode.mjs request --instance . [--model <id>] [--ui] > REQUEST.json
 node kit/scripts/team-mode.mjs limits LIMITS.json --instance .
 ```
+
+`rw` is short for `router-worker`. Without `REQUEST.json` the request is `{}`;
+without `--instance` the instance is the current folder; without
+`--product-root` the product is the `product_repo_path` of the instance's
+`profiles/project.md` (a switch is refused when that is unanswered and no flag
+is given). The long form, with `--instance <root>` and `--product-root
+<product>`, still works.
 
 `REQUEST.json` is `{"spec"?, "limits"?, "gatePath"?}`: the Router/Worker team spec that
 `team-mode.mjs preview` takes (project, the three worker profiles, governance
@@ -231,7 +240,7 @@ put everything back, and the lock is released. If the process dies, the journal
 stays: every further proposal or switch is refused (`SWITCH_INTERRUPTED`) until
 
 ```sh
-node kit/scripts/team-mode.mjs switch recover --instance .
+node kit/scripts/team-mode.mjs switch recover
 ```
 
 rolls the interrupted switch back and appends one line to `pm-decisions.md`.
