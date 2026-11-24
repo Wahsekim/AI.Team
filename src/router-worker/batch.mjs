@@ -177,7 +177,7 @@ function checkFiles(ticket) {
     `Ticket ${ticket.id}: moves must list at most ${MAX_PATHS} moves, each { "from": "<file>", "to": "<file>" }`);
   need(ticket.deletes === undefined || (Array.isArray(ticket.deletes) && ticket.deletes.length <= MAX_PATHS), `Ticket ${ticket.id}: deletes must list at most ${MAX_PATHS} files`);
   const files = named(ticket), odd = files.filter(path => !literal(path));
-  need(!odd.length, `Ticket ${ticket.id}: ${JSON.stringify(plain(String(odd[0])))} is not one plain file path a quoted shell command can hold (no folder grant, no "." or "..", none of " $ \` \\ ! * ? [ ] { } :)`);
+  need(!odd.length, `Ticket ${ticket.id}: ${JSON.stringify(plain(String(odd[0])))} is not one plain file path a quoted shell command can hold (no folder grant, no "." or "..", none of " $ \` \\ ! * ? [ ] { } :, no control, bidirectional or zero-width character)`);
   const kept = files.filter(reserved);
   need(!kept.length, `Ticket ${ticket.id} moves or deletes ${kept[0]}; no ticket writes under ${RESERVED.join(' or ')}`);
   const outside = files.filter(path => !ticket.paths.some(grant => covers(grant, path)));
