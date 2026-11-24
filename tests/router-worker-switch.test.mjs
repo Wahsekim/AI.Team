@@ -148,11 +148,13 @@ test('CLI: the short form runs from the instance root with {} and the product pa
   const short = run(f.root, 'switch', 'rw', file);
   assert.equal(short.status, 2, short.stderr); assert.equal(JSON.parse(short.stdout).digest, long.digest, 'rw, the current folder and the recorded product are the long form');
   const empty = run(f.root, 'switch', 'rw');
-  assert.equal(empty.status, 2); assert.match(empty.stderr, /SWITCH_REFUSED/, 'with no REQUEST.json the request is {}, which a first switch refuses for want of a spec');
+  assert.equal(empty.status, 2); assert.match(empty.stderr, /not the product repository this team is bound to/, 'with no REQUEST.json the request is {}: no spec binds the recorded product');
   writeFileSync(project, readFileSync(project, 'utf8').replace(/^(\s*product_repo_path:).*$/m, '$1 "{{PRODUCT_REPO_PATH}}"'));
   const unrecorded = run(f.root, 'switch', 'rw', file);
   assert.equal(unrecorded.status, 2); assert.match(unrecorded.stderr, /records no product_repo_path; pass --product-root/);
   assert.equal(run(f.root, 'switch', 'rw', file, 'extra').status, 1, 'a stray argument is a usage error');
+  const elsewhere = run(f.base, 'switch', 'rw', file);
+  assert.equal(elsewhere.status, 2); assert.match(elsewhere.stderr, /is not an instance root \(no kit.lock\)/);
   assert.equal(existsSync(join(f.root, 'holiday')), false);
 });
 

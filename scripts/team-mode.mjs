@@ -1,4 +1,4 @@
-import { readFileSync, statSync, writeSync, readSync, openSync } from 'node:fs';
+import { readFileSync, statSync, writeSync, readSync, openSync, existsSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { parseJSON } from '../src/loop/contracts.mjs';
 import { draftTeam, writeDraft, verifyDraft } from '../src/router-worker/draft.mjs';
@@ -91,6 +91,7 @@ if (process.argv[2] === 'switch') {
   }
   const instanceRoot = resolve(options['--instance'] ?? '.'), teamRoot = join(instanceRoot, 'kit');
   if (recover) { const result = recoverSwitch({ teamRoot, instanceRoot }); finish(result, true); }
+  if (!existsSync(join(instanceRoot, 'kit.lock'))) finish({ errors: [{ code: 'SWITCH_REFUSED', field: 'switch', reason: `${instanceRoot} is not an instance root (no kit.lock); run from the instance root or pass --instance <instance-root>` }] }, false);
   const productRoot = options['--product-root'] ? resolve(options['--product-root']) : recordedProduct(instanceRoot);
   if (!productRoot) finish({ errors: [{ code: 'SWITCH_REFUSED', field: 'switch', reason: 'profiles/project.md records no product_repo_path; pass --product-root <product-root>' }] }, false);
   let request;
