@@ -272,3 +272,37 @@ write the team's files; the owner's spot review of `pm-decisions.md` is the
 check on that.
 
 Merging the pull request that adds this amendment ratifies it.
+
+### 2026-11-24: a worker moves and deletes the files its ticket declares
+
+Status: Proposed.
+
+On 2026-11-24 a batch on a real team ran a refactor that moves four source
+files (US-61). The exec worker stopped before writing: in a batch it has its
+file tools and the confirmed verification commands only (amendment of
+2026-11-18), so it could not rename or delete a tracked file, though "commit"
+already commits a staged rename or deletion. Its brief also gave it a narrower
+scope than the hook enforces (the planned paths, not the ticket's `paths`) and
+opened with the offline-preview line that calls the brief no dispatch
+authority.
+
+- A ticket may declare `moves` (`from`, `to`) and `deletes`. "before" accepts
+  each only as one plain file path inside the ticket's `paths`, named once;
+  each moved or deleted file is tracked at the product's HEAD, and each `to`
+  does not exist and lies in a real folder of the product.
+- From each, "before" derives one exact command: `git mv -- "<from>" "<to>"`,
+  prefixed with `mkdir -p -- "<folder>" && ` when that folder does not exist,
+  or `git rm -q -- "<path>"`. A worker may run exactly those commands, inside
+  its grant, for that batch only. They are added to the exec worker's command
+  list in the write boundary, not to the checker's or the Guardian's, and the
+  hook judges them like the verification commands: the exact text, from the
+  product root, inside the sandbox if there is one.
+- The exec brief states the real grant (`writePaths`, the ticket's `paths`),
+  the planned paths and the ticket's own commands, and says the worker runs no
+  other command, Git included. A brief compiled for a standing batch no longer
+  opens with the offline-preview line.
+
+This widens the amendment of 2026-11-18 by those commands only. They are not
+confirmed by the owner one by one: the PM declares them in the ticket, and the
+owner reads them in the batch record (`moves`, `deletes`) and in the briefs.
+Merging the pull request that adds this amendment ratifies it.

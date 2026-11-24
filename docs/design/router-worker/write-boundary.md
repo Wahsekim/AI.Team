@@ -108,7 +108,7 @@ switch, not by a run, and a boundary file exists at all times:
 | State (`state`) | Boundary file | Workers | Reviewers | Other agents |
 |---|---|---|---|---|
 | no batch open (`closed`) | the three workers, no write path | every write and command refused | not judged | not judged |
-| batch open (`batch`) | the three workers, exec with the batch's write paths | exec inside its paths only; the confirmed commands | not judged | not judged |
+| batch open (`batch`) | the three workers, exec with the batch's write paths | exec inside its paths only; exec and the checker the confirmed commands, exec also the Git moves and deletions its tickets declare | not judged | not judged |
 | batch in review (`review`, ADR 0011) | the three workers with nothing, each reviewer's wrapper with `duty: "review"`, the run id and the team root | every write and command refused | no product write, no shell; the Architect writes `decisions/drafts/**` of the team folder only | not judged |
 | file missing or edited | none readable | every write refused | every write refused | every write refused |
 
@@ -122,5 +122,7 @@ limits are refused in `review`.
 `armBoundary` still accepts only an activated throwaway copy. In a standing
 team the batch "before" command opens the boundary (`openBoundary`): it starts
 from the closed boundary the switch wrote, keeps its wrappers and its product
-root, and only adds the batch's write paths for the exec worker. See
+root, and only adds the batch's write paths for the exec worker, the
+verification commands for exec and the checker, and the `git mv` and `git rm`
+commands of the tickets' `moves` and `deletes` for exec alone. See
 [mode-switch.md](mode-switch.md) and [batch.md](batch.md).

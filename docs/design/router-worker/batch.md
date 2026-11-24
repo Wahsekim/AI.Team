@@ -73,6 +73,8 @@ must come before the next batch.
 | `riskFlags` (optional) | 1 to 10 plain names (`auth`, `payments`), each named once. Each declares the ticket sensitive (`riskFlag:<name>`). What a ticket declares is frozen in the record as its `declared` list. A declared-sensitive ticket that passed and changed something is flagged for Security on every changed path, even when no trigger matches, and is not committed without a passed Security verdict; one that changed nothing is not committed, so it is not flagged |
 | `commitMessage` (optional) | The message of the ticket's commit, one line; by default `<id>: <title>` |
 | `dependsOn` (optional) | Ids of tickets this one builds on: an earlier ticket of the batch, or a ticket of an archived batch. Frozen in the record (`[]` when absent); an escalated ticket blocks every ticket that depends on it, directly or through others (see "Review verdict, commit gate and escalation") |
+| `moves` (optional) | Tracked files the worker renames: `[{ "from": "src/a.js", "to": "lib/a.js" }]`. Each gives the exec worker one exact command, `git mv -- "<from>" "<to>"`, prefixed with `mkdir -p -- "<folder>" && ` when the folder of `to` does not exist yet (Git does not create it). Frozen in the record (`[]` when absent). See "Moves and deletions" |
+| `deletes` (optional) | Tracked files the worker deletes: `["src/old.js"]`. Each gives the exec worker one exact command, `git rm -q -- "<path>"`. Frozen in the record (`[]` when absent) |
 | `runId`, `date` (optional) | Default: `rw-<commit>-L<nextLifecycleNumber>-<time>`, new at every `before`, and today |
 
 The PM does not write a ceiling, a number of rounds, a wrapper name or a
@@ -95,6 +97,8 @@ budget per ticket. Those come from the team.
    owner confirmed for the team (`allowedCommands` in its limits).
 2. **The tickets**: each is complete, and no two tickets claim the same file. A
    folder grant claims every file under it; paths are compared without case.
+   Each file a ticket moves or deletes is one plain path inside its `paths`
+   (see "Moves and deletions").
 3. **The product repository**: on a branch that is not a default branch, no Git
    operation in progress, nothing uncommitted or untracked. Git-ignored files
    are not counted. The team's own files are never counted: the team lives
@@ -123,7 +127,8 @@ budget per ticket. Those come from the team.
 7. **The product is read once more**: what is there must be what step 3 found.
 8. **The write boundary opens**, last: the exec worker may write the tickets'
    paths, the checker and the Guardian nothing. The exec worker and the checker
-   may run the batch's verification commands; see "The workers' shell".
+   may run the batch's verification commands, and the exec worker the Git
+   commands of the tickets' moves and deletions; see "The workers' shell".
 9. **The batch record** `rw-batch.json` is written in the team's folder and
    printed. Its `args` are the arguments the PM passes to `run-n-rounds`. It
    also holds what "after" will need: the branch and commit, the paths that
@@ -207,6 +212,7 @@ their shell:
 | Call | Decision |
 |---|---|
 | exec worker or checker, `cd "<product root>" && <command>` with a command of the batch | approved: no permission prompt |
+| exec worker, the same with a Git command of a ticket's `moves` or `deletes` (see "Moves and deletions") | approved; the checker and the Guardian are refused it |
 | the same with the product root unquoted, when its path needs no quotes | approved |
 | the same command alone, when the shell is at the product root | approved |
 | any other text: an argument added, two commands joined, a pipe, another folder, a command of the team's list that is not this batch's | refused, and the refusal names the commands that run |
@@ -218,8 +224,42 @@ their shell:
 
 The text must be the confirmed command exactly; only spaces and line breaks
 around it are ignored. A worker reads files with its file tools; it has no
-`ls`, `cat` or `git` in a batch. A command a ticket needs and the list lacks is
+`ls`, `cat` or `git` in a batch, apart from the exact Git commands of its
+tickets' moves and deletions. A command a ticket needs and the list lacks is
 the owner's to add, before the batch.
+
+### Moves and deletions
+
+With its file tools a worker can write a file but not rename or delete one
+([ADR 0010](../../../decisions/0010-router-worker-second-mode.md), amendment of
+2026-11-24). A ticket that needs it declares the files in `moves` and
+`deletes`, and "before" checks them:
+
+- each `from`, `to` and deleted path is one plain file path: no folder grant,
+  no `.` or `..` part, none of `` " $ ` \ ! * ? [ ] { } : ``, not under `.git` or
+  `.claude`; it lies inside the ticket's `paths`, and no path is named twice in
+  the ticket's moves and deletes (compared without case);
+- each `from` and each deleted path is a file tracked at the product's HEAD;
+- each `to` does not exist, and the nearest folder of it that exists is a real
+  folder of the product, not a link;
+- at most 100 moves and deletions over the whole batch.
+
+From each it derives one exact command, given to the exec worker's shell for
+that batch only, and to no other worker:
+
+| Declared | Command |
+|---|---|
+| a move whose folder exists | `git mv -- "<from>" "<to>"` |
+| a move into a folder that does not exist yet | `mkdir -p -- "<folder>" && git mv -- "<from>" "<to>"` |
+| a deletion | `git rm -q -- "<path>"` |
+
+The exec brief lists the ticket's own commands as `gitCommands`, beside its
+`writePaths` (the ticket's `paths`) and `plannedPaths`, and says that the worker
+runs no other command, Git included. A worker that runs another `git mv`, the
+same one with a flag added, or one of these commands from the checker is
+refused like any other command. "after" and `commit` treat the result as any
+other change: both sides of a rename and the deleted path lie in the ticket's
+`paths` and go into that ticket's commit.
 
 A command is confirmed as one line of at most 300 printable ASCII characters
 with single spaces, so that what the owner reads in the proposal is all there
@@ -330,7 +370,9 @@ line to `pm-decisions.md`. It takes the lock for its length. It pushes nothing.
   exactly the ticket's paths. A commit hook that adds or drops paths stops the
   batch there; the commit is left as it is.
 - Paths are given to Git literally, on standard input: no pattern, no limit on
-  their number. Staged deletions and renames made by a worker are committed.
+  their number. Staged deletions and renames made by a worker, through its
+  ticket's `moves` and `deletes`, are committed in the ticket's commit, both
+  sides of a rename included.
 - A path that was changed before the batch (start as is) is never in a commit,
   staged or not.
 - The repository's own commit hooks run. If one refuses a commit, the commits
