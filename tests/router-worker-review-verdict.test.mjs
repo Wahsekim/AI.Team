@@ -179,6 +179,7 @@ test('a rejection whose verdict was lost is recovered by judging the same transc
   const lock = join(f.root, `${VERDICTS_FILE}.lock`), past = new Date(Date.now() - 120000);
   writeFileSync(lock, 'died'); utimesSync(lock, past, past);
   assert.equal(f.judge('security', path).outcome, 'accepted');
+  assert.equal(existsSync(lock), false, 'the judgment releases its claim');
   rmSync(join(f.root, VERDICTS_FILE));
   assert.match(refusal(f.resolve()).reason, /US-01 \(rejected by security\).*Judge that reviewer's transcript again with: rw-batch\.mjs review --reviewer/);
   assert.equal(f.judge('security', path).outcome, 'accepted');
