@@ -932,3 +932,16 @@ test('ADR 0011: the deployment fails on a project review trigger list the kit co
     assert.equal(code, 0, out); assert.match(out, /WARN - review-triggers: profiles\/review\.json missing/)
   })
 })
+
+test('a team packed under holiday/ is dormant: its wrappers and tables are not drift findings', async () => {
+  await withFixture({
+    ...COMPLETE_DEPLOYMENT,
+    'holiday/specialist/.claude/agents/proj-qa.md': '---\nname: proj-qa\ndescription: qa\nmodel: opus\neffort: high\nmaxTurns: 40\n---\nRead agents/qa.md.\n',
+    'holiday/specialist/agents/qa.md': '# QA\n\n| tier | band |\n|---|---|\n| B | 45-75K |\n',
+  }, async root => {
+    const { code, out } = await runValidator(root, '--mode', 'deployment')
+    assert.equal(code, 0, out)
+    assert.match(out, /PASS - drift-models/)
+    assert.match(out, /PASS - drift-bands/)
+  })
+})

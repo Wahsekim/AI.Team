@@ -409,6 +409,7 @@ else
 fi
 
 # ------------------------------- check 4: single-source drift (caps, bands, models)
+# holiday/ holds a packed, dormant team (docs/design/router-worker/mode-switch.md): 4a-4c do not scan it.
 # 4a token caps stated outside the charter table
 if [ "$DEPLOYED" = 0 ]; then
   skip "drift-caps" "fresh kit — caps live as defaults in charter.template.md"
@@ -417,7 +418,7 @@ else
   if [ -z "$CAPS" ]; then
     warn "drift-caps" "could not extract cap values from charter.md budget table"
   else
-    CAP_EXCL='^(kit/|charter\.md|charter\.template\.md|docs/lazy-placeholders\.md|agents/lifecycle\.md|pm-decisions\.md|memory/|messages/|agents/archive/|decisions/)'
+    CAP_EXCL='^(kit/|holiday/|charter\.md|charter\.template\.md|docs/lazy-placeholders\.md|agents/lifecycle\.md|pm-decisions\.md|memory/|messages/|agents/archive/|decisions/)'
     CAP_HITS=""
     for n in $CAPS; do
       HITS=$(grep -rl --include='*.md' -e "$n" "$ROOT" 2>/dev/null \
@@ -433,7 +434,7 @@ else
 fi
 
 # 4b tier-band table rows outside agents/pm.md (band cell shape: '| 45-75K |')
-BAND_EXCL='^(kit/|agents/pm\.md|agents/archive/|messages/|memory/)'
+BAND_EXCL='^(kit/|holiday/|agents/pm\.md|agents/archive/|messages/|memory/)'
 BAND_HITS=$(grep -rlE --include='*.md' '\|\s*[0-9]{1,3}-[0-9]{1,3}K\s*\|' "$ROOT" 2>/dev/null \
   | sed "s|^$ROOT/||" | grep -vE "$BAND_EXCL")
 if [ -n "$BAND_HITS" ]; then
@@ -444,7 +445,7 @@ fi
 
 # 4c model assignments outside roster + wrappers (heuristic on common model-name shapes)
 MODEL_RE='^[-*]?\s*([Mm]odel|[Mm]odel name)\s*[:=]\s*"?(opus|sonnet|haiku|fable|gpt-[a-z0-9]|o[0-9])'
-MODEL_EXCL='^(kit/|agents/roster\.md|agents/roster\.template\.md|\.claude/agents/|agents/lifecycle\.md|pm-decisions\.md|memory/|messages/|agents/archive/|decisions/)'
+MODEL_EXCL='^(kit/|holiday/|agents/roster\.md|agents/roster\.template\.md|\.claude/agents/|agents/lifecycle\.md|pm-decisions\.md|memory/|messages/|agents/archive/|decisions/)'
 MODEL_HITS=$(grep -rlE --include='*.md' "$MODEL_RE" "$ROOT" 2>/dev/null \
   | sed "s|^$ROOT/||" | grep -vE "$MODEL_EXCL")
 if [ -n "$MODEL_HITS" ]; then
