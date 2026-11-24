@@ -447,11 +447,14 @@ test('a commit hook written or moved during a batch holds it; a hook that stages
   const written = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n' } });
   writeFileSync(join(written.product, '.git/hooks/pre-commit'), '#!/bin/sh\ntouch /tmp/never\n', { mode: 0o755 });
   const caught = written.after(); assert.ok(caught.findings.some(finding => finding.code === 'HOOKS_CHANGED')); assert.equal(caught.holdAll, true); assert.deepEqual(caught.commits, []);
+  const handFirst = /A commit by hand runs the repository's commit hooks as you: inspect .* and remove every hook the batch added or changed, before any commit by hand/;
+  assert.match(caught.next.join('\n'), handFirst, 'the PM is told to clear the hook before committing by hand');
+  assert.match(abortBatch({ teamRoot: written.kit, instanceRoot: written.root }).next, handFirst, 'abort says it too before it says to commit by hand');
   const moved = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n' } }); git(moved.product, 'config', 'core.hooksPath', 'hooks');
   assert.ok(moved.after().findings.some(finding => finding.code === 'HOOKS_CHANGED'));
   const late = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n' } }); assert.equal(late.after().status, 'clean');
   writeFileSync(join(late.product, '.git/hooks/pre-commit'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-  assert.match(refusal(late.commit()).reason, /commit hooks were changed or moved/); assert.deepEqual(late.log(), []);
+  assert.match(refusal(late.commit()).reason, /commit hooks were changed or moved/); assert.match(refusal(late.commit()).reason, handFirst); assert.deepEqual(late.log(), []);
   // Husky 9, and a worker's shell writing the script beside the stub folder, which no ticket granted.
   const stub = live(t); mkdirSync(join(stub.product, '.husky/_'), { recursive: true }); writeFileSync(join(stub.product, '.husky/_/pre-commit'), '#!/bin/sh\n. "$(dirname "$0")/../pre-commit"\n', { mode: 0o755 });
   git(stub.product, 'add', '-A'); git(stub.product, 'commit', '-q', '-m', 'husky'); git(stub.product, 'config', 'core.hooksPath', '.husky/_');

@@ -23,6 +23,9 @@ export const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/, TICKET_ID = /^[A-Za-z
 // Line and paragraph separators break a line too; bidi controls make a ledger line read other than it is.
 const UNSAFE = /[\x00-\x1f\x7f-\x9f\u061c\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]/g;
 export const oneLine = text => typeof text === 'string' && text.length > 0 && text.length <= 200 && text === text.trim() && !text.match(UNSAFE);
+// A hook a batch planted runs at the PM's next commit, the kit's or one by hand.
+export const HOOKS_FIRST = 'A commit by hand runs the repository\'s commit hooks as you: inspect the folder Git runs them from (git rev-parse --git-path hooks, git config core.hooksPath) and remove every hook the batch added or changed, before any commit by hand';
+export const HOOKS_MOVED = `The repository's commit hooks were changed or moved since the batch opened. ${HOOKS_FIRST}`;
 const MODE_FILE = 'profiles/team-mode.json', JOURNAL = 'holiday/.switch-in-progress.json', LEDGER = 'pm-decisions.md';
 const IN_PROGRESS = ['index.lock', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'BISECT_LOG', 'rebase-merge', 'rebase-apply'];
 const TICKET_FIELDS = ['id', 'title', 'goal', 'acceptance', 'paths', 'estimate'], TICKET_OPTIONAL = ['expectedPaths', 'commitMessage', 'dependsOn', 'riskFlags', 'moves', 'deletes'], BATCH_FIELDS = ['tickets', 'verificationCommands', 'sensitivePaths', 'nextLifecycleNumber'];
@@ -159,7 +162,7 @@ function checkBatch(batch, known) {
   const handled = batch.tickets.reduce((count, ticket) => count + (ticket.moves?.length ?? 0) + (ticket.deletes?.length ?? 0), 0);
   need(handled <= MAX_PATHS, `The tickets of one batch may move or delete at most ${MAX_PATHS} files in all (${handled} given); use a smaller batch`);
   // The commands run one after another: a path one of them creates or removes could redirect another that runs under it.
-  const declared = batch.tickets.flatMap(ticket => named(ticket).map(path => ({ id: ticket.id, path, key: path.toLowerCase() })));
+  const declared = batch.tickets.flatMap(ticket => named(ticket).map(path => ({ id: ticket.id, path, key: fold(path) })));
   for (const inner of declared) {
     const outer = declared.find(other => inner.key.startsWith(`${other.key}/`));
     need(!outer, `Ticket ${inner.id} names ${inner.path} in its moves or deletes, under ${outer?.path}, which ticket ${outer?.id} names too: no path a batch moves or deletes lies under another. Put them in different batches`);
@@ -168,7 +171,9 @@ function checkBatch(batch, known) {
 
 // ADR 0010, amendment of 2026-11-24: the files a ticket moves or deletes with Git. Each is one literal path inside
 // its grant, written into a quoted shell command, and named once.
-const literal = path => typeof path === 'string' && path.length <= 512 && quotable(path) && !path.match(UNSAFE) && !/[*?[\]{}:]/.test(path) && path.split('/').every(part => part && part !== '.' && part !== '..' && part === part.trim());
+const literal = path => typeof path === 'string' && path.length <= 512 && quotable(path) && !path.match(UNSAFE) && !/[*?[\]{}:]/.test(path) && path === path.normalize('NFC') && path.split('/').every(part => part && part !== '.' && part !== '..' && part === part.trim());
+// One file on a case-insensitive file system that does not tell composed from decomposed Unicode, as APFS.
+const fold = path => path.normalize('NFC').toLowerCase();
 const isMove = move => move && typeof move === 'object' && !Array.isArray(move) && Object.keys(move).sort().join() === 'from,to';
 const named = ticket => [...(ticket.moves ?? []).flatMap(move => [move.from, move.to]), ...(ticket.deletes ?? [])];
 function checkFiles(ticket) {
@@ -177,12 +182,12 @@ function checkFiles(ticket) {
     `Ticket ${ticket.id}: moves must list at most ${MAX_PATHS} moves, each { "from": "<file>", "to": "<file>" }`);
   need(ticket.deletes === undefined || (Array.isArray(ticket.deletes) && ticket.deletes.length <= MAX_PATHS), `Ticket ${ticket.id}: deletes must list at most ${MAX_PATHS} files`);
   const files = named(ticket), odd = files.filter(path => !literal(path));
-  need(!odd.length, `Ticket ${ticket.id}: ${JSON.stringify(plain(String(odd[0])))} is not one plain file path a quoted shell command can hold (no folder grant, no "." or "..", none of " $ \` \\ ! * ? [ ] { } :, no control, bidirectional or zero-width character)`);
+  need(!odd.length, `Ticket ${ticket.id}: ${JSON.stringify(plain(String(odd[0])))} is not one plain file path a quoted shell command can hold (no folder grant, no "." or "..", none of " $ \` \\ ! * ? [ ] { } :, no control, bidirectional or zero-width character, written in composed Unicode (NFC))`);
   const kept = files.filter(reserved);
   need(!kept.length, `Ticket ${ticket.id} moves or deletes ${kept[0]}; no ticket writes under ${RESERVED.join(' or ')}`);
   const outside = files.filter(path => !ticket.paths.some(grant => covers(grant, path)));
   need(!outside.length, `Ticket ${ticket.id} moves or deletes ${outside[0]}, outside its paths; add it to the ticket's paths`);
-  const twice = files.find((path, i) => files.findIndex(other => other.toLowerCase() === path.toLowerCase()) !== i);
+  const twice = files.find((path, i) => files.findIndex(other => fold(other) === fold(path)) !== i);
   need(twice === undefined, `Ticket ${ticket.id} names ${twice} twice in its moves and deletes`);
 }
 // A move lands where nothing is, in a real folder of the product: a link would carry the file out of it.
@@ -196,20 +201,30 @@ function headModes(productRoot, paths) {
   const listed = git(productRoot, '--literal-pathspecs', 'ls-tree', '-z', 'HEAD', '--', ...paths) ?? '';
   return new Map(listed.split('\0').filter(entry => /^\d{6} blob /.test(entry)).map(entry => [entry.slice(entry.indexOf('\t') + 1), entry.slice(0, 6)]));
 }
+// The paths whose index entry has assume-unchanged (a lowercase tag) or skip-worktree (S) set: git status is blind to them.
+function hiddenFromGit(productRoot, paths) {
+  const listed = git(productRoot, '--literal-pathspecs', 'ls-files', '-v', '-z', '--', ...paths);
+  need(listed !== null, 'The index of the product repository cannot be read');
+  return listed.split('\0').filter(entry => /^([a-z]|S) /.test(entry)).map(entry => entry.slice(2));
+}
 function checkFilesInProduct(productRoot, ticket) {
   const sources = [...(ticket.moves ?? []).map(move => move.from), ...(ticket.deletes ?? [])];
   if (!sources.length) return;
   const modes = headModes(productRoot, sources), untracked = sources.filter(path => !modes.has(path));
   need(!untracked.length, `Ticket ${ticket.id} moves or deletes ${plain(untracked[0])}, which is not a file tracked at the product's HEAD`);
   // A moved link could be reached through by a later path; git rm removes a link itself and never follows it.
-  const linked = (ticket.moves ?? []).find(move => modes.get(move.from) === '120000');
+  // The work tree is read too: the index can be told not to look at a path, which HEAD still records as a file.
+  const linked = (ticket.moves ?? []).find(move => modes.get(move.from) === '120000' || lstatSync(join(productRoot, move.from), { throwIfNoEntry: false })?.isSymbolicLink());
   need(!linked, `Ticket ${ticket.id} moves ${plain(linked?.from)}, a symbolic link: a link is never moved in a batch, since a later path could reach through it out of the grant. Delete it, or move it outside a batch`);
+  const hidden = hiddenFromGit(productRoot, named(ticket));
+  need(!hidden.length, `Ticket ${ticket.id} moves or deletes ${plain(hidden[0])}, which Git is told not to look at (assume-unchanged or skip-worktree): what the work tree holds there is not what Git reports. Clear it with: git update-index --no-assume-unchanged --no-skip-worktree -- <path>`);
   const taken = (ticket.moves ?? []).map(move => move.to).filter(path => exists(join(productRoot, path)) || !landsInside(productRoot, path));
   need(!taken.length, `Ticket ${ticket.id} moves a file to ${plain(taken[0])}, which already exists or does not lie in a folder of the product (a link is not followed)`);
 }
-// The exact commands the exec worker may run for them; Git does not create the folder a file is moved into.
-const gitCommandsOf = (productRoot, ticket) => [
-  ...(ticket.moves ?? []).map(({ from, to }) => { const folder = to.split('/').slice(0, -1).join('/'), mv = `git --literal-pathspecs mv -- "${from}" "${to}"`; return folder && !exists(join(productRoot, folder)) ? `mkdir -p -- "${folder}" && ${mv}` : mv; }),
+// The exact commands the exec worker may run for them. Git does not create the folder a file is moved into, and an
+// earlier git rm of a folder's last file removes the folder: each move makes its folder at the moment it runs.
+const gitCommandsOf = ticket => [
+  ...(ticket.moves ?? []).map(({ from, to }) => { const folder = to.split('/').slice(0, -1).join('/'), mv = `git --literal-pathspecs mv -- "${from}" "${to}"`; return folder ? `mkdir -p -- "${folder}" && ${mv}` : mv; }),
   ...(ticket.deletes ?? []).map(path => `git --literal-pathspecs rm -q -- "${path}"`)];
 
 // The compiler input of one ticket, built from what the PM wrote and what the team's mode profile holds.
@@ -304,7 +319,7 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     const mixed = product.preexisting.filter(path => batch.tickets.some(ticket => ticket.paths.some(grant => covers(grant, path))));
     need(!mixed.length, `These paths are already changed and lie where a ticket of this batch writes (${mixed.slice(0, 5).map(plain).join(', ')}); they could not be kept out of its commit. Commit or discard them first`);
     for (const ticket of batch.tickets) checkFilesInProduct(productRoot, ticket);
-    const gitCommands = batch.tickets.map(ticket => gitCommandsOf(productRoot, ticket));
+    const gitCommands = batch.tickets.map(gitCommandsOf);
     const closed = readBoundary(instance);
     need(closed && closed.productRoot === productRoot, 'The write-boundary file is missing or was changed. It is rebuilt by a mode switch: team-mode.mjs switch specialist, then switch router-worker');
     need(stateOf(closed) === 'closed', 'The write boundary is open: an earlier batch was not closed. Clear it with: rw-batch.mjs abort --instance <instance-root>');
@@ -378,6 +393,7 @@ export function abortBatch({ teamRoot, instanceRoot }) {
     need(!exists(join(instance, JOURNAL)), 'A mode switch was interrupted; roll it back first with: team-mode.mjs switch recover --instance <instance-root>');
     const record = readJSON(join(instance, BATCH_FILE)), held = readLease({ productRoot }), boundary = readBoundary(instance);
     const ours = held.status === 'held' && held.lease.teamRoot === instance, open = boundary ? stateOf(boundary) !== 'closed' : false;
+    const hooksMoved = typeof record?.hooks?.digest === 'string' && hooksOf(productRoot).digest !== record.hooks.digest ? `${HOOKS_MOVED}. ` : '';
     // After releases the lock when it closes a batch: a free lock is reported as such, not as a release that failed.
     const lockReleased = ours || (held.status === 'free' ? 'already-free' : false);
     // A batch that after claimed or closed and commit cannot finish: the boundary is closed and the lock released
@@ -392,7 +408,7 @@ export function abortBatch({ teamRoot, instanceRoot }) {
       const patches = Array.isArray(readJSON(join(instance, RESOLUTION_FILE))?.removed) && !id.startsWith('unreadable-') ? `; the tickets resolve held are patches under reviews/held/${id}/ and are not put back` : '';
       const work = (made.length ? `${made.length} commit(s) were already made by the kit and stay on the branch (${made.join(', ')}); the rest of what the batch changed is still in the product work tree` : 'Nothing was committed by the kit; what the batch changed is still in the product work tree') + patches;
       const stamp = new Date().toISOString(), note = { schemaVersion: 1, stage: 'batch-archived-without-commit', runId: id, archivedAt: stamp, commitsMade: made, boundary: boundary ? 'closed' : 'not-restored', lockReleased,
-        next: `${work}: commit it by hand on the working branch, or discard it.${boundary ? '' : ' The write-boundary file is missing or was changed: a mode switch to specialist and back rebuilds it.'}` };
+        next: `${hooksMoved}${work}: commit it by hand on the working branch, or discard it.${boundary ? '' : ' The write-boundary file is missing or was changed: a mode switch to specialist and back rebuilds it.'}` };
       appendFileSync(join(instance, LEDGER), `${stamp.slice(0, 10)} BATCH ${id} ARCHIVED WITHOUT COMMIT by rw-batch.mjs abort: the batch was not finished by the kit. ${work}.\n`);
       archiveBatch(instance, id, { 'abandoned.json': { ...note, digest: digest(note) } }, RECORDS);
       return { ...note, digest: digest(note) };
@@ -406,7 +422,7 @@ export function abortBatch({ teamRoot, instanceRoot }) {
     appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} BATCH ${runId ?? '(no readable record)'} ABORTED by rw-batch.mjs abort: ${boundary ? 'the write boundary is closed' : 'the write boundary is missing or was changed and was NOT restored'}${ours ? ', the lock released' : ''}. Nothing about the work was checked.\n`);
     rmSync(join(instance, BATCH_FILE), { recursive: true, force: true });
     const body = { schemaVersion: 1, stage: 'batch-aborted', runId, boundary: boundary ? 'closed' : 'not-restored', lockReleased, abortedAt: at,
-      ...(boundary ? {} : { next: 'The write boundary is missing or was changed: every subagent write and shell command is refused until a mode switch to specialist and back rebuilds it' }) };
+      ...(boundary && !hooksMoved ? {} : { next: `${hooksMoved}${boundary ? '' : 'The write boundary is missing or was changed: every subagent write and shell command is refused until a mode switch to specialist and back rebuilds it'}`.trim() }) };
     return { ...body, digest: digest(body) };
   } catch (error) {
     return refuse(error instanceof Refusal || error?.code === 'BOUNDARY_REFUSED' ? error.message : `The batch could not be aborted: ${error?.code ?? error?.message}`);

@@ -8,7 +8,7 @@ import { readBoundary, closeBoundary, reviewBoundary, stateOf, within, LOG_FILE 
 import { flagPaths } from './review-triggers.mjs';
 import { reviewGate, verdictsOf } from './review-judge.mjs';
 import { escalationsOf } from './escalations.mjs';
-import { BATCH_FILE, AFTER_FILE, PROGRESS_FILE, RETURN_FILE, RESOLUTION_FILE, RECORDS, ARCHIVE, RUN_ID, TICKET_ID, oneLine, changedPaths, contentOf, hooksOf, archiveBatch, plain, proposedTokens } from './batch.mjs';
+import { BATCH_FILE, AFTER_FILE, PROGRESS_FILE, RETURN_FILE, RESOLUTION_FILE, RECORDS, ARCHIVE, RUN_ID, TICKET_ID, oneLine, changedPaths, contentOf, hooksOf, archiveBatch, plain, proposedTokens, HOOKS_FIRST, HOOKS_MOVED } from './batch.mjs';
 
 // ADR 0010, decisions 12 and 13: what a PM runs when a batch ends in a standing Router/Worker team.
 // after: the engine's return is matched against what was frozen, the product is compared with the tickets'
@@ -167,7 +167,8 @@ export function afterBatch({ teamRoot, instanceRoot, result }) {
     const committed = new Set(commits.flatMap(commit => commit.paths)), at = new Date().toISOString(), passed = tickets.filter(ticket => ticket.status === 'passed').length;
     const left = changed.filter(path => !committed.has(path)), next = [];
     if (!boundaryClosed) next.push('The write-boundary file is missing or was changed: every subagent write and shell command is refused until a mode switch to specialist and back rebuilds it');
-    if (holdAll) next.push(`No ticket of this batch is committed by the kit. ${ABANDON}`);
+    const hooksTouched = findings.some(finding => ['HOOKS_CHANGED', 'HOOKS_WRITTEN'].includes(finding.code));
+    if (holdAll) next.push(`No ticket of this batch is committed by the kit. ${hooksTouched ? `${HOOKS_FIRST}. ` : ''}${ABANDON}`);
     if (!holdAll && left.length) next.push('Paths are left uncommitted in the product; the next batch refuses until they are committed or discarded by hand, or it is started as is');
     const reviewers = Object.keys(reviews);
     if (reviewers.length) next.push(`The batch is in review: brief each reviewer with ${reviewers.map(reviewer => `rw-batch.mjs review-brief --reviewer ${reviewer} --instance <instance-root>`).join(', and ')}; no batch, switch or change of limits starts until the review is over`);
@@ -241,7 +242,7 @@ export function commitBatch({ teamRoot, instanceRoot }) {
     need(git(product, 'symbolic-ref', '--short', '-q', 'HEAD')?.trim() === batch.branch, `The product repository is no longer on the batch's branch (${plain(batch.branch)}). ${ABANDON}`);
     const gitDir = git(product, 'rev-parse', '--absolute-git-dir')?.trim(), busy = IN_PROGRESS.filter(name => gitDir && exists(join(gitDir, name)));
     need(gitDir && !busy.length, `A Git operation is in progress in the product repository (${busy.join(', ')})`);
-    need(hooksOf(product).digest === batch.hooks?.digest, `The repository's commit hooks were changed or moved since the batch opened. ${ABANDON}`);
+    need(hooksOf(product).digest === batch.hooks?.digest, `${HOOKS_MOVED}. ${ABANDON}`);
     need(!exists(join(instance, ARCHIVE, batch.runId)), `batches/${batch.runId} already exists: an archive of this batch was started. ${ABANDON}`);
     // The commits this command already made, by their ids: the branch must be the batch's start plus exactly those.
     const progressPath = join(instance, PROGRESS_FILE), progress = exists(progressPath) ? readJSON(progressPath) : { commits: [] };

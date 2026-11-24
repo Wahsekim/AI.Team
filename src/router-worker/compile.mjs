@@ -6,8 +6,9 @@ const HASH = /^sha256:[a-f0-9]{64}$/;
 const CONTROL = /[\x00-\x1f\x7f]/;
 const DUTIES = ['exec', 'check', 'guard'];
 // A path inside double quotes that the shell takes as written: none of " $ ` \ ! and no control character.
-const QUOTED = String.raw`"[^"$\x60\\!\x00-\x1f\x7f]+"`;
-const GIT_COMMAND = new RegExp(`^(?:mkdir -p -- ${QUOTED} && )?git --literal-pathspecs (?:mv -- ${QUOTED} ${QUOTED}|rm -q -- ${QUOTED})$`);
+const CHAR = String.raw`[^"$\x60\\!\x00-\x1f\x7f]`, QUOTED = `"${CHAR}+"`, NAME = String.raw`[^"$\x60\\!\x00-\x1f\x7f/]+`;
+// A move into a folder makes exactly that folder first; a move to the top of the product needs none.
+const GIT_COMMAND = new RegExp(`^(?:mkdir -p -- "(${CHAR}+)" && git --literal-pathspecs mv -- ${QUOTED} "\\1/${NAME}"|git --literal-pathspecs mv -- ${QUOTED} "${NAME}"|git --literal-pathspecs rm -q -- ${QUOTED})$`);
 
 class InvalidPreview extends Error {
   constructor(code, field, reason) {

@@ -73,7 +73,7 @@ must come before the next batch.
 | `riskFlags` (optional) | 1 to 10 plain names (`auth`, `payments`), each named once. Each declares the ticket sensitive (`riskFlag:<name>`). What a ticket declares is frozen in the record as its `declared` list. A declared-sensitive ticket that passed and changed something is flagged for Security on every changed path, even when no trigger matches, and is not committed without a passed Security verdict; one that changed nothing is not committed, so it is not flagged |
 | `commitMessage` (optional) | The message of the ticket's commit, one line; by default `<id>: <title>` |
 | `dependsOn` (optional) | Ids of tickets this one builds on: an earlier ticket of the batch, or a ticket of an archived batch. Frozen in the record (`[]` when absent); an escalated ticket blocks every ticket that depends on it, directly or through others (see "Review verdict, commit gate and escalation") |
-| `moves` (optional) | Tracked files the worker renames: `[{ "from": "src/a.js", "to": "lib/a.js" }]`. Each gives the exec worker one exact command, `git --literal-pathspecs mv -- "<from>" "<to>"`, prefixed with `mkdir -p -- "<folder>" && ` when the folder of `to` does not exist yet (Git does not create it). An empty list declares nothing, as an absent one. Frozen in the record (`[]` when absent). See "Moves and deletions" |
+| `moves` (optional) | Tracked files the worker renames: `[{ "from": "src/a.js", "to": "lib/a.js" }]`. Each gives the exec worker one exact command, `mkdir -p -- "<folder>" && git --literal-pathspecs mv -- "<from>" "<to>"`, where `<folder>` is the folder of `to` (Git does not create it, and an earlier `git rm` may have removed it); a `to` at the top of the product gives the `git mv` alone. An empty list declares nothing, as an absent one. Frozen in the record (`[]` when absent). See "Moves and deletions" |
 | `deletes` (optional) | Tracked files the worker deletes: `["src/old.js"]`. Each gives the exec worker one exact command, `git --literal-pathspecs rm -q -- "<path>"`. An empty list declares nothing, as an absent one. Frozen in the record (`[]` when absent) |
 | `runId`, `date` (optional) | Default: `rw-<commit>-L<nextLifecycleNumber>-<time>`, new at every `before`, and today |
 
@@ -159,7 +159,7 @@ opened.
    | `NESTED_REPOSITORY` | a worker created a Git repository inside the product; Git would commit a link to it, not its files | the folder is left uncommitted |
    | `PREEXISTING_PATH_CHANGED` | a path that was already changed when the batch started as is was changed again | not held; the path is never committed |
    | `LEDGER_NOT_WRITTEN` | `pm-decisions.md` could not be appended | not held |
-   | `HOOKS_CHANGED` | the folder Git runs commit hooks from was moved, or a file in it was added, removed or changed since the batch opened | all held |
+   | `HOOKS_CHANGED` | the folder Git runs commit hooks from was moved, or a file in it was added, removed or changed since the batch opened. A commit by hand runs the hooks as the PM, so `next`, the refusal of `commit` and `abort` tell the PM to inspect that folder and remove every hook the batch added or changed before any commit by hand | all held |
    | `HOOKS_WRITTEN` | a path was changed where the hooks live or beside husky's stub folder, for instance through a worker's shell | all held |
    | `BOUNDARY_CHANGED` | the write-boundary file is not the one the batch opened | all held |
    | `PRODUCT_HEAD_MOVED`, `PRODUCT_BRANCH_CHANGED` | someone committed or changed branch during the batch | all held |
@@ -240,16 +240,20 @@ With its file tools a worker can write a file but not rename or delete one
 
 - each `from`, `to` and deleted path is one plain file path: no folder grant,
   no `.` or `..` part, none of `` " $ ` \ ! * ? [ ] { } : ``, no control,
-  bidirectional or zero-width character, not under `.git` or `.claude`; it
-  lies inside the ticket's `paths`, and no path is named twice in the
-  ticket's moves and deletes (compared without case);
+  bidirectional or zero-width character, written in composed Unicode (NFC),
+  not under `.git` or `.claude`; it lies inside the ticket's `paths`, and no
+  path is named twice in the ticket's moves and deletes (compared without
+  case);
 - each `from` and each deleted path is a file tracked at the product's HEAD;
-  a `from` is not a symbolic link, since a later path could reach through a
-  moved link out of the grant (a deleted path may be one: `git rm` removes the
-  link itself and never follows it);
+  a `from` is not a symbolic link, at HEAD or in the work tree, since a later
+  path could reach through a moved link out of the grant (a deleted path may
+  be one: `git rm` removes the link itself and never follows it);
+- no path a ticket moves or deletes has assume-unchanged or skip-worktree set
+  in the index: `git status` does not look at such a path, so the work tree
+  may hold there what neither HEAD nor the status shows;
 - no path the batch moves or deletes lies under another such path, over all
-  its tickets: the commands run one after another, and the first could
-  redirect the second;
+  its tickets, compared without case: the commands run one after another, and
+  the first could redirect the second;
 - each `to` does not exist, and the nearest folder of it that exists is a real
   folder of the product, not a link;
 - at most 100 moves and deletions over the whole batch.
@@ -263,11 +267,15 @@ tickets' `paths`, for that batch only; no other worker's shell accepts them:
 
 | Declared | Command |
 |---|---|
-| a move whose folder exists | `git --literal-pathspecs mv -- "<from>" "<to>"` |
-| a move into a folder that does not exist yet | `mkdir -p -- "<folder>" && git --literal-pathspecs mv -- "<from>" "<to>"` |
+| a move into a folder | `mkdir -p -- "<folder>" && git --literal-pathspecs mv -- "<from>" "<to>"`, `<folder>` being the folder of `to` |
+| a move to the top of the product | `git --literal-pathspecs mv -- "<from>" "<to>"` |
 | a deletion | `git --literal-pathspecs rm -q -- "<path>"` |
 
-Git takes each path as written, never as a pattern, as `commit` does.
+Git takes each path as written, never as a pattern, as `commit` does. Every
+move makes its folder when it runs, not only when the folder is missing at
+"before": an earlier ticket's `git rm` of the last file of a folder removes
+the folder, and the move into it must still land. `mkdir -p` does nothing
+when the folder is there.
 
 The exec brief lists the ticket's own commands as `gitCommands`, beside its
 `writePaths` (the ticket's `paths`) and `plannedPaths`. It tells the worker to
