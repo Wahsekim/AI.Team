@@ -172,9 +172,10 @@ const literal = path => typeof path === 'string' && path.length <= 512 && quotab
 const isMove = move => move && typeof move === 'object' && !Array.isArray(move) && Object.keys(move).sort().join() === 'from,to';
 const named = ticket => [...(ticket.moves ?? []).flatMap(move => [move.from, move.to]), ...(ticket.deletes ?? [])];
 function checkFiles(ticket) {
-  need(ticket.moves === undefined || (Array.isArray(ticket.moves) && ticket.moves.length >= 1 && ticket.moves.length <= MAX_PATHS && ticket.moves.every(isMove)),
-    `Ticket ${ticket.id}: moves must list 1 to ${MAX_PATHS} moves, each { "from": "<file>", "to": "<file>" }`);
-  need(ticket.deletes === undefined || (Array.isArray(ticket.deletes) && ticket.deletes.length >= 1 && ticket.deletes.length <= MAX_PATHS), `Ticket ${ticket.id}: deletes must list 1 to ${MAX_PATHS} files`);
+  // An empty list declares nothing, as an absent one.
+  need(ticket.moves === undefined || (Array.isArray(ticket.moves) && ticket.moves.length <= MAX_PATHS && ticket.moves.every(isMove)),
+    `Ticket ${ticket.id}: moves must list at most ${MAX_PATHS} moves, each { "from": "<file>", "to": "<file>" }`);
+  need(ticket.deletes === undefined || (Array.isArray(ticket.deletes) && ticket.deletes.length <= MAX_PATHS), `Ticket ${ticket.id}: deletes must list at most ${MAX_PATHS} files`);
   const files = named(ticket), odd = files.filter(path => !literal(path));
   need(!odd.length, `Ticket ${ticket.id}: ${JSON.stringify(plain(String(odd[0])))} is not one plain file path a quoted shell command can hold (no folder grant, no "." or "..", none of " $ \` \\ ! * ? [ ] { } :)`);
   const kept = files.filter(reserved);

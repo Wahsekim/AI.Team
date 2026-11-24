@@ -42,8 +42,8 @@ test('before refuses a move or a deletion that is not one tracked file inside th
     'src/list/:a.js', 'src/list/a:b.js', 'src/list/a\u202eb.js', 'src/list/a\u200bb.js', 'src/list/a\x85b.js'])
     await refused(lister({ deletes: [odd] }), /is not one plain file path a quoted shell command can hold/);
   await refused(lister({ deletes: ['src/list/.git/config'] }), /no ticket writes under \.git or \.claude/);
-  for (const [field, value] of [['moves', []], ['moves', [{ from: 'src/list/a.js' }]], ['moves', [{ from: 'src/list/a.js', to: 'src/list/c.js', force: true }]], ['deletes', 'src/list/a.js'], ['deletes', []]])
-    await refused(lister({ [field]: value }), new RegExp(`US-61: ${field} must list 1 to 100`));
+  for (const [field, value] of [['moves', [{ from: 'src/list/a.js' }]], ['moves', [{ from: 'src/list/a.js', to: 'src/list/c.js', force: true }]], ['moves', {}], ['deletes', 'src/list/a.js'], ['deletes', null]])
+    await refused(lister({ [field]: value }), new RegExp(`US-61: ${field} must list at most 100`));
   const many = (id, folder) => ticket(id, [`${folder}/**`], { expectedPaths: [`${folder}/x.js`], deletes: Array.from({ length: 51 }, (_, i) => `${folder}/f${i}.js`) });
   await refused(batchOf(many('US-61', 'src/a'), many('US-62', 'src/b')), /may move or delete at most 100 files in all \(102 given\)/);
   // A folder that is a link would carry the moved file out of the product.
@@ -72,6 +72,13 @@ test('before refuses a move a link or an earlier move of the batch could carry o
   git(sub.product, 'update-index', '--add', '--cacheinfo', `160000,${git(sub.product, 'rev-parse', 'HEAD').trim()},src/list/sub`); mkdirSync(join(sub.product, 'src/list/sub'));
   git(sub.product, 'commit', '-q', '-m', 'submodule');
   await refused(lister({ moves: [{ from: 'src/list/a.js', to: 'src/list/sub/a.js' }] }), /SUBMODULE_PRESENT/, sub);
+});
+
+test('an empty moves or deletes list is the same as none', async t => {
+  const f = seeded(t), open = await f.before(lister({ moves: [], deletes: [] }));
+  assert.equal(open.errors, undefined, JSON.stringify(open.errors));
+  assert.deepEqual([open.tickets[0].moves, open.tickets[0].deletes, taskData(open.args.plan[0].brief).gitCommands], [[], [], []]);
+  assert.deepEqual(readBoundary(f.root).wrappers[EXEC].commands, [...f.commands].sort(), 'the exec worker runs the verification commands only');
 });
 
 test('the exec worker may run exactly the git commands its tickets declare, the checker and the Guardian may not; the exec brief names its grant and those commands', async t => {
