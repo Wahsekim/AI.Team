@@ -43,7 +43,7 @@ test('before freezes N tickets, computes the ceiling, takes the lock and opens t
   const boundary = readBoundary(f.root), write = (agent, path) => decideCall({ boundary, input: { tool_name: 'Edit', agent_type: agent, cwd: f.product, tool_input: { file_path: path } } }).decision;
   assert.equal(write('tag-list-fixture-worker-exec', 'src/list/view.js'), 'allow'); assert.equal(write('tag-list-fixture-worker-exec', 'src/api/tags.js'), 'allow');
   assert.equal(write('tag-list-fixture-worker-exec', 'src/other.js'), 'deny'); assert.equal(write('tag-list-fixture-worker-check', 'src/app.js'), 'deny');
-  assert.deepEqual(record.sensitivePaths, ['src/auth/**']); assert.deepEqual(record.tickets[1], { id: 'US-02', title: 'Ticket US-02', goal: 'Do US-02', acceptance: ['US-02 works'], commitMessage: 'US-02: Ticket US-02', paths: ['src/api/tags.js'], expectedPaths: ['src/api/tags.js'], dependsOn: [], declared: [] });
+  assert.deepEqual(record.sensitivePaths, ['src/auth/**']); assert.deepEqual(record.tickets[1], { id: 'US-02', title: 'Ticket US-02', goal: 'Do US-02', acceptance: ['US-02 works'], commitMessage: 'US-02: Ticket US-02', paths: ['src/api/tags.js'], expectedPaths: ['src/api/tags.js'], dependsOn: [], moves: [], deletes: [], declared: [] });
   assert.match(refusal(await f.before(batchOf(ticket('US-03', ['src/x.js'])))).reason, /already open/);
   assert.equal(readLease({ productRoot: f.product }).lease.digest, record.lease, 'the open batch keeps its lock'); assert.equal(write('tag-list-fixture-worker-exec', 'src/list/view.js'), 'allow');
 });
@@ -72,7 +72,7 @@ test('in a batch a worker\'s shell runs the confirmed verification commands from
   const hook = (agent, command) => spawnSync('sh', ['-c', JSON.parse(f.read('.claude/settings.json')).hooks.PreToolUse.at(-1).hooks[0].command], { encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: f.root },
     input: JSON.stringify({ tool_name: 'Bash', agent_type: agent, cwd: f.root, tool_input: { command } }) });
   const approved = hook(exec, `cd "${f.product}" && npm test`);
-  assert.equal(approved.status, 0, approved.stderr); assert.deepEqual(JSON.parse(approved.stdout).hookSpecificOutput, { hookEventName: 'PreToolUse', permissionDecision: 'allow', permissionDecisionReason: 'A verification command the owner confirmed for this team' });
+  assert.equal(approved.status, 0, approved.stderr); assert.deepEqual(JSON.parse(approved.stdout).hookSpecificOutput, { hookEventName: 'PreToolUse', permissionDecision: 'allow', permissionDecisionReason: 'A command frozen for this batch: a verification command the owner confirmed, or a move or deletion a ticket of this batch declared' });
   const refused = hook(exec, 'curl example.invalid'); assert.equal(refused.status, 2); assert.equal(refused.stdout, ''); assert.match(refused.stderr, /only the verification commands confirmed for this team/);
   const unjudged = hook('tag-list-fixture-architect', 'ls'); assert.equal(unjudged.status, 0); assert.equal(unjudged.stdout, '', 'no decision is given for an agent that is not a worker');
   assert.deepEqual(f.read('.claude/rw-write-boundary.log.jsonl').trim().split('\n').map(line => JSON.parse(line)).map(line => [line.decision, line.judged]), [['approve', true], ['deny', true], ['allow', false]]);
@@ -344,6 +344,7 @@ test('after refuses a return that is not this batch\'s and changes nothing; find
   // The way out of a closed batch the kit will not commit: its records are archived, the work stays in the tree.
   const out = abortBatch({ teamRoot: f.kit, instanceRoot: f.root });
   assert.equal(out.errors, undefined, JSON.stringify(out.errors)); assert.equal(out.stage, 'batch-archived-without-commit');
+  assert.equal(out.lockReleased, 'already-free', 'after had released the lock; abort does not say it failed to');
   assert.deepEqual(readdirSync(join(f.root, 'batches', f.open.runId)).sort(), ['abandoned.json', 'after.json', 'batch.json', 'return.json']); assert.equal(existsSync(join(f.root, BATCH_FILE)), false);
   assert.match(f.read('pm-decisions.md'), /ARCHIVED WITHOUT COMMIT by rw-batch\.mjs abort/); assert.ok(f.status().includes('src/app.js'), 'the work is still there');
   f.unmetered(); assert.equal((await f.before(batchOf(ticket('US-07', ['src/q.js'])), { startAsIs: true })).errors, undefined, 'and the team can open its next batch');
@@ -450,11 +451,14 @@ test('a commit hook written or moved during a batch holds it; a hook that stages
   const written = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n' } });
   writeFileSync(join(written.product, '.git/hooks/pre-commit'), '#!/bin/sh\ntouch /tmp/never\n', { mode: 0o755 });
   const caught = written.after(); assert.ok(caught.findings.some(finding => finding.code === 'HOOKS_CHANGED')); assert.equal(caught.holdAll, true); assert.deepEqual(caught.commits, []);
+  const handFirst = /A commit by hand runs the repository's commit hooks as you: inspect .* and remove every hook the batch added or changed, before any commit by hand/;
+  assert.match(caught.next.join('\n'), handFirst, 'the PM is told to clear the hook before committing by hand');
+  assert.match(abortBatch({ teamRoot: written.kit, instanceRoot: written.root }).next, handFirst, 'abort says it too before it says to commit by hand');
   const moved = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n' } }); git(moved.product, 'config', 'core.hooksPath', 'hooks');
   assert.ok(moved.after().findings.some(finding => finding.code === 'HOOKS_CHANGED'));
   const late = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n' } }); assert.equal(late.after().status, 'clean');
   writeFileSync(join(late.product, '.git/hooks/pre-commit'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-  assert.match(refusal(late.commit()).reason, /commit hooks were changed or moved/); assert.deepEqual(late.log(), []);
+  assert.match(refusal(late.commit()).reason, /commit hooks were changed or moved/); assert.match(refusal(late.commit()).reason, handFirst); assert.deepEqual(late.log(), []);
   // Husky 9, and a worker's shell writing the script beside the stub folder, which no ticket granted.
   const stub = live(t); mkdirSync(join(stub.product, '.husky/_'), { recursive: true }); writeFileSync(join(stub.product, '.husky/_/pre-commit'), '#!/bin/sh\n. "$(dirname "$0")/../pre-commit"\n', { mode: 0o755 });
   git(stub.product, 'add', '-A'); git(stub.product, 'commit', '-q', '-m', 'husky'); git(stub.product, 'config', 'core.hooksPath', '.husky/_');

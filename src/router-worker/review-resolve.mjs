@@ -5,7 +5,7 @@ import { digest, bytesDigest } from '../loop/contracts.mjs';
 import { git, gitRun, acquireLease, releaseLease, readLease } from './lease.mjs';
 import { readBoundary, closeBoundary, stateOf } from './write-boundary.mjs';
 import { runCommands, confirmedOf } from './run-commands.mjs';
-import { AFTER_FILE, RESOLUTION_FILE, changedPaths, contentOf, hooksOf, plain } from './batch.mjs';
+import { AFTER_FILE, RESOLUTION_FILE, changedPaths, contentOf, hooksOf, plain, HOOKS_MOVED } from './batch.mjs';
 import { openBatch, intact, Refusal, IN_PROGRESS, ABANDON } from './batch-close.mjs';
 import { reviewGate, verdictsOf, briefsOf } from './review-judge.mjs';
 
@@ -93,7 +93,7 @@ export function resolveBatch({ teamRoot, instanceRoot, run = runCommands }) {
     need(git(product, 'symbolic-ref', '--short', '-q', 'HEAD')?.trim() === batch.branch, `The product repository is no longer on the batch's branch (${plain(batch.branch)}). ${ABANDON}`);
     const gitDir = git(product, 'rev-parse', '--absolute-git-dir')?.trim(), busy = IN_PROGRESS.filter(name => gitDir && exists(join(gitDir, name)));
     need(gitDir && !busy.length, `A Git operation is in progress in the product repository (${busy.join(', ')})`);
-    need(hooksOf(product).digest === batch.hooks?.digest, `The repository's commit hooks were changed or moved since the batch opened. ${ABANDON}`);
+    need(hooksOf(product).digest === batch.hooks?.digest, `${HOOKS_MOVED}. ${ABANDON}`);
 
     let journal = { schemaVersion: 1, stage: 'batch-resolving', runId: batch.runId, batchDigest: batch.digest, afterDigest: after.digest, reviewsDigest, lease, pid: process.pid,
       removed: kept?.removed ?? [], verification: kept?.verification ?? null };

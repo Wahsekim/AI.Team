@@ -219,7 +219,8 @@ and, once a code is typed at an interactive terminal (a session without a
 terminal cannot confirm), packs the live mode's own files, puts the other
 mode's in place and installs the write-limit hook (between batches the three
 workers may write nothing and run no command; in a batch their shell runs only
-the verification commands the owner confirmed with the limits; a team switched
+the verification commands the owner confirmed with the limits, plus, for the exec
+worker, the exact `git mv` and `git rm` commands derived from the batch's declared `moves` and `deletes`; a team switched
 before that list existed gets it, and the closed shell, from `team-mode.mjs limits`)
 ([details](docs/design/router-worker/mode-switch.md)). `scripts/rw-batch.mjs` runs a batch in such a team: `before` checks the
 tickets and the product repository, computes the ceiling, takes the lock and

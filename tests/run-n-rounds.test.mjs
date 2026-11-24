@@ -1274,3 +1274,14 @@ test('F-07: verifier estimates are observed separately from worker estimates', a
   assert.equal(verifier.kind, 'verifier')
   assert.equal(result.coaching.beyondThresholdCount, 1)
 })
+
+test('the reconcile instructions name the command from a single-root kit and from a two-root instance root', async () => {
+  const { result } = await run(mkArgs())
+  const { pasteInstruction, checklist } = result.mainSessionTodo
+  assert.match(pasteInstruction, /'node scripts\/reconcile-run\.mjs <file> \.'/)
+  assert.match(pasteInstruction, /'node kit\/scripts\/reconcile-run\.mjs <file> \.'/, 'an instance root holds the kit under kit/')
+  const monitoring = checklist.find(line => line.includes('--monitoring'))
+  assert.match(monitoring, /`node scripts\/reconcile-run\.mjs <result\.json> \. --monitoring <attestation\.json>`/)
+  assert.match(monitoring, /`node kit\/scripts\/reconcile-run\.mjs <result\.json> \. --monitoring <attestation\.json>`/)
+  assert.match(checklist[0], /kit\/scripts\/reconcile-run\.mjs/)
+})

@@ -7,7 +7,7 @@ import { compile } from './compile.mjs';
 // the product paths its file tools may write; the PreToolUse hook judges each
 // call against that file. Bash writes are outside this boundary. A batch of a
 // standing team also freezes the verification commands its workers run without
-// a permission prompt.
+// a permission prompt, and the Git moves and deletions its exec worker runs.
 export const BOUNDARY_FILE = '.claude/rw-write-boundary.json';
 const SETTINGS = '.claude/settings.json';
 export const LOG_FILE = '.claude/rw-write-boundary.log.jsonl';
@@ -113,14 +113,16 @@ export function standBoundary({ teamRoot, productRoot, wrappers, hookPath }) {
 
 // A batch opens in a standing team: the closed boundary becomes the batch's, with the exec worker's write
 // paths. The wrappers and the product are the ones the closed boundary already names; nothing else is trusted.
-export function openBoundary({ teamRoot, productRoot, writePaths, commands = [] }) {
+// `execCommands`: the Git moves and deletions the tickets declare, for the exec worker only.
+export function openBoundary({ teamRoot, productRoot, writePaths, commands = [], execCommands = [] }) {
   const closed = readBoundary(teamRoot);
   need(closed && closed.productRoot === productRoot && stateOf(closed) === 'closed', 'The team has no closed write boundary for this product; a batch may be open or in review, or the boundary was changed');
   need(Array.isArray(writePaths) && writePaths.length > 0 && writePaths.every(path => typeof path === 'string' && path), 'A batch needs at least one write path');
-  need(Array.isArray(commands) && commands.every(command => typeof command === 'string' && command), 'The commands of a batch must be a list of commands');
+  need([commands, execCommands].every(list => Array.isArray(list) && list.every(command => typeof command === 'string' && command)), 'The commands of a batch must be a list of commands');
   // The Guardian reads; the two workers that run the verification commands are approved for them.
+  const runs = { exec: [...commands, ...execCommands], check: commands, guard: [] };
   const body = { schemaVersion: 1, state: 'batch', productRoot, wrappers: Object.fromEntries(Object.entries(closed.wrappers).map(([name, entry]) => [name, { duty: entry.duty, writePaths: entry.duty === 'exec' ? [...new Set(writePaths)].sort() : [],
-    commands: entry.duty === 'guard' ? [] : [...new Set(commands)].sort() }])) };
+    commands: [...new Set(runs[entry.duty])].sort() }])) };
   writeFileSync(join(teamRoot, BOUNDARY_FILE), JSON.stringify({ ...body, digest: digest(body) }, null, 2) + '\n');
   return { digest: digest(body), wrappers: Object.fromEntries(Object.entries(body.wrappers).map(([name, entry]) => [entry.duty, name])) };
 }
