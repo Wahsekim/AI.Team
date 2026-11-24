@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { writeFileSync, mkdirSync, existsSync, symlinkSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { spawnSync, execFileSync } from 'node:child_process';
-import { BATCH_FILE } from '../src/router-worker/batch.mjs';
+import { BATCH_FILE, abortBatch } from '../src/router-worker/batch.mjs';
 import { afterBatch } from '../src/router-worker/batch-close.mjs';
 import { readLease } from '../src/router-worker/lease.mjs';
 import { readBoundary, decideCall } from '../src/router-worker/write-boundary.mjs';
@@ -49,6 +49,28 @@ test('before refuses a move or a deletion that is not one tracked file inside th
   mkdirSync(join(f.base, 'outside')); symlinkSync(join(f.base, 'outside'), join(f.product, 'src/list/out'));
   git(f.product, 'add', '-A'); git(f.product, 'commit', '-q', '-m', 'link');
   await refused(lister({ moves: [{ from: 'src/list/a.js', to: 'src/list/out/a.js' }] }), /moves a file to src\/list\/out\/a\.js, which already exists or does not lie in a folder of the product/);
+});
+
+test('before refuses a move a link or an earlier move of the batch could carry out of the grant, and a move into a submodule', async t => {
+  const f = seeded(t), refused = async (batch, pattern, team = f) => { assert.match(refusal(await team.before(batch))?.reason ?? 'opened', pattern); untouched(team); };
+  writeFileSync(join(f.product, 'src/list/run.sh'), '#!/bin/sh\necho benign\n'); symlinkSync('../../.git/hooks', join(f.product, 'src/list/hk'));
+  git(f.product, 'add', '-A'); git(f.product, 'commit', '-q', '-m', 'link');
+  // The link moved first, then a file moved through it, would land in .git/hooks.
+  await refused(lister({ moves: [{ from: 'src/list/hk', to: 'src/list/d' }, { from: 'src/list/run.sh', to: 'src/list/d/pre-commit' }] }), /US-61 names src\/list\/d\/pre-commit in its moves or deletes, under src\/list\/d, which ticket US-61 names too/);
+  await refused(lister({ moves: [{ from: 'src/list/hk', to: 'src/list/d' }] }), /US-61 moves src\/list\/hk, a symbolic link/);
+  await refused(lister({ moves: [{ from: 'src/list/a.js', to: 'src/list/d' }, { from: 'src/list/b.js', to: 'src/list/d/b.js' }] }), /names src\/list\/d\/b\.js in its moves or deletes, under src\/list\/d/);
+  await refused(lister({ moves: [{ from: 'src/list/a.js', to: 'src/list/old.js/a.js' }], deletes: ['src/list/old.js'] }), /names src\/list\/old\.js\/a\.js in its moves or deletes, under src\/list\/old\.js/);
+  await refused(batchOf(ticket('US-61', ['src/list/a.js', 'src/list/d'], { moves: [{ from: 'src/list/a.js', to: 'src/list/d' }] }), ticket('US-62', ['src/list/d/**', 'src/list/b.js'], { expectedPaths: ['src/list/d/b.js'], moves: [{ from: 'src/list/b.js', to: 'src/list/d/b.js' }] })),
+    /US-62 names src\/list\/d\/b\.js in its moves or deletes, under src\/list\/d, which ticket US-61 names too/);
+  assert.equal(existsSync(join(f.product, '.git/hooks/pre-commit')), false);
+  // git rm removes a link itself and never follows it.
+  const removed = await f.before(lister({ deletes: ['src/list/hk'] }));
+  assert.equal(removed.errors, undefined, JSON.stringify(removed.errors)); assert.equal(abortBatch(f.common).errors, undefined);
+  // git mv into a submodule's folder drops the submodule from the index; a product with one opens no batch at all.
+  const sub = seeded(t);
+  git(sub.product, 'update-index', '--add', '--cacheinfo', `160000,${git(sub.product, 'rev-parse', 'HEAD').trim()},src/list/sub`); mkdirSync(join(sub.product, 'src/list/sub'));
+  git(sub.product, 'commit', '-q', '-m', 'submodule');
+  await refused(lister({ moves: [{ from: 'src/list/a.js', to: 'src/list/sub/a.js' }] }), /SUBMODULE_PRESENT/, sub);
 });
 
 test('the exec worker may run exactly the git commands its tickets declare, the checker and the Guardian may not; the exec brief names its grant and those commands', async t => {

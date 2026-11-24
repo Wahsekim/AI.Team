@@ -240,9 +240,18 @@ With its file tools a worker can write a file but not rename or delete one
   `.claude`; it lies inside the ticket's `paths`, and no path is named twice in
   the ticket's moves and deletes (compared without case);
 - each `from` and each deleted path is a file tracked at the product's HEAD;
+  a `from` is not a symbolic link, since a later path could reach through a
+  moved link out of the grant (a deleted path may be one: `git rm` removes the
+  link itself and never follows it);
+- no path the batch moves or deletes lies under another such path, over all
+  its tickets: the commands run one after another, and the first could
+  redirect the second;
 - each `to` does not exist, and the nearest folder of it that exists is a real
   folder of the product, not a link;
 - at most 100 moves and deletions over the whole batch.
+
+No move lands in a submodule: a product whose index holds one opens no batch
+at all (`SUBMODULE_PRESENT`, step 6).
 
 From each it derives one exact command, given to the exec worker's shell for
 that batch only, and to no other worker:

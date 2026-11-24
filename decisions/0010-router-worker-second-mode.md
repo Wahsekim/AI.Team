@@ -288,8 +288,12 @@ authority.
 
 - A ticket may declare `moves` (`from`, `to`) and `deletes`. "before" accepts
   each only as one plain file path inside the ticket's `paths`, named once;
-  each moved or deleted file is tracked at the product's HEAD, and each `to`
-  does not exist and lies in a real folder of the product.
+  each moved or deleted file is tracked at the product's HEAD, a moved file is
+  not a symbolic link, no path the batch moves or deletes lies under another,
+  and each `to` does not exist and lies in a real folder of the product. A
+  moved link, or a path one command creates that another command's path lies
+  under, could carry a later move out of the grant (an independent review
+  reproduced a move into `.git/hooks`).
 - From each, "before" derives one exact command: `git mv -- "<from>" "<to>"`,
   prefixed with `mkdir -p -- "<folder>" && ` when that folder does not exist,
   or `git rm -q -- "<path>"`. A worker may run exactly those commands, inside

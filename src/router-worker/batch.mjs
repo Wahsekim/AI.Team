@@ -158,6 +158,12 @@ function checkBatch(batch, known) {
   need(all.size <= MAX_PATHS, `The tickets of one batch may claim at most ${MAX_PATHS} paths in all (${all.size} given); use folder grants or a smaller batch`);
   const handled = batch.tickets.reduce((count, ticket) => count + (ticket.moves?.length ?? 0) + (ticket.deletes?.length ?? 0), 0);
   need(handled <= MAX_PATHS, `The tickets of one batch may move or delete at most ${MAX_PATHS} files in all (${handled} given); use a smaller batch`);
+  // The commands run one after another: a path one of them creates or removes could redirect another that runs under it.
+  const declared = batch.tickets.flatMap(ticket => named(ticket).map(path => ({ id: ticket.id, path, key: path.toLowerCase() })));
+  for (const inner of declared) {
+    const outer = declared.find(other => inner.key.startsWith(`${other.key}/`));
+    need(!outer, `Ticket ${inner.id} names ${inner.path} in its moves or deletes, under ${outer?.path}, which ticket ${outer?.id} names too: no path a batch moves or deletes lies under another. Put them in different batches`);
+  }
 }
 
 // ADR 0010, amendment of 2026-11-24: the files a ticket moves or deletes with Git. Each is one literal path inside
@@ -184,9 +190,19 @@ function landsInside(productRoot, path) {
   while (!exists(folder)) folder = dirname(folder);
   return lstatSync(folder).isDirectory() && realpathSync(folder) === folder;
 }
+// The mode HEAD records at each of these paths; a path it does not hold as a file or a link is not in the map.
+function headModes(productRoot, paths) {
+  const listed = git(productRoot, '--literal-pathspecs', 'ls-tree', '-z', 'HEAD', '--', ...paths) ?? '';
+  return new Map(listed.split('\0').filter(entry => /^\d{6} blob /.test(entry)).map(entry => [entry.slice(entry.indexOf('\t') + 1), entry.slice(0, 6)]));
+}
 function checkFilesInProduct(productRoot, ticket) {
-  const untracked = [...(ticket.moves ?? []).map(move => move.from), ...(ticket.deletes ?? [])].filter(path => git(productRoot, 'cat-file', '-t', `HEAD:${path}`)?.trim() !== 'blob');
+  const sources = [...(ticket.moves ?? []).map(move => move.from), ...(ticket.deletes ?? [])];
+  if (!sources.length) return;
+  const modes = headModes(productRoot, sources), untracked = sources.filter(path => !modes.has(path));
   need(!untracked.length, `Ticket ${ticket.id} moves or deletes ${plain(untracked[0])}, which is not a file tracked at the product's HEAD`);
+  // A moved link could be reached through by a later path; git rm removes a link itself and never follows it.
+  const linked = (ticket.moves ?? []).find(move => modes.get(move.from) === '120000');
+  need(!linked, `Ticket ${ticket.id} moves ${plain(linked?.from)}, a symbolic link: a link is never moved in a batch, since a later path could reach through it out of the grant. Delete it, or move it outside a batch`);
   const taken = (ticket.moves ?? []).map(move => move.to).filter(path => exists(join(productRoot, path)) || !landsInside(productRoot, path));
   need(!taken.length, `Ticket ${ticket.id} moves a file to ${plain(taken[0])}, which already exists or does not lie in a folder of the product (a link is not followed)`);
 }
