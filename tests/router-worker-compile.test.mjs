@@ -108,6 +108,8 @@ test('a standing batch brief states the ticket\'s grant and the exact git comman
   assert.equal(output.errors, undefined, JSON.stringify(output.errors));
   const { exec, check } = output.renderedBriefs;
   for (const brief of [exec, check]) assert.doesNotMatch(brief, /offline preview|not dispatch authority/);
+  // A worker has no shell to look for a file a role file names; it is told where the file lives and how to read it.
+  for (const brief of [exec, check]) assert.match(brief, /team-relative path .* resolves in the team root when it exists there, otherwise under kit\/.*Read files with Read, Grep and Glob, never with the shell\./);
   assert.deepEqual(taskData(exec).writePaths, ['src/tag-list/**', 'src/api/tags.ts', 'tests/tag-list/**'], 'the grant, not only the planned paths');
   assert.deepEqual(taskData(exec).plannedPaths, standing.proposal.expectedPaths);
   assert.deepEqual(taskData(exec).gitCommands, commands);

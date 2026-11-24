@@ -225,7 +225,10 @@ their shell:
 The text must be the confirmed command exactly; only spaces and line breaks
 around it are ignored. A worker reads files with its file tools; it has no
 `ls`, `cat` or `git` in a batch, apart from the exact Git commands of the
-batch's declared moves and deletions. A command a ticket needs and the list lacks is
+batch's declared moves and deletions. Each brief of a standing batch says so,
+and gives the path rule: a team-relative path (`agents/...`, `docs/...`) is
+read in the team root when it exists there, otherwise under `kit/`, and the
+ticket's paths are relative to the product root. A command a ticket needs and the list lacks is
 the owner's to add, before the batch.
 
 ### Moves and deletions
