@@ -835,8 +835,11 @@ kept out of the tickets' commits by the "after" command.
   a batch is already open.
 - A ticket is incomplete, or two tickets claim the same file. The message names
   the tickets and the paths.
-- A ticket claims a path under `.git` or `.claude`, could write a sensitive
-  path, or grants only folders without `expectedPaths`.
+- A ticket claims a path under `.git` or `.claude`, or grants only folders
+  without `expectedPaths`. A ticket whose grants cover a `sensitivePaths` entry,
+  or that carries a `riskFlags` entry, is not refused: `before` records it as
+  declared-sensitive and `after` flags it for Security whenever it passes with
+  changes.
 - The product repository is on a default branch, not on a branch, has a Git
   operation in progress, or has uncommitted changes (the first ten paths are
   listed), or changed while the batch was being prepared.
