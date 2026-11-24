@@ -479,6 +479,9 @@ offline on transcript fixtures.
   only next to a full `Read` of the same path. The Read tool's own default
   cut of a long file is not detected. The report is the last fenced `json` block of the
   last assistant message; a `REPORT.json` given must be equal to it.
+  Judgments of one team run one at a time: `review` and `review --no-answer`
+  hold `rw-batch-reviews.json.lock` from reading the verdicts to writing them
+  back, a second one waits, and a lock older than a minute is taken over.
 - **The verdict is derived by the kit**, per ticket of the brief: every flagged
   file listed in `filesRead` with `read: true`; every rule of the frozen list
   reported `pass`, `fail` or `not-checked`; not every rule `not-checked`; a
@@ -522,8 +525,9 @@ offline on transcript fixtures.
   `rejected` or `not-obtained` line for this run that the reviewer's final
   verdict does not show: deleting or rewriting `rw-batch-reviews.json` to have
   a ticket judged again does not reset its rejection. A judgment that died
-  after that line and before its verdict, then passed on a new attempt, is
-  refused the same way; the batch is aborted.
+  after that line and before its verdict is recovered by judging the same
+  transcript again, as the refusal says; one that then passed on a new
+  attempt is refused the same way, and the batch is aborted.
 - **Across batches.** Each final outcome that is not a pass is appended to
   `reviews/tickets.jsonl` as `{ticket, runId, reviewer, outcome:
   "rejected"|"not-obtained", finding, at}`, once per ticket, run and reviewer.
