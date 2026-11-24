@@ -367,7 +367,12 @@ shipped tool:
 ```bash
 # save the engine return object to a file, then:
 node scripts/reconcile-run.mjs <result.json> .
+# from a two-root instance root, where the kit is under kit/:
+node kit/scripts/reconcile-run.mjs <result.json> .
 ```
+
+The engine's `mainSessionTodo` names both forms; the same holds for
+`--monitoring` below.
 
 The tool checks the runId in EVERY target independently (a crash between
 targets is repaired by re-running — a partial earlier write is detected and

@@ -37,8 +37,8 @@ no network.
 | 1 | PM | `before BATCH.json`: the batch is checked, frozen and opened |
 | 2 | PM | runs `run-n-rounds` with the `args` of the batch record |
 | 3 | PM | `after RESULT.json`, with the engine's return: the run is checked, the write limits close, the lock is released |
-| 4 | PM | `scripts/reconcile-run.mjs RESULT.json .`: lifecycle and message ledgers, as in specialist mode |
-| 5 | PM | `scripts/measure-spawn.mjs <session-dir> --json > METER.json`, then `settle METER.json`: usage per ticket. The next `before` is refused until this is done |
+| 4 | PM | `node kit/scripts/reconcile-run.mjs RESULT.json .`: lifecycle and message ledgers, as in specialist mode |
+| 5 | PM | `node kit/scripts/measure-spawn.mjs <session-dir> --json > METER.json`, then `settle METER.json`: usage per ticket. The next `before` is refused until this is done |
 | 6 | PM | a flagged batch only: `review-brief`, the reviewer's dispatch and `review` per reviewer, then `resolve` (see "Resolve") |
 | 7 | PM | `commit`: one commit per ticket that passed, or per ticket the resolution kept; the batch is archived |
 
