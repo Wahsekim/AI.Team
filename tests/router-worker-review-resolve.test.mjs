@@ -3,16 +3,18 @@
 // when a later ticket is still to be committed, and commit takes its plan from the resolution.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { writeFileSync, readFileSync, existsSync, rmSync, mkdirSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { bytesDigest } from '../src/loop/contracts.mjs';
-import { abortBatch } from '../src/router-worker/batch.mjs';
+import { abortBatch, beforeBatch } from '../src/router-worker/batch.mjs';
+import { afterBatch } from '../src/router-worker/batch-close.mjs';
+import { runWorkflow, makeAgentImpl } from '../scripts/lib/workflow-harness.mjs';
 import { recordNoAnswer } from '../src/router-worker/review-judge.mjs';
 import { reviewBrief } from '../src/router-worker/review-brief.mjs';
 import { readLease } from '../src/router-worker/lease.mjs';
 import { git } from './fixtures/router-worker/standing-team.mjs';
-import { refusal, ticket, live, changed, runBatch, reportOf, failing, transcriptOf } from './fixtures/router-worker/review.mjs';
+import { refusal, ticket, live, changed, runBatch, reportOf, failing, transcriptOf, batchOf, agentsOf } from './fixtures/router-worker/review.mjs';
 
 // The engine refuses a no-op verification command such as true, so pwd stands for a command that passes.
 // US-02 is flagged for Security (its path holds "auth") and edits a tracked file too; US-01 and US-03 are not flagged.
@@ -159,5 +161,51 @@ test('a command that failed when the review was briefed on a tree holding more t
   assert.equal(resolved.errors, undefined, JSON.stringify(resolved.errors));
   assert.deepEqual(resolved.failedAtBrief, [{ reviewer: 'security', attempt: 1, command: f.commands[0], exit: 1, timedOut: false }]); assert.deepEqual(resolved.removed, []);
   assert.match(f.ledger(), new RegExp(`BATCH ${open.runId} RESOLVED: nothing held; 1 to commit; verification failed when the review was briefed: .*gate-fails.* \\(security's brief 1: exit 1\\)`));
+  assert.deepEqual(f.commit().commits.map(commit => commit.ticket), ['US-01']);
+});
+
+test('the latest run of the commands on the work tree decides: a later passing brief of another reviewer clears a failure, a later failing one holds; review-brief tells the PM of a failure', async t => {
+  const f = live(t, { commands: GATE });
+  await runBatch(f, [ticket('US-01', ['src/authz.js'])], { 'src/authz.js': 'export const x = 2;\n' });
+  writeFileSync(join(f.base, 'gate-fails'), '');
+  const cli = spawnSync(process.execPath, [join(f.kit, 'scripts/rw-batch.mjs'), 'review-brief', '--reviewer', 'security', '--instance', f.root], { encoding: 'utf8' });
+  assert.equal(cli.status, 0, cli.stderr); assert.match(cli.stdout, /^# Batch review brief: security/);
+  assert.match(cli.stderr, /failed or timed out when this brief was made: .*gate-fails.*exit 1.*review-brief --reviewer security --instance <instance-root> before dispatching the reviewer/);
+  const failed = JSON.parse(f.read('rw-batch-review-security.json')).entries.at(-1);
+  rmSync(join(f.base, 'gate-fails'));
+  const passed = f.brief('architect', ['US-01']);
+  assert.equal(passed.record.verification[0].exit, 0); assert.equal(passed.notice, undefined, 'a brief whose commands passed carries no notice');
+  assert.equal(passed.record.treeDigest, failed.treeDigest, 'both briefs ran on the same work tree');
+  assert.equal(f.judge('security', transcriptOf(f, { brief: cli.stdout, record: failed })).outcome, 'accepted');
+  assert.equal(f.judge('architect', transcriptOf(f, passed)).outcome, 'accepted');
+  const resolved = f.resolve();
+  assert.equal(resolved.errors, undefined, JSON.stringify(resolved.errors)); assert.deepEqual(resolved.failedAtBrief, []);
+  assert.deepEqual(f.commit().commits.map(commit => commit.ticket), ['US-01']);
+
+  const g = live(t, { commands: GATE });
+  await runBatch(g, [ticket('US-01', ['src/authz.js'])], { 'src/authz.js': 'export const x = 2;\n' });
+  const first = g.brief('security');
+  writeFileSync(join(g.base, 'gate-fails'), '');
+  const last = g.brief('architect', ['US-01']);
+  assert.match(last.notice, /failed or timed out when this brief was made/);
+  assert.equal(g.judge('security', transcriptOf(g, first)).outcome, 'accepted'); assert.equal(g.judge('architect', transcriptOf(g, last)).outcome, 'accepted');
+  assert.match(refusal(g.resolve()).reason, /failed when the review was briefed.*architect's brief 1: exit 1/);
+});
+
+test('a batch started as is holds more than what would be committed: a failure when the review was briefed is recorded, not held on', async t => {
+  const f = live(t, { commands: GATE });
+  writeFileSync(join(f.product, 'stray.txt'), 'pre-existing\n');
+  const open = await beforeBatch({ ...f.common, batch: { ...batchOf(ticket('US-01', ['src/authz.js'])), verificationCommands: f.commands }, startAsIs: true });
+  assert.equal(open.errors, undefined, JSON.stringify(open.errors));
+  const { result } = await runWorkflow({ scriptPath: join(f.root, '.claude/workflows/run-n-rounds.js'), args: open.args, agentImpl: makeAgentImpl(agentsOf(f.commands)) });
+  mkdirSync(join(f.product, 'src'), { recursive: true }); writeFileSync(join(f.product, 'src/authz.js'), 'export const x = 2;\n');
+  appendFileSync(join(f.root, '.claude/rw-write-boundary.log.jsonl'), JSON.stringify({ at: new Date().toISOString(), tool: 'Edit', agentType: 'tag-list-fixture-worker-exec', judged: true, decision: 'allow' }) + '\n');
+  const after = afterBatch({ ...f.common, result });
+  assert.equal(after.errors, undefined, JSON.stringify(after.errors)); assert.deepEqual(after.left, [], 'a path changed before the batch is not left by after');
+  writeFileSync(join(f.base, 'gate-fails'), '');
+  assert.equal(f.judge('security', transcriptOf(f, f.brief('security'))).outcome, 'accepted');
+  const resolved = f.resolve();
+  assert.equal(resolved.errors, undefined, JSON.stringify(resolved.errors));
+  assert.deepEqual(resolved.failedAtBrief, [{ reviewer: 'security', attempt: 1, command: f.commands[0], exit: 1, timedOut: false }]);
   assert.deepEqual(f.commit().commits.map(commit => commit.ticket), ['US-01']);
 });

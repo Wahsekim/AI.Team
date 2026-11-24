@@ -89,6 +89,8 @@ export const contentOf = (product, paths) => Object.fromEntries(paths.map(path =
   const stat = lstatSync(join(product, path), { throwIfNoEntry: false });
   return [path, stat?.isFile() ? bytesDigest(readFileSync(join(product, path))) : null];
 }));
+// The work tree as the commands see it: every changed path with its content.
+export const treeOf = product => digest(contentOf(product, changedPaths(product)));
 // The records of a batch leave the team's root in one move, so a batch is either open or archived.
 export function archiveBatch(instance, runId, records, sources) {
   const final = join(instance, ARCHIVE, runId), staging = join(instance, ARCHIVE, `.${runId}.tmp`);

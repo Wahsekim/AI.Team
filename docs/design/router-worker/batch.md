@@ -345,6 +345,10 @@ line to `pm-decisions.md`. It takes the lock for its length. It pushes nothing.
   description is taken up too, but only when its files are what `after` saw:
   the work tree holds the content `after` recorded and nothing of the ticket's
   paths differs from the commit. Otherwise `commit` refuses and records nothing.
+  A pre-commit hook that rewrites a file (a formatter) is accepted on a normal
+  `commit`, but a commit it rewrote is not what `after` saw, so if the command
+  dies right after it, the take-up refuses and the batch is aborted. Whether to
+  accept such a commit is open (R23-01, case 2), an owner decision.
 - A commit is made with the repository's identity, or the one given in
   `GIT_AUTHOR_*` and `GIT_COMMITTER_*`. Every other `GIT_*` variable is ignored.
 - A `commit` that died after archiving the batch is finished by the next call.
@@ -425,9 +429,14 @@ a narrower pattern would miss `oauth/` or `authz.js`.
   nothing committed; `resolve` ends the review state once every verdict is in.
 - **`review-brief --reviewer R`** prints the brief the PM gives reviewer R's
   wrapper, and appends it, sealed, to `rw-batch-review-R.json` (one entry per
-  attempt: run, reviewer, wrapper, attempt, `briefDigest`, the tickets with
+  attempt: run, reviewer, wrapper, attempt, `briefDigest`, `madeAt`,
+  `treeDigest` (every changed path of the work tree with its content, taken
+  before the commands run), the tickets with
   their goal, acceptance, changed and flagged paths and content digests, the
-  rule ids, the ADRs, each verification command's exit and output digest). The
+  rule ids, the ADRs, each verification command's exit and output digest).
+  When a command failed or timed out, it also says so on standard error (the
+  result's `notice`) and tells the PM to brief again before dispatching the
+  reviewer if the failure is flaky or its cause is gone. The
   brief holds, for each ticket R must review: the goal and acceptance, the
   reason it was flagged, and the flagged files as absolute paths to open with
   the Read tool; the diff of those tickets from the batch's start, untracked
@@ -579,12 +588,18 @@ flagged batch has a final verdict, before `commit`. It takes the lock and checks
 that the product is on the batch's branch at the batch's start commit, with no
 Git operation in progress and the same commit hooks, and that every changed path
 of a ticket still to be committed or held has the content `after` pinned
-(`tickets[].content`). It also reads the verification commands the kit ran for
-each reviewer's latest brief: when one failed or timed out and that brief's work
-tree was exactly what would be committed (`after` left no path and no review
-holds a ticket), it refuses and names the command, and `abort` is the way out; otherwise the
-failure is recorded in the resolution (`failedAtBrief`) and on its ledger line.
-A reviewer's verdict is never changed by it. Then:
+(`tickets[].content`). It also reads the verification commands the kit ran when
+the reviews were briefed. On each work tree (`treeDigest`) the latest brief by
+`madeAt` decides, whichever reviewer it was for: a later run that passed clears
+an earlier failure, and a later failure stands. When that latest run on the work
+tree as it is now failed or timed out and the tree is exactly what would be
+committed (nothing changed before the batch, `after` left no path, and no review
+holds a ticket), it refuses and names the command, and `abort` is the way out.
+Every other such failure is recorded in the resolution (`failedAtBrief`) and on
+its ledger line. A brief that ran no command (the batch freezes none, or none
+is still confirmed for the team) has nothing that failed, so a batch whose
+verification commands list is empty is never held here. A reviewer's verdict is
+never changed by it. Then:
 
 1. **Held patches.** For each ticket rejected or whose review was not obtained,
    the kit makes a binary patch of the ticket's changed paths against the
