@@ -595,8 +595,8 @@ of a ticket still to be committed or held has the content `after` pinned
 the reviews were briefed. Across every reviewer's briefs of the batch, the most
 recent complete run decides: the brief with the highest `seq`, never the wall
 clock, among the briefs that ran every frozen command (none dropped). A brief
-that ran no command, or dropped one, clears nothing; when no brief is complete,
-every recorded failure counts as the most recent. A
+that ran no command, or dropped one, clears nothing, though a failure in it
+still holds; when no brief is complete, every recorded failure counts. A
 brief recorded before `seq` existed comes before every numbered one, and such
 briefs are ordered by `madeAt` among themselves. A later run that passed clears
 an earlier failure, and a later failure stands, whatever the commands wrote in

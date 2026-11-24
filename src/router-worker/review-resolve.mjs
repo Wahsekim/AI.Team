@@ -74,9 +74,9 @@ export function resolveBatch({ teamRoot, instanceRoot, run = runCommands }) {
     const briefs = batch.review.reviewers.flatMap(reviewer => briefsOf(instance, reviewer, batch.runId))
       .sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0) || (a.madeAt > b.madeAt) - (a.madeAt < b.madeAt));
     const failing = brief => (brief?.verification ?? []).filter(run => run.exit !== 0 || run.timedOut).map(({ command, exit, timedOut }) => ({ reviewer: brief.reviewer, attempt: brief.attempt, command, exit, timedOut }));
-    // Only a brief that ran every frozen command can clear an earlier failure: no command run proves nothing.
+    // Only a brief that ran every frozen command can clear an earlier failure (no command run proves nothing); a later failure, complete or not, stands.
     const complete = briefs.filter(brief => brief.verification?.length && !brief.dropped?.length);
-    const failedAtBrief = briefs.flatMap(failing), holding = complete.length ? failing(complete.at(-1)) : failedAtBrief;
+    const failedAtBrief = briefs.flatMap(failing), holding = complete.length ? briefs.slice(briefs.lastIndexOf(complete.at(-1))).flatMap(failing) : failedAtBrief;
     const named = runs => runs.map(run => `${plain(run.command)} (${run.reviewer}'s brief ${run.attempt}: ${run.timedOut ? 'timed out' : `exit ${run.exit}`})`).join(', '), failures = named(failedAtBrief);
     need(!holding.length || batch.preexisting.length || after.left.length || reasons.some(Boolean), `A verification command failed when the review was briefed, on a work tree that held only what would be committed: ${named(holding)}. ${ABANDON}`);
     product = batch.productRoot;

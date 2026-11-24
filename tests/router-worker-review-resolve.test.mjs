@@ -9,6 +9,7 @@ import { spawnSync } from 'node:child_process';
 import { bytesDigest, digest } from '../src/loop/contracts.mjs';
 import { abortBatch, beforeBatch } from '../src/router-worker/batch.mjs';
 import { afterBatch } from '../src/router-worker/batch-close.mjs';
+import { AT_TERMINAL } from '../src/router-worker/switch.mjs';
 import { runWorkflow, makeAgentImpl } from '../scripts/lib/workflow-harness.mjs';
 import { recordNoAnswer } from '../src/router-worker/review-judge.mjs';
 import { reviewBrief } from '../src/router-worker/review-brief.mjs';
@@ -263,4 +264,19 @@ test('a brief that ran no command, or dropped a frozen one, cannot clear an earl
   const resolved = f.resolve();
   assert.match(resolved.errors?.[0]?.reason ?? '', /security's brief 1: exit 1/, 'the zero-command brief clears nothing');
   assert.ok(f.commit().errors, 'and nothing commits while the gate fails');
+});
+
+test('a later partial brief that failed still holds after an earlier complete pass', async t => {
+  const f = live(t, { commands: base => [`test ! -f "${base}/gate-fails"`, 'pwd'] });
+  await runBatch(f, [ticket('US-01', ['src/authz.js'])], { 'src/authz.js': 'export const x = 2;\n' });
+  const passed = f.brief('security');
+  assert.equal(passed.record.verification.length, 2);
+  writeFileSync(join(f.base, 'gate-fails'), '');
+  const mode = join(f.root, 'profiles/team-mode.json'), profile = JSON.parse(readFileSync(mode, 'utf8')), limits = { ...profile.limits, allowedCommands: [f.commands[0]] };
+  writeFileSync(mode, JSON.stringify({ ...profile, limits }));
+  appendFileSync(join(f.root, 'pm-decisions.md'), `2026-11-24 LIMITS CHANGED: test; proposal sha256:${'0'.repeat(64)} was confirmed ${AT_TERMINAL}; limits ${digest(limits)}.\n`);
+  const partial = f.brief('architect', ['US-01']);
+  assert.deepEqual(partial.record.dropped, ['pwd']); assert.equal(partial.record.verification[0].exit, 1);
+  assert.equal(f.judge('security', transcriptOf(f, passed)).outcome, 'accepted'); assert.equal(f.judge('architect', transcriptOf(f, partial)).outcome, 'accepted');
+  assert.match(f.resolve().errors?.[0]?.reason ?? '', /architect's brief 1: exit 1/);
 });
