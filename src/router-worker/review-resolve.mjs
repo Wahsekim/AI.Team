@@ -68,13 +68,15 @@ export function resolveBatch({ teamRoot, instanceRoot, run = runCommands }) {
     const reviewsDigest = digest(verdictsOf(instance, batch.runId));
     need(!kept || kept.reviewsDigest === reviewsDigest, `${RESOLUTION_FILE} was started on other verdicts than those in the team now. ${ABANDON}`);
     const { reasons } = reviewGate(instance, batch, after);
-    // The latest brief's run of the commands decides, whichever reviewer it was for: a failure there holds the batch when
+    // The latest complete brief's run of the commands decides, whichever reviewer it was for: a failure there holds the batch when
     // the tree is exactly what would be committed; otherwise every failure is recorded. A record made before
     // briefs were numbered (no seq) comes before every numbered one.
     const briefs = batch.review.reviewers.flatMap(reviewer => briefsOf(instance, reviewer, batch.runId))
       .sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0) || (a.madeAt > b.madeAt) - (a.madeAt < b.madeAt));
     const failing = brief => (brief?.verification ?? []).filter(run => run.exit !== 0 || run.timedOut).map(({ command, exit, timedOut }) => ({ reviewer: brief.reviewer, attempt: brief.attempt, command, exit, timedOut }));
-    const failedAtBrief = briefs.flatMap(failing), holding = failing(briefs.at(-1));
+    // Only a brief that ran every frozen command can clear an earlier failure: no command run proves nothing.
+    const complete = briefs.filter(brief => brief.verification?.length && !brief.dropped?.length);
+    const failedAtBrief = briefs.flatMap(failing), holding = complete.length ? failing(complete.at(-1)) : failedAtBrief;
     const named = runs => runs.map(run => `${plain(run.command)} (${run.reviewer}'s brief ${run.attempt}: ${run.timedOut ? 'timed out' : `exit ${run.exit}`})`).join(', '), failures = named(failedAtBrief);
     need(!holding.length || batch.preexisting.length || after.left.length || reasons.some(Boolean), `A verification command failed when the review was briefed, on a work tree that held only what would be committed: ${named(holding)}. ${ABANDON}`);
     product = batch.productRoot;

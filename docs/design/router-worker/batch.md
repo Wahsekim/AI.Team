@@ -593,7 +593,10 @@ Git operation in progress and the same commit hooks, and that every changed path
 of a ticket still to be committed or held has the content `after` pinned
 (`tickets[].content`). It also reads the verification commands the kit ran when
 the reviews were briefed. Across every reviewer's briefs of the batch, the most
-recent run decides: the brief with the highest `seq`, never the wall clock. A
+recent complete run decides: the brief with the highest `seq`, never the wall
+clock, among the briefs that ran every frozen command (none dropped). A brief
+that ran no command, or dropped one, clears nothing; when no brief is complete,
+every recorded failure counts as the most recent. A
 brief recorded before `seq` existed comes before every numbered one, and such
 briefs are ordered by `madeAt` among themselves. A later run that passed clears
 an earlier failure, and a later failure stands, whatever the commands wrote in
@@ -601,10 +604,9 @@ between. When the most recent run failed or timed out and the tree is exactly
 what would be committed (nothing changed before the batch, `after` left no
 path, and no review holds a ticket), it refuses and names the command, and
 `abort` is the way out. Otherwise every failure at a brief is recorded in the
-resolution (`failedAtBrief`) and on its ledger line. A brief that ran no
-command (the batch freezes none, or none is still confirmed for the team) has
-nothing that failed, so a batch whose verification commands list is empty is
-never held here. A reviewer's verdict is
+resolution (`failedAtBrief`) and on its ledger line. A batch whose briefs ran
+no command and recorded no failure (the batch freezes none, or none is still
+confirmed for the team) is never held here. A reviewer's verdict is
 never changed by it. Then:
 
 1. **Held patches.** For each ticket rejected or whose review was not obtained,

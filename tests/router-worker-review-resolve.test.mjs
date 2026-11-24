@@ -247,3 +247,20 @@ test('a batch started as is holds more than what would be committed: a failure w
   assert.deepEqual(resolved.failedAtBrief, [{ reviewer: 'security', attempt: 1, command: f.commands[0], exit: 1, timedOut: false }]);
   assert.deepEqual(f.commit().commits.map(commit => commit.ticket), ['US-01']);
 });
+
+test('a brief that ran no command, or dropped a frozen one, cannot clear an earlier failure', async t => {
+  const f = live(t, { commands: base => [`test ! -f "${base}/gate-fails"`] });
+  await runBatch(f, [ticket('US-01', ['src/authz.js'])], { 'src/authz.js': 'export const x = 2;\n' });
+  writeFileSync(join(f.base, 'gate-fails'), '');
+  const failed = f.brief('security');
+  assert.equal(failed.record.verification[0].exit, 1);
+  const mode = join(f.root, 'profiles/team-mode.json'), original = readFileSync(mode, 'utf8'), profile = JSON.parse(original);
+  writeFileSync(mode, JSON.stringify({ ...profile, limits: { ...profile.limits, note: 'unbound' } }));
+  const empty = f.brief('architect', ['US-01']);
+  assert.deepEqual(empty.record.verification, []); assert.equal(empty.record.dropped.length, 1);
+  writeFileSync(mode, original);
+  assert.equal(f.judge('security', transcriptOf(f, failed)).outcome, 'accepted'); assert.equal(f.judge('architect', transcriptOf(f, empty)).outcome, 'accepted');
+  const resolved = f.resolve();
+  assert.match(resolved.errors?.[0]?.reason ?? '', /security's brief 1: exit 1/, 'the zero-command brief clears nothing');
+  assert.ok(f.commit().errors, 'and nothing commits while the gate fails');
+});
