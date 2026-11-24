@@ -322,8 +322,9 @@ line to `pm-decisions.md`. It takes the lock for its length. It pushes nothing.
 - It refuses when the product is no longer on the batch's branch, when a Git
   operation is in progress, when the commit hooks were changed or moved, when
   an archive of this batch was already started, when the work
-  tree is not exactly what `after` saw, or when the branch is not the batch's
-  starting commit plus the commits this command itself made.
+  tree is not exactly what `after` saw (the same paths, and for each ticket to
+  commit, reviewed or not, the content `after` recorded), or when the branch is
+  not the batch's starting commit plus the commits this command itself made.
 - The plan is derived again from the tickets: a path is committed only inside
   the paths of a ticket that passed.
 - After each commit it checks that the commit landed on the branch and holds
@@ -341,7 +342,9 @@ line to `pm-decisions.md`. It takes the lock for its length. It pushes nothing.
   A commit made just before the command died, and so never recorded, is taken
   up when it is the next planned one: its parent is the expected commit and it
   holds exactly that ticket's paths. A commit made by hand that fits the same
-  description is taken up too; the kit compares paths, not content.
+  description is taken up too, but only when its files are what `after` saw:
+  the work tree holds the content `after` recorded and nothing of the ticket's
+  paths differs from the commit. Otherwise `commit` refuses and records nothing.
 - A commit is made with the repository's identity, or the one given in
   `GIT_AUTHOR_*` and `GIT_COMMITTER_*`. Every other `GIT_*` variable is ignored.
 - A `commit` that died after archiving the batch is finished by the next call.
