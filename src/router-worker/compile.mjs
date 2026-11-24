@@ -181,7 +181,7 @@ function render(input, duty, methods, standingBatch) {
     duty, attempt: 1, baseline, plannedPaths: p.expectedPaths,
     ...(duty === 'exec' ? { writePaths: m.allowedWritePaths } : {}),
     ...(duty === 'exec' && standingBatch ? { gitCommands: m.gitCommands ?? [], shell: SHELL } : {}),
-    writeBoundary: duty === 'exec' ? 'Write only inside writePaths; plannedPaths are the files expected to change. The host refuses any other write' : 'No product mutation; use the approved isolated verification runner',
+    writeBoundary: duty === 'exec' ? 'Write only inside writePaths; plannedPaths are the files expected to change. The host refuses any other write' : standingBatch ? 'No product write; run only the listed verification commands, from the product root' : 'No product mutation; use the approved isolated verification runner',
     requestedExecTools: p.requestedTools,
     permissionRef: policy.profiles[duty].permissionRef,
     verificationCommands: policy.verificationCommands,

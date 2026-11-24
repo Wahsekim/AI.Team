@@ -67,7 +67,7 @@ test('the exec worker may run exactly the git commands its tickets declare, the 
   assert.deepEqual(taskData(first.brief).writePaths, ['src/list/**']); assert.deepEqual(taskData(first.brief).plannedPaths, ['src/list/c.js']);
   assert.deepEqual(taskData(first.brief).gitCommands, [mv, made, rm]); assert.deepEqual(taskData(second.brief).gitCommands, []);
   assert.match(first.brief, /run no other command, Git included/);
-  for (const brief of [first.brief, first.verifierBrief]) assert.doesNotMatch(brief, /offline preview|not dispatch authority/);
+  for (const brief of [first.brief, first.verifierBrief]) assert.doesNotMatch(brief, /offline preview|not dispatch authority|isolated verification runner/);
   assert.ok(!first.verifierBrief.includes('git mv'), 'the checker is not given the moves');
 });
 
