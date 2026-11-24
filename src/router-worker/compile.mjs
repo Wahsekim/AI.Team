@@ -5,7 +5,9 @@ const ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const HASH = /^sha256:[a-f0-9]{64}$/;
 const CONTROL = /[\x00-\x1f\x7f]/;
 const DUTIES = ['exec', 'check', 'guard'];
-const GIT_COMMAND = /^(?:mkdir -p -- "[^"\x00-\x1f]+" && )?git (?:mv -- "[^"\x00-\x1f]+" "[^"\x00-\x1f]+"|rm -q -- "[^"\x00-\x1f]+")$/;
+// A path inside double quotes that the shell takes as written: none of " $ ` \ ! and no control character.
+const QUOTED = String.raw`"[^"$\x60\\!\x00-\x1f\x7f]+"`;
+const GIT_COMMAND = new RegExp(`^(?:mkdir -p -- ${QUOTED} && )?git --literal-pathspecs (?:mv -- ${QUOTED} ${QUOTED}|rm -q -- ${QUOTED})$`);
 
 class InvalidPreview extends Error {
   constructor(code, field, reason) {

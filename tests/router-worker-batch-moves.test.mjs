@@ -38,7 +38,8 @@ test('before refuses a move or a deletion that is not one tracked file inside th
   await refused(lister({ moves: [{ from: 'src/list/a.js', to: 'src/list/b.js' }] }), /US-61 moves a file to src\/list\/b\.js, which already exists/);
   await refused(lister({ moves: [{ from: 'src/list/a.js', to: 'src/list/c.js' }], deletes: ['src/list/A.js'] }), /US-61 names src\/list\/A\.js twice in its moves and deletes/);
   await refused(lister({ moves: [{ from: 'src/list/a.js', to: 'src/list/c.js' }, { from: 'src/list/b.js', to: 'src/list/c.js' }] }), /names src\/list\/c\.js twice/);
-  for (const odd of ['src/list/a"b.js', 'src/list/$x.js', 'src/list/a!.js', 'src/list/*.js', 'src/list/../app.js', 'src/list/**', '/src/list/a.js', 'src/list/a.js\n', 'src/list//a.js', 'src/list/'])
+  for (const odd of ['src/list/a"b.js', 'src/list/$x.js', 'src/list/a!.js', 'src/list/*.js', 'src/list/../app.js', 'src/list/**', '/src/list/a.js', 'src/list/a.js\n', 'src/list//a.js', 'src/list/',
+    'src/list/:a.js', 'src/list/a:b.js', 'src/list/a\u202eb.js', 'src/list/a\u200bb.js', 'src/list/a\x85b.js'])
     await refused(lister({ deletes: [odd] }), /is not one plain file path a quoted shell command can hold/);
   await refused(lister({ deletes: ['src/list/.git/config'] }), /no ticket writes under \.git or \.claude/);
   for (const [field, value] of [['moves', []], ['moves', [{ from: 'src/list/a.js' }]], ['moves', [{ from: 'src/list/a.js', to: 'src/list/c.js', force: true }]], ['deletes', 'src/list/a.js'], ['deletes', []]])
@@ -77,11 +78,11 @@ test('the exec worker may run exactly the git commands its tickets declare, the 
   const f = seeded(t), moves = [{ from: 'src/list/a.js', to: 'src/list/c.js' }, { from: 'src/list/b.js', to: 'src/list/new/b.js' }];
   const open = await f.before(batchOf(ticket('US-61', ['src/list/**'], { expectedPaths: ['src/list/c.js'], moves, deletes: ['src/list/old.js'] }), ticket('US-62', ['src/app.js'])));
   assert.equal(open.errors, undefined, JSON.stringify(open.errors));
-  const mv = 'git mv -- "src/list/a.js" "src/list/c.js"', made = 'mkdir -p -- "src/list/new" && git mv -- "src/list/b.js" "src/list/new/b.js"', rm = 'git rm -q -- "src/list/old.js"';
+  const mv = 'git --literal-pathspecs mv -- "src/list/a.js" "src/list/c.js"', made = 'mkdir -p -- "src/list/new" && git --literal-pathspecs mv -- "src/list/b.js" "src/list/new/b.js"', rm = 'git --literal-pathspecs rm -q -- "src/list/old.js"';
   assert.deepEqual([open.tickets[0].moves, open.tickets[0].deletes, open.tickets[1].moves, open.tickets[1].deletes], [moves, ['src/list/old.js'], [], []]);
   const shell = (agent, command) => decideCall({ boundary: readBoundary(f.root), input: { tool_name: 'Bash', agent_type: agent, cwd: f.root, tool_input: { command: `cd "${f.product}" && ${command}` } } }).decision;
   for (const command of [mv, made, rm]) assert.deepEqual([EXEC, CHECK, GUARD].map(agent => shell(agent, command)), ['approve', 'deny', 'deny'], command);
-  for (const other of ['git mv -- "src/list/a.js" "src/list/d.js"', 'git mv -- "src/list/b.js" "src/list/c.js"', 'git mv -f -- "src/list/a.js" "src/list/c.js"', 'git mv src/list/a.js src/list/c.js',
+  for (const other of ['git mv -- "src/list/a.js" "src/list/c.js"', 'git --literal-pathspecs mv -- "src/list/a.js" "src/list/d.js"', 'git mv -- "src/list/b.js" "src/list/c.js"', 'git mv -f -- "src/list/a.js" "src/list/c.js"', 'git mv src/list/a.js src/list/c.js',
     'git mv -- "src/list/b.js" "src/list/new/b.js"', 'git rm -q -- "src/app.js"', 'git rm -rq -- "src/list/old.js"', `${mv} && git status`, 'git status', 'mkdir -p -- "src/list/new"'])
     assert.equal(shell(EXEC, other), 'deny', other);
   assert.deepEqual([shell(EXEC, 'pwd'), shell(CHECK, 'pwd')], ['approve', 'approve'], 'both keep the verification commands');

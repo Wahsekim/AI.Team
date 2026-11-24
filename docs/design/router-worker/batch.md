@@ -73,8 +73,8 @@ must come before the next batch.
 | `riskFlags` (optional) | 1 to 10 plain names (`auth`, `payments`), each named once. Each declares the ticket sensitive (`riskFlag:<name>`). What a ticket declares is frozen in the record as its `declared` list. A declared-sensitive ticket that passed and changed something is flagged for Security on every changed path, even when no trigger matches, and is not committed without a passed Security verdict; one that changed nothing is not committed, so it is not flagged |
 | `commitMessage` (optional) | The message of the ticket's commit, one line; by default `<id>: <title>` |
 | `dependsOn` (optional) | Ids of tickets this one builds on: an earlier ticket of the batch, or a ticket of an archived batch. Frozen in the record (`[]` when absent); an escalated ticket blocks every ticket that depends on it, directly or through others (see "Review verdict, commit gate and escalation") |
-| `moves` (optional) | Tracked files the worker renames: `[{ "from": "src/a.js", "to": "lib/a.js" }]`. Each gives the exec worker one exact command, `git mv -- "<from>" "<to>"`, prefixed with `mkdir -p -- "<folder>" && ` when the folder of `to` does not exist yet (Git does not create it). Frozen in the record (`[]` when absent). See "Moves and deletions" |
-| `deletes` (optional) | Tracked files the worker deletes: `["src/old.js"]`. Each gives the exec worker one exact command, `git rm -q -- "<path>"`. Frozen in the record (`[]` when absent) |
+| `moves` (optional) | Tracked files the worker renames: `[{ "from": "src/a.js", "to": "lib/a.js" }]`. Each gives the exec worker one exact command, `git --literal-pathspecs mv -- "<from>" "<to>"`, prefixed with `mkdir -p -- "<folder>" && ` when the folder of `to` does not exist yet (Git does not create it). Frozen in the record (`[]` when absent). See "Moves and deletions" |
+| `deletes` (optional) | Tracked files the worker deletes: `["src/old.js"]`. Each gives the exec worker one exact command, `git --literal-pathspecs rm -q -- "<path>"`. Frozen in the record (`[]` when absent) |
 | `runId`, `date` (optional) | Default: `rw-<commit>-L<nextLifecycleNumber>-<time>`, new at every `before`, and today |
 
 The PM does not write a ceiling, a number of rounds, a wrapper name or a
@@ -236,9 +236,10 @@ With its file tools a worker can write a file but not rename or delete one
 `deletes`, and "before" checks them:
 
 - each `from`, `to` and deleted path is one plain file path: no folder grant,
-  no `.` or `..` part, none of `` " $ ` \ ! * ? [ ] { } : ``, not under `.git` or
-  `.claude`; it lies inside the ticket's `paths`, and no path is named twice in
-  the ticket's moves and deletes (compared without case);
+  no `.` or `..` part, none of `` " $ ` \ ! * ? [ ] { } : ``, no control,
+  bidirectional or zero-width character, not under `.git` or `.claude`; it
+  lies inside the ticket's `paths`, and no path is named twice in the
+  ticket's moves and deletes (compared without case);
 - each `from` and each deleted path is a file tracked at the product's HEAD;
   a `from` is not a symbolic link, since a later path could reach through a
   moved link out of the grant (a deleted path may be one: `git rm` removes the
@@ -258,9 +259,11 @@ that batch only, and to no other worker:
 
 | Declared | Command |
 |---|---|
-| a move whose folder exists | `git mv -- "<from>" "<to>"` |
-| a move into a folder that does not exist yet | `mkdir -p -- "<folder>" && git mv -- "<from>" "<to>"` |
-| a deletion | `git rm -q -- "<path>"` |
+| a move whose folder exists | `git --literal-pathspecs mv -- "<from>" "<to>"` |
+| a move into a folder that does not exist yet | `mkdir -p -- "<folder>" && git --literal-pathspecs mv -- "<from>" "<to>"` |
+| a deletion | `git --literal-pathspecs rm -q -- "<path>"` |
+
+Git takes each path as written, never as a pattern, as `commit` does.
 
 The exec brief lists the ticket's own commands as `gitCommands`, beside its
 `writePaths` (the ticket's `paths`) and `plannedPaths`, and says that the worker

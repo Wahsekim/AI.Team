@@ -102,7 +102,7 @@ test('the standing-batch review lets a risk flag or a sensitive planned path thr
 // A standing batch's brief is the worker's assignment: it names the ticket's grant and the only Git commands exec may run.
 test('a standing batch brief states the ticket\'s grant and the exact git commands; only the offline preview says it is not dispatch authority', () => {
   const taskData = brief => JSON.parse(brief.trim().split('\n').at(-1));
-  const commands = ['git mv -- "src/tag-list/view.ts" "src/tag-list/list-view.ts"', 'mkdir -p -- "src/tag-list/new" && git mv -- "src/api/tags.ts" "src/tag-list/new/tags.ts"', 'git rm -q -- "tests/tag-list/old.test.ts"'];
+  const commands = ['git --literal-pathspecs mv -- "src/tag-list/view.ts" "src/tag-list/list-view.ts"', 'mkdir -p -- "src/tag-list/new" && git --literal-pathspecs mv -- "src/api/tags.ts" "src/tag-list/new/tags.ts"', 'git --literal-pathspecs rm -q -- "tests/tag-list/old.test.ts"'];
   const standing = inputFixture(); standing.mandate.gitCommands = commands;
   const output = compile(standing, { standingBatch: true });
   assert.equal(output.errors, undefined, JSON.stringify(output.errors));
@@ -119,7 +119,8 @@ test('a standing batch brief states the ticket\'s grant and the exact git comman
   assert.match(offline.renderedBriefs.exec, /^Frozen Router\/Worker offline preview\. This document is not dispatch authority\./);
   assert.deepEqual(taskData(offline.renderedBriefs.exec).writePaths, inputFixture().mandate.allowedWritePaths);
   assert.equal(compile(standing).errors[0].field, 'mandate.gitCommands', 'an input cannot vouch for itself');
-  for (const command of ['git push', 'git mv -f -- "a.js" "b.js"', 'git rm -q -- "a.js" && rm -rf src', 'rm -rf src']) {
+  for (const command of ['git push', 'git mv -- "a.js" "b.js"', 'git --literal-pathspecs mv -f -- "a.js" "b.js"', 'git --literal-pathspecs rm -q -- "a.js" && rm -rf src', 'rm -rf src',
+    'git --literal-pathspecs mv -- "$(touch x).js" "b.js"', 'git --literal-pathspecs rm -q -- "`id`.js"', 'git --literal-pathspecs rm -q -- "a\\b.js"', 'git --literal-pathspecs rm -q -- "!!.js"', 'mkdir -p -- "$HOME" && git --literal-pathspecs mv -- "a.js" "b.js"']) {
     const other = inputFixture(); other.mandate.gitCommands = [command];
     assert.equal(compile(other, { standingBatch: true }).errors?.[0].code, 'INVALID_INPUT', command);
   }

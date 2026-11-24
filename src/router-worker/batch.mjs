@@ -168,7 +168,7 @@ function checkBatch(batch, known) {
 
 // ADR 0010, amendment of 2026-11-24: the files a ticket moves or deletes with Git. Each is one literal path inside
 // its grant, written into a quoted shell command, and named once.
-const literal = path => typeof path === 'string' && path.length <= 512 && quotable(path) && !/[*?[\]{}:]/.test(path) && path.split('/').every(part => part && part !== '.' && part !== '..' && part === part.trim());
+const literal = path => typeof path === 'string' && path.length <= 512 && quotable(path) && !path.match(UNSAFE) && !/[*?[\]{}:]/.test(path) && path.split('/').every(part => part && part !== '.' && part !== '..' && part === part.trim());
 const isMove = move => move && typeof move === 'object' && !Array.isArray(move) && Object.keys(move).sort().join() === 'from,to';
 const named = ticket => [...(ticket.moves ?? []).flatMap(move => [move.from, move.to]), ...(ticket.deletes ?? [])];
 function checkFiles(ticket) {
@@ -208,8 +208,8 @@ function checkFilesInProduct(productRoot, ticket) {
 }
 // The exact commands the exec worker may run for them; Git does not create the folder a file is moved into.
 const gitCommandsOf = (productRoot, ticket) => [
-  ...(ticket.moves ?? []).map(({ from, to }) => { const folder = to.split('/').slice(0, -1).join('/'), mv = `git mv -- "${from}" "${to}"`; return folder && !exists(join(productRoot, folder)) ? `mkdir -p -- "${folder}" && ${mv}` : mv; }),
-  ...(ticket.deletes ?? []).map(path => `git rm -q -- "${path}"`)];
+  ...(ticket.moves ?? []).map(({ from, to }) => { const folder = to.split('/').slice(0, -1).join('/'), mv = `git --literal-pathspecs mv -- "${from}" "${to}"`; return folder && !exists(join(productRoot, folder)) ? `mkdir -p -- "${folder}" && ${mv}` : mv; }),
+  ...(ticket.deletes ?? []).map(path => `git --literal-pathspecs rm -q -- "${path}"`)];
 
 // The compiler input of one ticket, built from what the PM wrote and what the team's mode profile holds.
 function inputOf(ticket, { batch, profile, wrappers, product, limits, allPaths, gitCommands }) {

@@ -294,9 +294,10 @@ authority.
   moved link, or a path one command creates that another command's path lies
   under, could carry a later move out of the grant (an independent review
   reproduced a move into `.git/hooks`).
-- From each, "before" derives one exact command: `git mv -- "<from>" "<to>"`,
-  prefixed with `mkdir -p -- "<folder>" && ` when that folder does not exist,
-  or `git rm -q -- "<path>"`. A worker may run exactly those commands, inside
+- From each, "before" derives one exact command:
+  `git --literal-pathspecs mv -- "<from>" "<to>"`, prefixed with
+  `mkdir -p -- "<folder>" && ` when that folder does not exist, or
+  `git --literal-pathspecs rm -q -- "<path>"`. A worker may run exactly those commands, inside
   its grant, for that batch only. They are added to the exec worker's command
   list in the write boundary, not to the checker's or the Guardian's, and the
   hook judges them like the verification commands: the exact text, from the
