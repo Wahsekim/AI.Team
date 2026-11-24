@@ -472,6 +472,7 @@ leaves this role/task interface unchanged.
 | Update the kit in a deployed instance, or migrate a single-root deployment | `docs/upgrade.md` |
 | Inject a reviewed method into a worker brief, or update the skill packs | `docs/role-skills.md` |
 | Understand the experimental Router/Worker mode and its rollout gates | `docs/design/router-worker/README.md` |
+| See a Router/Worker instance's latest batch as a read-only HTML page | `node scripts/dashboard.mjs --instance <root>` (`docs/dashboard.md`) |
 
 ## Directory Shape
 
