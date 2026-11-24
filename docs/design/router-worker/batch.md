@@ -575,7 +575,12 @@ flagged batch has a final verdict, before `commit`. It takes the lock and checks
 that the product is on the batch's branch at the batch's start commit, with no
 Git operation in progress and the same commit hooks, and that every changed path
 of a ticket still to be committed or held has the content `after` pinned
-(`tickets[].content`). Then:
+(`tickets[].content`). It also reads the verification commands the kit ran for
+each reviewer's latest brief: when one failed or timed out and that brief's work
+tree was exactly what would be committed (`after` left no path and no review
+holds a ticket), it refuses and names the command, and `abort` is the way out; otherwise the
+failure is recorded in the resolution (`failedAtBrief`) and on its ledger line.
+A reviewer's verdict is never changed by it. Then:
 
 1. **Held patches.** For each ticket rejected or whose review was not obtained,
    the kit makes a binary patch of the ticket's changed paths against the
@@ -607,7 +612,8 @@ the same record.
 reviewsDigest, resolvedAt, removed: [{ticket, reason:
 "rejected"|"review-not-obtained"|"verification-failed-after-removal", patch,
 patchDigest, paths}], verification: {ran, failed, commands: [{command, exit,
-timedOut, outputDigest, tail}], dropped, changed, wrote}, commits, left}`.
+timedOut, outputDigest, tail}], dropped, changed, wrote}, failedAtBrief:
+[{reviewer, attempt, command, exit, timedOut}], commits, left}`.
 `commit` checks it against the verdicts (`reviewsDigest`), `after`'s plan (the
 commits are after's commits less the removed tickets, and every ticket a review
 held is removed) and the patches on disk (each at its exact path with its

@@ -7,7 +7,7 @@ import { readBoundary, closeBoundary, stateOf } from './write-boundary.mjs';
 import { runCommands, confirmedOf } from './run-commands.mjs';
 import { AFTER_FILE, RESOLUTION_FILE, changedPaths, contentOf, hooksOf, plain } from './batch.mjs';
 import { openBatch, intact, Refusal, IN_PROGRESS, ABANDON } from './batch-close.mjs';
-import { reviewGate, verdictsOf } from './review-judge.mjs';
+import { reviewGate, verdictsOf, briefsOf } from './review-judge.mjs';
 
 // ADR 0011, decisions 14 and 15, with the owner's answer of 2026-11-20: once the reviews are over, each ticket a review
 // rejected or could not obtain is saved as a patch and taken out of the work tree; when a later ticket is still to be
@@ -68,6 +68,12 @@ export function resolveBatch({ teamRoot, instanceRoot, run = runCommands }) {
     const reviewsDigest = digest(verdictsOf(instance, batch.runId));
     need(!kept || kept.reviewsDigest === reviewsDigest, `${RESOLUTION_FILE} was started on other verdicts than those in the team now. ${ABANDON}`);
     const { reasons } = reviewGate(instance, batch, after);
+    // The commands the kit ran for each reviewer's latest brief. A failure there holds the batch when that tree was exactly
+    // what would be committed: after left nothing beside the tickets and no review holds one. Otherwise it is recorded.
+    const failedAtBrief = batch.review.reviewers.flatMap(reviewer => { const brief = briefsOf(instance, reviewer, batch.runId).at(-1);
+      return (brief?.verification ?? []).filter(run => run.exit !== 0 || run.timedOut).map(({ command, exit, timedOut }) => ({ reviewer, attempt: brief.attempt, command, exit, timedOut })); });
+    const failures = failedAtBrief.map(run => `${plain(run.command)} (${run.reviewer}'s brief ${run.attempt}: ${run.timedOut ? 'timed out' : `exit ${run.exit}`})`).join(', ');
+    need(!failedAtBrief.length || after.left.length || reasons.some(Boolean), `A verification command failed when the review was briefed, on a work tree that held only what would be committed: ${failures}. ${ABANDON}`);
     product = batch.productRoot;
     // The lock of a resolve that died is taken over; one that still runs is not.
     const held = readLease({ productRoot: product });
@@ -128,9 +134,9 @@ export function resolveBatch({ teamRoot, instanceRoot, run = runCommands }) {
     const at = new Date().toISOString(), removed = journal.removed, plan = commits.filter(commit => !isRemoved(commit.ticket));
     const verification = journal.verification ?? { ran: false, failed: false, commands: [], dropped: [], changed: [], wrote: [] };
     const record = sealed({ schemaVersion: 1, stage: 'batch-resolved', runId: batch.runId, batchDigest: batch.digest, afterDigest: after.digest, reviewsDigest, resolvedAt: at,
-      removed, verification, commits: plan, left: after.left });
+      removed, verification, failedAtBrief, commits: plan, left: after.left });
     const again = verification.ran ? `; verification run again ${verification.failed ? 'FAILED' : 'passed'}${verification.changed.length ? `, changed ${verification.changed.slice(0, 10).map(plain).join(', ')}` : ''}${verification.wrote.length ? `, wrote ${verification.wrote.slice(0, 10).map(plain).join(', ')} (left uncommitted)` : ''}` : '';
-    appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} BATCH ${batch.runId} RESOLVED: ${removed.length ? `held ${removed.map(entry => `${entry.ticket} (${entry.reason})`).join(', ')} as patches under ${HELD}/${batch.runId}/` : 'nothing held'}; ${plan.length} to commit${again}.\n`);
+    appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} BATCH ${batch.runId} RESOLVED: ${removed.length ? `held ${removed.map(entry => `${entry.ticket} (${entry.reason})`).join(', ')} as patches under ${HELD}/${batch.runId}/` : 'nothing held'}; ${plan.length} to commit${again}${failures ? `; verification failed when the review was briefed: ${failures}` : ''}.\n`);
     replace(path, record);
     return record;
   } catch (error) {

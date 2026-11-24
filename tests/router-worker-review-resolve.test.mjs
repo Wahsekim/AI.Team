@@ -9,6 +9,7 @@ import { spawnSync } from 'node:child_process';
 import { bytesDigest } from '../src/loop/contracts.mjs';
 import { abortBatch } from '../src/router-worker/batch.mjs';
 import { recordNoAnswer } from '../src/router-worker/review-judge.mjs';
+import { reviewBrief } from '../src/router-worker/review-brief.mjs';
 import { readLease } from '../src/router-worker/lease.mjs';
 import { git } from './fixtures/router-worker/standing-team.mjs';
 import { refusal, ticket, live, changed, runBatch, reportOf, failing, transcriptOf } from './fixtures/router-worker/review.mjs';
@@ -63,6 +64,7 @@ test('when a command fails after the removal, every ticket after the first remov
   assert.equal(resolved.errors, undefined, JSON.stringify(resolved.errors));
   assert.deepEqual(removedOf(resolved), [['US-02', 'rejected'], ['US-03', 'verification-failed-after-removal']]);
   assert.deepEqual(resolved.verification.commands.map(run => [run.command, run.exit]), [['false', 1]]);
+  assert.deepEqual(resolved.failedAtBrief, [{ reviewer: 'security', attempt: 1, command: 'false', exit: 1, timedOut: false }], 'the tree the brief ran on held a rejected ticket: its failure is recorded, not held on');
   assert.deepEqual(resolved.commits.map(commit => commit.ticket), ['US-01']);
   assert.deepEqual(changed(f), ['src/list/a.js']);
   git(f.product, 'apply', '--check', join(f.root, `reviews/held/${open.runId}/US-03.patch`));
@@ -125,4 +127,37 @@ test('resolve refuses a product changed since after; abort after resolve re-appl
   assert.ok(existsSync(join(f.root, `reviews/held/${open.runId}/US-02.patch`)));
   assert.deepEqual(changed(f), ['src/list/a.js', 'src/list/b.js'], 'the held ticket is not put back');
   assert.ok(existsSync(join(f.root, 'batches', open.runId, 'resolution.json')));
+});
+
+// The kit's own run of the commands when a reviewer is briefed; the command fails only once the marker exists.
+const GATE = base => [`test ! -f "${base}/gate-fails"`];
+test('a command that failed or timed out when the review was briefed holds resolve when the tree held only what would be committed; the verdict is left as the reviewer gave it', async t => {
+  const f = live(t, { commands: GATE });
+  await runBatch(f, [ticket('US-01', ['src/authz.js'])], { 'src/authz.js': 'export const x = 2;\n' });
+  writeFileSync(join(f.base, 'gate-fails'), '');
+  const made = f.brief('security');
+  assert.equal(made.record.verification[0].exit, 1);
+  const verdict = f.judge('security', transcriptOf(f, made));
+  assert.equal(verdict.outcome, 'accepted'); assert.deepEqual(verdict.tickets.map(item => [item.id, item.verdict]), [['US-01', 'passed']]);
+  assert.match(refusal(f.resolve()).reason, /failed when the review was briefed.*gate-fails.*security's brief 1: exit 1/);
+  assert.equal(f.state(), 'review'); assert.equal(readLease({ productRoot: f.product }).status, 'free'); assert.equal(existsSync(join(f.root, RESOLUTION)), false);
+  assert.match(refusal(f.commit()).reason, /resolve it first/); assert.deepEqual(changed(f), ['src/authz.js']);
+  const g = live(t);
+  await runBatch(g, [ticket('US-01', ['src/authz.js'])], { 'src/authz.js': 'export const x = 2;\n' });
+  const slow = reviewBrief({ ...g.common, reviewer: 'security', run: ({ commands }) => commands.map(command => ({ command, exit: null, timedOut: true, outputDigest: 'none', tail: '' })) });
+  assert.equal(g.judge('security', transcriptOf(g, slow)).outcome, 'accepted');
+  assert.match(refusal(g.resolve()).reason, /security's brief 1: timed out/);
+});
+
+test('a command that failed when the review was briefed on a tree holding more than what would be committed is recorded in the resolution and the ledger, and holds nothing', async t => {
+  const f = live(t, { commands: GATE });
+  const { open, after } = await runBatch(f, [ticket('US-01', ['src/authz.js'])], { 'src/authz.js': 'export const x = 2;\n', 'notes.txt': 'outside every ticket\n' });
+  assert.deepEqual(after.left, ['notes.txt']);
+  writeFileSync(join(f.base, 'gate-fails'), '');
+  assert.equal(f.judge('security', transcriptOf(f, f.brief('security'))).outcome, 'accepted');
+  const resolved = f.resolve();
+  assert.equal(resolved.errors, undefined, JSON.stringify(resolved.errors));
+  assert.deepEqual(resolved.failedAtBrief, [{ reviewer: 'security', attempt: 1, command: f.commands[0], exit: 1, timedOut: false }]); assert.deepEqual(resolved.removed, []);
+  assert.match(f.ledger(), new RegExp(`BATCH ${open.runId} RESOLVED: nothing held; 1 to commit; verification failed when the review was briefed: .*gate-fails.* \\(security's brief 1: exit 1\\)`));
+  assert.deepEqual(f.commit().commits.map(commit => commit.ticket), ['US-01']);
 });
