@@ -183,7 +183,7 @@ final-candidate mock gate. Every response is labelled `simulation: true`;
 or verified**. No Claude calls, product writes, or legacy ledger writes occur.
 See [implementation status and next steps](docs/loop-graph.md).
 
-### Experimental Router/Worker mode (offline only, not launchable)
+### Router/Worker mode (second team mode; real-team runs attended, proof in progress)
 
 Router/Worker is a second, optional team topology. The specialist team described
 under "Existing team model" stays the default and is unchanged. The mode changes
