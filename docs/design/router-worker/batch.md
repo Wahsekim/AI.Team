@@ -388,8 +388,9 @@ line to `pm-decisions.md`. It takes the lock for its length. It pushes nothing.
 - It refuses when the product is no longer on the batch's branch, when a Git
   operation is in progress, when the commit hooks were changed or moved, when
   an archive of this batch was already started, when the work
-  tree is not exactly what `after` saw, or when the branch is not the batch's
-  starting commit plus the commits this command itself made.
+  tree is not exactly what `after` saw (the same paths, and for each ticket to
+  commit, reviewed or not, the content `after` recorded), or when the branch is
+  not the batch's starting commit plus the commits this command itself made.
 - The plan is derived again from the tickets: a path is committed only inside
   the paths of a ticket that passed.
 - After each commit it checks that the commit landed on the branch and holds
@@ -409,7 +410,13 @@ line to `pm-decisions.md`. It takes the lock for its length. It pushes nothing.
   A commit made just before the command died, and so never recorded, is taken
   up when it is the next planned one: its parent is the expected commit and it
   holds exactly that ticket's paths. A commit made by hand that fits the same
-  description is taken up too; the kit compares paths, not content.
+  description is taken up too, but only when its files are what `after` saw:
+  the work tree holds the content `after` recorded and nothing of the ticket's
+  paths differs from the commit. Otherwise `commit` refuses and records nothing.
+  A pre-commit hook that rewrites a file (a formatter) is accepted on a normal
+  `commit`, but a commit it rewrote is not what `after` saw, so if the command
+  dies right after it, the take-up refuses and the batch is aborted. Whether to
+  accept such a commit is open (R23-01, case 2), an owner decision.
 - A commit is made with the repository's identity, or the one given in
   `GIT_AUTHOR_*` and `GIT_COMMITTER_*`. Every other `GIT_*` variable is ignored.
 - A `commit` that died after archiving the batch is finished by the next call.
@@ -490,9 +497,17 @@ a narrower pattern would miss `oauth/` or `authz.js`.
   nothing committed; `resolve` ends the review state once every verdict is in.
 - **`review-brief --reviewer R`** prints the brief the PM gives reviewer R's
   wrapper, and appends it, sealed, to `rw-batch-review-R.json` (one entry per
-  attempt: run, reviewer, wrapper, attempt, `briefDigest`, the tickets with
+  attempt: run, reviewer, wrapper, attempt, `seq` (one more than the highest
+  `seq` among the briefs of this batch, every reviewer's), `briefDigest`,
+  `madeAt`, the tickets with
   their goal, acceptance, changed and flagged paths and content digests, the
-  rule ids, the ADRs, each verification command's exit and output digest). The
+  rule ids, the ADRs, each verification command's exit and output digest).
+  When a command failed or timed out, it also says so on standard error (the
+  result's `notice`) and tells the PM to brief again before dispatching the
+  reviewer if the failure is flaky or its cause is gone. `review-brief` takes
+  no lock around reading the briefs and writing its own: two briefs made at the
+  same time for different reviewers can get the same `seq`, and two for the
+  same reviewer can lose one. The
   brief holds, for each ticket R must review: the goal and acceptance, the
   reason it was flagged, and the flagged files as absolute paths to open with
   the Read tool; the diff of those tickets from the batch's start, untracked
@@ -544,6 +559,9 @@ offline on transcript fixtures.
   only next to a full `Read` of the same path. The Read tool's own default
   cut of a long file is not detected. The report is the last fenced `json` block of the
   last assistant message; a `REPORT.json` given must be equal to it.
+  Judgments of one team run one at a time: `review` and `review --no-answer`
+  hold `rw-batch-reviews.json.lock` from reading the verdicts to writing them
+  back, a second one waits, and a lock older than a minute is taken over.
 - **The verdict is derived by the kit**, per ticket of the brief: every flagged
   file listed in `filesRead` with `read: true`; every rule of the frozen list
   reported `pass`, `fail` or `not-checked`; not every rule `not-checked`; a
@@ -587,8 +605,9 @@ offline on transcript fixtures.
   `rejected` or `not-obtained` line for this run that the reviewer's final
   verdict does not show: deleting or rewriting `rw-batch-reviews.json` to have
   a ticket judged again does not reset its rejection. A judgment that died
-  after that line and before its verdict, then passed on a new attempt, is
-  refused the same way; the batch is aborted.
+  after that line and before its verdict is recovered by judging the same
+  transcript again, as the refusal says; one that then passed on a new
+  attempt is refused the same way, and the batch is aborted.
 - **Across batches.** Each final outcome that is not a pass is appended to
   `reviews/tickets.jsonl` as `{ticket, runId, reviewer, outcome:
   "rejected"|"not-obtained", finding, at}`, once per ticket, run and reviewer.
@@ -640,7 +659,23 @@ flagged batch has a final verdict, before `commit`. It takes the lock and checks
 that the product is on the batch's branch at the batch's start commit, with no
 Git operation in progress and the same commit hooks, and that every changed path
 of a ticket still to be committed or held has the content `after` pinned
-(`tickets[].content`). Then:
+(`tickets[].content`). It also reads the verification commands the kit ran when
+the reviews were briefed. Across every reviewer's briefs of the batch, the most
+recent complete run decides: the brief with the highest `seq`, never the wall
+clock, among the briefs that ran every frozen command (none dropped). A brief
+that ran no command, or dropped one, clears nothing, though a failure in it
+still holds; when no brief is complete, every recorded failure counts. A
+brief recorded before `seq` existed comes before every numbered one, and such
+briefs are ordered by `madeAt` among themselves. A later run that passed clears
+an earlier failure, and a later failure stands, whatever the commands wrote in
+between. When the most recent run failed or timed out and the tree is exactly
+what would be committed (nothing changed before the batch, `after` left no
+path, and no review holds a ticket), it refuses and names the command, and
+`abort` is the way out. Otherwise every failure at a brief is recorded in the
+resolution (`failedAtBrief`) and on its ledger line. A batch whose briefs ran
+no command and recorded no failure (the batch freezes none, or none is still
+confirmed for the team) is never held here. A reviewer's verdict is
+never changed by it. Then:
 
 1. **Held patches.** For each ticket rejected or whose review was not obtained,
    the kit makes a binary patch of the ticket's changed paths against the
@@ -672,7 +707,8 @@ the same record.
 reviewsDigest, resolvedAt, removed: [{ticket, reason:
 "rejected"|"review-not-obtained"|"verification-failed-after-removal", patch,
 patchDigest, paths}], verification: {ran, failed, commands: [{command, exit,
-timedOut, outputDigest, tail}], dropped, changed, wrote}, commits, left}`.
+timedOut, outputDigest, tail}], dropped, changed, wrote}, failedAtBrief:
+[{reviewer, attempt, command, exit, timedOut}], commits, left}`.
 `commit` checks it against the verdicts (`reviewsDigest`), `after`'s plan (the
 commits are after's commits less the removed tickets, and every ticket a review
 held is removed) and the patches on disk (each at its exact path with its
@@ -898,8 +934,11 @@ kept out of the tickets' commits by the "after" command.
   a batch is already open.
 - A ticket is incomplete, or two tickets claim the same file. The message names
   the tickets and the paths.
-- A ticket claims a path under `.git` or `.claude`, could write a sensitive
-  path, or grants only folders without `expectedPaths`.
+- A ticket claims a path under `.git` or `.claude`, or grants only folders
+  without `expectedPaths`. A ticket whose grants cover a `sensitivePaths` entry,
+  or that carries a `riskFlags` entry, is not refused: `before` records it as
+  declared-sensitive and `after` flags it for Security whenever it passes with
+  changes.
 - The product repository is on a default branch, not on a branch, has a Git
   operation in progress, or has uncommitted changes (the first ten paths are
   listed), or changed while the batch was being prepared.

@@ -382,17 +382,21 @@ test('after reports, and does not change, each limit that stopped work: the outp
 
 test('commit refuses when the product changed after the batch was closed, keeps paths changed before the batch out of every commit, and resumes after a failure', async t => {
   const blocking = f => ({ 'pre-commit': `#!/bin/sh\n[ -e "${join(f.base, 'block')}" ] && git diff --cached --name-only | grep -q tags.js && exit 1\nexit 0\n` });
-  const f = await ran(t, { tickets: two, edits: { 'src/app.js': 'export const x = 2;\n', 'src/api/tags.js': 'tags\n' }, hooks: blocking });
-  assert.equal(f.after().errors, undefined);
+  const f = await ran(t, { tickets: two, edits: { 'src/app.js': 'export const x = 2;\n', 'src/api/tags.js': 'tags\n' }, hooks: blocking }), closed = f.after();
+  assert.equal(closed.errors, undefined); assert.deepEqual(closed.reviews, {}, 'no ticket is flagged for review');
   writeFileSync(join(f.product, 'src/app.js'), 'export const x = 3;\n'); writeFileSync(join(f.product, 'src/late.js'), 'late\n');
   assert.match(refusal(f.commit()).reason, /changed since the batch was closed/); assert.deepEqual(f.log(), []); assert.equal(readLease({ productRoot: f.product }).status, 'free');
   rmSync(join(f.product, 'src/late.js'));
+  // The same paths with other content are not what after saw, in a batch no review flagged too.
+  assert.match(refusal(f.commit()).reason, /src\/app\.js changed since the batch was closed/); assert.deepEqual(f.log(), []);
+  writeFileSync(join(f.product, 'src/app.js'), 'export const x = 2;\n');
   // A commit hook that refuses the second commit: the first stays, and a second run makes only what is missing.
   writeFileSync(join(f.base, 'block'), '');
   assert.match(refusal(f.commit()).reason, /git commit failed for ticket US-02 \(1 of 2 made\)/); assert.deepEqual(f.log(), ['US-01: Ticket US-01']); assert.ok(existsSync(join(f.root, BATCH_FILE)));
   rmSync(join(f.base, 'block'));
   const done = f.commit();
   assert.equal(done.errors, undefined, JSON.stringify(done.errors)); assert.deepEqual(f.log(), ['US-01: Ticket US-01', 'feat(api): tags endpoint']); assert.equal(done.commits.length, 2);
+  assert.equal(git(f.product, 'show', 'HEAD~1:src/app.js'), 'export const x = 2;\n', 'the commit holds what after saw');
 
   const dirty = await (async () => { const g = live(t); writeFileSync(join(g.product, 'notes.txt'), 'mine\n'); git(g.product, 'add', 'notes.txt'); return g; })();
   assert.match(refusal(await dirty.before(batchOf(ticket('US-01', ['notes.txt', 'src/a.js'])), { startAsIs: true })).reason, /already changed and lie where a ticket of this batch writes \(notes\.txt\)/);
@@ -610,6 +614,12 @@ test('abort after a claimed or closed batch always frees the team; a forged arch
   const died = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n', 'src/api/tags.js': 't\n' } }); assert.equal(died.after().errors, undefined);
   git(died.product, 'add', 'src/app.js'); git(died.product, 'commit', '-q', '-m', 'US-01: Ticket US-01');
   const taken = died.commit(); assert.equal(taken.errors, undefined, JSON.stringify(taken.errors)); assert.equal(taken.commits.length, 2); assert.equal(died.log().length, 2);
+  // Such a commit is taken up only when it holds what after saw: neither other content, nor other content with the work tree put back.
+  const edited = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n', 'src/api/tags.js': 't\n' } }); assert.equal(edited.after().errors, undefined);
+  writeFileSync(join(edited.product, 'src/app.js'), 'y\n'); git(edited.product, 'add', 'src/app.js'); git(edited.product, 'commit', '-q', '-m', 'US-01: Ticket US-01');
+  assert.match(refusal(edited.commit()).reason, /found for ticket US-01 .*src\/app\.js/);
+  writeFileSync(join(edited.product, 'src/app.js'), 'x\n');
+  assert.match(refusal(edited.commit()).reason, /found for ticket US-01 .*src\/app\.js/); assert.equal(existsSync(join(edited.root, 'rw-batch-commits.json')), false, 'nothing is taken up');
   const fake = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n', 'src/api/tags.js': 't\n' } }); assert.equal(fake.after().errors, undefined);
   writeFileSync(join(fake.product, 'zzz.js'), 'z\n'); git(fake.product, 'add', 'zzz.js', 'src/app.js'); git(fake.product, 'commit', '-q', '-m', 'by hand');
   writeFileSync(join(fake.root, 'rw-batch-commits.json'), JSON.stringify({ commits: [{ ticket: 'US-01', sha: git(fake.product, 'rev-parse', 'HEAD').trim() }] }));

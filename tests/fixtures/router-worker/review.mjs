@@ -17,7 +17,7 @@ export const ticket = (id, paths, extra = {}) => ({ id, title: `Ticket ${id}`, g
 export const COMMANDS = ['echo verified-by-kit', 'pwd'];
 export const batchOf = (...tickets) => ({ tickets, verificationCommands: COMMANDS, sensitivePaths: ['src/auth/**'], nextLifecycleNumber: 1 });
 const WORKER = 'tag-list-fixture-worker-exec';
-const agentsOf = commands => ({ worker: () => ({ outcome: 'done', progress: true, filesTouched: [], decisionsCount: 1, selfReportTokens: 100, blocked: false, terminalStop: false, notes: 'done' }),
+export const agentsOf = commands => ({ worker: () => ({ outcome: 'done', progress: true, filesTouched: [], decisionsCount: 1, selfReportTokens: 100, blocked: false, terminalStop: false, notes: 'done' }),
   verifier: () => ({ pass: true, staticPass: true, e2ePass: true, summary: 'ok', commandsRun: commands.map(command => ({ command, exitCode: 0 })), failures: [] }) });
 
 // `commands`: the verification commands the batch freezes and the owner confirms, or a function of the fixture's base folder.

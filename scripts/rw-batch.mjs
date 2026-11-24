@@ -73,6 +73,7 @@ if (process.argv[2] === 'review-brief') {
   if (!options['--reviewer'] || !options['--instance']) { console.error(USAGE); process.exit(1); }
   const root = resolve(options['--instance']), made = reviewBrief({ teamRoot: join(root, 'kit'), instanceRoot: root, reviewer: options['--reviewer'], tickets: options['--ticket'] });
   // A brief is long: it is written out in full before the process ends.
+  if (made.notice) console.error(made.notice);
   if (made.errors) print(made); else await new Promise(done => process.stdout.write(made.brief, done));
   process.exit();
 }

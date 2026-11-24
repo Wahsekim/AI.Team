@@ -250,9 +250,15 @@ export function commitBatch({ teamRoot, instanceRoot }) {
       `${PROGRESS_FILE} cannot be read. ${ABANDON}`);
     const done = progress.commits, head = () => git(product, 'rev-parse', 'HEAD')?.trim(), parentOf = sha => git(product, 'rev-parse', `${sha}^`)?.trim();
     const holds = (sha, paths) => digest((git(product, 'diff-tree', '--no-commit-id', '--name-only', '--no-renames', '-r', '-z', sha) ?? '').split('\0').filter(Boolean).sort()) === digest([...paths].sort());
+    const drift = commits => commits.flatMap(commit => { const now = contentOf(product, commit.paths), was = after.tickets.find(ticket => ticket.id === commit.ticket)?.content ?? {}; return commit.paths.filter(path => now[path] !== was[path]); });
     // A commit that was made just before this command died, and so was never recorded, is taken up when it is the next planned one.
     const tip = done.length ? done.at(-1).sha : batch.productHead, upNext = plan[done.length];
-    if (upNext && head() !== tip && parentOf(head()) === tip && holds(head(), upNext.paths)) { done.push({ ticket: upNext.ticket, sha: head() }); replace(progressPath, { schemaVersion: 1, runId: batch.runId, commits: done }); }
+    if (upNext && head() !== tip && parentOf(head()) === tip && holds(head(), upNext.paths)) {
+      // It holds what after saw when the work tree does and the commit is the work tree.
+      const unlike = [...new Set([...drift([upNext]), ...changedPaths(product).filter(path => upNext.paths.includes(path))])];
+      need(!unlike.length, `The commit ${head().slice(0, 8)} found for ticket ${upNext.ticket} does not hold what after saw (${unlike.slice(0, 5).map(plain).join(', ')}). ${ABANDON}`);
+      done.push({ ticket: upNext.ticket, sha: head() }); replace(progressPath, { schemaVersion: 1, runId: batch.runId, commits: done });
+    }
     need(done.every((made, i) => holds(made.sha, plan[i].paths)), `A commit recorded for this batch does not hold its ticket's paths. ${ABANDON}`);
     need(head() === (done.length ? done.at(-1).sha : batch.productHead) && done.every((made, i) => parentOf(made.sha) === (i ? done[i - 1].sha : batch.productHead)),
       `The product branch is not the batch's start plus the commits this command made: someone committed, or moved the branch. ${ABANDON}`);
@@ -260,10 +266,8 @@ export function commitBatch({ teamRoot, instanceRoot }) {
     // What is still to commit must be exactly what after saw, less what resolve removed, plus what its commands wrote.
     const pending = changedPaths(product).filter(path => !batch.preexisting.includes(path)), expected = [...new Set([...todo.flatMap(commit => commit.paths), ...after.left, ...wrote])].sort();
     need(digest(pending) === digest(expected), `The product repository changed since the batch was closed. ${ABANDON}`);
-    if (reviewed) {
-      const moved = todo.flatMap(commit => { const now = contentOf(product, commit.paths), was = after.tickets.find(ticket => ticket.id === commit.ticket)?.content ?? {}; return commit.paths.filter(path => now[path] !== was[path]); });
-      need(!moved.length, `${moved.slice(0, 5).map(plain).join(', ')} changed since the review; what would be committed is not what was reviewed. ${ABANDON}`);
-    }
+    const moved = drift(todo);
+    need(!moved.length, `${moved.slice(0, 5).map(plain).join(', ')} changed since the batch was closed; what would be committed is not what after saw${reviewed ? ' and the review read' : ''}. ${ABANDON}`);
 
     for (const commit of todo) {
       // A path a worker already removed from the index has nothing to add; the commit below records its deletion.

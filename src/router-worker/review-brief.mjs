@@ -123,12 +123,17 @@ export function reviewBrief({ teamRoot, instanceRoot, reviewer, tickets: named =
     const attempt = entries.length + 1, diff = diffOf(product, batch.productHead, briefed);
     const body = render({ batch, reviewer, attempt, tickets, diff, rules, adrs, verification, dropped, protocol, retryReason }), briefDigest = digest(body);
     const brief = `${body}\nbriefDigest: ${briefDigest}\n`;
-    const record = sealed({ schemaVersion: 1, stage: 'review-brief', runId: batch.runId, reviewer, wrapper, attempt, briefDigest, madeAt: new Date().toISOString(),
+    // The briefs of a batch are numbered across its reviewers, so resolve can tell which run of the commands came last.
+    const seq = 1 + Math.max(0, ...batch.review.reviewers.flatMap(name => briefsOf(instance, name, batch.runId)).map(entry => entry.seq ?? 0));
+    const record = sealed({ schemaVersion: 1, stage: 'review-brief', runId: batch.runId, reviewer, wrapper, attempt, seq, briefDigest, madeAt: new Date().toISOString(),
       tickets: tickets.map(({ ticket, frozen, elective: chosenElectively, flaggedFiles, content }) => ({ id: ticket.id, elective: chosenElectively, goal: frozen.goal, acceptance: frozen.acceptance, changedPaths: ticket.changedPaths, flaggedFiles, content })),
       ruleIds: rules.map(rule => rule.id), adrs: batch.review.adrs, verification: verification.map(({ tail, ...kept }) => kept), dropped, ...(retryReason ? { retryReason } : {}) });
     const path = join(instance, REVIEW_FILE(reviewer));
     writeFileSync(`${path}.tmp`, JSON.stringify({ schemaVersion: 1, runId: batch.runId, reviewer, entries: [...entries, record] }, null, 2) + '\n'); renameSync(`${path}.tmp`, path);
-    return { brief, record };
+    // resolve holds the batch on a failure here while it is the latest brief of the batch, so the PM hears of it now.
+    const failed = verification.filter(entry => entry.exit !== 0 || entry.timedOut).map(entry => `${plain(entry.command)} (${entry.timedOut ? 'timed out' : `exit ${entry.exit}`})`);
+    const notice = failed.length ? `A verification command failed or timed out when this brief was made: ${failed.join(', ')}. If it is flaky or its cause is gone, brief again with: rw-batch.mjs review-brief --reviewer ${reviewer} --instance <instance-root> before dispatching the reviewer; resolve reads the latest brief of any reviewer.` : undefined;
+    return { brief, record, ...(notice ? { notice } : {}) };
   } catch (error) {
     return { errors: [{ code: 'REVIEW_REFUSED', field: 'review', reason: error instanceof Refusal ? error.message : `The brief could not be made: ${error?.code ?? error?.message}` }] };
   }
