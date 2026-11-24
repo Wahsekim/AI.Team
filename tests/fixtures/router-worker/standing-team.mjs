@@ -13,7 +13,7 @@ const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 export const CLI = fileURLToPath(new URL('../../../scripts/team-mode.mjs', import.meta.url));
 export const git = (dir, ...args) => execFileSync('git', ['-C', dir, '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', ...args], { encoding: 'utf8' });
 const GOVERNANCE = ['architect', 'coach', 'auditor', 'security'];
-const readOnly = { model: 'fixture-governance-model', effort: 'medium', maxTurns: 12, tools: ['Read', 'Grep', 'Glob'] };
+const readOnly = { model: 'sonnet', effort: 'medium', maxTurns: 12, tools: ['Read', 'Grep', 'Glob'] };
 
 // A bootstrapped two-root specialist team with one delivery role (backend) and its wrapper, and a clean product repository.
 // `blank`: the product holds only what docs/bootstrap-empty-project.md step 6 has the PM create, no code.
@@ -33,7 +33,7 @@ export function fixture(t, { roles = 'backend', blank = false } = {}) {
   for (const path of ['charter.md', 'profiles/project.md', 'profiles/stack.md', 'agents/_shared/verify-discipline.md', 'CLAUDE.md'])
     writeFileSync(join(root, path), readFileSync(join(root, path), 'utf8').replace(/\{\{[^}]*\}\}/g, 'fixture-answer'));
   mkdirSync(join(root, '.claude/agents'), { recursive: true });
-  if (roles) writeFileSync(join(root, '.claude/agents/tag-list-fixture-backend.md'), '---\nname: "tag-list-fixture-backend"\ndescription: "specialist backend"\nmodel: "m"\n---\n\nRead agents/backend.md.\n');
+  if (roles) writeFileSync(join(root, '.claude/agents/tag-list-fixture-backend.md'), '---\nname: "tag-list-fixture-backend"\ndescription: "specialist backend"\nmodel: "opus"\n---\n\nRead agents/backend.md.\n');
   const spec = { ...draftSpecFixture(), project: { ...draftSpecFixture().project, productRoot: product },
     governance: Object.fromEntries(GOVERNANCE.map(role => [role, ['architect', 'coach'].includes(role) ? { ...readOnly, tools: [...readOnly.tools, 'Write', 'Edit'] } : readOnly])) };
   const common = { teamRoot: kit, instanceRoot: root, productRoot: product };
