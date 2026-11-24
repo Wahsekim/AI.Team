@@ -132,11 +132,28 @@ sys.stdout.write(seen.decode(errors='replace')); sys.exit(os.waitstatus_to_exitc
   const done = pty('CODE');
   assert.equal(done.status, 0, done.stdout + done.stderr); assert.match(done.stdout, /"stage": "mode-switched"/);
   assert.match(f.read('pm-decisions.md'), /confirmed by its code, typed at an interactive terminal/);
-  assert.equal(run('switch', 'router-worker').status, 1);
   assert.equal(run('switch', 'bogus', '/nonexistent', '--instance', f.root, '--product-root', f.product).status, 1, 'an unknown mode is a usage error, before any file is read');
   assert.equal(run('switch', 'specialist', file, '--instance', f.root, '--instance', f.root, '--product-root', f.product).status, 1, 'a repeated flag');
   const nothing = run('switch', 'recover', '--instance', f.root);
   assert.equal(nothing.status, 2); assert.match(nothing.stderr, /no interrupted switch/);
+});
+
+test('CLI: the short form runs from the instance root with {} and the product path of profiles/project.md', t => {
+  const f = fixture(t), file = join(f.base, 'switch.json');
+  writeFileSync(file, JSON.stringify({ spec: f.spec }));
+  const run = (cwd, ...argv) => spawnSync(process.execPath, [CLI, ...argv], { cwd, encoding: 'utf8', input: '' });
+  const project = join(f.root, 'profiles/project.md');
+  writeFileSync(project, readFileSync(project, 'utf8').replace(/^(\s*product_repo_path:).*$/m, `$1 "${f.product}"`));
+  const long = JSON.parse(run(f.base, 'switch', 'router-worker', file, '--instance', f.root, '--product-root', f.product).stdout);
+  const short = run(f.root, 'switch', 'rw', file);
+  assert.equal(short.status, 2, short.stderr); assert.equal(JSON.parse(short.stdout).digest, long.digest, 'rw, the current folder and the recorded product are the long form');
+  const empty = run(f.root, 'switch', 'rw');
+  assert.equal(empty.status, 2); assert.match(empty.stderr, /SWITCH_REFUSED/, 'with no REQUEST.json the request is {}, which a first switch refuses for want of a spec');
+  writeFileSync(project, readFileSync(project, 'utf8').replace(/^(\s*product_repo_path:).*$/m, '$1 "{{PRODUCT_REPO_PATH}}"'));
+  const unrecorded = run(f.root, 'switch', 'rw', file);
+  assert.equal(unrecorded.status, 2); assert.match(unrecorded.stderr, /records no product_repo_path; pass --product-root/);
+  assert.equal(run(f.root, 'switch', 'rw', file, 'extra').status, 1, 'a stray argument is a usage error');
+  assert.equal(existsSync(join(f.root, 'holiday')), false);
 });
 
 test('an existing holiday folder is never touched by a refused switch', t => {

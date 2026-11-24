@@ -105,7 +105,7 @@ is hired. After `scripts/validate-team.sh` exits 0 on the bootstrapped team:
    workflow status unanswered.
 2. The PM shows the request to the owner and edits it as the owner asks.
 3. **The owner** runs the switch in a terminal and types the code it asks for:
-   `node kit/scripts/team-mode.mjs switch router-worker REQUEST.json --instance . --product-root <product>`.
+   `node kit/scripts/team-mode.mjs switch rw REQUEST.json` from the instance root.
    A PM session cannot confirm it. The proposal on screen is what is confirmed:
    staffing, limits, the files that move.
 

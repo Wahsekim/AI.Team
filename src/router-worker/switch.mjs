@@ -120,7 +120,7 @@ function checkProduct(productRoot) {
 }
 
 // The product repository bootstrap recorded in the project profile; null when that was never answered.
-function recordedProduct(instance) {
+export function recordedProduct(instance) {
   let text; try { text = readFileSync(join(instance, 'profiles/project.md'), 'utf8'); } catch { return null; }
   const value = /^\s*product_repo_path:\s*"?([^"\n]+?)"?\s*$/m.exec(text)?.[1];
   if (!value || value.includes('{{')) return null;
