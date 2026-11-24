@@ -1,0 +1,82 @@
+{
+  "schemaVersion": 1,
+  "stage": "batch-closed",
+  "runId": "rw-16a5df77-L101-mwuxucug",
+  "batchDigest": "sha256:43fff011108301ad4181843130cd967c30f7d53667bc1c0d33660b374fb2310e",
+  "closedAt": "2026-11-24T17:01:33.404Z",
+  "status": "review",
+  "account": {
+    "status": "accounted",
+    "findings": [],
+    "calls": {
+      "tickets": 1,
+      "exec": 1,
+      "check": 1,
+      "guard": 1
+    },
+    "attempts": [
+      1
+    ],
+    "nextLifecycleNumberAfter": 103,
+    "blockers": [
+      "guardian-not-clean",
+      "fix-retest-pending",
+      "recovery-pending",
+      "halt-requires-acknowledgement"
+    ]
+  },
+  "returnDigest": "sha256:c58bb4d1daccfb0dfe416557592bce2bf79f03fd54ed9fd007daacf539b1e99c",
+  "tickets": [
+    {
+      "id": "US-61",
+      "status": "not-passed",
+      "workerStatus": "blocked",
+      "verificationStatus": "failed",
+      "changedPaths": []
+    }
+  ],
+  "reviews": {},
+  "commits": [],
+  "left": [],
+  "holdAll": true,
+  "hook": {
+    "calls": 7,
+    "workerCalls": 2,
+    "denied": 2
+  },
+  "findings": [
+    {
+      "code": "GUARDIAN_NOT_CLEAN",
+      "status": "ok",
+      "verdict": "main-session-action-required"
+    }
+  ],
+  "limits": [
+    {
+      "limit": "allowedCommands",
+      "observed": "cd <instance>; for f in agents/worker-exec.md agents/router-worker-contract.md; do if [ -f \"$f\" ]; then echo \"== $f\"; else echo \"== kit/$f\"; fi; done",
+      "current": [
+        "fvm dart format --set-exit-if-changed .",
+        "fvm flutter analyze",
+        "fvm flutter test"
+      ],
+      "proposal": null
+    },
+    {
+      "limit": "allowedCommands",
+      "observed": "for f in agents/worker-check.md agents/router-worker-contract.md; do echo \"=== $f\"; [ -f \"$f\" ] && cat \"$f\" || cat \"kit/$f\"; done 2>&1 | head -300",
+      "current": [
+        "fvm dart format --set-exit-if-changed .",
+        "fvm flutter analyze",
+        "fvm flutter test"
+      ],
+      "proposal": null
+    }
+  ],
+  "boundaryClosed": true,
+  "leaseReleased": true,
+  "next": [
+    "No ticket of this batch is committed by the kit. If the batch cannot be committed by the kit, archive it with: rw-batch.mjs abort --instance <instance-root>, then commit or discard its changes by hand"
+  ],
+  "digest": "sha256:096c1ac6dda5d762dbf89dc17cd314e324807336038fc218fdf6f6ac5593e523"
+}

@@ -1,0 +1,331 @@
+{
+  "runId": "rw-16a5df77-L101-mwuxucug",
+  "rounds": 1,
+  "executionMode": "wrappers",
+  "failurePolicy": "halt-on-failure",
+  "maxAttemptsPerTicket": 1,
+  "dispatchedCount": 1,
+  "launchManifestDigest": "sha256:31cc7af925c15eaf1fafd74a1c61fb1b7e6ccbe7c20640bfcc720ee994027616",
+  "workerSucceededCount": 0,
+  "verificationRequiredCount": 1,
+  "verificationPassedCount": 0,
+  "doneCount": 0,
+  "deliveryPendingCount": 0,
+  "recoveryRequiredCount": 1,
+  "coaching": {
+    "meter": "engine budget.spent() deltas per spawn (OUTPUT tokens of the turn) — NOT the lifecycle Tokens: unit (input+cache_creation) and NOT provider billing; do not convert or compare across meters",
+    "varianceThresholdPct": 50,
+    "observations": [
+      {
+        "id": "rw-16a5df77-L101-mwuxucug:iter1:worker",
+        "kind": "worker",
+        "estimatedTokens": 120000,
+        "measuredTokens": 8383,
+        "variancePct": -93.014,
+        "beyondThreshold": true
+      },
+      {
+        "id": "rw-16a5df77-L101-mwuxucug:iter1:verifier",
+        "kind": "verifier",
+        "estimatedTokens": 50000,
+        "measuredTokens": 3593,
+        "variancePct": -92.814,
+        "beyondThreshold": true
+      }
+    ],
+    "beyondThresholdCount": 2
+  },
+  "allPassed": false,
+  "safeToContinue": false,
+  "itersRun": 1,
+  "haltReason": "failure-policy halt at iter 1: WORKER BLOCKED + verification not passed -> recovery — workspace integrity not attested; main session must drain recovery before anything else runs (failurePolicy=halt-on-failure)",
+  "runIncomplete": false,
+  "needsGrooming": false,
+  "planShortfall": false,
+  "remainingRounds": 0,
+  "budgetStatus": {
+    "ceiling": 21000,
+    "loopSpent": 15801,
+    "overshootTokens": 0,
+    "tripped": false
+  },
+  "budgetGateTripped": false,
+  "haltRequiresAcknowledgement": true,
+  "results": [
+    {
+      "iter": 1,
+      "ticket": "US-61",
+      "agentType": "uhf-locator-poc-worker-exec",
+      "display": {
+        "title": "Fix the dependency-rule exceptions and add an import sentinel test",
+        "workKind": "unspecified",
+        "layers": []
+      },
+      "workerStatus": "blocked",
+      "verificationStatus": "failed",
+      "sideEffects": "none_reported",
+      "executionStatus": "blocked",
+      "acceptanceStatus": "rejected",
+      "deliveryStatus": "not_required",
+      "deliveryRequired": false,
+      "done": false,
+      "terminalStopRequested": false,
+      "scopeDrift": false,
+      "ownershipViolation": false,
+      "verificationRequired": true,
+      "worker": {
+        "outcome": "Blocked before any product write. US-61 needs four source files, and at least one test file, deleted or renamed, and nothing in this batch can delete or rename a file. The brief's write boundary also leaves out files the goal requires editing.",
+        "progress": true,
+        "filesTouched": [],
+        "decisionsCount": 1,
+        "selfReportTokens": 60000,
+        "blocked": true,
+        "terminalStop": false,
+        "delivery": {
+          "status": "not_attempted",
+          "reason": "Stopped on stop condition 'Required scope or permission change' before any write; no diff exists."
+        },
+        "notes": "I stopped under the stop condition \"Required scope or permission change\". The product tree is unchanged: no Write or Edit was made, and none of the three verification commands was run because there was no diff to verify.\n\nBlocker 1: files cannot be deleted or renamed.\n- The ticket moves four files: lib/features/catalogue/data/catalogue_tables.dart, lib/features/find/data/confirmed_finds_table.dart, lib/features/settings/presentation/find_method_section.dart and lib/app/app_routes.dart. Their tests move too; test/features/settings/presentation/find_method_section_test.dart exists, and others are likely.\n- A move needs the old file deleted. My tools are Read, Write, Edit and a Bash that the hook limits to the three confirmed commands. It refused my first Bash call and named only those three commands.\n- Writing a new copy without deleting the old one breaks the acceptance. The old settings find_method_section.dart would still import find/presentation/find_method_labels.dart, so the sentinel test fails. The drift table classes would also exist twice.\n- Emptying the old files or turning them into re-export stubs would leave junk files. The owner decision says \"fixed properly\", so I rejected that. A test file emptied that way would also fail to load in `fvm flutter test`.\n- batch.md says \"Staged deletions and renames made by a worker are committed\", but a batch gives the worker no way to make one. This looks like a gap in the kit.\n\nBlocker 2: the write boundary is narrower than the goal.\n- The brief says writeBoundary \"Only the listed plannedPaths\". That list has only the 7 expectedPaths.\n- The goal needs edits outside it: the five feature presentation files that import app_routes, lib/app/settings_tab.dart, the moved tests, and every importer in test/ and integration_test/.\n- rw-batch.json grants lib/**, test/**, integration_test/** and docs/architecture.md, so the brief and the batch disagree.\n\nAlso missing: the brief requested Grep and Glob, but this session had neither. Without them I cannot list every importer of the moved files. `fvm flutter analyze` would list them only once the old paths are gone.\n\nFacts checked by reading the files at 16a5df77:\n- app_database.dart imports both feature table files, has `part 'app_database.g.dart'`, and lists `tables: [ProductTypes, Items, References, ConfirmedFinds]`.\n- Neither table file has a part directive. Moving them should leave the schema and *.g.dart unchanged, but no build was run to confirm it.\n- The new find/presentation/find_method_section.dart would import settings/application/find_method_notifier.dart. A feature may use another feature's application layer, so that is allowed.\n- The 'Exceptions in the tree today' paragraph is at docs/architecture.md lines 20-24.\n\nOptions for the PM:\n(a) In the PM session, before the batch, do the four source moves and the test moves with `git mv` and commit them on rw/proof-2-2026-11-24. Then re-run US-61 as an import-fix plus sentinel ticket. Its writeBoundary must match the ticket paths (lib/**, test/**, integration_test/**, docs/architecture.md).\n(b) Ask the owner to confirm a delete or rename command for workers through `team-mode.mjs limits`.\nEither way, align the brief's writeBoundary with the ticket paths and provide Grep and Glob.\n\nNext step: `node kit/scripts/rw-batch.mjs abort --instance .` (or `after` with the engine return), then replan."
+      },
+      "verifier": {
+        "pass": false,
+        "staticPass": false,
+        "e2ePass": false,
+        "summary": "STOP: there is no host-bound candidate to verify. The product work tree at <product-root> does not contain the exec worker's change for US-61; every file I inspected is at baseline (16a5df77). The brief says \"No host-bound candidate means stop\", so I did not run the three verification commands. Running them on the baseline would have tested the unchanged tree and produced no evidence about US-61. Evidence, all read with the Read tool:\n- lib/shared/data/catalogue_tables.dart does not exist. lib/features/catalogue/data/catalogue_tables.dart still exists.\n- lib/shared/data/app_database.dart still imports '../../features/catalogue/data/catalogue_tables.dart' and '../../features/find/data/confirmed_finds_table.dart'.\n- lib/shared/presentation/app_routes.dart does not exist. lib/app/app_routes.dart still exists.\n- lib/features/find/presentation/find_method_section.dart does not exist.\n- test/architecture/dependency_rules_test.dart (the sentinel test) does not exist.\nPossible causes, which I could not check because I have no git or ls in this batch: the exec worker (US-61.exec.1) did not run, did not write, or wrote somewhere other than the product root; or the check was dispatched before the exec result landed. Batch record <instance>/rw-batch.json shows the batch open (runId rw-16a5df77-L101-mwuxucug, branch rw/proof-2-2026-11-24). Next step for the PM: confirm the exec worker's outcome and what is in the product work tree, then run `after` and treat US-61 as not passed, or re-dispatch exec and then check. Process note: agents/worker-check.md and agents/router-worker-contract.md exist only in the instance root, not under kit/. My first shell call, a cat of those files, was refused by the rw-write-boundary hook and never executed. It is not counted as a command run.",
+        "failures": [
+          "No host-bound candidate: the product work tree is at baseline 16a5df77 and none of the expected US-61 paths are present (lib/shared/data/catalogue_tables.dart, lib/shared/data/confirmed_finds_table.dart, lib/shared/presentation/app_routes.dart, lib/features/find/presentation/find_method_section.dart, test/architecture/dependency_rules_test.dart).",
+          "lib/shared/data/app_database.dart still imports the feature table files under lib/features/ (acceptance criteria 2 and 3 not met).",
+          "Verification commands not run (fvm dart format --set-exit-if-changed ., fvm flutter analyze, fvm flutter test): the brief's stop rule for a missing candidate applies, and a run would only have tested the baseline."
+        ],
+        "commandsRun": []
+      },
+      "workerTokens": 8383,
+      "verifierTokens": 3593,
+      "attempts": 1,
+      "priorAttempts": [],
+      "estimates": {
+        "worker": {
+          "id": "rw-16a5df77-L101-mwuxucug:iter1:worker",
+          "kind": "worker",
+          "estimatedTokens": 120000,
+          "measuredTokens": 8383,
+          "variancePct": -93.014
+        },
+        "verifier": {
+          "id": "rw-16a5df77-L101-mwuxucug:iter1:verifier",
+          "kind": "verifier",
+          "estimatedTokens": 50000,
+          "measuredTokens": 3593,
+          "variancePct": -92.814
+        }
+      },
+      "verifierPass": false,
+      "verifierGroundingFailure": null,
+      "needsFixRetest": true,
+      "needsRecovery": true,
+      "progress": true,
+      "error": null
+    }
+  ],
+  "fixRetestQueue": [
+    {
+      "iter": 1,
+      "ticket": "US-61",
+      "agentType": "uhf-locator-poc-worker-exec",
+      "display": {
+        "title": "Fix the dependency-rule exceptions and add an import sentinel test",
+        "workKind": "unspecified",
+        "layers": []
+      },
+      "workerStatus": "blocked",
+      "verificationStatus": "failed",
+      "sideEffects": "none_reported",
+      "executionStatus": "blocked",
+      "acceptanceStatus": "rejected",
+      "deliveryStatus": "not_required",
+      "deliveryRequired": false,
+      "done": false,
+      "terminalStopRequested": false,
+      "scopeDrift": false,
+      "ownershipViolation": false,
+      "verificationRequired": true,
+      "worker": {
+        "outcome": "Blocked before any product write. US-61 needs four source files, and at least one test file, deleted or renamed, and nothing in this batch can delete or rename a file. The brief's write boundary also leaves out files the goal requires editing.",
+        "progress": true,
+        "filesTouched": [],
+        "decisionsCount": 1,
+        "selfReportTokens": 60000,
+        "blocked": true,
+        "terminalStop": false,
+        "delivery": {
+          "status": "not_attempted",
+          "reason": "Stopped on stop condition 'Required scope or permission change' before any write; no diff exists."
+        },
+        "notes": "I stopped under the stop condition \"Required scope or permission change\". The product tree is unchanged: no Write or Edit was made, and none of the three verification commands was run because there was no diff to verify.\n\nBlocker 1: files cannot be deleted or renamed.\n- The ticket moves four files: lib/features/catalogue/data/catalogue_tables.dart, lib/features/find/data/confirmed_finds_table.dart, lib/features/settings/presentation/find_method_section.dart and lib/app/app_routes.dart. Their tests move too; test/features/settings/presentation/find_method_section_test.dart exists, and others are likely.\n- A move needs the old file deleted. My tools are Read, Write, Edit and a Bash that the hook limits to the three confirmed commands. It refused my first Bash call and named only those three commands.\n- Writing a new copy without deleting the old one breaks the acceptance. The old settings find_method_section.dart would still import find/presentation/find_method_labels.dart, so the sentinel test fails. The drift table classes would also exist twice.\n- Emptying the old files or turning them into re-export stubs would leave junk files. The owner decision says \"fixed properly\", so I rejected that. A test file emptied that way would also fail to load in `fvm flutter test`.\n- batch.md says \"Staged deletions and renames made by a worker are committed\", but a batch gives the worker no way to make one. This looks like a gap in the kit.\n\nBlocker 2: the write boundary is narrower than the goal.\n- The brief says writeBoundary \"Only the listed plannedPaths\". That list has only the 7 expectedPaths.\n- The goal needs edits outside it: the five feature presentation files that import app_routes, lib/app/settings_tab.dart, the moved tests, and every importer in test/ and integration_test/.\n- rw-batch.json grants lib/**, test/**, integration_test/** and docs/architecture.md, so the brief and the batch disagree.\n\nAlso missing: the brief requested Grep and Glob, but this session had neither. Without them I cannot list every importer of the moved files. `fvm flutter analyze` would list them only once the old paths are gone.\n\nFacts checked by reading the files at 16a5df77:\n- app_database.dart imports both feature table files, has `part 'app_database.g.dart'`, and lists `tables: [ProductTypes, Items, References, ConfirmedFinds]`.\n- Neither table file has a part directive. Moving them should leave the schema and *.g.dart unchanged, but no build was run to confirm it.\n- The new find/presentation/find_method_section.dart would import settings/application/find_method_notifier.dart. A feature may use another feature's application layer, so that is allowed.\n- The 'Exceptions in the tree today' paragraph is at docs/architecture.md lines 20-24.\n\nOptions for the PM:\n(a) In the PM session, before the batch, do the four source moves and the test moves with `git mv` and commit them on rw/proof-2-2026-11-24. Then re-run US-61 as an import-fix plus sentinel ticket. Its writeBoundary must match the ticket paths (lib/**, test/**, integration_test/**, docs/architecture.md).\n(b) Ask the owner to confirm a delete or rename command for workers through `team-mode.mjs limits`.\nEither way, align the brief's writeBoundary with the ticket paths and provide Grep and Glob.\n\nNext step: `node kit/scripts/rw-batch.mjs abort --instance .` (or `after` with the engine return), then replan."
+      },
+      "verifier": {
+        "pass": false,
+        "staticPass": false,
+        "e2ePass": false,
+        "summary": "STOP: there is no host-bound candidate to verify. The product work tree at <product-root> does not contain the exec worker's change for US-61; every file I inspected is at baseline (16a5df77). The brief says \"No host-bound candidate means stop\", so I did not run the three verification commands. Running them on the baseline would have tested the unchanged tree and produced no evidence about US-61. Evidence, all read with the Read tool:\n- lib/shared/data/catalogue_tables.dart does not exist. lib/features/catalogue/data/catalogue_tables.dart still exists.\n- lib/shared/data/app_database.dart still imports '../../features/catalogue/data/catalogue_tables.dart' and '../../features/find/data/confirmed_finds_table.dart'.\n- lib/shared/presentation/app_routes.dart does not exist. lib/app/app_routes.dart still exists.\n- lib/features/find/presentation/find_method_section.dart does not exist.\n- test/architecture/dependency_rules_test.dart (the sentinel test) does not exist.\nPossible causes, which I could not check because I have no git or ls in this batch: the exec worker (US-61.exec.1) did not run, did not write, or wrote somewhere other than the product root; or the check was dispatched before the exec result landed. Batch record <instance>/rw-batch.json shows the batch open (runId rw-16a5df77-L101-mwuxucug, branch rw/proof-2-2026-11-24). Next step for the PM: confirm the exec worker's outcome and what is in the product work tree, then run `after` and treat US-61 as not passed, or re-dispatch exec and then check. Process note: agents/worker-check.md and agents/router-worker-contract.md exist only in the instance root, not under kit/. My first shell call, a cat of those files, was refused by the rw-write-boundary hook and never executed. It is not counted as a command run.",
+        "failures": [
+          "No host-bound candidate: the product work tree is at baseline 16a5df77 and none of the expected US-61 paths are present (lib/shared/data/catalogue_tables.dart, lib/shared/data/confirmed_finds_table.dart, lib/shared/presentation/app_routes.dart, lib/features/find/presentation/find_method_section.dart, test/architecture/dependency_rules_test.dart).",
+          "lib/shared/data/app_database.dart still imports the feature table files under lib/features/ (acceptance criteria 2 and 3 not met).",
+          "Verification commands not run (fvm dart format --set-exit-if-changed ., fvm flutter analyze, fvm flutter test): the brief's stop rule for a missing candidate applies, and a run would only have tested the baseline."
+        ],
+        "commandsRun": []
+      },
+      "workerTokens": 8383,
+      "verifierTokens": 3593,
+      "attempts": 1,
+      "priorAttempts": [],
+      "estimates": {
+        "worker": {
+          "id": "rw-16a5df77-L101-mwuxucug:iter1:worker",
+          "kind": "worker",
+          "estimatedTokens": 120000,
+          "measuredTokens": 8383,
+          "variancePct": -93.014
+        },
+        "verifier": {
+          "id": "rw-16a5df77-L101-mwuxucug:iter1:verifier",
+          "kind": "verifier",
+          "estimatedTokens": 50000,
+          "measuredTokens": 3593,
+          "variancePct": -92.814
+        }
+      },
+      "verifierPass": false,
+      "verifierGroundingFailure": null,
+      "needsFixRetest": true,
+      "needsRecovery": true,
+      "progress": true,
+      "error": null
+    }
+  ],
+  "recoveryQueue": [
+    {
+      "iter": 1,
+      "ticket": "US-61",
+      "agentType": "uhf-locator-poc-worker-exec",
+      "display": {
+        "title": "Fix the dependency-rule exceptions and add an import sentinel test",
+        "workKind": "unspecified",
+        "layers": []
+      },
+      "workerStatus": "blocked",
+      "verificationStatus": "failed",
+      "sideEffects": "none_reported",
+      "executionStatus": "blocked",
+      "acceptanceStatus": "rejected",
+      "deliveryStatus": "not_required",
+      "deliveryRequired": false,
+      "done": false,
+      "terminalStopRequested": false,
+      "scopeDrift": false,
+      "ownershipViolation": false,
+      "verificationRequired": true,
+      "worker": {
+        "outcome": "Blocked before any product write. US-61 needs four source files, and at least one test file, deleted or renamed, and nothing in this batch can delete or rename a file. The brief's write boundary also leaves out files the goal requires editing.",
+        "progress": true,
+        "filesTouched": [],
+        "decisionsCount": 1,
+        "selfReportTokens": 60000,
+        "blocked": true,
+        "terminalStop": false,
+        "delivery": {
+          "status": "not_attempted",
+          "reason": "Stopped on stop condition 'Required scope or permission change' before any write; no diff exists."
+        },
+        "notes": "I stopped under the stop condition \"Required scope or permission change\". The product tree is unchanged: no Write or Edit was made, and none of the three verification commands was run because there was no diff to verify.\n\nBlocker 1: files cannot be deleted or renamed.\n- The ticket moves four files: lib/features/catalogue/data/catalogue_tables.dart, lib/features/find/data/confirmed_finds_table.dart, lib/features/settings/presentation/find_method_section.dart and lib/app/app_routes.dart. Their tests move too; test/features/settings/presentation/find_method_section_test.dart exists, and others are likely.\n- A move needs the old file deleted. My tools are Read, Write, Edit and a Bash that the hook limits to the three confirmed commands. It refused my first Bash call and named only those three commands.\n- Writing a new copy without deleting the old one breaks the acceptance. The old settings find_method_section.dart would still import find/presentation/find_method_labels.dart, so the sentinel test fails. The drift table classes would also exist twice.\n- Emptying the old files or turning them into re-export stubs would leave junk files. The owner decision says \"fixed properly\", so I rejected that. A test file emptied that way would also fail to load in `fvm flutter test`.\n- batch.md says \"Staged deletions and renames made by a worker are committed\", but a batch gives the worker no way to make one. This looks like a gap in the kit.\n\nBlocker 2: the write boundary is narrower than the goal.\n- The brief says writeBoundary \"Only the listed plannedPaths\". That list has only the 7 expectedPaths.\n- The goal needs edits outside it: the five feature presentation files that import app_routes, lib/app/settings_tab.dart, the moved tests, and every importer in test/ and integration_test/.\n- rw-batch.json grants lib/**, test/**, integration_test/** and docs/architecture.md, so the brief and the batch disagree.\n\nAlso missing: the brief requested Grep and Glob, but this session had neither. Without them I cannot list every importer of the moved files. `fvm flutter analyze` would list them only once the old paths are gone.\n\nFacts checked by reading the files at 16a5df77:\n- app_database.dart imports both feature table files, has `part 'app_database.g.dart'`, and lists `tables: [ProductTypes, Items, References, ConfirmedFinds]`.\n- Neither table file has a part directive. Moving them should leave the schema and *.g.dart unchanged, but no build was run to confirm it.\n- The new find/presentation/find_method_section.dart would import settings/application/find_method_notifier.dart. A feature may use another feature's application layer, so that is allowed.\n- The 'Exceptions in the tree today' paragraph is at docs/architecture.md lines 20-24.\n\nOptions for the PM:\n(a) In the PM session, before the batch, do the four source moves and the test moves with `git mv` and commit them on rw/proof-2-2026-11-24. Then re-run US-61 as an import-fix plus sentinel ticket. Its writeBoundary must match the ticket paths (lib/**, test/**, integration_test/**, docs/architecture.md).\n(b) Ask the owner to confirm a delete or rename command for workers through `team-mode.mjs limits`.\nEither way, align the brief's writeBoundary with the ticket paths and provide Grep and Glob.\n\nNext step: `node kit/scripts/rw-batch.mjs abort --instance .` (or `after` with the engine return), then replan."
+      },
+      "verifier": {
+        "pass": false,
+        "staticPass": false,
+        "e2ePass": false,
+        "summary": "STOP: there is no host-bound candidate to verify. The product work tree at <product-root> does not contain the exec worker's change for US-61; every file I inspected is at baseline (16a5df77). The brief says \"No host-bound candidate means stop\", so I did not run the three verification commands. Running them on the baseline would have tested the unchanged tree and produced no evidence about US-61. Evidence, all read with the Read tool:\n- lib/shared/data/catalogue_tables.dart does not exist. lib/features/catalogue/data/catalogue_tables.dart still exists.\n- lib/shared/data/app_database.dart still imports '../../features/catalogue/data/catalogue_tables.dart' and '../../features/find/data/confirmed_finds_table.dart'.\n- lib/shared/presentation/app_routes.dart does not exist. lib/app/app_routes.dart still exists.\n- lib/features/find/presentation/find_method_section.dart does not exist.\n- test/architecture/dependency_rules_test.dart (the sentinel test) does not exist.\nPossible causes, which I could not check because I have no git or ls in this batch: the exec worker (US-61.exec.1) did not run, did not write, or wrote somewhere other than the product root; or the check was dispatched before the exec result landed. Batch record <instance>/rw-batch.json shows the batch open (runId rw-16a5df77-L101-mwuxucug, branch rw/proof-2-2026-11-24). Next step for the PM: confirm the exec worker's outcome and what is in the product work tree, then run `after` and treat US-61 as not passed, or re-dispatch exec and then check. Process note: agents/worker-check.md and agents/router-worker-contract.md exist only in the instance root, not under kit/. My first shell call, a cat of those files, was refused by the rw-write-boundary hook and never executed. It is not counted as a command run.",
+        "failures": [
+          "No host-bound candidate: the product work tree is at baseline 16a5df77 and none of the expected US-61 paths are present (lib/shared/data/catalogue_tables.dart, lib/shared/data/confirmed_finds_table.dart, lib/shared/presentation/app_routes.dart, lib/features/find/presentation/find_method_section.dart, test/architecture/dependency_rules_test.dart).",
+          "lib/shared/data/app_database.dart still imports the feature table files under lib/features/ (acceptance criteria 2 and 3 not met).",
+          "Verification commands not run (fvm dart format --set-exit-if-changed ., fvm flutter analyze, fvm flutter test): the brief's stop rule for a missing candidate applies, and a run would only have tested the baseline."
+        ],
+        "commandsRun": []
+      },
+      "workerTokens": 8383,
+      "verifierTokens": 3593,
+      "attempts": 1,
+      "priorAttempts": [],
+      "estimates": {
+        "worker": {
+          "id": "rw-16a5df77-L101-mwuxucug:iter1:worker",
+          "kind": "worker",
+          "estimatedTokens": 120000,
+          "measuredTokens": 8383,
+          "variancePct": -93.014
+        },
+        "verifier": {
+          "id": "rw-16a5df77-L101-mwuxucug:iter1:verifier",
+          "kind": "verifier",
+          "estimatedTokens": 50000,
+          "measuredTokens": 3593,
+          "variancePct": -92.814
+        }
+      },
+      "verifierPass": false,
+      "verifierGroundingFailure": null,
+      "needsFixRetest": true,
+      "needsRecovery": true,
+      "progress": true,
+      "error": null
+    }
+  ],
+  "guardian": {
+    "status": "ok",
+    "runawayDetected": false,
+    "missedHaltRisk": false,
+    "budgetGateCorrect": true,
+    "droppedFixRetest": false,
+    "verdict": "main-session-action-required",
+    "findings": [
+      "RUNAWAY: none. N=1, 1 iter run, and the failure-policy (halt-on-failure) fired at iter 1 on WORKER BLOCKED + verification failed. Nothing was dispatched after the should-halt point, so there is no repeat or pile-up. maxAttemptsPerTicket=1 and priorAttempts=[] agree with allAttemptsTokens == workerTokens + verifierTokens (8383 + 3593 = 11976), which matches the spend trace [11976].",
+      "HALT REASON IS TRUTHFUL: the declared haltReason is failure-policy, not count-complete. So no not-done result was hidden behind a count-complete halt. done=false, acceptanceStatus=rejected and both queues are non-empty, which all fit the declared halt.",
+      "Q3/Q4: missedHaltRisk=false because the loop halted itself at its first and only iteration. A Q3 or Q4 halt could not have prevented any extra dispatch. Q3 (hardware) is also unlikely to apply to a dependency-rule and import-sentinel ticket. Residual note: the facts given here contain no main-session attestation of watching for Q3/Q4. If the owner gave mid-run input, such as granting delete or rename permission, it must be applied when the main session reconciles, not by re-launching under the same frozen brief.",
+      "BUDGET GATE: correct. Spend was 11976 against a 21000 ceiling (about 57%), so the Q5 gate correctly did not fire. The vacuous-ceiling test applies only at count-complete, and this run halted early on a failure. 57% for a one-iteration N=1 run is not vacuous.",
+      "SPEND ON A NO-OP: 11976 tokens went to a ticket that, by the worker's own report, made no product write and ran none of the three verification commands. This is spend-to-detect of a planning defect, not token-burn [REDACTED] It is recorded below as a new pattern.",
+      "FIX-RETEST: fixRetestQueue size=1, so the verifier FAIL was queued and not silently dropped. Risk: the cause is a scope/permission block (the worker reports the ticket needs file delete/rename, which the batch boundary forbids), not a defect a fix can address. A same-session fix-retest under the same frozen brief and wrapper will block the same way. The main session must re-scope first, by widening the write boundary or tool set via the PM/owner, or by splitting the delete/rename work into a separate ticket. It must not close the item as 'nothing to fix'.",
+      "RECOVERY (highest priority): recoveryQueue size=1, 'workspace integrity not attested'. The worker's claim 'product tree unchanged, no Write or Edit' is untrusted. Before anything else runs, the main session must independently check the product repo ../uhf_locator_poc on branch rw/proof-2-2026-11-24 (git status / git diff against the batch base) and record the result in the ledger.",
+      "UNVERIFIED BY GUARDIAN: under the reasoning-only scope I did not inspect git, the product tree, the frozen brief or the wrapper. The worker's claim that the brief requires deleting or renaming four source files and at least one test file has to be checked by the PM against the frozen US-61 brief (OP#294) before re-scoping. The worker notes were also truncated in the data handed to me."
+    ],
+    "newPatternCandidates": [
+      "brief-capability-mismatch-at-freeze (US-61, rw-16a5df77-L101): the frozen brief's acceptance needs file operations (delete/rename) that the worker wrapper's tools or the brief's write boundary cannot do. The worker finds this only after dispatch, and the cost was a full worker+verifier spend (~12k) with zero product change. Proposed fix: at plan-freeze, a preflight maps each acceptance criterion to the file operations it needs (create/edit/delete/rename/move) and checks them against the wrapper's allowed tools and the brief's write boundary. Any mismatch is a planning error, raised before launch.",
+      "blocked-routed-as-fix-retest: a worker block caused by missing scope or permission, with no code defect, lands in fixRetestQueue next to real verifier FAILs. This invites a same-brief re-dispatch that will block the same way, which is a runaway in the main session that the engine's halt cannot see. Proposed fix: the engine tags fix-retest entries with cause (verifier-defect vs worker-blocked-scope), and the main session must re-scope (PM/owner) before re-dispatching any worker-blocked-scope entry.",
+      "verifier-on-pre-write-block: the verifier runs a full pass (3593 tokens here) on an iteration where the worker reports it blocked before any write. It still fails to attest workspace integrity, so the main session must do a manual integrity check anyway. Candidate engine change: when the worker blocks before any write, run a cheap, deterministic integrity probe (tree-clean check against the batch base) in place of the full verifier, and route the result straight to recovery."
+    ]
+  },
+  "guardianError": null,
+  "guardianConsistencyFailure": null,
+  "guardianTokens": 3825,
+  "nextInvocationBlocked": true,
+  "mainSessionTodo": {
+    "pasteInstruction": "PREFERRED: save this whole return object to a file and run 'node scripts/reconcile-run.mjs <file> .' — it applies lifecycleEntries + messagesLogBlock to agents/lifecycle.md and messages/2026-11-24.md ATOMICALLY, checks runId rw-16a5df77-L101-mwuxucug idempotency in EVERY target (not just lifecycle), and updates the 'Next NNN to assign' counter. MANUAL FALLBACK: check that no target already contains runId rw-16a5df77-L101-mwuxucug, paste mainSessionTodo.lifecycleEntries VERBATIM into agents/lifecycle.md and mainSessionTodo.messagesLogBlock VERBATIM into messages/2026-11-24.md, then update the lifecycle 'Next NNN to assign' counter to 103. Do NOT reword (workflow cannot write audit files itself; audit writes are serial-PM-only). Manual re-derivation of entries is BANNED (docs/engine.md reconciliation rule).",
+    "nextLifecycleNumberAfter": 103,
+    "lifecycleEntries": [
+      "### BATCH 2026-11-24 rw-16a5df77-L101-mwuxucug — run-n-rounds N=1, dispatched 1, halt: failure-policy halt at iter 1: WORKER BLOCKED + verification not passed -> recovery — workspace integrity not attested; main session must drain recovery before anything else runs (failurePolicy=halt-on-failure), manifest: sha256:31cc7af925c15eaf1fafd74a1c61fb1b7e6ccbe7c20640bfcc720ee994027616",
+      "## [101] uhf-locator-poc-worker-exec US-61 (Fix the dependency-rule exceptions and add an import sentinel test) — WORKER BLOCKED + verification not passed -> recovery, ~8383 tok worker / ~3593 tok verifier, Blocked before any product write. US-61 needs four source files, and at least one test file, deleted or renamed, and nothing in this batch c",
+      "## [102] guardian (chaos) — status: ok, verdict: main-session-action-required, runaway=false, missedHalt=false, budgetGate=true, droppedFixRetest=false, ~3825 tok"
+    ],
+    "messagesLogBlock": "## 2026-11-24 — run-n-rounds batch rw-16a5df77-L101-mwuxucug (N=1, dispatched 1, halt: failure-policy halt at iter 1: WORKER BLOCKED + verification not passed -> recovery — workspace integrity not attested; main session must drain recovery before anything else runs (failurePolicy=halt-on-failure))\n\n- [101] iter1 US-61 (Fix the dependency-rule exceptions and add an import sentinel test) (uhf-locator-poc-worker-exec): WORKER BLOCKED + verification not passed -> recovery — Blocked before any product write. US-61 needs four source files, and at least one test file, deleted or renamed, and nothing in this batch c\n- Halt reason: failure-policy halt at iter 1: WORKER BLOCKED + verification not passed -> recovery — workspace integrity not attested; main session must drain recovery before anything else runs (failurePolicy=halt-on-failure); fixRetestQueue=1; recoveryQueue=1; guardian=ok/main-session-action-required",
+    "checklist": [
+      "Reconcile via scripts/reconcile-run.mjs (atomic, idempotent across all targets, updates the counter to 103); still reconstruct one pm-decisions.md dispatch+close line per iter from results[] using workerTokens/verifierTokens (PM-authored, serial-PM-only).",
+      "Do ALL tracker transitions now, attended (workflow is banned from tracker/MCP in-loop).",
+      "DRAIN fixRetestQueue: `haltReason: count-complete` means all N DISPATCHED, NOT all passed. Every queued item MUST be fix-retested (or PM-direct-verified) BEFORE the batch is declared closed (count-complete must never mask not-done). Path per the engine fix-retest drain rule (docs/engine.md): same-session continuation if the harness exposes the workflow-spawned session; otherwise a fresh scoped fix spawn inlining the verifier failure report, logged `Session: resumed-fresh`.",
+      "DRAIN recoveryQueue: error/null records have UNKNOWN side effects — inspect the working tree (git status/diff) for each before dispatching anything else; blocked/no-progress records need triage (unblock, re-scope, or return to the board).",
+      "For any deliveryStatus pending/failed record (F-01): the candidate may be ACCEPTED but is NOT landed — land it yourself under explicit owner authority (verify the exact diff, `git diff --cached --stat` first so unrelated staged work is preserved, run the relevant gates, record the receipt ref) or return it to the board. Never mark the ticket Done on execution success alone. For deliveryStatus=landed, verify the reported ref exists (`git cat-file -e <ref>`) — a self-reported ref is not a receipt.",
+      "Record the Q3/Q4 monitoring attestation for THIS run interval with `node scripts/reconcile-run.mjs <result.json> . --monitoring <attestation.json>` (observer, interval, coverage, events) — the workflow could not observe hardware or owner input; an unrecorded attestation means coverage UNKNOWN, never \"no stop occurred\".",
+      "If budgetGateTripped or haltRequiresAcknowledgement: acknowledge the halt cause FIRST (re-budget the ceiling / act on the terminal-stop or failure) — nextInvocationBlocked stays true until then; safeToContinue is the only field automation may read alone.",
+      "For any scopeDrift record: a non-code plan item touched code-shaped files — read the REAL git diff before trusting or reverting the work (worker file reports are untrusted).",
+      "If guardian.status != \"ok\": the run is UNAUDITED — run the guardian audit manually (agents/chaos.md) before the next invocation. If guardian.verdict != \"clean\" or guardianConsistencyFailure is set, act on guardian.findings first. nextInvocationBlocked=true until queues are drained AND the guardian question is settled.",
+      "If needsGrooming/planShortfall, groom remaining tickets (tracker) then re-invoke run-n-rounds with remainingRounds + a fresh plan (and nextLifecycleNumber = mainSessionTodo.nextLifecycleNumberAfter). If runIncomplete, first resolve the halt cause — the same plan tail may be re-run only after recovery is drained."
+    ]
+  }
+}

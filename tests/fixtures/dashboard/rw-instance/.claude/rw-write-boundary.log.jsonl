@@ -1,0 +1,2 @@
+{"at":"2026-11-24T16:59:00.677Z","tool":"Bash","agentType":"uhf-locator-poc-worker-exec","judged":true,"decision":"deny","command":"cd <instance>; for f in agents/worker-exec.md agents/router-worker-contract.md; do if [ -f \"$f\" ]; then echo \"== $f\"; else echo \"== kit/$f\"; fi; done"}
+{"at":"2026-11-24T17:00:06.155Z","tool":"Bash","agentType":"uhf-locator-poc-worker-check","judged":true,"decision":"deny","command":"for f in agents/worker-check.md agents/router-worker-contract.md; do echo \"=== $f\"; [ -f \"$f\" ] && cat \"$f\" || cat \"kit/$f\"; done 2>&1 | head -300"}

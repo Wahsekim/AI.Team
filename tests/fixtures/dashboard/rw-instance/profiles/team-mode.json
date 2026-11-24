@@ -1,0 +1,378 @@
+{
+  "schemaVersion": 1,
+  "mode": "router-worker",
+  "status": "live",
+  "launchable": true,
+  "topologyOnly": true,
+  "executionMode": "wrappers",
+  "maxConcurrentExec": 1,
+  "coverageDigest": "sha256:94b8d739583c530ce0f2ba55c723903b3e5a523296204af7748e7f216d0e37de",
+  "dispatch": "engine",
+  "gatePath": false,
+  "limits": {
+    "attemptsPerTicket": 1,
+    "outputAllowancePerTicket": 15000,
+    "guardianOutputShare": 6000,
+    "authorizationPerTicket": 200000,
+    "authorizationPerReviewerCall": 300000,
+    "allowedCommands": [
+      "fvm dart format --set-exit-if-changed .",
+      "fvm flutter analyze",
+      "fvm flutter test"
+    ]
+  },
+  "staffing": {
+    "exec": {
+      "model": "opus",
+      "effort": "high",
+      "maxTurns": 120,
+      "tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Bash",
+        "Write",
+        "Edit"
+      ]
+    },
+    "check": {
+      "model": "opus",
+      "effort": "medium",
+      "maxTurns": 80,
+      "tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Bash"
+      ]
+    },
+    "guard": {
+      "model": "opus",
+      "effort": "high",
+      "maxTurns": 40,
+      "tools": [
+        "Read",
+        "Grep",
+        "Glob"
+      ]
+    },
+    "architect": {
+      "model": "opus",
+      "effort": "medium",
+      "maxTurns": 40,
+      "tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Write",
+        "Edit"
+      ]
+    },
+    "coach": {
+      "model": "opus",
+      "effort": "medium",
+      "maxTurns": 40,
+      "tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Write",
+        "Edit"
+      ]
+    },
+    "auditor": {
+      "model": "opus",
+      "effort": "medium",
+      "maxTurns": 40,
+      "tools": [
+        "Read",
+        "Grep",
+        "Glob"
+      ]
+    },
+    "security": {
+      "model": "opus",
+      "effort": "medium",
+      "maxTurns": 40,
+      "tools": [
+        "Read",
+        "Grep",
+        "Glob"
+      ]
+    }
+  },
+  "spec": {
+    "schemaVersion": 1,
+    "mode": "router-worker",
+    "project": {
+      "name": "UHF Locator POC",
+      "slug": "uhf-locator-poc",
+      "productRoot": "<product-root>",
+      "ui": true
+    },
+    "profiles": {
+      "exec": {
+        "model": "opus",
+        "effort": "high",
+        "maxTurns": 120,
+        "tools": [
+          "Read",
+          "Grep",
+          "Glob",
+          "Bash",
+          "Write",
+          "Edit"
+        ]
+      },
+      "check": {
+        "model": "opus",
+        "effort": "medium",
+        "maxTurns": 80,
+        "tools": [
+          "Read",
+          "Grep",
+          "Glob",
+          "Bash"
+        ]
+      },
+      "guard": {
+        "model": "opus",
+        "effort": "high",
+        "maxTurns": 40,
+        "tools": [
+          "Read",
+          "Grep",
+          "Glob"
+        ]
+      }
+    },
+    "governance": {
+      "architect": {
+        "model": "opus",
+        "effort": "medium",
+        "maxTurns": 40,
+        "tools": [
+          "Read",
+          "Grep",
+          "Glob",
+          "Write",
+          "Edit"
+        ]
+      },
+      "coach": {
+        "model": "opus",
+        "effort": "medium",
+        "maxTurns": 40,
+        "tools": [
+          "Read",
+          "Grep",
+          "Glob",
+          "Write",
+          "Edit"
+        ]
+      },
+      "auditor": {
+        "model": "opus",
+        "effort": "medium",
+        "maxTurns": 40,
+        "tools": [
+          "Read",
+          "Grep",
+          "Glob"
+        ]
+      },
+      "security": {
+        "model": "opus",
+        "effort": "medium",
+        "maxTurns": 40,
+        "tools": [
+          "Read",
+          "Grep",
+          "Glob"
+        ]
+      }
+    },
+    "workflowStates": {
+      "WF-00": {
+        "status": "enabled",
+        "reason": "done 2026-09-24",
+        "decisionRef": null
+      },
+      "WF-01": {
+        "status": "enabled",
+        "reason": "As recorded in profiles/project.md",
+        "decisionRef": null
+      },
+      "WF-02": {
+        "status": "enabled",
+        "reason": "As recorded in profiles/project.md",
+        "decisionRef": null
+      },
+      "WF-03": {
+        "status": "enabled",
+        "reason": "As recorded in profiles/project.md",
+        "decisionRef": null
+      },
+      "WF-04": {
+        "status": "enabled",
+        "reason": "As recorded in profiles/project.md",
+        "decisionRef": null
+      },
+      "WF-05": {
+        "status": "enabled",
+        "reason": "As recorded in profiles/project.md",
+        "decisionRef": null
+      },
+      "WF-06": {
+        "status": "enabled",
+        "reason": "As recorded in profiles/project.md",
+        "decisionRef": null
+      },
+      "WF-07": {
+        "status": "enabled",
+        "reason": "As recorded in profiles/project.md",
+        "decisionRef": null
+      },
+      "WF-08": {
+        "status": "enabled",
+        "reason": "As recorded in profiles/project.md",
+        "decisionRef": null
+      },
+      "WF-09": {
+        "status": "enabled",
+        "reason": "gates: profiles/stack.md",
+        "decisionRef": null
+      },
+      "WF-10": {
+        "status": "enabled",
+        "reason": "As recorded in profiles/project.md",
+        "decisionRef": null
+      },
+      "WF-11": {
+        "status": "enabled",
+        "reason": "As recorded in profiles/project.md",
+        "decisionRef": null
+      },
+      "WF-12": {
+        "status": "enabled",
+        "reason": "As recorded in profiles/project.md",
+        "decisionRef": null
+      },
+      "WF-13": {
+        "status": "enabled",
+        "reason": "pubspec.lock / pub cache first; web search needs owner ack",
+        "decisionRef": null
+      },
+      "WF-14": {
+        "status": "enabled",
+        "reason": "PM-only tracker sync",
+        "decisionRef": null
+      },
+      "WF-15": {
+        "status": "deferred",
+        "reason": "owner attended; install watchdog before first unattended loop",
+        "decisionRef": null
+      },
+      "WF-16": {
+        "status": "enabled",
+        "reason": "As recorded in profiles/project.md",
+        "decisionRef": null
+      },
+      "WF-17": {
+        "status": "deferred",
+        "reason": "POC horizon",
+        "decisionRef": null
+      },
+      "WF-18": {
+        "status": "deferred",
+        "reason": "hardening counter suspended",
+        "decisionRef": null
+      },
+      "WF-19": {
+        "status": "enabled",
+        "reason": "coach dormant; first drain = hire signal",
+        "decisionRef": null
+      },
+      "WF-20": {
+        "status": "deferred",
+        "reason": "auditor dormant",
+        "decisionRef": null
+      },
+      "WF-21": {
+        "status": "enabled",
+        "reason": "As recorded in profiles/project.md",
+        "decisionRef": null
+      },
+      "WF-22": {
+        "status": "enabled",
+        "reason": "security dormant, standing trigger: network / permission / storage / release-config change",
+        "decisionRef": null
+      },
+      "WF-23": {
+        "status": "enabled",
+        "reason": "chaos (Cass) hired 2026-09-24, ADR 0002",
+        "decisionRef": null
+      },
+      "WF-24": {
+        "status": "enabled",
+        "reason": "product ADRs in ../uhf_locator_poc/docs/adr/, team ADRs in decisions/",
+        "decisionRef": null
+      },
+      "WF-25": {
+        "status": "enabled",
+        "reason": "As recorded in profiles/project.md",
+        "decisionRef": null
+      },
+      "WF-26": {
+        "status": "enabled",
+        "reason": "emulator/simulator per agents/_shared/browser-access.md",
+        "decisionRef": null
+      },
+      "WF-27": {
+        "status": "enabled",
+        "reason": "As recorded in profiles/project.md",
+        "decisionRef": null
+      },
+      "WF-28": {
+        "status": "enabled",
+        "reason": "As recorded in profiles/project.md",
+        "decisionRef": null
+      },
+      "WF-29": {
+        "status": "enabled",
+        "reason": "all roles opus (agents/roster.md)",
+        "decisionRef": null
+      },
+      "WF-30": {
+        "status": "enabled",
+        "reason": "stack locked by product ADRs",
+        "decisionRef": null
+      },
+      "WF-31": {
+        "status": "enabled",
+        "reason": "first count directive 2026-09-24 (10 rounds); runtime compat PASS; guardian = Cass",
+        "decisionRef": null
+      }
+    }
+  },
+  "specDigest": "sha256:e3c8613eacb271176af89d7d30abcce242b515312ebf4a2cb3346622c6c2af3f",
+  "draftDigest": "sha256:e724cc9fc9345d6adceae745c469cd755962a3db1054e8136a9edd4e113ef022",
+  "confirmedProposal": "sha256:975f56bdc5e4da5b0238f4ddcafb2bb7f264d4d5a71e95f588260cb39e09b6d6",
+  "ownFiles": [
+    ".claude/agents/uhf-locator-poc-architect.md",
+    ".claude/agents/uhf-locator-poc-auditor.md",
+    ".claude/agents/uhf-locator-poc-coach.md",
+    ".claude/agents/uhf-locator-poc-security.md",
+    ".claude/agents/uhf-locator-poc-worker-check.md",
+    ".claude/agents/uhf-locator-poc-worker-exec.md",
+    ".claude/agents/uhf-locator-poc-worker-guard.md",
+    "agents/roster.md",
+    "agents/router-worker-contract.md",
+    "agents/router-worker-review.md",
+    "agents/router-worker-router.md",
+    "agents/worker-check.md",
+    "agents/worker-exec.md",
+    "agents/worker-guard.md",
+    "profiles/team-mode.json"
+  ]
+}
