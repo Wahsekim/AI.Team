@@ -83,7 +83,9 @@ manifest or a journal that names a file outside these sets, such as the charter
 or a ledger, is refused, not obeyed.
 
 A folder under `holiday/` is outside `.claude/agents/`, so the runtime cannot
-dispatch a packed wrapper.
+dispatch a packed wrapper. The deployment validator does not scan `holiday/`
+for single-source drift: a packed wrapper keeps its `model:` line, a packed role
+file its tables.
 
 ## The request, drafted by the kit
 
