@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, renameSync, lstatSync, realpathSync, appendFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, lstatSync, realpathSync, appendFileSync, rmSync } from 'node:fs';
 import { join, resolve, relative, dirname, basename, isAbsolute, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { digest, bytesDigest } from '../loop/contracts.mjs';
@@ -21,6 +21,24 @@ const same = (a, b) => typeof a === 'string' && a.toLowerCase() === String(b).to
 export const said = (text, max = 300) => typeof text === 'string' ? plain(text.trim()).slice(0, max) : '';
 const refuse = error => ({ errors: [{ code: 'REVIEW_REFUSED', field: 'review', reason: error instanceof Refusal ? error.message : `The review could not be judged: ${error?.code ?? error?.message}` }] });
 export const projectsOf = () => join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'projects');
+const CLAIM_MS = 60000;
+const sleep = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+// One judgment at a time in a team, from reading the verdicts to writing them back: two at once would each write back the
+// list they read, and one verdict would be lost. A claim older than a minute is one that died, and is taken over; its age
+// is the lock file's, since a claim being written has no content yet.
+function judging({ teamRoot, instanceRoot }, judge) {
+  let instance = null;
+  try { instance = instanceOf(resolve(teamRoot), instanceRoot); } catch { /* inReview refuses */ }
+  if (!instance) return judge();
+  const path = join(instance, `${VERDICTS_FILE}.lock`), token = `${process.pid} ${Date.now()} ${Math.random()}`;
+  for (;;) {
+    try { writeFileSync(path, token, { flag: 'wx' }); break; } catch (error) { if (error?.code !== 'EEXIST') throw error; }
+    const age = Date.now() - (lstatSync(path, { throwIfNoEntry: false })?.mtimeMs ?? NaN);
+    if (Math.abs(age) <= CLAIM_MS) sleep(20); else if (!Number.isNaN(age)) rmSync(path, { force: true });
+  }
+  try { return judge(); } finally { try { if (readFileSync(path, 'utf8') === token) rmSync(path, { force: true }); } catch { /* taken over and released */ } }
+}
 
 // This reviewer's briefs for the run, each still as it was sealed.
 export function briefsOf(instance, reviewer, runId) {
@@ -155,20 +173,22 @@ function record({ instance, batch, after, brief, verdicts, mine }, reviewer, jud
 
 export function judgeReview({ teamRoot, instanceRoot, reviewer, transcript, report: given, projectsRoot = projectsOf() }) {
   try {
-    const context = inReview({ teamRoot, instanceRoot, reviewer }), { batch, brief, verdicts } = context, product = batch.productRoot;
-    let text; try { text = readFileSync(transcript, 'utf8'); } catch { need(false, `${plain(transcript)} cannot be read; nothing was recorded`); }
-    const fileDigest = bytesDigest(text);
-    need(!verdicts.some(entry => entry.transcript?.digest === fileDigest), 'This transcript was already judged; nothing was recorded');
-    // What the reviewer read must still be what is committed; a change since the brief is the PM's to undo, not the reviewer's attempt.
-    const recorded = Object.assign({}, ...brief.tickets.map(item => item.content)), now = contentOf(product, Object.keys(recorded));
-    const moved = Object.keys(recorded).filter(path => now[path] !== recorded[path]);
-    need(!moved.length, `${moved.slice(0, 5).map(plain).join(', ')} changed since the brief; the review would not judge what is committed. Restore it, or abort the batch`);
-    const evidence = evidenceOf({ transcript, text, projectsRoot, wrapper: brief.wrapper, reviewer, heading: `# Batch review brief: ${reviewer}, run ${batch.runId}, attempt ${brief.attempt}`, brief, product });
-    const refusals = [...evidence.refusals];
-    if (evidence.report && given !== undefined && digest(given) !== digest(evidence.report)) refusals.push({ code: 'REVIEW_REPORT_MISMATCH', detail: 'The report file given is not the report the transcript ends with' });
-    const derived = evidence.report ? derive(evidence.report, brief, reviewer, product) : { refusals: [], tickets: [] };
-    return record(context, reviewer, { refusals: [...refusals, ...derived.refusals], tickets: derived.tickets,
-      transcript: { file: evidence.file, digest: fileDigest, agentType: evidence.agentType }, reportDigest: evidence.report ? digest(evidence.report) : null });
+    return judging({ teamRoot, instanceRoot }, () => {
+      const context = inReview({ teamRoot, instanceRoot, reviewer }), { batch, brief, verdicts } = context, product = batch.productRoot;
+      let text; try { text = readFileSync(transcript, 'utf8'); } catch { need(false, `${plain(transcript)} cannot be read; nothing was recorded`); }
+      const fileDigest = bytesDigest(text);
+      need(!verdicts.some(entry => entry.transcript?.digest === fileDigest), 'This transcript was already judged; nothing was recorded');
+      // What the reviewer read must still be what is committed; a change since the brief is the PM's to undo, not the reviewer's attempt.
+      const recorded = Object.assign({}, ...brief.tickets.map(item => item.content)), now = contentOf(product, Object.keys(recorded));
+      const moved = Object.keys(recorded).filter(path => now[path] !== recorded[path]);
+      need(!moved.length, `${moved.slice(0, 5).map(plain).join(', ')} changed since the brief; the review would not judge what is committed. Restore it, or abort the batch`);
+      const evidence = evidenceOf({ transcript, text, projectsRoot, wrapper: brief.wrapper, reviewer, heading: `# Batch review brief: ${reviewer}, run ${batch.runId}, attempt ${brief.attempt}`, brief, product });
+      const refusals = [...evidence.refusals];
+      if (evidence.report && given !== undefined && digest(given) !== digest(evidence.report)) refusals.push({ code: 'REVIEW_REPORT_MISMATCH', detail: 'The report file given is not the report the transcript ends with' });
+      const derived = evidence.report ? derive(evidence.report, brief, reviewer, product) : { refusals: [], tickets: [] };
+      return record(context, reviewer, { refusals: [...refusals, ...derived.refusals], tickets: derived.tickets,
+        transcript: { file: evidence.file, digest: fileDigest, agentType: evidence.agentType }, reportDigest: evidence.report ? digest(evidence.report) : null });
+    });
   } catch (error) { return refuse(error); }
 }
 
@@ -176,7 +196,7 @@ export function judgeReview({ teamRoot, instanceRoot, reviewer, transcript, repo
 export function recordNoAnswer({ teamRoot, instanceRoot, reviewer, reason }) {
   try {
     need(said(reason), 'Give the reason there is no answer');
-    return record(inReview({ teamRoot, instanceRoot, reviewer }), reviewer, { refusals: [{ code: 'REVIEW_NO_ANSWER', detail: said(reason) }], tickets: [] });
+    return judging({ teamRoot, instanceRoot }, () => record(inReview({ teamRoot, instanceRoot, reviewer }), reviewer, { refusals: [{ code: 'REVIEW_NO_ANSWER', detail: said(reason) }], tickets: [] }));
   } catch (error) { return refuse(error); }
 }
 
@@ -187,9 +207,10 @@ export function reviewGate(instance, batch, after) {
   for (const reviewer of batch.review.reviewers) for (const brief of briefsOf(instance, reviewer, batch.runId))
     for (const item of brief.tickets.filter(entry => entry.elective)) needs.set(item.id, new Set([...(needs.get(item.id) ?? []), reviewer]));
   const verdicts = verdictsOf(instance, batch.runId);
-  // The lines across batches are written before the verdict: one the verdicts do not show means they were changed or removed.
+  // The lines across batches are written before the verdict: one the verdicts do not show is a judgment lost before its
+  // verdict was kept, or verdicts changed or removed. Judging the same transcript again writes no second line.
   const lost = outcomesOf(instance, batch.runId).filter(line => finalOf(verdicts, line.reviewer)?.tickets.find(item => same(item.id, line.ticket))?.verdict !== line.outcome);
-  need(!lost.length, `${lost.slice(0, 5).map(line => `${plain(String(line.ticket))} (${plain(String(line.outcome))} by ${plain(String(line.reviewer))})`).join(', ')} ${lost.length > 1 ? 'are' : 'is'} recorded in ${TICKETS} for this batch, but ${VERDICTS_FILE} does not show it: the verdicts were changed or removed. Restore them, or abort the batch`);
+  need(!lost.length, `${lost.slice(0, 5).map(line => `${plain(String(line.ticket))} (${plain(String(line.outcome))} by ${plain(String(line.reviewer))})`).join(', ')} ${lost.length > 1 ? 'are' : 'is'} recorded in ${TICKETS} for this batch, but ${VERDICTS_FILE} does not show it: a judgment was lost, or the verdicts were changed. Judge that reviewer's transcript again with: rw-batch.mjs review --reviewer <reviewer> --transcript <agent-*.jsonl> --instance <instance-root> (or review --no-answer "<reason>" if it gave none), or abort the batch`);
   const open = new Set(), reasons = after.commits.map(commit => {
     const outcomes = [...(needs.get(commit.ticket) ?? [])].map(reviewer => {
       const final = finalOf(verdicts, reviewer);

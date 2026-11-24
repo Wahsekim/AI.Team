@@ -2,11 +2,11 @@
 // on the verdicts, and escalates a ticket that keeps failing review to the owner without stopping unrelated work.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, readFileSync, mkdtempSync, rmSync, appendFileSync, existsSync } from 'node:fs';
+import { writeFileSync, readFileSync, mkdtempSync, rmSync, appendFileSync, existsSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { digest } from '../src/loop/contracts.mjs';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, spawn } from 'node:child_process';
 import { abortBatch } from '../src/router-worker/batch.mjs';
 import { markNotMetered } from '../src/router-worker/batch-settle.mjs';
 import { recordNoAnswer, VERDICTS_FILE } from '../src/router-worker/review-judge.mjs';
@@ -133,6 +133,58 @@ test('an elective review binds: the commit waits for it and its failed rule reje
   assert.equal(f.resolve().errors, undefined);
   const committed = f.commit();
   assert.deepEqual(committed.commits.map(commit => commit.ticket), ['US-01']); assert.deepEqual(committed.held.map(entry => [entry.ticket, entry.reason]), [['US-02', 'rejected']]);
+});
+
+test('two judgments at once each keep their verdict', async t => {
+  const f = live(t);
+  await runBatch(f, [ticket('US-01', ['src/authz.js'])], edits(['src/authz.js']));
+  const made = { security: f.brief('security'), architect: f.brief('architect', ['US-01']) };
+  const transcripts = Object.fromEntries(Object.entries(made).map(([reviewer, brief]) => [reviewer, transcriptOf(f, brief)]));
+  // Before writing the verdicts each judgment waits up to three seconds for the other to reach that point, and the Architect
+  // then writes after Security: two judgments that both read the verdicts before either wrote would keep only the last.
+  const shim = join(f.base, 'verdict-barrier.mjs');
+  writeFileSync(shim, `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+import { join } from 'node:path';
+const base = process.env.BARRIER_BASE, role = process.env.BARRIER_ROLE, other = role === 'security' ? 'architect' : 'security', write = fs.writeFileSync, rename = fs.renameSync;
+const until = (file, ms) => { const end = Date.now() + ms; while (!fs.existsSync(file)) { if (Date.now() > end) return false; Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10); } return true; };
+fs.writeFileSync = function (path, ...args) {
+  if (String(path).endsWith('/${VERDICTS_FILE}.tmp')) { write(join(base, role + '.ready'), ''); if (until(join(base, other + '.ready'), 3000) && role === 'architect') until(join(base, 'security.saved'), 10000); }
+  return write(path, ...args);
+};
+fs.renameSync = function (from, to) { const result = rename(from, to); if (role === 'security' && String(to).endsWith('/${VERDICTS_FILE}')) write(join(base, 'security.saved'), ''); return result; };
+syncBuiltinESMExports();
+`);
+  const module = new URL('../src/router-worker/review-judge.mjs', import.meta.url).href;
+  const judge = reviewer => new Promise((resolve, reject) => {
+    const args = { ...f.common, reviewer, transcript: transcripts[reviewer], projectsRoot: f.projectsRoot };
+    const child = spawn(process.execPath, ['--import', shim, '--input-type=module', '-e', `import { judgeReview } from ${JSON.stringify(module)}; console.log(JSON.stringify(judgeReview(${JSON.stringify(args)})));`],
+      { env: { ...process.env, BARRIER_BASE: f.base, BARRIER_ROLE: reviewer } });
+    let out = '', err = '';
+    child.stdout.on('data', chunk => { out += chunk; }); child.stderr.on('data', chunk => { err += chunk; });
+    child.on('error', reject); child.on('close', code => { try { assert.equal(code, 0, err); resolve(JSON.parse(out)); } catch (error) { reject(error); } });
+  });
+  const results = await Promise.all(['security', 'architect'].map(judge));
+  assert.deepEqual(results.map(result => result.outcome), ['accepted', 'accepted'], JSON.stringify(results));
+  assert.deepEqual(JSON.parse(f.read(VERDICTS_FILE)).entries.map(entry => entry.reviewer).sort(), ['architect', 'security']);
+  assert.equal(f.resolve().errors, undefined);
+  assert.deepEqual(f.commit().commits.map(commit => commit.ticket), ['US-01']);
+});
+
+test('a rejection whose verdict was lost is recovered by judging the same transcript again, as the refusal says', async t => {
+  const f = live(t);
+  await runBatch(f, [ticket('US-01', ['src/authz.js'])], edits(['src/authz.js']));
+  const made = f.brief('security'), path = transcriptOf(f, made, { report: failing(reportOf(made), 'US-01', 'kit.sec.secret-in-code') });
+  // The claim of a judgment that died two minutes ago is taken over.
+  const lock = join(f.root, `${VERDICTS_FILE}.lock`), past = new Date(Date.now() - 120000);
+  writeFileSync(lock, 'died'); utimesSync(lock, past, past);
+  assert.equal(f.judge('security', path).outcome, 'accepted');
+  assert.equal(existsSync(lock), false, 'the judgment releases its claim');
+  rmSync(join(f.root, VERDICTS_FILE));
+  assert.match(refusal(f.resolve()).reason, /US-01 \(rejected by security\).*Judge that reviewer's transcript again with: rw-batch\.mjs review --reviewer/);
+  assert.equal(f.judge('security', path).outcome, 'accepted');
+  const resolved = f.resolve();
+  assert.equal(resolved.errors, undefined, JSON.stringify(resolved.errors)); assert.deepEqual(resolved.removed.map(entry => [entry.ticket, entry.reason]), [['US-01', 'rejected']]);
 });
 
 test('a ticket rejected in a second batch is escalated: only a batch with it or a related ticket is refused, until the owner acknowledges it', async t => {

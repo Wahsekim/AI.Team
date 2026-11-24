@@ -183,7 +183,7 @@ final-candidate mock gate. Every response is labelled `simulation: true`;
 or verified**. No Claude calls, product writes, or legacy ledger writes occur.
 See [implementation status and next steps](docs/loop-graph.md).
 
-### Experimental Router/Worker mode (offline only, not launchable)
+### Router/Worker mode (second team mode; real-team proof in progress)
 
 Router/Worker is a second, optional team topology. The specialist team described
 under "Existing team model" stays the default and is unchanged. The mode changes
@@ -210,9 +210,9 @@ of these two mappings only.
 deployed team works in specialist mode or in Router/Worker mode, chosen at
 bootstrap or by a switch that packs the inactive mode into `holiday/`. It works
 under "run N rounds" in the real product repository, through the count engine,
-with a lock, write limits and after-run checks. **Of that standing mode only the
-choice of mode exists so far**: bootstrap asks for the mode
-(`docs/staffing.md`), `team-mode.mjs request` drafts the staffing and limits
+with a lock, write limits and after-run checks. **That standing mode is built
+and tested offline, with stand-in agents; it has not run with real agents**:
+bootstrap asks for the mode (`docs/staffing.md`), `team-mode.mjs request` drafts the staffing and limits
 from the project profile, `team-mode.mjs switch` proposes them (from the
 instance root: `node kit/scripts/team-mode.mjs switch rw` or `... switch specialist`),
 and, once a code is typed at an interactive terminal (a session without a
@@ -243,10 +243,12 @@ Built so far: the trigger list (`kit/config/router-worker/review.json` plus the 
 
 Proof 1 of ADR 0010 is `tests/router-worker-proof-1.test.mjs`, run in CI with no model: a blank project bootstrapped and switched into Router/Worker mode runs a reviewed batch on stand-in agents (one flagged ticket passes, one is rejected, one's review is not obtained), switches to specialist mode and back with the same team and ledgers, and runs a second batch ([details](docs/design/router-worker/proof-1.md)).
 
-What exists today is offline tooling in `src/router-worker/`: a deterministic
+`src/router-worker/` also holds the earlier offline tooling: a deterministic
 compiler (first-attempt `exec` and `check` previews only), local source/context
 preflight, inert deployment drafts, candidate/check-record binding and persisted
-retry accounting. No command activates a Router/Worker team or calls a model.
+retry accounting. `team-mode.mjs switch` activates a Router/Worker team. No
+kit command calls a model; the PM's session runs each batch through the count
+engine.
 
 ```sh
 node --test tests/router-worker-*.test.mjs
