@@ -16,25 +16,29 @@ concurrency:
 
 jobs:
   test:
+    # The kit runs on macOS only (owner, 2026-11-25). The suite is split into 4 shards that run side
+    # by side, within the 5 macOS jobs an account runs at once: one runner took up to 22 minutes.
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest]
-        node: [22, 24]
-    runs-on: ${{ matrix.os }}
+        shard: [1, 2, 3, 4]
+    runs-on: macos-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
-          node-version: ${{ matrix.node }}
-      - name: Fault-injection test suite
-        run: node --test tests/*.test.mjs
+          node-version: 24
+      - name: Fault-injection test suite (shard ${{ matrix.shard }} of 4)
+        run: node --test --test-shard=${{ matrix.shard }}/4 tests/*.test.mjs
       - name: Shell syntax
+        if: matrix.shard == 1
         run: |
           for f in scripts/*.sh scripts/watchdog/*.sh; do bash -n "$f"; done
       - name: Kit validator (self-check)
+        if: matrix.shard == 1
         run: bash scripts/validate-team.sh .
       - name: Context budget ratchet
+        if: matrix.shard == 1
         run: bash scripts/measure-context.sh .
 
   shellcheck:
