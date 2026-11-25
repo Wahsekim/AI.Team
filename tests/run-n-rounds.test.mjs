@@ -580,8 +580,7 @@ test('R-02: whitespace-only verifier command is no evidence — grounding fail-c
 })
 
 // Fixture secrets are CONCATENATED at runtime so no secret-shaped literal
-// exists in this source file — otherwise the CI gitleaks gate (correctly)
-// flags the test fixtures themselves.
+// exists in this source file for a secret scanner to flag.
 const FAKE = {
   quoted: 'quoted' + 'secret' + '12345',
   json: 'json' + 'secret' + '999xx',
