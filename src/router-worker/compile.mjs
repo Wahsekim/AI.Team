@@ -116,8 +116,12 @@ function validateInput(input, bundle, standingBatch) {
   requireValue(policy.budgetUnit === 'input+cache_creation', 'policy.budgetUnit', 'Unsupported budget unit');
   positive(policy.maxTicketBudget, 'policy.maxTicketBudget');
 
-  fields(m, ['ticketId', 'repoId', 'approvalRef', 'policyDigest', 'allowedWritePaths', 'allowedTools', 'budgetTokens', 'stopConditions', ...['gitCommands', 'resumedPaths'].filter(key => Object.hasOwn(m ?? {}, key))], 'mandate');
+  fields(m, ['ticketId', 'repoId', 'approvalRef', 'policyDigest', 'allowedWritePaths', 'allowedTools', 'budgetTokens', 'stopConditions', ...['gitCommands', 'resumedPaths', 'verificationCommands'].filter(key => Object.hasOwn(m ?? {}, key))], 'mandate');
   // ADR 0010, amendment of 2026-11-24: the moves and deletions a standing batch derived from its ticket; the input cannot vouch for itself.
+  if (Object.hasOwn(m, 'verificationCommands')) {
+    requireValue(standingBatch === true, 'mandate.verificationCommands', 'Only a standing batch narrows the verification commands of a ticket');
+    list(m.verificationCommands, 'mandate.verificationCommands', (command, field) => requireValue(policy.verificationCommands.includes(command), field, 'Expected one of the policy verification commands'));
+  }
   if (Object.hasOwn(m, 'resumedPaths')) {
     requireValue(standingBatch === true, 'mandate.resumedPaths', 'Only a standing batch resumes earlier work');
     list(m.resumedPaths, 'mandate.resumedPaths', (path, field) => requireValue(typeof path === 'string' && within(path, m.allowedWritePaths), field, 'Expected a path the ticket may write'));
@@ -196,7 +200,7 @@ function render(input, duty, methods, standingBatch) {
     writeBoundary: duty === 'exec' ? 'Write only inside writePaths; plannedPaths are the files expected to change. The host refuses any other write' : standingBatch ? `No product write; run only the listed verification commands, from the product root. ${EXIT}` : 'No product mutation; use the approved isolated verification runner',
     requestedExecTools: p.requestedTools,
     permissionRef: policy.profiles[duty].permissionRef,
-    verificationCommands: policy.verificationCommands,
+    verificationCommands: m.verificationCommands ?? policy.verificationCommands,
     estimate: p.estimate, authorizedTicketTokens: m.budgetTokens, budgetUnit: policy.budgetUnit,
     stopConditions: m.stopConditions, methods: methods.map(m => m.receipt),
     selectionReason: duty === 'check' && input.schemaVersion === 2 ? p.checkSelectionReason : p.selectionReason,

@@ -29,7 +29,7 @@ export const HOOKS_FIRST = 'A commit by hand runs the repository\'s commit hooks
 export const HOOKS_MOVED = `The repository's commit hooks were changed or moved since the batch opened. ${HOOKS_FIRST}`;
 const MODE_FILE = 'profiles/team-mode.json', JOURNAL = 'holiday/.switch-in-progress.json', LEDGER = 'pm-decisions.md';
 const IN_PROGRESS = ['index.lock', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'BISECT_LOG', 'rebase-merge', 'rebase-apply'];
-const TICKET_FIELDS = ['id', 'title', 'goal', 'acceptance', 'paths', 'estimate'], TICKET_OPTIONAL = ['expectedPaths', 'commitMessage', 'dependsOn', 'riskFlags', 'moves', 'deletes', 'resume'], BATCH_FIELDS = ['tickets', 'verificationCommands', 'sensitivePaths', 'nextLifecycleNumber'];
+const TICKET_FIELDS = ['id', 'title', 'goal', 'acceptance', 'paths', 'estimate'], TICKET_OPTIONAL = ['expectedPaths', 'commitMessage', 'dependsOn', 'riskFlags', 'moves', 'deletes', 'resume', 'verificationCommands'], BATCH_FIELDS = ['tickets', 'verificationCommands', 'sensitivePaths', 'nextLifecycleNumber'];
 const ESTIMATE = ['execTokens', 'checkTokens', 'reworkTokens'], MAX_PATHS = 100, MAX_FLAGS = 10;
 const STOP = ['Owner stop', 'Required scope or permission change', 'Missing verification environment'];
 // What a standing team accepts by decision: no sandbox is required, and Git-ignored build output is tolerated.
@@ -139,6 +139,9 @@ function checkBatch(batch, known) {
     const claimed = ticket.paths.filter(reserved);
     need(!claimed.length, `Ticket ${ticket.id} claims ${claimed.join(', ')}; no ticket writes under ${RESERVED.join(' or ')}`);
     checkFiles(ticket);
+    need(ticket.verificationCommands === undefined || (strings(ticket.verificationCommands) && ticket.verificationCommands.every(command => batch.verificationCommands.includes(command))
+      && new Set(ticket.verificationCommands).size === ticket.verificationCommands.length),
+      `Ticket ${ticket.id}: verificationCommands must list 1 or more of the batch's verification commands, each once; its workers run only those`);
     const resumeProblem = resumePathProblem(ticket);
     need(!resumeProblem, resumeProblem);
     need(ticket.riskFlags === undefined || (strings(ticket.riskFlags) && ticket.riskFlags.length <= MAX_FLAGS && ticket.riskFlags.every(flag => TICKET_ID.test(flag))
@@ -242,7 +245,7 @@ function inputOf(ticket, { batch, profile, wrappers, product, limits, allPaths, 
   return { schemaVersion: 1,
     ticket: { id: ticket.id, title: ticket.title, goal: ticket.goal, acceptance: ticket.acceptance, acceptanceRef: ref('acceptance', ticket.acceptance), isCodeShipping: true, deliveryRequired: false, riskFlags: ticket.riskFlags ?? [] },
     mandate: { ticketId: ticket.id, repoId, approvalRef: ref('batch-ticket', ticket), policyDigest: digest(policy), allowedWritePaths: ticket.paths, allowedTools: tools,
-      budgetTokens: limits.authorizationPerTicket, stopConditions: STOP, ...(gitCommands.length ? { gitCommands } : {}), ...(resumedPaths ? { resumedPaths } : {}) },
+      budgetTokens: limits.authorizationPerTicket, stopConditions: STOP, ...(gitCommands.length ? { gitCommands } : {}), ...(resumedPaths ? { resumedPaths } : {}), ...(ticket.verificationCommands ? { verificationCommands: ticket.verificationCommands } : {}) },
     proposal: { assignmentId: `${ticket.id}.exec.1`, checkAssignmentId: `${ticket.id}.check.1`, duty: 'exec', attempt: 1, sessionRef: null, continuationOf: null, methodIds: [],
       selectionReason: 'Planned by the PM from the backlog', expectedPaths: ticket.expectedPaths ?? ticket.paths.filter(path => !path.endsWith('/**')), requestedTools: tools,
       estimate: { ref: ref('pm-estimate', amounts), ...amounts } },
@@ -375,7 +378,7 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     const body = { schemaVersion: 1, stage: 'batch-open', runId: frozen.args.runId, openedAt: at, productRoot, productHead: product.head, branch: product.branch,
       startedAsIs: startAsIs === true, preexisting: product.preexisting, preexistingContent: contentOf(productRoot, product.preexisting), hooks, lease, boundaryDigest: boundary.digest, isolationDigest: isolation.digest,
       limits, ceiling: { outputTokens: ceiling, stopLine: Math.floor(ceiling * 4 / 5) },
-      tickets: batch.tickets.map((ticket, i) => ({ id: ticket.id, title: ticket.title, goal: ticket.goal, acceptance: ticket.acceptance, commitMessage: ticket.commitMessage ?? `${ticket.id}: ${ticket.title}`, paths: ticket.paths, expectedPaths: inputs[i].proposal.expectedPaths, dependsOn: ticket.dependsOn ?? [], moves: ticket.moves ?? [], deletes: ticket.deletes ?? [], declared: declaredOf(ticket, batch.sensitivePaths), ...(plans[i] ? { resume: { patch: plans[i].patch, digest: plans[i].digest, paths: plans[i].paths, content: contentOf(productRoot, plans[i].paths) } } : {}) })),
+      tickets: batch.tickets.map((ticket, i) => ({ id: ticket.id, title: ticket.title, goal: ticket.goal, acceptance: ticket.acceptance, commitMessage: ticket.commitMessage ?? `${ticket.id}: ${ticket.title}`, paths: ticket.paths, expectedPaths: inputs[i].proposal.expectedPaths, dependsOn: ticket.dependsOn ?? [], moves: ticket.moves ?? [], deletes: ticket.deletes ?? [], declared: declaredOf(ticket, batch.sensitivePaths), ...(ticket.verificationCommands ? { verificationCommands: ticket.verificationCommands } : {}), ...(plans[i] ? { resume: { patch: plans[i].patch, digest: plans[i].digest, paths: plans[i].paths, content: contentOf(productRoot, plans[i].paths) } } : {}) })),
       sensitivePaths: batch.sensitivePaths, verificationCommands: batch.verificationCommands, review, reviewWrappers, triggerChanges: triggerChanges(lastFrozen, review),
       launchManifest: manifest ? 'chained' : 'absent', runRecord: frozen.record, args: frozen.args };
     const record = { ...body, digest: digest(body) };

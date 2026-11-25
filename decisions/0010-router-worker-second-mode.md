@@ -371,3 +371,17 @@ same condition.
 
 Merging the pull request that adds this amendment ratifies it.
 
+### 2026-11-25: a ticket names the verification commands its workers run
+
+Status: Proposed.
+
+The verification commands of a batch applied to every ticket, so on
+2026-11-25 a ticket that changed one diagram file had its checker run the
+product's full test suite. A ticket may now name `verificationCommands`, one
+or more of the batch's own; its briefs list only those. The engine still
+refuses a pass with no command run, so the list is never empty. The hook keeps
+accepting the batch's whole list, and the kit's own re-verification at review
+time runs the whole list.
+
+Merging the pull request that adds this amendment ratifies it.
+
