@@ -3,7 +3,7 @@
   "reviewers": ["security", "architect"],
   "triggers": [
     { "id": "kit.dependency-manifest", "reviewers": ["security", "architect"],
-      "match": { "glob": ["**/package.json", "**/*.lock", "**/package-lock.json", "**/go.mod", "**/requirements*.txt", "**/pyproject.toml", "**/Cargo.toml", "**/*.csproj", "**/pnpm-lock.yaml", "**/pom.xml", "**/build.gradle", "**/build.gradle.kts", "**/.npmrc", "**/Gemfile", "**/pubspec.yaml", "**/Podfile", "**/Package.swift"] } },
+      "match": { "glob": ["**/package.json", "**/*.lock", "**/package-lock.json", "**/go.mod", "**/requirements*.txt", "**/pyproject.toml", "**/Cargo.toml", "**/*.csproj", "**/pnpm-lock.yaml", "**/pom.xml", "**/build.gradle", "**/build.gradle.kts", "**/.npmrc", "**/Gemfile", "**/pubspec.yaml", "**/Podfile", "**/Package.swift", "**/Package.resolved"] } },
     { "id": "kit.sensitive-word", "reviewers": ["security"],
       "match": { "contains": ["auth", "session", "token", "crypto", "secret", "credential"] } },
     { "id": "kit.migration", "reviewers": ["architect", "security"],
