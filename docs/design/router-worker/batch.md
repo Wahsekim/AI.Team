@@ -168,7 +168,8 @@ opened. A patch already applied in step 8 is taken back out of the work tree.
    | `HOOKS_WRITTEN` | a path was changed where the hooks live or beside husky's stub folder, for instance through a worker's shell | all held |
    | `BOUNDARY_CHANGED` | the write-boundary file is not the one the batch opened | all held |
    | `PRODUCT_HEAD_MOVED`, `PRODUCT_BRANCH_CHANGED` | someone committed or changed branch during the batch | all held |
-   | `GUARDIAN_NOT_CLEAN` | the Guardian did not answer, or did not find the run clean | all held |
+   | `GUARDIAN_NOT_CLEAN` | the Guardian did not answer, asked to halt and investigate, or found a problem in the run: a runaway, a budget gate that misbehaved, or a failed check at risk of being dropped | all held |
+   | `GUARDIAN_ATTENTION` | the Guardian found no such problem but did not call the run clean, for instance because no observer watched it for an owner stop or a hardware halt (`missedHaltRisk`), which is true of every headless batch. Its findings are in the engine's return for the PM to read | not held |
    | `BOUNDARY_NOT_RESTORED`, `LOCK_RELEASE_FAILED`, `LOCK_NOT_HELD_BY_THIS_BATCH` | the batch could not be closed completely | not held |
 
 4. **The write boundary closes and the lock is released**, whatever the

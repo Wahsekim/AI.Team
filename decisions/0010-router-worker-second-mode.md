@@ -347,3 +347,27 @@ away and spends the same tokens again.
   grants no write beyond the ticket's `paths` and no command.
 
 Merging the pull request that adds this amendment ratifies it.
+
+### 2026-11-25: what of the Guardian's verdict holds a batch
+
+Status: Proposed.
+
+On 2026-11-25 a batch on a real team passed both tickets' checks and a
+Security review, and the kit committed nothing: the Guardian answered
+`main-session-action-required` because no observer had watched the run for an
+owner stop or a hardware halt (`missedHaltRisk`), and any verdict but `clean`
+held every commit with no way in the kit to clear it. A headless batch never
+has such an observer, so that rule held every unattended batch whenever the
+Guardian said so; an earlier headless batch had been called clean under the
+same condition.
+
+- A batch's commits are all held when the Guardian did not answer, asked to
+  halt and investigate, or reports a problem in the run itself: a runaway, a
+  budget gate that did not behave, or a failed check at risk of being
+  dropped (`GUARDIAN_NOT_CLEAN`, as before).
+- Any other verdict that is not `clean`, a missed halt risk included, is
+  recorded as `GUARDIAN_ATTENTION` and holds nothing. The tickets are still
+  committed only when their own check passed and their review, if any, passed.
+
+Merging the pull request that adds this amendment ratifies it.
+
