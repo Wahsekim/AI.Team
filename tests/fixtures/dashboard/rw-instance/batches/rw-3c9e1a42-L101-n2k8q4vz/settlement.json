@@ -1,0 +1,346 @@
+{
+  "schemaVersion": 1,
+  "stage": "batch-settled",
+  "runId": "rw-3c9e1a42-L101-n2k8q4vz",
+  "batchDigest": "sha256:ce8fccf7df6befb8cf242e1e6d5d740a425a196d35cee863945c7bf0b123f0d5",
+  "afterDigest": "sha256:9547e7153ff4e8962d75de1e416013f470a123195916f03d87902cbc19f0bc02",
+  "settledAt": "2026-11-24T17:01:42.046Z",
+  "status": "clear",
+  "tickets": [
+    {
+      "ticket": "T-1",
+      "authorizedTokens": 200000,
+      "spentTokens": 131169,
+      "remainingTokens": 68831,
+      "budgetGate": "clear"
+    }
+  ],
+  "limits": [],
+  "calls": [
+    {
+      "ticket": "T-1",
+      "duty": "exec",
+      "attempt": 1,
+      "agentId": "ae89b9cc56da94e64",
+      "tokens": 69472,
+      "finished": true
+    },
+    {
+      "ticket": "T-1",
+      "duty": "check",
+      "attempt": 1,
+      "agentId": "aafacd941c9e4135a",
+      "tokens": 61697,
+      "finished": true
+    },
+    {
+      "ticket": null,
+      "duty": "guard",
+      "attempt": null,
+      "agentId": "a22d6821b0635d5d4",
+      "tokens": 17589,
+      "finished": true
+    }
+  ],
+  "reviews": [],
+  "reviewCost": 0,
+  "mainSessionTokens": 137732,
+  "findings": [],
+  "run": {
+    "schemaVersion": 1,
+    "stage": "offline-run-settlement",
+    "launchable": false,
+    "unit": "input+cache_creation",
+    "recordDigest": "sha256:329d3c61214df4a93d4afea9d0bc5bd1915e2e88762a6a26f406f04afe46f64c",
+    "authorizedTokens": 200000,
+    "guardianEstimateTokens": 200000,
+    "ticketTokens": 131169,
+    "guardianTokens": 17589,
+    "totalTokens": 148758,
+    "runGate": "clear",
+    "reasons": [],
+    "undispatchedTickets": [],
+    "tickets": [
+      {
+        "ticketId": "T-1",
+        "spentTokens": 131169,
+        "budgetGate": "clear",
+        "settlementDigest": "sha256:1aa49a2b19cfeb5e162fd817e3a3a9f2284d0fe7427bbabe69eccb739c286ae3"
+      }
+    ],
+    "unresolved": [
+      "call-accounting-authenticity",
+      "meter-read-authenticity",
+      "guardian-call-to-transcript-binding",
+      "governance-usage",
+      "main-session-usage"
+    ],
+    "digest": "sha256:3e83a59c2d3e4254f1c1e7f49c95d1d37f94c232891e59a7a98213f90174d9e2"
+  },
+  "ticketRecords": [
+    {
+      "ticketId": "T-1",
+      "journal": {
+        "schemaVersion": 1,
+        "ticketId": "T-1",
+        "rulesDigest": "sha256:33efdaeda049a3e19a3c44d43faf578c05c87beeffddb9dc2175329af06dd513",
+        "events": [
+          {
+            "admission": {
+              "gates": {
+                "budget": "clear",
+                "count-guardian": "clear",
+                "global-progress": "clear",
+                "governance": "clear",
+                "lifecycle": "clear",
+                "owner": "clear",
+                "round-trip": "clear",
+                "runtime-isolation": "clear",
+                "security": "clear"
+              },
+              "sourceRef": {
+                "digest": "sha256:ce8fccf7df6befb8cf242e1e6d5d740a425a196d35cee863945c7bf0b123f0d5",
+                "id": "rw-launch"
+              }
+            },
+            "assignmentId": "T-1.exec.1",
+            "candidateRef": {
+              "digest": "sha256:55d51d076f15f47456be89b3d2d0fd91c6d02fadfbd1c1c9ebe3ad07ad78b381",
+              "id": "launch-product-head"
+            },
+            "continuationOf": null,
+            "divergence": null,
+            "duty": "exec",
+            "eventId": "event-1",
+            "planRef": {
+              "digest": "sha256:56acf410aad6626f23f30af669e368b673d14e39a356566366fef8d17b7dc6be",
+              "id": "T-1-exec-plan-1"
+            },
+            "resumeSessionRef": null,
+            "type": "prepare"
+          },
+          {
+            "admission": {
+              "gates": {
+                "budget": "clear",
+                "count-guardian": "clear",
+                "global-progress": "clear",
+                "governance": "clear",
+                "lifecycle": "clear",
+                "owner": "clear",
+                "round-trip": "clear",
+                "runtime-isolation": "clear",
+                "security": "clear"
+              },
+              "sourceRef": {
+                "digest": "sha256:ce8fccf7df6befb8cf242e1e6d5d740a425a196d35cee863945c7bf0b123f0d5",
+                "id": "rw-launch"
+              }
+            },
+            "assignmentId": "T-1.exec.1",
+            "callRef": {
+              "digest": "sha256:1211a2a2541b7eb99691b3f6e7b1f376918053ef4130ef15af16804f8fddf38d",
+              "id": "transcript-ae89b9cc56da94e64"
+            },
+            "eventId": "event-2",
+            "sessionRef": {
+              "digest": "sha256:d0cfbcea9c0f278b154abd17c6af36da3101dbb7dfd76df02293fd0303a7ccb8",
+              "id": "agent-ae89b9cc56da94e64"
+            },
+            "type": "start"
+          },
+          {
+            "assignmentId": "T-1.exec.1",
+            "candidateRef": {
+              "digest": "sha256:defd4b95bc70107f5485b402ca75249082c90e3fea7266a96e0e79cdc7ed6830",
+              "id": "T-1-candidate"
+            },
+            "eventId": "event-3",
+            "outcome": "blocked",
+            "outcomeKey": "exec-1-blocked",
+            "progress": true,
+            "receiptRef": {
+              "digest": "sha256:9547e7153ff4e8962d75de1e416013f470a123195916f03d87902cbc19f0bc02",
+              "id": "rw-close"
+            },
+            "type": "close"
+          },
+          {
+            "admission": {
+              "gates": {
+                "budget": "clear",
+                "count-guardian": "clear",
+                "global-progress": "clear",
+                "governance": "clear",
+                "lifecycle": "clear",
+                "owner": "clear",
+                "round-trip": "clear",
+                "runtime-isolation": "clear",
+                "security": "clear"
+              },
+              "sourceRef": {
+                "digest": "sha256:ce8fccf7df6befb8cf242e1e6d5d740a425a196d35cee863945c7bf0b123f0d5",
+                "id": "rw-launch"
+              }
+            },
+            "assignmentId": "T-1.check.1",
+            "candidateRef": {
+              "digest": "sha256:defd4b95bc70107f5485b402ca75249082c90e3fea7266a96e0e79cdc7ed6830",
+              "id": "T-1-candidate"
+            },
+            "continuationOf": null,
+            "divergence": null,
+            "duty": "check",
+            "eventId": "event-4",
+            "planRef": {
+              "digest": "sha256:56acf410aad6626f23f30af669e368b673d14e39a356566366fef8d17b7dc6be",
+              "id": "T-1-check-plan-1"
+            },
+            "resumeSessionRef": null,
+            "type": "prepare"
+          },
+          {
+            "admission": {
+              "gates": {
+                "budget": "clear",
+                "count-guardian": "clear",
+                "global-progress": "clear",
+                "governance": "clear",
+                "lifecycle": "clear",
+                "owner": "clear",
+                "round-trip": "clear",
+                "runtime-isolation": "clear",
+                "security": "clear"
+              },
+              "sourceRef": {
+                "digest": "sha256:ce8fccf7df6befb8cf242e1e6d5d740a425a196d35cee863945c7bf0b123f0d5",
+                "id": "rw-launch"
+              }
+            },
+            "assignmentId": "T-1.check.1",
+            "callRef": {
+              "digest": "sha256:e4a83f58e40c99a5d140452e1b8b276cc05485331125a56ec42d6531e33af020",
+              "id": "transcript-aafacd941c9e4135a"
+            },
+            "eventId": "event-5",
+            "sessionRef": {
+              "digest": "sha256:d8c1711d764546ace30bbf31a0f29c78db6dcce7640fccdee51648be7f8c01a2",
+              "id": "agent-aafacd941c9e4135a"
+            },
+            "type": "start"
+          },
+          {
+            "assignmentId": "T-1.check.1",
+            "candidateRef": {
+              "digest": "sha256:defd4b95bc70107f5485b402ca75249082c90e3fea7266a96e0e79cdc7ed6830",
+              "id": "T-1-candidate"
+            },
+            "eventId": "event-6",
+            "outcome": "fail",
+            "outcomeKey": "check-1-fail",
+            "progress": true,
+            "receiptRef": {
+              "digest": "sha256:9547e7153ff4e8962d75de1e416013f470a123195916f03d87902cbc19f0bc02",
+              "id": "rw-close"
+            },
+            "type": "close"
+          }
+        ],
+        "digest": "sha256:31f08935dea67e44253dce650120425853083fbb4462d25e56102040eb673a06"
+      },
+      "ledger": {
+        "authorizedTokens": 200000,
+        "events": [
+          {
+            "agentId": "ae89b9cc56da94e64",
+            "callRef": {
+              "digest": "sha256:1211a2a2541b7eb99691b3f6e7b1f376918053ef4130ef15af16804f8fddf38d",
+              "id": "transcript-ae89b9cc56da94e64"
+            },
+            "eventId": "usage-1",
+            "finished": true,
+            "harnessTokens": 69472,
+            "sourceRef": {
+              "digest": "sha256:8d44bacf7f17dd4217575f1819b17cceb23bcdd990b038102b9f12be8cccabef",
+              "id": "measure-spawn"
+            },
+            "type": "usage",
+            "uniqueMessages": 8
+          },
+          {
+            "agentId": "aafacd941c9e4135a",
+            "callRef": {
+              "digest": "sha256:e4a83f58e40c99a5d140452e1b8b276cc05485331125a56ec42d6531e33af020",
+              "id": "transcript-aafacd941c9e4135a"
+            },
+            "eventId": "usage-2",
+            "finished": true,
+            "harnessTokens": 61697,
+            "sourceRef": {
+              "digest": "sha256:e16e889d99c222c26b30ab38c9bcc94d89d977de2f3f0f31fe5f74a9ed327557",
+              "id": "measure-spawn"
+            },
+            "type": "usage",
+            "uniqueMessages": 8
+          }
+        ],
+        "schemaVersion": 1,
+        "ticketId": "T-1",
+        "unit": "input+cache_creation",
+        "digest": "sha256:725be968fb3a6efe8cb2dffb6da1935a3f52ea4895b12906162a21201827700e"
+      },
+      "settlement": {
+        "schemaVersion": 1,
+        "stage": "offline-settlement",
+        "launchable": false,
+        "ticketId": "T-1",
+        "unit": "input+cache_creation",
+        "authorizedTokens": 200000,
+        "spentTokens": 131169,
+        "remainingTokens": 68831,
+        "overrunTokens": 0,
+        "budgetGate": "clear",
+        "reasons": [],
+        "calls": [
+          {
+            "assignmentId": "T-1.exec.1",
+            "duty": "exec",
+            "attempt": 1,
+            "callRef": {
+              "digest": "sha256:1211a2a2541b7eb99691b3f6e7b1f376918053ef4130ef15af16804f8fddf38d",
+              "id": "transcript-ae89b9cc56da94e64"
+            },
+            "tokens": 69472,
+            "status": "settled"
+          },
+          {
+            "assignmentId": "T-1.check.1",
+            "duty": "check",
+            "attempt": 1,
+            "callRef": {
+              "digest": "sha256:e4a83f58e40c99a5d140452e1b8b276cc05485331125a56ec42d6531e33af020",
+              "id": "transcript-aafacd941c9e4135a"
+            },
+            "tokens": 61697,
+            "status": "settled"
+          }
+        ],
+        "unattributedCalls": 0,
+        "ticketStopped": true,
+        "ledgerDigest": "sha256:725be968fb3a6efe8cb2dffb6da1935a3f52ea4895b12906162a21201827700e",
+        "journalDigest": "sha256:31f08935dea67e44253dce650120425853083fbb4462d25e56102040eb673a06",
+        "unresolved": [
+          "meter-read-authenticity",
+          "call-to-transcript-binding",
+          "durable-ledger",
+          "guardian-and-governance-usage",
+          "lifecycle-token-lines",
+          "cross-ticket-run-budget"
+        ],
+        "digest": "sha256:1aa49a2b19cfeb5e162fd817e3a3a9f2284d0fe7427bbabe69eccb739c286ae3"
+      }
+    }
+  ],
+  "journalSource": "reconstructed-after-run",
+  "digest": "sha256:84efa7e662dff7a92d404f18dfbfb219fb5b6da5c5da92f8c4ee874beef8b86b"
+}

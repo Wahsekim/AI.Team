@@ -1,0 +1,82 @@
+{
+  "schemaVersion": 1,
+  "stage": "batch-closed",
+  "runId": "rw-3c9e1a42-L101-n2k8q4vz",
+  "batchDigest": "sha256:ce8fccf7df6befb8cf242e1e6d5d740a425a196d35cee863945c7bf0b123f0d5",
+  "closedAt": "2026-11-24T17:01:33.404Z",
+  "status": "review",
+  "account": {
+    "status": "accounted",
+    "findings": [],
+    "calls": {
+      "tickets": 1,
+      "exec": 1,
+      "check": 1,
+      "guard": 1
+    },
+    "attempts": [
+      1
+    ],
+    "nextLifecycleNumberAfter": 103,
+    "blockers": [
+      "guardian-not-clean",
+      "fix-retest-pending",
+      "recovery-pending",
+      "halt-requires-acknowledgement"
+    ]
+  },
+  "returnDigest": "sha256:24bd1f32ed5f94a2296383237efb46bf032ab920e4980aae4c906fce3bced187",
+  "tickets": [
+    {
+      "id": "T-1",
+      "status": "not-passed",
+      "workerStatus": "blocked",
+      "verificationStatus": "failed",
+      "changedPaths": []
+    }
+  ],
+  "reviews": {},
+  "commits": [],
+  "left": [],
+  "holdAll": true,
+  "hook": {
+    "calls": 7,
+    "workerCalls": 2,
+    "denied": 2
+  },
+  "findings": [
+    {
+      "code": "GUARDIAN_NOT_CLEAN",
+      "status": "ok",
+      "verdict": "main-session-action-required"
+    }
+  ],
+  "limits": [
+    {
+      "limit": "allowedCommands",
+      "observed": "cd <instance>; for f in agents/worker-exec.md agents/router-worker-contract.md; do if [ -f \"$f\" ]; then echo \"== $f\"; else echo \"== kit/$f\"; fi; done",
+      "current": [
+        "npm run format:check",
+        "npm run lint",
+        "npm test"
+      ],
+      "proposal": null
+    },
+    {
+      "limit": "allowedCommands",
+      "observed": "for f in agents/worker-check.md agents/router-worker-contract.md; do echo \"=== $f\"; [ -f \"$f\" ] && cat \"$f\" || cat \"kit/$f\"; done 2>&1 | head -300",
+      "current": [
+        "npm run format:check",
+        "npm run lint",
+        "npm test"
+      ],
+      "proposal": null
+    }
+  ],
+  "boundaryClosed": true,
+  "leaseReleased": true,
+  "next": [
+    "No ticket of this batch is committed by the kit. If the batch cannot be committed by the kit, archive it with: rw-batch.mjs abort --instance <instance-root>, then commit or discard its changes by hand"
+  ],
+  "digest": "sha256:9547e7153ff4e8962d75de1e416013f470a123195916f03d87902cbc19f0bc02"
+}

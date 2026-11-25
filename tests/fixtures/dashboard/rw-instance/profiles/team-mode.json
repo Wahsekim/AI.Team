@@ -1,0 +1,378 @@
+{
+  "schemaVersion": 1,
+  "mode": "router-worker",
+  "status": "live",
+  "launchable": true,
+  "topologyOnly": true,
+  "executionMode": "wrappers",
+  "maxConcurrentExec": 1,
+  "coverageDigest": "sha256:5cf3416ef1bac2824e1c456f7bee0744c99bf2fc16949e8a15308036798ea880",
+  "dispatch": "engine",
+  "gatePath": false,
+  "limits": {
+    "attemptsPerTicket": 1,
+    "outputAllowancePerTicket": 15000,
+    "guardianOutputShare": 6000,
+    "authorizationPerTicket": 200000,
+    "authorizationPerReviewerCall": 300000,
+    "allowedCommands": [
+      "npm run format:check",
+      "npm run lint",
+      "npm test"
+    ]
+  },
+  "staffing": {
+    "exec": {
+      "model": "opus",
+      "effort": "high",
+      "maxTurns": 120,
+      "tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Bash",
+        "Write",
+        "Edit"
+      ]
+    },
+    "check": {
+      "model": "opus",
+      "effort": "medium",
+      "maxTurns": 80,
+      "tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Bash"
+      ]
+    },
+    "guard": {
+      "model": "opus",
+      "effort": "high",
+      "maxTurns": 40,
+      "tools": [
+        "Read",
+        "Grep",
+        "Glob"
+      ]
+    },
+    "architect": {
+      "model": "opus",
+      "effort": "medium",
+      "maxTurns": 40,
+      "tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Write",
+        "Edit"
+      ]
+    },
+    "coach": {
+      "model": "opus",
+      "effort": "medium",
+      "maxTurns": 40,
+      "tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Write",
+        "Edit"
+      ]
+    },
+    "auditor": {
+      "model": "opus",
+      "effort": "medium",
+      "maxTurns": 40,
+      "tools": [
+        "Read",
+        "Grep",
+        "Glob"
+      ]
+    },
+    "security": {
+      "model": "opus",
+      "effort": "medium",
+      "maxTurns": 40,
+      "tools": [
+        "Read",
+        "Grep",
+        "Glob"
+      ]
+    }
+  },
+  "spec": {
+    "schemaVersion": 1,
+    "mode": "router-worker",
+    "project": {
+      "name": "Sample Project",
+      "slug": "sample-project",
+      "productRoot": "<product-root>",
+      "ui": true
+    },
+    "profiles": {
+      "exec": {
+        "model": "opus",
+        "effort": "high",
+        "maxTurns": 120,
+        "tools": [
+          "Read",
+          "Grep",
+          "Glob",
+          "Bash",
+          "Write",
+          "Edit"
+        ]
+      },
+      "check": {
+        "model": "opus",
+        "effort": "medium",
+        "maxTurns": 80,
+        "tools": [
+          "Read",
+          "Grep",
+          "Glob",
+          "Bash"
+        ]
+      },
+      "guard": {
+        "model": "opus",
+        "effort": "high",
+        "maxTurns": 40,
+        "tools": [
+          "Read",
+          "Grep",
+          "Glob"
+        ]
+      }
+    },
+    "governance": {
+      "architect": {
+        "model": "opus",
+        "effort": "medium",
+        "maxTurns": 40,
+        "tools": [
+          "Read",
+          "Grep",
+          "Glob",
+          "Write",
+          "Edit"
+        ]
+      },
+      "coach": {
+        "model": "opus",
+        "effort": "medium",
+        "maxTurns": 40,
+        "tools": [
+          "Read",
+          "Grep",
+          "Glob",
+          "Write",
+          "Edit"
+        ]
+      },
+      "auditor": {
+        "model": "opus",
+        "effort": "medium",
+        "maxTurns": 40,
+        "tools": [
+          "Read",
+          "Grep",
+          "Glob"
+        ]
+      },
+      "security": {
+        "model": "opus",
+        "effort": "medium",
+        "maxTurns": 40,
+        "tools": [
+          "Read",
+          "Grep",
+          "Glob"
+        ]
+      }
+    },
+    "workflowStates": {
+      "WF-00": {
+        "status": "enabled",
+        "reason": "done 2026-09-24",
+        "decisionRef": null
+      },
+      "WF-01": {
+        "status": "enabled",
+        "reason": "As recorded in profiles/project.md",
+        "decisionRef": null
+      },
+      "WF-02": {
+        "status": "enabled",
+        "reason": "As recorded in profiles/project.md",
+        "decisionRef": null
+      },
+      "WF-03": {
+        "status": "enabled",
+        "reason": "As recorded in profiles/project.md",
+        "decisionRef": null
+      },
+      "WF-04": {
+        "status": "enabled",
+        "reason": "As recorded in profiles/project.md",
+        "decisionRef": null
+      },
+      "WF-05": {
+        "status": "enabled",
+        "reason": "As recorded in profiles/project.md",
+        "decisionRef": null
+      },
+      "WF-06": {
+        "status": "enabled",
+        "reason": "As recorded in profiles/project.md",
+        "decisionRef": null
+      },
+      "WF-07": {
+        "status": "enabled",
+        "reason": "As recorded in profiles/project.md",
+        "decisionRef": null
+      },
+      "WF-08": {
+        "status": "enabled",
+        "reason": "As recorded in profiles/project.md",
+        "decisionRef": null
+      },
+      "WF-09": {
+        "status": "enabled",
+        "reason": "gates: profiles/stack.md",
+        "decisionRef": null
+      },
+      "WF-10": {
+        "status": "enabled",
+        "reason": "As recorded in profiles/project.md",
+        "decisionRef": null
+      },
+      "WF-11": {
+        "status": "enabled",
+        "reason": "As recorded in profiles/project.md",
+        "decisionRef": null
+      },
+      "WF-12": {
+        "status": "enabled",
+        "reason": "As recorded in profiles/project.md",
+        "decisionRef": null
+      },
+      "WF-13": {
+        "status": "enabled",
+        "reason": "lockfile / package cache first; web search needs owner ack",
+        "decisionRef": null
+      },
+      "WF-14": {
+        "status": "enabled",
+        "reason": "PM-only tracker sync",
+        "decisionRef": null
+      },
+      "WF-15": {
+        "status": "deferred",
+        "reason": "owner attended; install watchdog before first unattended loop",
+        "decisionRef": null
+      },
+      "WF-16": {
+        "status": "enabled",
+        "reason": "As recorded in profiles/project.md",
+        "decisionRef": null
+      },
+      "WF-17": {
+        "status": "deferred",
+        "reason": "early-stage horizon",
+        "decisionRef": null
+      },
+      "WF-18": {
+        "status": "deferred",
+        "reason": "hardening counter suspended",
+        "decisionRef": null
+      },
+      "WF-19": {
+        "status": "enabled",
+        "reason": "coach dormant; first drain = hire signal",
+        "decisionRef": null
+      },
+      "WF-20": {
+        "status": "deferred",
+        "reason": "auditor dormant",
+        "decisionRef": null
+      },
+      "WF-21": {
+        "status": "enabled",
+        "reason": "As recorded in profiles/project.md",
+        "decisionRef": null
+      },
+      "WF-22": {
+        "status": "enabled",
+        "reason": "security dormant, standing trigger: network / permission / storage / release-config change",
+        "decisionRef": null
+      },
+      "WF-23": {
+        "status": "enabled",
+        "reason": "chaos role hired 2026-09-24, team ADR",
+        "decisionRef": null
+      },
+      "WF-24": {
+        "status": "enabled",
+        "reason": "product ADRs in <product-root>/docs/adr/, team ADRs in decisions/",
+        "decisionRef": null
+      },
+      "WF-25": {
+        "status": "enabled",
+        "reason": "As recorded in profiles/project.md",
+        "decisionRef": null
+      },
+      "WF-26": {
+        "status": "enabled",
+        "reason": "browser per agents/_shared/browser-access.md",
+        "decisionRef": null
+      },
+      "WF-27": {
+        "status": "enabled",
+        "reason": "As recorded in profiles/project.md",
+        "decisionRef": null
+      },
+      "WF-28": {
+        "status": "enabled",
+        "reason": "As recorded in profiles/project.md",
+        "decisionRef": null
+      },
+      "WF-29": {
+        "status": "enabled",
+        "reason": "all roles opus (agents/roster.md)",
+        "decisionRef": null
+      },
+      "WF-30": {
+        "status": "enabled",
+        "reason": "stack locked by product ADRs",
+        "decisionRef": null
+      },
+      "WF-31": {
+        "status": "enabled",
+        "reason": "first count directive 2026-09-24 (10 rounds); runtime compat PASS; guardian = chaos role",
+        "decisionRef": null
+      }
+    }
+  },
+  "specDigest": "sha256:fdb24e442ac3ed2babebf9f93491edd90ccff8227713a25753f196db09fe537d",
+  "draftDigest": "sha256:abad6e9350a8ecaa205a1155c12eff8fc9952ce3b14b8d7bf6a5ea39bd8ae53d",
+  "confirmedProposal": "sha256:da74ec073a8b290bd1b4d5b4a42f73e7bff0af8d2831089572f7f92ee9b945ff",
+  "ownFiles": [
+    ".claude/agents/sample-project-architect.md",
+    ".claude/agents/sample-project-auditor.md",
+    ".claude/agents/sample-project-coach.md",
+    ".claude/agents/sample-project-security.md",
+    ".claude/agents/sample-project-worker-check.md",
+    ".claude/agents/sample-project-worker-exec.md",
+    ".claude/agents/sample-project-worker-guard.md",
+    "agents/roster.md",
+    "agents/router-worker-contract.md",
+    "agents/router-worker-review.md",
+    "agents/router-worker-router.md",
+    "agents/worker-check.md",
+    "agents/worker-exec.md",
+    "agents/worker-guard.md",
+    "profiles/team-mode.json"
+  ]
+}

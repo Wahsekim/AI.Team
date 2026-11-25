@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "stage": "batch-archived-without-commit",
+  "runId": "rw-3c9e1a42-L101-n2k8q4vz",
+  "archivedAt": "2026-11-24T17:01:49.213Z",
+  "commitsMade": [],
+  "boundary": "closed",
+  "lockReleased": false,
+  "next": "Nothing was committed by the kit; what the batch changed is still in the product work tree: commit it by hand on the working branch, or discard it.",
+  "digest": "sha256:8995a07ead4ed04618721be03a38a909c71e90aa45788366b89a596c31baf283"
+}
