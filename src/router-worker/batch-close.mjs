@@ -123,7 +123,12 @@ export function afterBatch({ teamRoot, instanceRoot, result }) {
     if ((git(product, 'rev-parse', 'HEAD')?.trim() ?? null) !== batch.productHead) findings.push({ code: 'PRODUCT_HEAD_MOVED' });
     if ((git(product, 'symbolic-ref', '--short', '-q', 'HEAD')?.trim() ?? null) !== batch.branch) findings.push({ code: 'PRODUCT_BRANCH_CHANGED' });
     if (hooksOf(product).digest !== batch.hooks?.digest) findings.push({ code: 'HOOKS_CHANGED' });
-    if (result.guardian?.status !== 'ok' || result.guardian?.verdict !== 'clean') findings.push({ code: 'GUARDIAN_NOT_CLEAN', status: plain(result.guardian?.status ?? 'none'), verdict: plain(result.guardian?.verdict ?? 'none') });
+    // ADR 0010, amendment of 2026-11-25: only a problem the Guardian found in the run holds the commits. No observer
+    // watching for an owner stop or a hardware halt (missedHaltRisk) is true of every headless batch, so it is recorded.
+    const guardian = result.guardian ?? {}, problem = guardian.status !== 'ok' || guardian.verdict === 'halt-and-investigate'
+      || guardian.runawayDetected !== false || guardian.budgetGateCorrect !== true || guardian.droppedFixRetest !== false;
+    if (problem) findings.push({ code: 'GUARDIAN_NOT_CLEAN', status: plain(guardian.status ?? 'none'), verdict: plain(guardian.verdict ?? 'none') });
+    else if (guardian.verdict !== 'clean') findings.push({ code: 'GUARDIAN_ATTENTION', verdict: plain(guardian.verdict ?? 'none'), missedHaltRisk: guardian.missedHaltRisk === true });
 
     // What the batch changed: everything the work tree holds now that was not already there when it opened.
     const changed = changedPaths(product).filter(path => !batch.preexisting.includes(path));

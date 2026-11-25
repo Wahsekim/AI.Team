@@ -575,6 +575,16 @@ test('each finding that questions the run holds every commit; each check of comm
   writeFileSync(file, JSON.stringify({ ...widened, digest: digest(widened) })); holds(boundary.after(), 'BOUNDARY_CHANGED');
   const branch = await ran(t, { tickets: two, edits }); git(branch.product, 'checkout', '-q', '-b', 'elsewhere'); holds(branch.after(), 'PRODUCT_BRANCH_CHANGED');
   const guard = await ran(t, { tickets: two, edits, agents: { guardian: () => ({ verdict: 'runaway', findings: ['the worker looped'], summary: 'not clean' }) } }); holds(guard.after(), 'GUARDIAN_NOT_CLEAN');
+  // A Guardian flag that reports a problem in the run holds every commit.
+  const audit = (flags, verdict = 'main-session-action-required') => () => ({ runawayDetected: false, missedHaltRisk: false, budgetGateCorrect: true, droppedFixRetest: false, ...flags, verdict, findings: ['x'], newPatternCandidates: [] });
+  for (const flags of [{ runawayDetected: true }, { budgetGateCorrect: false }, { droppedFixRetest: true }])
+    holds((await ran(t, { tickets: two, edits, agents: { guardian: audit(flags) } })).after(), 'GUARDIAN_NOT_CLEAN');
+  holds((await ran(t, { tickets: two, edits, agents: { guardian: audit({}, 'halt-and-investigate') } })).after(), 'GUARDIAN_NOT_CLEAN');
+  // No observer watched the run, as in every headless batch: recorded, nothing held.
+  const unwatched = (await ran(t, { tickets: two, edits, agents: { guardian: audit({ missedHaltRisk: true }) } })).after();
+  assert.equal(unwatched.holdAll, false); assert.ok(!unwatched.findings.some(finding => finding.code === 'GUARDIAN_NOT_CLEAN'));
+  assert.deepEqual(unwatched.findings.find(finding => finding.code === 'GUARDIAN_ATTENTION'), { code: 'GUARDIAN_ATTENTION', verdict: 'main-session-action-required', missedHaltRisk: true });
+  assert.equal(unwatched.commits.length, 1);
   // A lock another team holds when the batch ends, and hook log lines from before the batch opened.
   const stolen = await ran(t, { tickets: two, edits }); releaseLease({ productRoot: stolen.product, lease: stolen.open.lease }); acquireLease({ teamRoot: fixture(t).root, productRoot: stolen.product });
   assert.ok(stolen.after().findings.some(finding => finding.code === 'LOCK_NOT_HELD_BY_THIS_BATCH'));
