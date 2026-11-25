@@ -42,6 +42,16 @@ no network.
 | 6 | PM | `commit`: one commit per ticket that passed, or per ticket the resolution kept; the batch is archived. A batch whose commits are all held is archived with `abort` instead; `commit` refuses it |
 | 7 | PM | `node kit/scripts/measure-spawn.mjs <session-dir> --json > METER.json`, then `settle METER.json`: usage per ticket. The next `before` is refused until this is done |
 
+**A PM with no owner present** can run a batch from a headless session started
+in the team's root (`claude -p "<instructions>"`). The session has the
+Workflow tool, the team's hook and its wrappers. It must not end its turn while
+the engine runs (it waits for the workflow's completion notice), and it must
+not leave a background shell running when it finishes: `claude -p` does not
+exit while one is alive, and one run on 2026-11-25 stayed up 45 minutes after
+its report. Start it with `caffeinate -i` on a Mac, or the machine can sleep
+mid-run. Its user settings apply too (see `docs/claude-integration.md`, "Your
+Own Claude Code Settings").
+
 After the last step the PM writes its next-wake notes in `memory/pm.md`, as in
 specialist mode: no command of the batch writes that file, and the validator
 warns when it is older than 14 days.
