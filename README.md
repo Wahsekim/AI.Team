@@ -2,7 +2,7 @@
 
 > **Status: Engineering Alpha.**
 > Validated: deterministic mock/fault-injection suite (`tests/`) + macOS/Linux
-> CI (Node 22/24, ShellCheck, full-history secret scan).
+> CI (Node 22/24, ShellCheck, full-history secret scan, no client identifiers in the tree).
 > NOT yet validated: real-Claude end-to-end runs, unattended operation on
 > private code. Open owner decisions: permission manifest, retention/TTL,
 > branch rules, first release.
@@ -504,6 +504,7 @@ AI.Team/
   scripts/migrate-to-instance.sh # moves a single-root deployment into an instance root
   scripts/preflight-run.mjs    # static launch preflight + frozen launch-bundle digest
   scripts/now-utc.sh           # the only sanctioned ledger timestamp source
+  scripts/check-public-data.sh # CI: refuses client identifiers in this public repo (names from the PUBLIC_DATA_DENYLIST secret)
   agents/_seeds/               # wrapper + inline-mode SEEDS (never inside .claude/agents/)
   scripts/watchdog/            # copied hang-detection hooks from the source team workspace
   .claude/agents/              # LIVE project-scoped Claude agent wrappers only (seeds: agents/_seeds/)
