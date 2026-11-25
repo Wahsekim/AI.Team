@@ -187,3 +187,18 @@ risk flag or plans to edit a sensitive path is refused at the start of a batch
 - Reviewers other than Security and Architect.
 - Enforcing the three kinds of evidence in the kit. If wanted, it comes after
   the real run.
+
+## Amendment of 2026-11-25: generated files of a declared-sensitive ticket
+
+Status: Proposed.
+
+On 2026-11-25 a ticket declared sensitive changed 47 files, among them
+generated code and translation tables, and Security had to read every one: its
+review cost more than the ticket's work and check together. The project part
+of the trigger list may now name `generated` patterns. Decision 6 then flags a
+declared-sensitive ticket on its other changed paths, or on all of them when
+it changed generated files only; triggers are unchanged. Adding a pattern is
+logged for the owner's spot review, as a removed trigger is.
+
+Merging the pull request that adds this amendment ratifies it.
+

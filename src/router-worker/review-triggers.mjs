@@ -19,8 +19,10 @@ const relativePath = path => text(path, 200) && !path.startsWith('/') && !path.s
 
 // One part of the list. Kit ids start with "kit.", project ids never do, so neither part can replace the other's entries.
 function checkPart(part, { kit, reviewers }) {
-  need(shape(part, kit ? ['schemaVersion', 'reviewers', 'triggers', 'rules', 'adrs'] : ['schemaVersion', 'triggers', 'rules', 'adrs']) && part.schemaVersion === 1,
-    `it must hold exactly schemaVersion 1, ${kit ? 'reviewers, ' : ''}triggers, rules and adrs`);
+  const keys = kit ? ['schemaVersion', 'reviewers', 'triggers', 'rules', 'adrs'] : ['schemaVersion', 'triggers', 'rules', 'adrs', ...(Object.hasOwn(part ?? {}, 'generated') ? ['generated'] : [])];
+  need(shape(part, keys) && part.schemaVersion === 1, `it must hold exactly schemaVersion 1, ${kit ? 'reviewers, ' : ''}triggers, rules and adrs${kit ? '' : ', and optionally generated'}`);
+  need(part.generated === undefined || (list(part.generated, relativePath) && new Set(part.generated).size === part.generated.length),
+    'generated must list relative glob patterns, each once: files a tool writes from reviewed sources');
   const own = id => ID.test(id ?? '') && id.startsWith('kit.') === kit, named = kit ? 'start with "kit."' : 'not start with "kit."';
   const known = names => list(names, name => reviewers.includes(name)) && names.length > 0 && new Set(names).size === names.length;
   need(Array.isArray(part.triggers), 'triggers must be a list');
@@ -50,7 +52,8 @@ export function loadReview({ instance, kit = ROOT, projectFile = join(instance, 
   const fix = `Security and Architect propose the project's triggers and rules, the owner confirms them; to start from the empty seed: cp ${SEED} ${PROJECT_REVIEW}`;
   const project = read(projectFile, PROJECT_REVIEW, fix);
   try { checkPart(project, { kit: false, reviewers }); } catch (error) { need(false, `${PROJECT_REVIEW} is not valid: ${error.message}. ${fix}`); }
-  const body = { reviewers, triggers: [...general.triggers, ...project.triggers], rules: [...general.rules, ...project.rules], adrs: [...new Set([...general.adrs, ...project.adrs])] };
+  const body = { reviewers, triggers: [...general.triggers, ...project.triggers], rules: [...general.rules, ...project.rules], adrs: [...new Set([...general.adrs, ...project.adrs])],
+    ...(project.generated?.length ? { generated: project.generated } : {}) };
   const ids = [...body.triggers, ...body.rules].map(entry => entry.id.toLowerCase()), twice = ids.find((id, i) => ids.indexOf(id) !== i);
   need(!twice, `${PROJECT_REVIEW} is not valid: the id ${twice} is used twice. ${fix}`);
   return { ...body, digest: digest(body) };
@@ -68,12 +71,16 @@ const shown = keys => `${keys.slice(0, SHOWN).map(key => key.replace(/[\x00-\x1f
 const names = value => list(value, name => typeof name === 'string');
 const wellFormed = kept => Boolean(kept) && typeof kept === 'object' && typeof kept.digest === 'string' && names(kept.adrs)
   && list(kept.triggers, trigger => Boolean(trigger) && typeof trigger.id === 'string' && names(trigger.reviewers) && Boolean(trigger.match) && typeof trigger.match === 'object' && KINDS.every(kind => trigger.match[kind] === undefined || names(trigger.match[kind])))
-  && list(kept.rules, rule => Boolean(rule) && typeof rule.id === 'string' && typeof rule.reviewer === 'string');
+  && list(kept.rules, rule => Boolean(rule) && typeof rule.id === 'string' && typeof rule.reviewer === 'string') && (kept.generated === undefined || names(kept.generated));
 const sealed = kept => { if (!wellFormed(kept)) return false; const { digest: was, ...body } = kept; return was === digest(body); };
 
 // What changed since `previous`, the list the newest archived batch froze. A rule whose text changed is both removed and added.
+// A generated pattern narrows what Security reviews, so adding one is reported with the removals, for the owner's spot review.
 export function triggerChanges(previous, review) {
-  return sealed(previous) ? { previous: previous.digest, added: minus(atoms(review), atoms(previous)), removed: minus(atoms(previous), atoms(review)) } : { previous: null, added: [], removed: [] };
+  if (!sealed(previous)) return { previous: null, added: [], removed: [] };
+  const was = previous.generated ?? [], now = review.generated ?? [];
+  return { previous: previous.digest, added: [...minus(atoms(review), atoms(previous)), ...was.filter(glob => !now.includes(glob)).map(glob => `generated ${glob} withdrawn`)],
+    removed: [...minus(atoms(previous), atoms(review)), ...now.filter(glob => !was.includes(glob)).map(glob => `generated ${glob}`)] };
 }
 // Called once the batch record is written. With no earlier list kept, the whole list goes to the owner's spot review.
 export function recordFrozen({ instance, review, changes, runId, at }) {
@@ -88,9 +95,12 @@ const globOf = pattern => new RegExp(`^${pattern.split(/(\*\*\/|\*\*|\*|\?)/).ma
 const hits = (match, path) => (match.glob ?? []).some(pattern => globOf(pattern).test(path)) || (match.contains ?? []).some(word => path.toLowerCase().includes(word.toLowerCase()));
 
 // The reviewers a ticket's changed paths require, in the kit's order, and why. A ticket that declared itself
-// sensitive (ADR 0011, decision 6) needs Security on every path it changed, whatever the triggers say.
+// sensitive (ADR 0011, decision 6) needs Security on every path it changed, whatever the triggers say, except
+// the files the team names as generated; a trigger still flags those.
 export function flagPaths(review, paths, declared = []) {
+  const authored = paths.filter(path => !(review.generated ?? []).some(glob => globOf(glob).test(path)));
   const because = [...paths.flatMap(path => review.triggers.filter(trigger => hits(trigger.match, path)).flatMap(trigger => trigger.reviewers.map(reviewer => ({ reviewer, trigger: trigger.id, path })))),
-    ...declared.flatMap(reason => paths.map(path => ({ reviewer: 'security', declared: reason, path })))];
+    // A declared-sensitive ticket that changed generated files only is reviewed on all of them.
+    ...declared.flatMap(reason => (authored.length ? authored : paths).map(path => ({ reviewer: 'security', declared: reason, path })))];
   return { required: review.reviewers.filter(name => because.some(entry => entry.reviewer === name)), because, flaggedFiles: [...new Set(because.map(entry => entry.path))] };
 }

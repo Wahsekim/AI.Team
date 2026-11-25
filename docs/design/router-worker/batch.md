@@ -460,6 +460,13 @@ The list has two parts of the same shape:
 | General | `kit/config/router-worker/review.json`: the reviewers (`security`, `architect`) and the kit's triggers and rules, ids starting with `kit.` | the kit |
 | Project | `profiles/review.json` in the team's folder, instantiated by bootstrap from `kit/profiles/review.template.json` (empty); ids never start with `kit.` | Security and Architect propose, the owner confirms |
 
+The project part may also hold `generated`: glob patterns of files a tool
+writes from reviewed sources (generated code, translation tables). A ticket
+declared sensitive is flagged for Security on its other changed paths only;
+when it changed generated files alone, on all of them. A trigger still flags a
+generated file. Adding a pattern narrows the review, so `before` logs it with
+the removed triggers for the owner's spot review (`generated <pattern>`).
+
 ```json
 { "schemaVersion": 1,
   "triggers": [{ "id": "billing", "reviewers": ["security"], "match": { "glob": ["src/billing/**"], "contains": ["invoice"] } }],

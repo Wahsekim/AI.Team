@@ -8,7 +8,7 @@ import { afterBatch } from '../src/router-worker/batch-close.mjs';
 import { markNotMetered } from '../src/router-worker/batch-settle.mjs';
 import { runWorkflow, makeAgentImpl } from '../scripts/lib/workflow-harness.mjs';
 import { readLease } from '../src/router-worker/lease.mjs';
-import { loadReview, flagPaths } from '../src/router-worker/review-triggers.mjs';
+import { loadReview, flagPaths, triggerChanges } from '../src/router-worker/review-triggers.mjs';
 import { digest } from '../src/loop/contracts.mjs';
 import { fixture, git } from './fixtures/router-worker/standing-team.mjs';
 
@@ -144,4 +144,23 @@ test('the kit triggers cover lock files, build manifests, credentials and nested
   for (const path of ['analysis_options.yaml', 'packages/core/analysis_options.yaml']) assert.ok(flagged(path).includes('kit.lint-test-config'), path);
   for (const path of ['config/credentials.yml', 'src/author.md']) assert.ok(flagged(path).includes('kit.sensitive-word'), path);
   for (const path of ['.github/workflows/ci.yml', 'svc/.github/workflows/ci.yml', 'deploy/run.sh', 'svc/deploy/run.sh']) assert.ok(flagged(path).includes('kit.ci-deploy'), path);
+});
+
+test('a declared-sensitive ticket is reviewed on what was authored, not on the files the team names as generated; a trigger still flags those', t => {
+  const f = live(t);
+  writeFileSync(join(f.root, 'profiles/review.json'), JSON.stringify({ schemaVersion: 1, triggers: [], rules: [], adrs: [], generated: ['**/*.g.js', 'src/l10n/**'] }));
+  const review = loadReview({ instance: f.root }), flagged = (paths, declared) => flagPaths(review, paths, declared).flaggedFiles;
+  assert.deepEqual(review.generated, ['**/*.g.js', 'src/l10n/**']);
+  assert.deepEqual(flagged(['src/a.js', 'src/a.g.js', 'src/l10n/en.js'], ['riskFlag:payments']), ['src/a.js']);
+  assert.deepEqual(flagged(['src/a.g.js'], ['riskFlag:payments']), ['src/a.g.js'], 'generated files alone are still reviewed');
+  assert.deepEqual(flagged(['src/session.g.js'], []), ['src/session.g.js'], 'a trigger is not narrowed by generated');
+  for (const generated of [['/abs/**'], ['a', 'a'], 'x'])
+    assert.throws(() => { writeFileSync(join(f.root, 'profiles/review.json'), JSON.stringify({ schemaVersion: 1, triggers: [], rules: [], adrs: [], generated })); loadReview({ instance: f.root }); }, /generated must list relative glob patterns, each once/);
+});
+
+test('adding a generated pattern goes to the owner\'s spot review, as a removed trigger does', () => {
+  const base = { reviewers: ['security'], triggers: [], rules: [], adrs: [] }, seal = body => ({ ...body, digest: digest(body) });
+  const changes = triggerChanges(seal(base), { ...base, generated: ['**/*.g.js'] });
+  assert.deepEqual([changes.added, changes.removed], [[], ['generated **/*.g.js']]);
+  assert.deepEqual(triggerChanges(seal({ ...base, generated: ['**/*.g.js'] }), base).added, ['generated **/*.g.js withdrawn']);
 });
