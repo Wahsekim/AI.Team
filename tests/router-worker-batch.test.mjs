@@ -685,11 +685,16 @@ test('settle sets each ticket\'s measured usage against its authorization, befor
   // The other run of the session is not read beyond its Guardian: a transcript of it that is gone does not matter.
   meterOf(f, [9, 9, 9, 9, 9], another);
   const full = meterOf(f, [12000, 6000, 150000, 60000, 5000]); for (const gone of ['exec0', 'guard']) rmSync(join(f.base, `projects/sess/subagents/workflows/wf_0/agent-wf_0-${gone}.jsonl`));
+  // A call that used every turn its staffing allows stopped at that limit, which no limit of the team names.
+  const execTurns = JSON.parse(f.read('profiles/team-mode.json')).staffing.exec.maxTurns;
+  full.subagents.find(row => row.agentId === 'wf_1-exec1').uniqueMessages = execTurns;
   const settled = settle(full); assert.ok(settled.calls?.every(call => call.agentId.startsWith('wf_1-')), JSON.stringify(settled.errors));
   assert.equal(settled.errors, undefined, JSON.stringify(settled.errors)); assert.equal(settled.stage, 'batch-settled');
   assert.deepEqual(settled.tickets.map(entry => [entry.ticket, entry.authorizedTokens, entry.spentTokens, entry.budgetGate]), [['US-01', 200000, 18020, 'clear'], ['US-02', 200000, 210020, 'blocked']]);
   assert.equal(settled.status, 'review', 'a ticket over its authorization puts the batch in review');
-  assert.deepEqual(settled.limits, [{ limit: 'authorizationPerTicket', observed: 210020, current: 200000, proposal: { authorizationPerTicket: 263000 }, tickets: ['US-02'] }]); assert.equal(settled.calls.length, 5); assert.equal(settled.mainSessionTokens, 7010);
+  assert.deepEqual(settled.limits, [{ limit: 'authorizationPerTicket', observed: 210020, current: 200000, proposal: { authorizationPerTicket: 263000 }, tickets: ['US-02'] },
+    { limit: 'staffing.exec.maxTurns', observed: execTurns, current: execTurns, proposal: null, tickets: ['US-02'],
+      note: 'the call used every turn its staffing allows and stopped there; staffing changes with a mode switch whose request raises it' }]); assert.equal(settled.calls.length, 5); assert.equal(settled.mainSessionTokens, 7010);
   assert.match(refusal(settle(meterOf(f, [1, 1, 1, 1, 1]))).reason, /already settled/);
   assert.match(f.read('pm-decisions.md'), /BATCH \S+ SETTLED \(review\): 228040 token\(s\) on 2 ticket\(s\) of 400000 authorized, Guardian 5010/);
   // Cost is reported, not enforced: the commits are made, and the settlement is archived with the batch.
