@@ -2,7 +2,7 @@
 
 > **Status: Engineering Alpha.**
 > Validated: deterministic mock/fault-injection suite (`tests/`) + macOS/Linux
-> CI (Node 22/24, ShellCheck, full-history secret scan, no client identifiers in the tree).
+> CI (Node 22/24, ShellCheck, no client identifiers in the tree).
 > NOT yet validated: real-Claude end-to-end runs, unattended operation on
 > private code. Open owner decisions: permission manifest, retention/TTL,
 > branch rules, first release.
