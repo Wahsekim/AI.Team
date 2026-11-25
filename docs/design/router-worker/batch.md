@@ -75,6 +75,7 @@ must come before the next batch.
 | `dependsOn` (optional) | Ids of tickets this one builds on: an earlier ticket of the batch, or a ticket of an archived batch. Frozen in the record (`[]` when absent); an escalated ticket blocks every ticket that depends on it, directly or through others (see "Review verdict, commit gate and escalation") |
 | `moves` (optional) | Tracked files the worker renames: `[{ "from": "src/a.js", "to": "lib/a.js" }]`. Each gives the exec worker one exact command, `mkdir -p -- "<folder>" && git --literal-pathspecs mv -- "<from>" "<to>"`, where `<folder>` is the folder of `to` (Git does not create it, and an earlier `git rm` may have removed it); a `to` at the top of the product gives the `git mv` alone. An empty list declares nothing, as an absent one. Frozen in the record (`[]` when absent). See "Moves and deletions" |
 | `deletes` (optional) | Tracked files the worker deletes: `["src/old.js"]`. Each gives the exec worker one exact command, `git --literal-pathspecs rm -q -- "<path>"`. An empty list declares nothing, as an absent one. Frozen in the record (`[]` when absent) |
+| `resume` (optional) | A patch in the team's folder that holds the work an earlier batch left for this ticket: `"handoff/T-1/left.patch"`. "before" applies it to the product, so what it changes is the ticket's. See "Resuming left work" |
 | `runId`, `date` (optional) | Default: `rw-<commit>-L<nextLifecycleNumber>-<time>`, new at every `before`, and today |
 
 The PM does not write a ceiling, a number of rounds, a wrapper name or a
@@ -129,6 +130,8 @@ budget per ticket. Those come from the team.
    paths, the checker and the Guardian nothing. The exec worker and the checker
    may run the batch's verification commands, and the exec worker the Git
    commands of the tickets' moves and deletions; see "The workers' shell".
+   Each ticket's `resume` patch is then applied to the work tree (see
+   "Resuming left work").
 9. **The batch record** `rw-batch.json` is written in the team's folder and
    printed. Its `args` are the arguments the PM passes to `run-n-rounds`. It
    also holds what "after" will need: the branch and commit, the paths that
@@ -136,7 +139,7 @@ budget per ticket. Those come from the team.
    verification commands, the limits.
 
 Any refusal after step 4 releases the lock, and closes the boundary if it was
-opened.
+opened. A patch already applied in step 8 is taken back out of the work tree.
 
 ## After
 
@@ -928,6 +931,47 @@ operation in progress. The paths are recorded in the batch record
 (`preexisting`) and one line is appended to `pm-decisions.md`. They are to be
 kept out of the tickets' commits by the "after" command.
 
+## Resuming left work
+
+A worker can end without a verdict and leave its work in the product's work
+tree: a turn limit, an output ceiling, a halt. `after` and `abort` leave that
+work there, and `--start-as-is` keeps it out of the next batch's commits, so
+without this field it could only be committed by hand, unchecked.
+
+The PM saves the left work as a patch in the team's folder
+(`git add -A -N && git diff --binary HEAD > <team>/handoff/<ticket>/left.patch`),
+cleans the product, and names the patch in the ticket's `resume`. "before":
+
+- accepts `resume` only as a relative path in the team's folder, outside
+  `kit/`, with no `.` or `..` part, naming a regular file (a link is not
+  followed);
+- reads the patch once and refuses it when it is empty, when Git cannot read
+  it, when it deletes, renames, copies or changes the mode of a file, or adds
+  anything but a regular non-executable file (a link, an executable, a
+  submodule; declare `moves` and `deletes` instead), when it changes more than
+  100 paths, a path with a control character or bytes that are not UTF-8, a
+  path outside the ticket's `paths` (compared as "after" compares, with case),
+  a path the ticket also moves or deletes, a path Git ignores (Git status would
+  never show it to "after" or "commit"), a path with assume-unchanged or
+  skip-worktree set, or when it does not apply on the product's HEAD;
+- applies those same bytes to the work tree after the write boundary opens,
+  records the patch's path, digest, paths and the content it left at each path
+  in the ticket's entry of the batch record (`resume`), and appends one line to
+  `pm-decisions.md` (`BATCH <run> RESUMES <ticket> from <patch>`). If "before"
+  then fails, the patch is taken back out; when that fails too, the refusal
+  says so. The launch manifest is taken before the patch is applied, so it
+  describes the HEAD; the batch record names the patch;
+- tells the exec worker in its brief which paths hold the earlier attempt
+  (`resumedPaths`), and to finish and verify it, not start over. The checker's
+  brief is unchanged: it verifies the work tree as it is.
+
+From then on the resumed work is the ticket's own: `after` counts it in the
+ticket's changed paths (a resumed path that still holds what "before" applied
+is not taken for a write no worker made, `HOOK_SAW_NO_WORKER`), the checker verifies it, the review triggers and the
+ticket's risk flags apply to it, and `commit` commits it with what the worker
+added. If the ticket does not pass, the work stays in the work tree as any
+batch's does.
+
 ## Refusals (`BATCH_REFUSED`)
 
 - The team is not live in Router/Worker mode, a mode switch was interrupted, or
@@ -944,6 +988,9 @@ kept out of the tickets' commits by the "after" command.
   listed), or changed while the batch was being prepared.
 - The lock is held. If this team holds it with no batch open, the message names
   `abort`.
+- A ticket's `resume` patch is not a file of the team's folder, or is not a
+  patch of edits and new files inside the ticket's `paths` that applies on the
+  product's HEAD (see "Resuming left work").
 - The batch cannot be frozen: an estimate above the authorization, a roster that does not staff the three workers.
 - The launch preflight or the isolation check does not pass.
 

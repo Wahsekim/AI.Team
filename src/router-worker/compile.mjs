@@ -116,8 +116,12 @@ function validateInput(input, bundle, standingBatch) {
   requireValue(policy.budgetUnit === 'input+cache_creation', 'policy.budgetUnit', 'Unsupported budget unit');
   positive(policy.maxTicketBudget, 'policy.maxTicketBudget');
 
-  fields(m, ['ticketId', 'repoId', 'approvalRef', 'policyDigest', 'allowedWritePaths', 'allowedTools', 'budgetTokens', 'stopConditions', ...(Object.hasOwn(m ?? {}, 'gitCommands') ? ['gitCommands'] : [])], 'mandate');
+  fields(m, ['ticketId', 'repoId', 'approvalRef', 'policyDigest', 'allowedWritePaths', 'allowedTools', 'budgetTokens', 'stopConditions', ...['gitCommands', 'resumedPaths'].filter(key => Object.hasOwn(m ?? {}, key))], 'mandate');
   // ADR 0010, amendment of 2026-11-24: the moves and deletions a standing batch derived from its ticket; the input cannot vouch for itself.
+  if (Object.hasOwn(m, 'resumedPaths')) {
+    requireValue(standingBatch === true, 'mandate.resumedPaths', 'Only a standing batch resumes earlier work');
+    list(m.resumedPaths, 'mandate.resumedPaths', (path, field) => requireValue(typeof path === 'string' && within(path, m.allowedWritePaths), field, 'Expected a path the ticket may write'));
+  }
   if (Object.hasOwn(m, 'gitCommands')) {
     requireValue(standingBatch === true, 'mandate.gitCommands', 'Only a standing batch grants Git moves and deletions');
     list(m.gitCommands, 'mandate.gitCommands', (command, field) => requireValue(typeof command === 'string' && GIT_COMMAND.test(command), field, 'Expected a git mv or git rm command derived by the batch'));
@@ -177,6 +181,7 @@ const HEADER = {
 // Workers have no shell to look for a file; CLAUDE.instance.template.md states the same path rule for the PM.
 const PATHS = 'A team-relative path named here or in a role file (agents/..., docs/..., profiles/...) resolves in the team root when it exists there, otherwise under kit/; writePaths, plannedPaths and gitCommands are relative to the product root. Read files with Read, Grep and Glob, never with the shell.';
 const EXIT = 'The Bash tool reports each command\'s exit code: append nothing to a command (no `; echo $?`, pipe or redirect); the host refuses any other form.';
+const RESUMED = 'resumedPaths hold an earlier attempt at this ticket, which the host applied before you started: read them first, keep what is right, finish the rest and verify. Do not start over.';
 const SHELL = 'Run only the verificationCommands and this ticket\'s own gitCommands listed here, each exactly as written, from the product root; run no other command, Git included. The host also accepts the moves and deletions the other tickets of this batch declare: they are not yours to run. Move or delete a tracked file only with these gitCommands. ' + EXIT;
 
 function render(input, duty, methods, standingBatch) {
@@ -187,6 +192,7 @@ function render(input, duty, methods, standingBatch) {
     duty, attempt: 1, baseline, plannedPaths: p.expectedPaths,
     ...(duty === 'exec' ? { writePaths: m.allowedWritePaths } : {}),
     ...(duty === 'exec' && standingBatch ? { gitCommands: m.gitCommands ?? [], shell: SHELL } : {}),
+    ...(duty === 'exec' && m.resumedPaths ? { resumedPaths: m.resumedPaths, resumed: RESUMED } : {}),
     writeBoundary: duty === 'exec' ? 'Write only inside writePaths; plannedPaths are the files expected to change. The host refuses any other write' : standingBatch ? `No product write; run only the listed verification commands, from the product root. ${EXIT}` : 'No product mutation; use the approved isolated verification runner',
     requestedExecTools: p.requestedTools,
     permissionRef: policy.profiles[duty].permissionRef,

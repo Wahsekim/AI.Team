@@ -227,15 +227,15 @@ tickets and the product repository, computes the ceiling, takes the lock and
 opens the write limits; `after` matches the engine's return against what was
 frozen, finds what was written outside the tickets' paths and closes the batch;
 `commit` makes one commit per ticket that passed; `abort` clears a batch that
-will not run; `settle` sets each ticket's measured usage against its
+will not run; a ticket's `resume` names a patch of work an earlier batch left, which `before` applies so the
+checker, the review and `commit` treat it as the ticket's own; `settle` sets each ticket's measured usage against its
 authorization, and the next batch does not open until that is done or the batch
 is marked as not metered with a reason ([details](docs/design/router-worker/batch.md)). Only the owner
 changes the limits: the ledger line of the switch or of `team-mode.mjs limits` binds them, `before` refuses limits
 no line binds, the hook refuses any session's file-tool write of `profiles/team-mode.json`, and `after` and
-`settle` report each limit that stopped work with a proposal the owner may confirm. The gate path (ADR 0010 decisions 14 and 15) is a team setting, `gatePath`, that the switch writes as `false`; a request or profile that turns it on is refused. Nothing has run
-on a real team, so batches with real
-agents still run only in a throwaway copy of the team
-with a clone of the product, as described below.
+`settle` report each limit that stopped work with a proposal the owner may confirm. The gate path (ADR 0010 decisions 14 and 15) is a team setting, `gatePath`, that the switch writes as `false`; a request or profile that turns it on is refused. Batches with real
+agents have run on a real team since 2026-11-24 (one ticket committed, one left by a turn limit);
+the throwaway copy described below remains for trying the kit without a team.
 
 [ADR 0011](decisions/0011-router-worker-batch-review.md) adds a review to that
 mode: at the end of a batch the kit, not the PM, decides from a trigger list

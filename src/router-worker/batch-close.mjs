@@ -148,7 +148,9 @@ export function afterBatch({ teamRoot, instanceRoot, result }) {
     const outside = files.filter(path => !batch.tickets.some(ticket => within(path, ticket.paths)));
     if (outside.length) findings.push({ code: 'WRITE_OUTSIDE_PATHS', paths: outside });
     const { refused, ...hook } = hookSeen(instance, batch.args.allowedAgentTypes, batch.openedAt);
-    if (changed.length && hook.workerCalls === 0) findings.push({ code: 'HOOK_SAW_NO_WORKER' });
+    // A resumed path that still holds what "before" applied was written by the PM, not by a worker.
+    const applied = Object.assign({}, ...batch.tickets.map(ticket => ticket.resume?.content ?? {})), now = contentOf(product, Object.keys(applied));
+    if (changed.some(path => !Object.hasOwn(applied, path) || applied[path] !== now[path]) && hook.workerCalls === 0) findings.push({ code: 'HOOK_SAW_NO_WORKER' });
 
     // ADR 0011, decision 4: a batch whose changes need a review leaves the workers closed and the reviewers judged.
     let boundaryClosed = false;
