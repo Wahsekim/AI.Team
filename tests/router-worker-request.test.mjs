@@ -35,6 +35,11 @@ test('the request is drafted from the team\'s own profile with the ADR\'s staffi
   writeFileSync(join(f.root, 'profiles/stack.md'), '# Stack\n\n```yaml\nverification:\n  code_shipping:\n    required:\n      - npm run lint\n      - "npm test"\n```\n');
   const proposed = draftRequest({ teamRoot: f.kit, instanceRoot: f.root });
   assert.deepEqual(proposed.request.limits.allowedCommands, ['npm run lint', 'npm test']); assert.ok(!proposed.notes.some(note => /stack\.md/.test(note)));
+  // The stack's code generator is proposed too: a ticket that changes annotated sources must regenerate, and its checker must be able to.
+  writeFileSync(join(f.root, 'profiles/stack.md'), '# Stack\n\n```yaml\ncommands:\n  codegen_command: "npm run codegen   # generated files are committed"\nverification:\n  code_shipping:\n    required:\n      - npm test\n```\n');
+  const generating = draftRequest({ teamRoot: f.kit, instanceRoot: f.root });
+  assert.deepEqual(generating.request.limits.allowedCommands, ['npm run codegen', 'npm test']);
+  assert.ok(generating.notes.some(note => /code generator npm run codegen.*proposed/.test(note)), JSON.stringify(generating.notes));
   // A gate the switch would refuse as it is written is left out, and named: the request that is printed is one the switch accepts.
   writeFileSync(join(f.root, 'profiles/stack.md'), '# Stack\n\n```yaml\nverification:\n  code_shipping:\n    required:\n      - npm run lint\n      - npm test  # the suite\n```\n');
   const partly = draftRequest({ teamRoot: f.kit, instanceRoot: f.root });

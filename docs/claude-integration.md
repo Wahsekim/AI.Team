@@ -71,3 +71,26 @@ section pointing to this team folder instead:
 Team process lives in `AI.Team/`. Start with `AI.Team/CLAUDE.md`.
 Product code rules in this file remain authoritative for code work.
 ```
+
+## Your Own Claude Code Settings
+
+Every Claude Code session on a machine loads that user's own configuration as
+well as the team's: `~/.claude/CLAUDE.md`, the rule files under
+`~/.claude/rules/`, `~/.claude/settings.json` (hooks, permissions, plugins) and
+its plugins' session hooks. A team session started there (the PM, a headless
+`claude -p` batch, and its workers) follows those instructions too. Two
+machines with different user settings run the same kit differently, and a
+personal rule can conflict with a worker's brief (for instance a rule to
+research the web before writing code, which a worker's closed shell refuses).
+
+To run the team with the kit's instructions only, give its sessions a
+configuration folder of their own:
+
+```sh
+CLAUDE_CONFIG_DIR="$HOME/.claude-team" claude          # the PM, in the team root
+CLAUDE_CONFIG_DIR="$HOME/.claude-team" claude -p "..."  # a headless batch
+```
+
+That folder holds its own login, settings and plugins: log in once with it,
+and add to it only what the team needs. Without it, record in the instance's
+`CLAUDE.md` that the team runs with the owner's user settings.
