@@ -1,8 +1,8 @@
 # AI.Team - Portable Multi-Agent Team Template
 
 > **Status: Engineering Alpha.**
-> Validated: deterministic mock/fault-injection suite (`tests/`) + macOS/Linux
-> CI (Node 22/24, ShellCheck, no client identifiers in the tree).
+> Validated: deterministic mock/fault-injection suite (`tests/`) + macOS
+> CI (macOS, Node 24, ShellCheck, no client identifiers in the tree).
 > NOT yet validated: real-Claude end-to-end runs, unattended operation on
 > private code. Open owner decisions: permission manifest, retention/TTL,
 > branch rules, first release.
@@ -49,8 +49,9 @@ It works against either:
 - **Node.js 22 or 24** (the fault-injection test suite and
   `scripts/reconcile-run.mjs`), **bash + coreutils/grep/awk** (validator,
   bootstrap, watchdog), and **perl** (bootstrap placeholder substitution).
-  Supported OS: macOS and Linux (CI runs both); Windows/WSL is untested —
-  the reconciler relies on POSIX same-directory rename semantics.
+  Supported OS: macOS (CI runs it). Linux is no longer tested in CI (owner,
+  2026-11-25); Windows/WSL is untested — the reconciler relies on POSIX
+  same-directory rename semantics.
 - Optional: an issue tracker (Jira / Linear / GitHub Projects). Without one,
   the Kanban methodology falls back to a file-based board — see
   `methodologies/kanban.md`.
