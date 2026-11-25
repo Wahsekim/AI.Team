@@ -42,6 +42,10 @@ no network.
 | 6 | PM | `commit`: one commit per ticket that passed, or per ticket the resolution kept; the batch is archived. A batch whose commits are all held is archived with `abort` instead; `commit` refuses it |
 | 7 | PM | `node kit/scripts/measure-spawn.mjs <session-dir> --json > METER.json`, then `settle METER.json`: usage per ticket. The next `before` is refused until this is done |
 
+After the last step the PM writes its next-wake notes in `memory/pm.md`, as in
+specialist mode: no command of the batch writes that file, and the validator
+warns when it is older than 14 days.
+
 `abort` replaces steps 2 to 7 for a batch that will not be run. `settle`
 refuses while a batch is in review; an unflagged batch may settle before
 `commit`, and an archived one settles with `--run <run id>`. It must come

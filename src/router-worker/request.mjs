@@ -55,7 +55,12 @@ export function draftRequest({ teamRoot, instanceRoot, model = 'opus', ui = fals
   // The commands a worker runs without a permission prompt are proposed from the project's own stack profile.
   const stack = readStackSource({ root: instance });
   if (stack.errors) notes.push(`profiles/stack.md gives no verification commands (${stack.errors[0].reason}); allowedCommands is empty, and no batch can start until it lists them`);
-  const gates = stack.errors ? [] : stack.verificationCommands, unfit = gates.filter(gate => !oneCommand(gate));
+  // A stack that generates code names its generator outside the gates; a ticket that changes annotated sources must run it.
+  let codegen = null;
+  try { codegen = /^\s*codegen_command:\s*"([^"#]*?)\s*(?:#[^"]*)?"\s*$/m.exec(readFileSync(join(instance, 'profiles/stack.md'), 'utf8'))?.[1]?.trim() || null; } catch { /* no stack profile */ }
+  const required = stack.errors ? [] : stack.verificationCommands, generates = codegen && !required.includes(codegen) && oneCommand(codegen);
+  if (generates) notes.push(`profiles/stack.md names the code generator ${codegen} outside the required gates; it is proposed in allowedCommands so a ticket that changes generated sources can run it`);
+  const gates = generates ? [codegen, ...required] : required, unfit = gates.filter(gate => !oneCommand(gate));
   if (unfit.length) notes.push(`profiles/stack.md lists ${unfit.length} gate(s) that cannot be confirmed as they are written (one line of printable ASCII with single spaces, at most 300 characters); they are left out of allowedCommands: ${unfit.map(gate => JSON.stringify(gate.slice(0, 80))).join(', ')}`);
   const fit = gates.filter(oneCommand), beyond = fit.slice(MAX_COMMANDS);
   if (beyond.length) notes.push(`profiles/stack.md lists ${beyond.length} gate(s) beyond the ${MAX_COMMANDS} a team may confirm; they are left out of allowedCommands: ${beyond.map(gate => JSON.stringify(gate)).join(', ')}`);
