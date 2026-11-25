@@ -231,6 +231,8 @@ test('an engine run makes one attempt per ticket unless the run asks for the fre
   const account = accountRun({ args, record, result });
   assert.equal(account.status, 'accounted', JSON.stringify(account.findings));
   assert.deepEqual(account.calls, { tickets: 2, exec: 3, check: 3, guard: 1 }); assert.deepEqual(account.attempts, [2, 1]);
+  const old = structuredClone(result); for (const r of old.results) { delete r.verifierDispatched; r.estimates = { worker: {}, verifier: {} }; }
+  assert.deepEqual(accountRun({ args, record, result: old }), account, 'a return from an engine without verifierDispatched is accounted as it was');
   assert.equal(accountRun({ args, record, result: { ...result, maxAttemptsPerTicket: 3 } }).status, 'unaccounted', 'a run with another attempt cap than the frozen one');
   const over = structuredClone(result); over.results[1].attempts = 3;
   assert.equal(accountRun({ args, record, result: over }).status, 'unaccounted', 'more attempts than the cap');

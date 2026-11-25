@@ -176,7 +176,8 @@ const HEADER = {
 };
 // Workers have no shell to look for a file; CLAUDE.instance.template.md states the same path rule for the PM.
 const PATHS = 'A team-relative path named here or in a role file (agents/..., docs/..., profiles/...) resolves in the team root when it exists there, otherwise under kit/; writePaths, plannedPaths and gitCommands are relative to the product root. Read files with Read, Grep and Glob, never with the shell.';
-const SHELL = 'Run only the verificationCommands and this ticket\'s own gitCommands listed here, each exactly as written, from the product root; run no other command, Git included. The host also accepts the moves and deletions the other tickets of this batch declare: they are not yours to run. Move or delete a tracked file only with these gitCommands.';
+const EXIT = 'The Bash tool reports each command\'s exit code: append nothing to a command (no `; echo $?`, pipe or redirect); the host refuses any other form.';
+const SHELL = 'Run only the verificationCommands and this ticket\'s own gitCommands listed here, each exactly as written, from the product root; run no other command, Git included. The host also accepts the moves and deletions the other tickets of this batch declare: they are not yours to run. Move or delete a tracked file only with these gitCommands. ' + EXIT;
 
 function render(input, duty, methods, standingBatch) {
   const { ticket: t, mandate: m, proposal: p, policy, baseline } = input;
@@ -186,7 +187,7 @@ function render(input, duty, methods, standingBatch) {
     duty, attempt: 1, baseline, plannedPaths: p.expectedPaths,
     ...(duty === 'exec' ? { writePaths: m.allowedWritePaths } : {}),
     ...(duty === 'exec' && standingBatch ? { gitCommands: m.gitCommands ?? [], shell: SHELL } : {}),
-    writeBoundary: duty === 'exec' ? 'Write only inside writePaths; plannedPaths are the files expected to change. The host refuses any other write' : standingBatch ? 'No product write; run only the listed verification commands, from the product root' : 'No product mutation; use the approved isolated verification runner',
+    writeBoundary: duty === 'exec' ? 'Write only inside writePaths; plannedPaths are the files expected to change. The host refuses any other write' : standingBatch ? `No product write; run only the listed verification commands, from the product root. ${EXIT}` : 'No product mutation; use the approved isolated verification runner',
     requestedExecTools: p.requestedTools,
     permissionRef: policy.profiles[duty].permissionRef,
     verificationCommands: policy.verificationCommands,
@@ -236,7 +237,6 @@ export function compile(input, { methodBundle, standingBatch } = {}) {
       ticket: t.id, title: t.title, agentType: policy.profiles.exec.wrapper,
       verifierAgentType: policy.profiles.check.wrapper, brief: renderedBriefs.exec,
       verifierBrief: renderedBriefs.check, isCodeShipping: true, deliveryRequired: false,
-      estimatedTokens: p.estimate.execTokens, verifierEstimatedTokens: p.estimate.checkTokens,
     };
     const manifestBody = {
       schemaVersion: 1, stage: 'offline-preview', launchable: false, compilerVersion: 'rw-preview-2',

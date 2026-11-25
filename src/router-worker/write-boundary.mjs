@@ -279,6 +279,6 @@ function decideCommand({ input, boundary, allow, deny }) {
   const unsandboxed = input.tool_input?.dangerouslyDisableSandbox;
   if ((unsandboxed === undefined || unsandboxed === false) && entry.commands.some(command => forms(command).includes(text))) return { decision: 'approve' };
   return deny(entry.commands.length
-    ? `${input.agent_type}: in a batch the shell runs only the verification commands confirmed for this team, from the product root, each exactly as written and inside the sandbox if there is one: ${entry.commands.map(command => `cd "${root}" && ${command}`).join('  |  ')}`
+    ? `${input.agent_type}: in a batch the shell runs only the verification commands confirmed for this team, from the product root, each exactly as written and inside the sandbox if there is one: ${entry.commands.map(command => `cd "${root}" && ${command}`).join('  |  ')}; append nothing to a command: the Bash tool reports the exit code`
     : `${input.agent_type}: no batch is open, or this worker runs no command in it; the shell is closed`);
 }

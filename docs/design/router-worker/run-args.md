@@ -84,9 +84,9 @@ The E-01 smoke run (2026-11-13) froze a ceiling in the ticket unit. The engine
 counted 7,593 and 5,220 for calls that measured 59,717 and 29,511 in the ticket
 unit, so that ceiling could not have stopped a runaway. The engine ceiling only
 bounds output; the ticket authorization is enforced by settlement, after the
-call. The plan items still pass the ticket estimates to the engine as
-`estimatedTokens`, so the engine's `coaching` variance for Router/Worker runs
-compares two units and is not usable yet.
+call. The plan items do not pass the ticket estimates to the engine, so its
+`coaching` variance has no observation for a Router/Worker run; settlement
+compares estimates and measured usage in the ticket unit.
 
 Budget figures in the record: `ceiling`, `stopLine` (80% of the ceiling,
 rounded down), `estimated` and `authorized`. The accepted range is

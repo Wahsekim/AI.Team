@@ -325,7 +325,7 @@ test('settle reports a call whose transcript does not carry the frozen brief, an
 test('a blocked worker whose returned work was checked settles as a stopped ticket; one that was not checked settles without a check call', async t => {
   const blockedWorker = { worker: () => ({ outcome: 'blocked', progress: true, filesTouched: ['src/tag-list/view.ts'], decisionsCount: 1, selfReportTokens: 100, blocked: true, terminalStop: false, notes: '' }) };
   const f = await ran(t, blockedWorker); f.close();
-  const checked = f.result.results[0].estimates.verifier !== null, meter = metered(f, checked ? {} : { order: ['exec1', 'guard1'] });
+  const checked = f.result.results[0].verifierDispatched === true, meter = metered(f, checked ? {} : { order: ['exec1', 'guard1'] });
   if (!checked) meter.subagents = meter.subagents.filter(row => row.agentId !== 'check1');
   const settled = settle(f, meter);
   assert.equal(settled.errors, undefined, JSON.stringify(settled.errors));

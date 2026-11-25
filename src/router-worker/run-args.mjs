@@ -119,6 +119,9 @@ function blockersOf(result) {
 // Every call of an engine return is matched to the frozen arguments. 'accounted'
 // says the return is consistent with them; it says nothing about quality:
 // read `blockers` for that.
+// An engine return from before verifierDispatched carried a verifier estimate for every checker call.
+export const checkerCalled = r => r.verifierDispatched ?? (r.estimates?.verifier != null);
+
 export function accountRun({ args, record, result }) {
   const findings = [], check = (condition, code) => { if (!condition) findings.push(code); };
   try {
@@ -140,7 +143,7 @@ export function accountRun({ args, record, result }) {
     if (findings.length) return { status: 'unaccounted', findings };
     return { status: 'accounted', findings,
       calls: { tickets: results.length, exec: results.reduce((total, r) => total + r.attempts, 0),
-        check: results.reduce((total, r) => total + r.attempts - 1 + (r.estimates.verifier !== null ? 1 : 0), 0), guard: 1 },
+        check: results.reduce((total, r) => total + r.attempts - 1 + (checkerCalled(r) ? 1 : 0), 0), guard: 1 },
       attempts: results.map(r => r.attempts),
       nextLifecycleNumberAfter: todo.nextLifecycleNumberAfter,
       blockers: blockersOf(result) };

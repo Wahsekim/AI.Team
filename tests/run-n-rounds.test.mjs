@@ -212,6 +212,7 @@ test('verifier throws -> verification missing, queued, allPassed=false', async (
     { verifier: () => { throw new Error('verifier died') } },
   )
   assert.equal(result.results[0].verificationStatus, 'missing')
+  assert.equal(result.results[0].verifierDispatched, true, 'a call that failed is still a call')
   assert.equal(result.fixRetestQueue.length, 1)
   assert.equal(result.allPassed, false)
 })
@@ -1242,6 +1243,7 @@ test('F-07: variance observations are typed per spawn and the >50% count is mech
   assert.equal(new Set(obs.map(o => o.id)).size, 5, 'observation ids are unique')
   assert.match(result.coaching.meter, /NOT provider billing/)
   assert.equal(result.results[0].estimates.verifier, null, 'no verifier spawn -> no verifier observation')
+  assert.equal(result.results[0].verifierDispatched, false, 'a non-code ticket calls no verifier')
 })
 
 test('F-07: exactly 50% is NOT beyond the threshold (strict inequality); missing estimates produce no observation', async () => {

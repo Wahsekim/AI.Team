@@ -22,7 +22,7 @@ test('F1: deterministic detached preview, bounded cross-layer task, existing eng
   assert.equal(output.manifest.launchable, false);
   assert.equal(output.manifest.stage, 'offline-preview');
   assert.deepEqual(Object.keys(output.enginePlanItem).sort(), ['ticket', 'title', 'agentType', 'verifierAgentType',
-    'brief', 'verifierBrief', 'isCodeShipping', 'deliveryRequired', 'estimatedTokens', 'verifierEstimatedTokens'].sort());
+    'brief', 'verifierBrief', 'isCodeShipping', 'deliveryRequired'].sort(), 'ticket estimates are in the ticket unit, which the engine does not meter');
   assert.equal(output.enginePlanItem.agentType, 'sample-worker-exec');
   assert.equal(output.enginePlanItem.verifierAgentType, 'sample-worker-check');
   assert.equal(output.enginePlanItem.title, 'Retry failed tag-list loading');
@@ -114,6 +114,8 @@ test('a standing batch brief states the ticket\'s grant and the exact git comman
   assert.deepEqual(taskData(exec).plannedPaths, standing.proposal.expectedPaths);
   assert.deepEqual(taskData(exec).gitCommands, commands);
   assert.match(exec, /run no other command, Git included/);
+  // A worker that appends '; echo $?' to read the exit code is refused by the hook; the tool already reports it.
+  for (const brief of [exec, check]) assert.match(brief, /The Bash tool reports each command's exit code: append nothing to a command \(no `; echo \$\?`, pipe or redirect\); the host refuses any other form\./);
   assert.match(exec, /this ticket's own gitCommands/); assert.match(exec, /the other tickets of this batch[^.]*not yours to run/, 'the boundary is batch-wide; the brief says which commands are this worker\'s');
   assert.equal(taskData(check).gitCommands, undefined); assert.ok(!check.includes('git mv'), 'the checker is not given the moves');
   const none = compile(inputFixture(), { standingBatch: true });
