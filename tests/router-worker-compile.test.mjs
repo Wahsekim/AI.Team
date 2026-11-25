@@ -115,6 +115,7 @@ test('a standing batch brief states the ticket\'s grant and the exact git comman
   assert.deepEqual(taskData(exec).gitCommands, commands);
   assert.match(exec, /run no other command, Git included/);
   // A worker that appends '; echo $?' to read the exit code is refused by the hook; the tool already reports it.
+  for (const brief of [exec, check]) assert.match(brief, /Run each command in the foreground with a timeout long enough for it \(up to 600000 ms\)\. Only a command that takes longer goes to the background; then wait for its completion notice instead of checking on it/);
   for (const brief of [exec, check]) assert.match(brief, /The Bash tool reports each command's exit code: append nothing to a command \(no `; echo \$\?`, pipe or redirect\); the host refuses any other form\./);
   assert.match(exec, /this ticket's own gitCommands/); assert.match(exec, /the other tickets of this batch[^.]*not yours to run/, 'the boundary is batch-wide; the brief says which commands are this worker\'s');
   assert.equal(taskData(check).gitCommands, undefined); assert.ok(!check.includes('git mv'), 'the checker is not given the moves');

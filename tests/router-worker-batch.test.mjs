@@ -52,6 +52,9 @@ test('in a batch a worker\'s shell runs the confirmed verification commands from
   const f = live(t), exec = 'tag-list-fixture-worker-exec', check = 'tag-list-fixture-worker-check', one = batchOf(ticket('US-01', ['src/a.js']));
   // A command the owner did not confirm for the team stops the batch before anything is taken.
   assert.match(refusal(await f.before({ ...one, verificationCommands: ['npm test', 'npm run e2e'] })).reason, /not among the commands the owner confirmed for this team \(npm run e2e\).*team-mode\.mjs limits/); f.untouched();
+  // It needs nothing from the product, so it is named first, before a product state the PM would fix in vain.
+  writeFileSync(join(f.product, 'stray.txt'), 'x\n');
+  assert.match(refusal(await f.before({ ...one, verificationCommands: ['npm test', 'npm run e2e'] })).reason, /not among the commands the owner confirmed/); rmSync(join(f.product, 'stray.txt'));
   assert.equal((await f.before(one)).errors, undefined);
   const shell = (agent, command, cwd = f.root, extra = {}) => decideCall({ boundary: readBoundary(f.root), input: { tool_name: 'Bash', ...(agent ? { agent_type: agent } : {}), cwd, tool_input: { command, ...extra } } });
   assert.equal(shell(exec, `cd "${f.product}" && npm test`).decision, 'approve'); assert.equal(shell(check, `cd ${f.product} && npm test`).decision, 'approve');

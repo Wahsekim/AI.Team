@@ -8,8 +8,8 @@ escalation to the owner are built ("Review triggers", "Review state and brief",
 "Review verdict, commit gate and escalation"), and so are "Resolve" (held
 tickets saved as patches, the rest verified again), sensitive tickets and the
 cost of each reviewer call, set at "settle", and the periodic review
-("Periodic review"). Not yet used
-on a real team.
+("Periodic review"). Used on a real team since 2026-11-24; the review path has
+not yet run there.
 [ADR 0010](../../../decisions/0010-router-worker-second-mode.md), decisions 8 to 12.
 
 ```sh
@@ -94,12 +94,14 @@ budget per ticket. Those come from the team.
    `security` and for `architect` whose file declares that same name (owner
    decision of 2026-11-20). No ticket of the batch is blocked by an escalation
    the owner has not acknowledged (see "Review verdict, commit gate and
-   escalation"; refused with `TICKET_ESCALATED`). Every verification command of the batch is one of the commands the
-   owner confirmed for the team (`allowedCommands` in its limits).
+   escalation"; refused with `TICKET_ESCALATED`).
 2. **The tickets**: each is complete, and no two tickets claim the same file. A
    folder grant claims every file under it; paths are compared without case.
    Each file a ticket moves or deletes is one plain path inside its `paths`
-   (see "Moves and deletions").
+   (see "Moves and deletions"). Every verification command of the batch is one
+   of the commands the owner confirmed for the team (`allowedCommands` in its
+   limits); this is checked right after the tickets, before the escalations and
+   the product, and again under the lock.
 3. **The product repository**: on a branch that is not a default branch, no Git
    operation in progress, nothing uncommitted or untracked. Git-ignored files
    are not counted. The team's own files are never counted: the team lives
@@ -988,6 +990,9 @@ batch's does.
   listed), or changed while the batch was being prepared.
 - The lock is held. If this team holds it with no batch open, the message names
   `abort`.
+- A verification command is not among the commands the owner confirmed for
+  the team. The message names the commands and the `team-mode.mjs limits` call
+  that adds them.
 - A ticket's `resume` patch is not a file of the team's folder, or is not a
   patch of edits and new files inside the ticket's `paths` that applies on the
   product's HEAD (see "Resuming left work").
