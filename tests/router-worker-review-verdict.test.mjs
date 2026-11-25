@@ -75,6 +75,8 @@ test('the kit refuses a report that does not show the work, and a transcript tha
   };
   check('a flagged file not listed as read', 'REVIEW_FILE_NOT_READ', made => [transcriptOf(f, made, { report: { ...reportOf(made), filesRead: [] } })]);
   check('every rule not checked', 'REVIEW_ALL_NOT_CHECKED', made => [transcriptOf(f, made, { report: { ...reportOf(made), rules: reportOf(made).rules.map(row => ({ ...row, result: 'not-checked' })) } })]);
+  check('rule rows that are results alone', 'REVIEW_RULE_NO_EVIDENCE', made => [transcriptOf(f, made, { report: { ...reportOf(made), rules: reportOf(made).rules.map(({ rule, ticket, result }) => ({ rule, ticket, result })) } })]);
+  check('a rule row with the template placeholder as note', 'REVIEW_RULE_NO_EVIDENCE', made => [transcriptOf(f, made, { report: { ...reportOf(made), rules: reportOf(made).rules.map(row => ({ ...row, note: '<what was checked>' })) } })]);
   check('a rule of the frozen list missing', 'REVIEW_RULE_MISSING', made => [transcriptOf(f, made, { report: { ...reportOf(made), rules: reportOf(made).rules.slice(1) } })]);
   check('no Read of the flagged file in the transcript', 'REVIEW_TRANSCRIPT_NO_OPEN', made => [transcriptOf(f, made, { reads: [] })]);
   check('a relative Read does not count', 'REVIEW_TRANSCRIPT_NO_OPEN', made => [transcriptOf(f, made, { reads: ['src/authz.js'] })]);

@@ -422,6 +422,9 @@ line to `pm-decisions.md`. It takes the lock for its length. It pushes nothing.
   only what is missing. The commits made are recorded by their ids
   (`rw-batch-commits.json`), so a hook that rewrites messages does not confuse
   the resume. Each recorded commit is checked again to hold its ticket's paths.
+  Each new commit must also hold, in every file, the bytes `after` recorded: a
+  commit hook that rewrites and stages a file (a formatter, for instance) stops
+  `commit`, which leaves that commit as it is and names the files.
   A commit made just before the command died, and so never recorded, is taken
   up when it is the next planned one: its parent is the expected commit and it
   holds exactly that ticket's paths. A commit made by hand that fits the same
@@ -600,7 +603,8 @@ offline on transcript fixtures.
   `REVIEW_WORKFLOW_AGENT`, `REVIEW_BRIEF_NOT_FOUND`,
   `REVIEW_TRANSCRIPT_NO_OPEN`, `REVIEW_NO_REPORT`, `REVIEW_REPORT_MISMATCH`,
   `REVIEW_REPORT_SHAPE`, `REVIEW_FILE_NOT_READ`, `REVIEW_RULE_CONFLICT`,
-  `REVIEW_ITEM_CONFLICT`, `REVIEW_RULE_MISSING`,
+  `REVIEW_ITEM_CONFLICT`, `REVIEW_RULE_MISSING`, `REVIEW_RULE_NO_EVIDENCE` (a
+  rule row with no note saying what was checked, or why it was not),
   `REVIEW_ALL_NOT_CHECKED`, `REVIEW_ITEM_MISSING`, `REVIEW_VERDICT_MISMATCH`,
   `REVIEW_CONTROL_MISSING`, `REVIEW_NO_ANSWER`. A transcript that cannot be
   read, one already judged, or a flagged file changed since the brief is
