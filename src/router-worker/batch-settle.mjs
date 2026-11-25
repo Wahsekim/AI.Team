@@ -92,6 +92,13 @@ export function settleBatch({ teamRoot, instanceRoot, meter, rules, runId }) {
     // Reported for the owner, who decides: tickets over, or above 80% of, their authorization.
     const near = tickets.filter(entry => 5 * entry.spentTokens > 4 * entry.authorizedTokens), most = Math.max(0, ...near.map(entry => entry.spentTokens));
     const limits = near.length ? [{ limit: 'authorizationPerTicket', observed: most, current: near[0].authorizedTokens, proposal: { authorizationPerTicket: proposedTokens(most) }, tickets: near.map(entry => entry.ticket) }] : [];
+    // A worker call that used every turn its staffing allows stopped there; staffing is not a limit, so it is named here.
+    const staffing = readJSON(join(instance, 'profiles/team-mode.json'))?.staffing ?? {}, turnsOf = call => (meter?.subagents ?? []).find(row => row?.agentId === call.agentId)?.uniqueMessages;
+    for (const duty of ['exec', 'check', 'guard']) {
+      const cap = staffing[duty]?.maxTurns, stopped = Number.isSafeInteger(cap) ? settled.calls.filter(call => call.duty === duty && Number.isSafeInteger(turnsOf(call)) && turnsOf(call) >= cap) : [];
+      if (stopped.length) limits.push({ limit: `staffing.${duty}.maxTurns`, observed: Math.max(...stopped.map(turnsOf)), current: cap, proposal: null, tickets: [...new Set(stopped.map(call => call.ticket).filter(Boolean))],
+        note: 'the call used every turn its staffing allows and stopped there; staffing changes with a mode switch whose request raises it' });
+    }
     // A reviewer call over its authorization is reported; the turn limit was its brake, and no ticket is held for it.
     const { reviews, findings: reviewFindings } = reviewCalls({ batch, after, kept: readJSON(at('reviews')), meter }), over = reviews.filter(entry => entry.overrun);
     const reviewCost = reviews.reduce((total, entry) => total + (entry.spentTokens ?? 0), 0), findings = [...settled.findings, ...reviewFindings];

@@ -335,8 +335,11 @@ session's transcripts: one row per agent, with its tokens.
 The record is `rw-batch-settlement.json`, archived with the batch
 (`settlement.json`); one line goes to `pm-decisions.md`. Its `limits` list holds
 one `authorizationPerTicket` entry when a ticket used more than 80% of its
-authorization: the largest usage observed, the tickets, and a proposal; empty
-otherwise. `status` is `clear`
+authorization: the largest usage observed, the tickets, and a proposal; and
+one `staffing.<duty>.maxTurns` entry when a worker call used every turn its
+staffing allows (the meter's `uniqueMessages`), which is how a call that ended
+without a report stopped at its turn limit. Staffing is not a limit: the entry
+has no proposal and says it changes with a mode switch. Empty otherwise. `status` is `clear`
 or `review`; exit 2 on review. A batch is settled once.
 
 **Reviewer calls**
