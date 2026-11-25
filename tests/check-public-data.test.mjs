@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
 const SCRIPT = fileURLToPath(new URL('../scripts/check-public-data.sh', import.meta.url))
+const TRACKER_ID = ['op', '7'].join('#')
 
 function repoWith(files) {
   const root = mkdtempSync(join(tmpdir(), 'public-data-'))
@@ -27,7 +28,7 @@ test('a clean tree passes', () => {
 })
 
 test('a tracker id fails without any denylist', () => {
-  const r = run(repoWith({ 'a.md': 'ok\nfix: op#294 thing\n' }))
+  const r = run(repoWith({ 'a.md': `ok\nfix: ${TRACKER_ID} thing\n` }))
   assert.equal(r.status, 1)
   assert.match(r.stdout, /FAIL - pattern 1 matches at a\.md:2/)
 })
@@ -42,6 +43,6 @@ test('a denylisted name fails case-insensitively and the log never shows it', ()
 
 test('an untracked file is not scanned', () => {
   const root = repoWith({ 'a.md': 'clean\n' })
-  writeFileSync(join(root, 'scratch.md'), 'OP#1\n')
+  writeFileSync(join(root, 'scratch.md'), `${TRACKER_ID}\n`)
   assert.equal(run(root).status, 0)
 })

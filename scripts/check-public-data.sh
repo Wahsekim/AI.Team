@@ -3,7 +3,7 @@
 # public repository. History is not scanned: a past leak cannot be fixed by CI.
 #
 # Usage: scripts/check-public-data.sh [ROOT]   (default ROOT: .)
-# Patterns: tracker work-package ids (OP#123) always, plus one extended regex
+# Patterns: tracker work-package ids (OP# then digits) always, plus one extended regex
 # per line of $PUBLIC_DATA_DENYLIST (a CI secret, so the names it lists are
 # not themselves published). Matching is case-insensitive.
 # A hit prints only file:line and the pattern number, never the matched text,
