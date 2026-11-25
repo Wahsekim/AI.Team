@@ -106,6 +106,9 @@ test('a report refused twice, or no answer, means review not obtained: the flagg
   const { open } = await runBatch(f, paths.map((path, i) => ticket(`US-0${i + 1}`, [path])), edits(paths));
   const first = f.brief('security'), refused = f.judge('security', transcriptOf(f, first, { reads: [] }));
   assert.equal(refused.outcome, 'refused');
+  // The reviewer is told the rule it is judged by, and the refusal says how to meet it.
+  assert.match(first.brief, /Read each whole: one Read with no offset and no limit\. A Read of a part of a file is not counted/);
+  assert.match(JSON.stringify(refused), /a Read counts only with no offset and no limit, so read each of these whole/);
   assert.match(refusal(f.judge('security', transcriptOf(f, first))).reason, /brief again/, 'the next attempt needs a new brief');
   const second = f.brief('security');
   assert.match(second.record.retryReason, /REVIEW_TRANSCRIPT_NO_OPEN/); assert.match(second.brief, /earlier attempt was refused.*REVIEW_TRANSCRIPT_NO_OPEN/s);

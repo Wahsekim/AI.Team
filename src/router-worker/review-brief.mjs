@@ -43,15 +43,16 @@ export const REPORT = (reviewer, briefDigest) => ({ schemaVersion: 1, reviewer, 
   items: [{ ticket: '<ticket id>', verdict: 'GREEN|AMBER|RED', finding: '<finding>', fix: '<fix>', control: { detects: '<what a control would detect>', variation: '<the variation it must also catch>', toolCanDetect: true } }],
   residualRisk: '<what remains>' });
 
-function render({ batch, reviewer, attempt, tickets, diff, rules, adrs, verification, dropped, protocol, retryReason }) {
+function render({ instance, batch, reviewer, attempt, tickets, diff, rules, adrs, verification, dropped, protocol, retryReason }) {
   const ticketText = tickets.map(({ ticket, frozen, elective, flaggedFiles, content, because }) => [
     `### ${ticket.id}: ${frozen.title}`, `Goal: ${frozen.goal}`, 'Acceptance:', lines(frozen.acceptance),
     `Review: ${elective ? 'elective (named by the PM; it binds like a required one)' : `required (${because.map(entry => `${entry.trigger ?? `declared ${plain(entry.declared)}`} on ${plain(entry.path)}`).join(', ')})`}`,
-    'Files to open with your Read tool, every one, and to report in filesRead:',
+    'Files to open with your Read tool, every one, and to report in filesRead. Read each whole: one Read with no offset and no limit. A Read of a part of a file is not counted, and a file not read whole refuses the report:',
     lines(flaggedFiles.map(path => content[path] === null ? `${join(batch.productRoot, path)} (deleted by the ticket: nothing to open)` : join(batch.productRoot, path))),
     `Changed paths of the ticket: ${ticket.changedPaths.join(', ')}`].join('\n')).join('\n\n');
+  const resumed = tickets.filter(({ frozen }) => frozen.resume).map(({ ticket, frozen }) => `${ticket.id} resumed earlier work: its patch is ${join(instance, frozen.resume.patch)}; read it whole for the change it made, then the changed paths for what this batch added`);
   const diffText = diff.length <= DIFF_CAP ? fenced(diff, 'diff')
-    : `The diff is ${diff.length} characters, over the cap of ${DIFF_CAP}: open each changed path of the tickets above with your Read tool instead.`;
+    : [`The diff is ${diff.length} characters, over the cap of ${DIFF_CAP}, so it is not included: open each changed path of the tickets above with your Read tool instead.`, ...resumed].join('\n');
   const runs = verification.map(run => `### \`${run.command}\`: exit ${run.exit}${run.timedOut ? ' (stopped at the time limit)' : ''}\n${fenced(run.tail)}`).join('\n\n');
   return [`# Batch review brief: ${reviewer}, run ${batch.runId}, attempt ${attempt}`,
     `You review the tickets below as ${reviewer}. You write nothing in the product and run no shell command: the kit ran the verification commands and gives their output here. Follow the protocol.`,
@@ -121,7 +122,7 @@ export function reviewBrief({ teamRoot, instanceRoot, reviewer, tickets: named =
     const rules = batch.review.rules.filter(rule => rule.reviewer === reviewer), adrs = batch.review.adrs.map(path => join(instance, path));
     const protocol = protocolOf(instance);
     const attempt = entries.length + 1, diff = diffOf(product, batch.productHead, briefed);
-    const body = render({ batch, reviewer, attempt, tickets, diff, rules, adrs, verification, dropped, protocol, retryReason }), briefDigest = digest(body);
+    const body = render({ instance, batch, reviewer, attempt, tickets, diff, rules, adrs, verification, dropped, protocol, retryReason }), briefDigest = digest(body);
     const brief = `${body}\nbriefDigest: ${briefDigest}\n`;
     // The briefs of a batch are numbered across its reviewers, so resolve can tell which run of the commands came last.
     const seq = 1 + Math.max(0, ...batch.review.reviewers.flatMap(name => briefsOf(instance, name, batch.runId)).map(entry => entry.seq ?? 0));
