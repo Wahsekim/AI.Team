@@ -10,6 +10,7 @@ import { limitsOf, COUNT_LIMITS, LATER_LIMITS, boundLimits, rosterWrapper, GATE_
 import { loadReview, isReviewListError, triggerChanges, recordFrozen } from './review-triggers.mjs';
 import { blockedTickets } from './escalations.mjs';
 import { periodicDue, periodicDueReason } from './review-periodic.mjs';
+import { resumePathProblem, resumePlan, applyResume, revertResume } from './batch-resume.mjs';
 
 // ADR 0010, decisions 8 to 12: the one command a PM runs before a batch in a standing Router/Worker team.
 // It builds the engine's inputs from the PM's tickets, checks the product repository, computes the ceiling,
@@ -28,7 +29,7 @@ export const HOOKS_FIRST = 'A commit by hand runs the repository\'s commit hooks
 export const HOOKS_MOVED = `The repository's commit hooks were changed or moved since the batch opened. ${HOOKS_FIRST}`;
 const MODE_FILE = 'profiles/team-mode.json', JOURNAL = 'holiday/.switch-in-progress.json', LEDGER = 'pm-decisions.md';
 const IN_PROGRESS = ['index.lock', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'BISECT_LOG', 'rebase-merge', 'rebase-apply'];
-const TICKET_FIELDS = ['id', 'title', 'goal', 'acceptance', 'paths', 'estimate'], TICKET_OPTIONAL = ['expectedPaths', 'commitMessage', 'dependsOn', 'riskFlags', 'moves', 'deletes'], BATCH_FIELDS = ['tickets', 'verificationCommands', 'sensitivePaths', 'nextLifecycleNumber'];
+const TICKET_FIELDS = ['id', 'title', 'goal', 'acceptance', 'paths', 'estimate'], TICKET_OPTIONAL = ['expectedPaths', 'commitMessage', 'dependsOn', 'riskFlags', 'moves', 'deletes', 'resume'], BATCH_FIELDS = ['tickets', 'verificationCommands', 'sensitivePaths', 'nextLifecycleNumber'];
 const ESTIMATE = ['execTokens', 'checkTokens', 'reworkTokens'], MAX_PATHS = 100, MAX_FLAGS = 10;
 const STOP = ['Owner stop', 'Required scope or permission change', 'Missing verification environment'];
 // What a standing team accepts by decision: no sandbox is required, and Git-ignored build output is tolerated.
@@ -138,6 +139,8 @@ function checkBatch(batch, known) {
     const claimed = ticket.paths.filter(reserved);
     need(!claimed.length, `Ticket ${ticket.id} claims ${claimed.join(', ')}; no ticket writes under ${RESERVED.join(' or ')}`);
     checkFiles(ticket);
+    const resumeProblem = resumePathProblem(ticket);
+    need(!resumeProblem, resumeProblem);
     need(ticket.riskFlags === undefined || (strings(ticket.riskFlags) && ticket.riskFlags.length <= MAX_FLAGS && ticket.riskFlags.every(flag => TICKET_ID.test(flag))
       && new Set(ticket.riskFlags.map(flag => flag.toLowerCase())).size === ticket.riskFlags.length),
       `Ticket ${ticket.id}: riskFlags must list 1 to ${MAX_FLAGS} plain names ("auth", "payments"), each named once`);
@@ -228,7 +231,7 @@ const gitCommandsOf = ticket => [
   ...(ticket.deletes ?? []).map(path => `git --literal-pathspecs rm -q -- "${path}"`)];
 
 // The compiler input of one ticket, built from what the PM wrote and what the team's mode profile holds.
-function inputOf(ticket, { batch, profile, wrappers, product, limits, allPaths, gitCommands }) {
+function inputOf(ticket, { batch, profile, wrappers, product, limits, allPaths, gitCommands, resumedPaths }) {
   const staffing = profile.staffing, tools = staffing.exec.tools, repoId = profile.spec.project.slug;
   const amounts = Object.fromEntries(ESTIMATE.map(key => [key, ticket.estimate[key]]));
   const policy = { schemaVersion: 1, mode: 'router-worker', approvalRef: ref('mode-switch', profile.confirmedProposal ?? profile.specDigest), stackRef: ref('team-spec', profile.spec),
@@ -239,7 +242,7 @@ function inputOf(ticket, { batch, profile, wrappers, product, limits, allPaths, 
   return { schemaVersion: 1,
     ticket: { id: ticket.id, title: ticket.title, goal: ticket.goal, acceptance: ticket.acceptance, acceptanceRef: ref('acceptance', ticket.acceptance), isCodeShipping: true, deliveryRequired: false, riskFlags: ticket.riskFlags ?? [] },
     mandate: { ticketId: ticket.id, repoId, approvalRef: ref('batch-ticket', ticket), policyDigest: digest(policy), allowedWritePaths: ticket.paths, allowedTools: tools,
-      budgetTokens: limits.authorizationPerTicket, stopConditions: STOP, ...(gitCommands.length ? { gitCommands } : {}) },
+      budgetTokens: limits.authorizationPerTicket, stopConditions: STOP, ...(gitCommands.length ? { gitCommands } : {}), ...(resumedPaths ? { resumedPaths } : {}) },
     proposal: { assignmentId: `${ticket.id}.exec.1`, checkAssignmentId: `${ticket.id}.check.1`, duty: 'exec', attempt: 1, sessionRef: null, continuationOf: null, methodIds: [],
       selectionReason: 'Planned by the PM from the backlog', expectedPaths: ticket.expectedPaths ?? ticket.paths.filter(path => !path.endsWith('/**')), requestedTools: tools,
       estimate: { ref: ref('pm-estimate', amounts), ...amounts } },
@@ -272,6 +275,7 @@ function liveTeam(teamRoot, instanceRoot) {
 
 export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = false, manifest }) {
   let lease = null, opened = false, instance, productRoot;
+  const applied = [];
   try {
     ({ instance, productRoot } = liveTeam(teamRoot, instanceRoot));
     need(!exists(join(instance, BATCH_FILE)) && !exists(join(instance, AFTER_FILE)), `A batch is already open (${BATCH_FILE}); close it with after and commit, or abort it, before starting another`);
@@ -319,6 +323,11 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     const mixed = product.preexisting.filter(path => batch.tickets.some(ticket => ticket.paths.some(grant => covers(grant, path))));
     need(!mixed.length, `These paths are already changed and lie where a ticket of this batch writes (${mixed.slice(0, 5).map(plain).join(', ')}); they could not be kept out of its commit. Commit or discard them first`);
     for (const ticket of batch.tickets) checkFilesInProduct(productRoot, ticket);
+    const resumes = batch.tickets.map(ticket => ticket.resume === undefined ? null : resumePlan({ instance, productRoot, ticket }));
+    for (const resume of resumes) need(!resume?.problem, resume?.problem);
+    const plans = resumes.map(resume => resume?.plan ?? null), resumedPaths = plans.flatMap(plan => plan?.paths ?? []);
+    const unseen = resumedPaths.length ? hiddenFromGit(productRoot, resumedPaths) : [];
+    need(!unseen.length, `A resumed patch changes ${plain(unseen[0])}, which Git is told not to look at (assume-unchanged or skip-worktree): what the work tree holds there is not what Git reports. Clear it with: git update-index --no-assume-unchanged --no-skip-worktree -- <path>`);
     const gitCommands = batch.tickets.map(gitCommandsOf);
     const closed = readBoundary(instance);
     need(closed && closed.productRoot === productRoot, 'The write-boundary file is missing or was changed. It is rebuilt by a mode switch: team-mode.mjs switch specialist, then switch router-worker');
@@ -334,7 +343,7 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     const ceiling = count * limits.outputAllowancePerTicket + limits.guardianOutputShare, allPaths = [...new Set(batch.tickets.flatMap(ticket => ticket.paths))].sort();
     const run = { rounds: count, date: batch.date ?? new Date().toISOString().slice(0, 10), nextLifecycleNumber: batch.nextLifecycleNumber, runId,
       budgetCeilingTokens: ceiling, estimatedOutputTokens: Math.floor(ceiling / 2), guardianEstimateTokens: limits.authorizationPerTicket, maxAttemptsPerTicket: limits.attemptsPerTicket };
-    const inputs = batch.tickets.map((ticket, i) => inputOf(ticket, { batch, profile, wrappers, product, limits, allPaths, gitCommands: gitCommands[i] }));
+    const inputs = batch.tickets.map((ticket, i) => inputOf(ticket, { batch, profile, wrappers, product, limits, allPaths, gitCommands: gitCommands[i], resumedPaths: plans[i]?.paths }));
     let frozen = await freezeRun({ inputs, run, teamRoot: instance, standingBatch: true });
     need(!frozen.errors, `The batch cannot be frozen: ${frozen.errors?.[0]?.field}: ${frozen.errors?.[0]?.reason}`);
     if (manifest) {
@@ -353,11 +362,12 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     // The write boundary opens last, once nothing can refuse the batch any more but the record itself.
     const boundary = openBoundary({ teamRoot: instance, productRoot, writePaths: allPaths, commands: batch.verificationCommands, execCommands: gitCommands.flat() });
     opened = true;
+    for (const plan of plans.filter(Boolean)) { applyResume(productRoot, plan); applied.push(plan); }
     const at = new Date().toISOString();
     const body = { schemaVersion: 1, stage: 'batch-open', runId: frozen.args.runId, openedAt: at, productRoot, productHead: product.head, branch: product.branch,
       startedAsIs: startAsIs === true, preexisting: product.preexisting, preexistingContent: contentOf(productRoot, product.preexisting), hooks, lease, boundaryDigest: boundary.digest, isolationDigest: isolation.digest,
       limits, ceiling: { outputTokens: ceiling, stopLine: Math.floor(ceiling * 4 / 5) },
-      tickets: batch.tickets.map((ticket, i) => ({ id: ticket.id, title: ticket.title, goal: ticket.goal, acceptance: ticket.acceptance, commitMessage: ticket.commitMessage ?? `${ticket.id}: ${ticket.title}`, paths: ticket.paths, expectedPaths: inputs[i].proposal.expectedPaths, dependsOn: ticket.dependsOn ?? [], moves: ticket.moves ?? [], deletes: ticket.deletes ?? [], declared: declaredOf(ticket, batch.sensitivePaths) })),
+      tickets: batch.tickets.map((ticket, i) => ({ id: ticket.id, title: ticket.title, goal: ticket.goal, acceptance: ticket.acceptance, commitMessage: ticket.commitMessage ?? `${ticket.id}: ${ticket.title}`, paths: ticket.paths, expectedPaths: inputs[i].proposal.expectedPaths, dependsOn: ticket.dependsOn ?? [], moves: ticket.moves ?? [], deletes: ticket.deletes ?? [], declared: declaredOf(ticket, batch.sensitivePaths), ...(plans[i] ? { resume: { patch: plans[i].patch, digest: plans[i].digest, paths: plans[i].paths, content: contentOf(productRoot, plans[i].paths) } } : {}) })),
       sensitivePaths: batch.sensitivePaths, verificationCommands: batch.verificationCommands, review, reviewWrappers, triggerChanges: triggerChanges(lastFrozen, review),
       launchManifest: manifest ? 'chained' : 'absent', runRecord: frozen.record, args: frozen.args };
     const record = { ...body, digest: digest(body) };
@@ -369,13 +379,18 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
       try { appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} BATCH ${record.runId} STARTED AS IS: ${product.preexisting.length} path(s) were already changed and are kept out of the tickets' commits (${product.preexisting.slice(0, 10).map(plain).join(', ')}${product.preexisting.length > 10 ? ', ...' : ''}).\n`); }
       catch (error) { rmSync(join(instance, BATCH_FILE), { force: true }); throw error; }
     }
+    // The resumed work enters the batch as the ticket's: the ledger names the patch it came from.
+    const resumed = record.tickets.filter(entry => entry.resume).map(entry => `${at.slice(0, 10)} BATCH ${record.runId} RESUMES ${entry.id} from ${plain(entry.resume.patch)} (${entry.resume.digest.slice(0, 19)}…, ${entry.resume.paths.length} path(s)), applied to the work tree by before.\n`).join('');
+    if (resumed) try { appendFileSync(join(instance, LEDGER), resumed); } catch (error) { rmSync(join(instance, BATCH_FILE), { force: true }); throw error; }
     try { recordFrozen({ instance, review, changes: record.triggerChanges, runId: record.runId, at }); }
     catch (error) { rmSync(join(instance, BATCH_FILE), { force: true }); throw error; }
-    lease = null; opened = false;
+    lease = null; opened = false; applied.length = 0;
     return record;
   } catch (error) {
-    if (error instanceof Refusal) return refuse(error.message, error.code);
-    return refuse(error?.code === 'BOUNDARY_REFUSED' ? error.message : `The batch could not be prepared: ${error?.code ?? error?.message}`);
+    const stuck = applied.reverse().filter(plan => !revertResume(productRoot, plan)).map(plan => plain(plan.patch));
+    const note = stuck.length ? ` The patch ${stuck.join(', ')} was applied and could not be taken back out of the product work tree; discard what it changed before the next batch.` : '';
+    if (error instanceof Refusal) return refuse(error.message + note, error.code);
+    return refuse((['BOUNDARY_REFUSED', 'RESUME_NOT_APPLIED'].includes(error?.code) ? error.message : `The batch could not be prepared: ${error?.code ?? error?.message}`) + note);
   } finally {
     if (opened) try { closeBoundary({ teamRoot: instance }); } catch { /* the next before names it and points to abort */ }
     if (lease) releaseLease({ productRoot, lease });

@@ -319,3 +319,31 @@ This widens the amendment of 2026-11-18 by those commands only. They are not
 confirmed by the owner one by one: the PM declares them in the ticket, and the
 owner reads them in the batch record (`moves`, `deletes`) and in the briefs.
 Merging the pull request that adds this amendment ratifies it.
+
+### 2026-11-25: a ticket resumes the work an earlier batch left
+
+Status: Proposed.
+
+On 2026-11-25 the exec worker of a real batch reached its turn limit during
+its last verification pass and returned no report. The checker never ran, and
+the work it left passed every gate when the PM ran them. The same had happened
+on 2026-11-24 with an output ceiling. The kit had no way to give such work its
+independent check and review: `--start-as-is` keeps changes found in the work
+tree out of the tickets' commits, and a rerun from a clean tree throws the work
+away and spends the same tokens again.
+
+- A ticket may name a `resume` patch in the team's folder. "before" accepts it
+  only as a regular file there, outside `kit/`, holding edits and new regular
+  files inside the ticket's `paths` that apply on the product's HEAD. It
+  applies those exact bytes to the work tree once nothing else can refuse the
+  batch, records the patch's path, digest and paths, and logs one line. A
+  refusal after that takes the patch back out.
+- What the patch changes is the ticket's own work from then on: checked by the
+  checker, flagged by the review triggers and the ticket's risk flags, and
+  committed with the ticket. The exec brief names the resumed paths and tells
+  the worker to finish them, not start over.
+- The patch is written by the PM, who is trusted with the team's folder; its
+  bytes, digest and paths are in the batch record for the owner to read. It
+  grants no write beyond the ticket's `paths` and no command.
+
+Merging the pull request that adds this amendment ratifies it.
