@@ -710,7 +710,7 @@ for (let i = 0; i < iters; i++) {
   emitLogs(r, verdict)
   // Halt precedence: worker error > terminal-stop REQUEST (any outcome) > budget > failure policy.
   if (workerStatus === 'error') {
-    haltReason = `agent() threw at iter ${i + 1} (likely harness budget exhausted): ${workerError.message}`
+    haltReason = `agent() threw at iter ${i + 1} (the harness ended the call: a turn limit, the session budget or an error; see its transcript): ${workerError.message}`
     log(`HALT — ${haltReason}`)
     break
   }

@@ -79,7 +79,12 @@ function limitsReached(limits, result, refused) {
   const spent = ran.filter(r => r.attempts >= limits.attemptsPerTicket && r.workerStatus === 'succeeded' && r.verificationStatus === 'failed');
   if (spent.length) report.push({ limit: 'attemptsPerTicket', observed: Math.max(...spent.map(r => r.attempts)), current: limits.attemptsPerTicket,
     proposal: limits.attemptsPerTicket < 3 ? { attemptsPerTicket: limits.attemptsPerTicket + 1 } : null, tickets: spent.map(r => r.ticket) });
-  for (const command of refused) report.push({ limit: 'allowedCommands', observed: command, current: limits.allowedCommands, proposal: null });
+  // A refused command that is a confirmed one in another form (no "cd" to the product root, or a bare "cd") needs no new limit.
+  for (const command of refused) {
+    const bare = command.replace(/^\s*cd\s+("[^"]*"|\S+)\s*&&\s*/, '').trim(), form = limits.allowedCommands.includes(bare) || /^cd(\s|$)/.test(bare);
+    report.push({ limit: 'allowedCommands', observed: command, current: limits.allowedCommands, proposal: null,
+      ...(form ? { note: 'a confirmed command, or a cd, in a form the hook does not accept; no limit change is needed. Workers run each command exactly as listed, from the product root' } : {}) });
+  }
   return report;
 }
 
@@ -239,6 +244,8 @@ export function commitBatch({ teamRoot, instanceRoot }) {
         && commit.paths.every(path => typeof path === 'string' && !path.endsWith('/') && within(path, ticket.paths) && !batch.preexisting.includes(path));
     });
     need(planned && (after.holdAll !== true || after.commits.length === 0), `${AFTER_FILE} plans a commit that is not a passed ticket's own paths. ${ABANDON}`);
+    // A held batch commits nothing: archiving it with commit would log it as committed.
+    need(after.holdAll !== true, `Every commit of this batch is held (${(after.findings ?? []).filter(finding => typeof finding?.code === 'string').map(finding => plain(finding.code)).join(', ')}); nothing can be committed. Archive it with: rw-batch.mjs abort --instance <instance-root>`);
     // ADR 0011, decisions 14 and 15: a reviewed batch commits what its resolution kept; the tickets it held are patches.
     const { plan, held, wrote, reviewed } = resolutionOf(instance, batch, after);
     product = batch.productRoot;

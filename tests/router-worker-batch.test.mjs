@@ -343,7 +343,7 @@ test('after refuses a return that is not this batch\'s and changes nothing; find
   const closed = f.after();
   assert.equal(closed.status, 'review'); assert.ok(closed.findings.some(finding => finding.code === 'PRODUCT_HEAD_MOVED')); assert.equal(closed.holdAll, true); assert.deepEqual(closed.commits, []);
   assert.equal(readLease({ productRoot: f.product }).status, 'free', 'the lock does not outlive the batch');
-  assert.match(refusal(f.commit()).reason, /not the batch's start plus the commits this command made.*rw-batch\.mjs abort/);
+  assert.match(refusal(f.commit()).reason, /Every commit of this batch is held \(PRODUCT_HEAD_MOVED\); nothing can be committed\. Archive it with: rw-batch\.mjs abort/);
   assert.match(closed.next.join(' '), /No ticket of this batch is committed by the kit.*rw-batch\.mjs abort/, 'the record says what to do');
   // The way out of a closed batch the kit will not commit: its records are archived, the work stays in the tree.
   const out = abortBatch({ teamRoot: f.kit, instanceRoot: f.root });
@@ -365,7 +365,7 @@ test('after reports, and does not change, each limit that stopped work: the outp
   // A worker's shell command the hook refused during the batch, as the runtime runs the hook.
   const hook = command => spawnSync('sh', ['-c', JSON.parse(f.read('.claude/settings.json')).hooks.PreToolUse.at(-1).hooks[0].command], { encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: f.root },
     input: JSON.stringify({ tool_name: 'Bash', agent_type: exec, cwd: f.product, tool_input: { command } }) });
-  for (const command of ['npm run e2e', 'npm run e2e', 'npm test']) hook(command);
+  for (const command of ['npm run e2e', 'npm run e2e', 'npm test', 'cd /elsewhere && npm test', 'cd']) hook(command);
   const profile = f.read('profiles/team-mode.json');
   const tripped = { ...f.result, budgetGateTripped: true, budgetStatus: { ...f.result.budgetStatus, loopSpent: 30000, tripped: true }, guardianTokens: 2000 };
   const closed = afterBatch({ teamRoot: f.kit, instanceRoot: f.root, result: tripped });
@@ -373,7 +373,9 @@ test('after reports, and does not change, each limit that stopped work: the outp
   assert.deepEqual(closed.limits, [
     { limit: 'outputAllowancePerTicket', observed: 28000, current: 15000, proposal: { outputAllowancePerTicket: 36000 } },
     { limit: 'attemptsPerTicket', observed: 1, current: 1, proposal: { attemptsPerTicket: 2 }, tickets: ['US-01'] },
-    { limit: 'allowedCommands', observed: 'npm run e2e', current: ['npm test', 'npm run lint'], proposal: null }]);
+    { limit: 'allowedCommands', observed: 'npm run e2e', current: ['npm test', 'npm run lint'], proposal: null },
+    ...['cd /elsewhere && npm test', 'cd'].map(observed => ({ limit: 'allowedCommands', observed, current: ['npm test', 'npm run lint'], proposal: null,
+      note: 'a confirmed command, or a cd, in a form the hook does not accept; no limit change is needed. Workers run each command exactly as listed, from the product root' }))]);
   assert.equal(f.read('profiles/team-mode.json'), profile, 'nothing writes the limits');
   // The ceiling is the tickets' allowances plus the Guardian's share: the proposal is for the share that ran out.
   const closeAgain = result => { writeFileSync(join(f.root, AFTER_FILE), JSON.stringify({ stage: 'batch-closing', runId: f.open.runId, claimedAt: '2000-01-01T00:00:00.000Z' }));
