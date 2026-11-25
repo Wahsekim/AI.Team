@@ -8,7 +8,7 @@ Status: Accepted (owner decisions given in session on 2026-11-16; ratified by th
 [ADR 0008](0008-router-worker-topology.md) accepted the Router/Worker topology
 on paper: three workers (execute, check, guard) instead of one role per
 speciality, with live activation left gated. Between 2026-11-13 and 2026-11-16
-five disposable smoke runs on the UHF test project exercised it with real
+five disposable smoke runs on the test project exercised it with real
 agents, each in a throwaway copy of the team and a clone of the product:
 
 | Run | What it showed |
@@ -33,7 +33,7 @@ not the goal.
 
 1. **Two modes, one team.** A deployed team works in specialist mode or in
    Router/Worker mode, at the owner's choice. Router/Worker is a feature of the
-   kit; UHF is only its test ground.
+   kit; the test project is only its test ground.
 2. **Same way of working as the specialist team.** The team works under the
    owner's "run N rounds" directive, without the owner attending, in the
    project's real product repository. No sandbox is required: the mode runs
@@ -142,7 +142,7 @@ The mode is called rolled out when both have happened:
    in Router/Worker mode, prepare and run a batch with stand-in agents, run the
    after-run checks, switch to specialist mode and back, and find the same team
    and the same ledgers.
-2. One run on the real UHF team and the real UHF repository, on a working
+2. One run on the real test team and its real repository, on a working
    branch, with small real tickets, on the owner's go-ahead at that time.
 
 ## Order of work
@@ -154,7 +154,7 @@ in reconciliation, and the allow-list. 7. The gate flag: present, off, refused
 in a standing team. 8. Proof 1. 9. Proof 2. 10. Remove the throwaway-copy
 tooling.
 
-Nothing touches the real UHF team or repository before step 9.
+Nothing touches the real test team or repository before step 9.
 
 ## Consequences
 
@@ -278,7 +278,7 @@ Merging the pull request that adds this amendment ratifies it.
 Status: Proposed.
 
 On 2026-11-24 a batch on a real team ran a refactor that moves four source
-files (US-61). The exec worker stopped before writing: in a batch it has its
+files. The exec worker stopped before writing: in a batch it has its
 file tools and the confirmed verification commands only (amendment of
 2026-11-18), so it could not rename or delete a tracked file, though "commit"
 already commits a staged rename or deletion. Its brief also gave it a narrower

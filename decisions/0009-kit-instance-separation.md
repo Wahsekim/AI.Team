@@ -9,7 +9,7 @@ A deployment today is a clone of this repository that bootstrap and every PM
 cycle then modify in place. The kit and one project's team state share a root
 and a Git history, so a kit update collides with project state.
 
-Observed on the UHF demo instance on 2026-11-12 (kit checkout at `fb8e106`,
+Observed on the demo instance on 2026-11-12 (kit checkout at `fb8e106`,
 81 commits behind `main`): `git pull` was refused. Twenty tracked kit files
 carried uncommitted project content, and seven of them were also changed
 upstream. The content falls into three kinds:
@@ -82,7 +82,7 @@ that deployed authority must come from the instantiated `charter.md`.
    universal sources from the kit root. The Router/Worker `teamRoot` parameter
    splits into the two roots, and its drafts target an instance root.
 9. **Legacy single-root deployments** keep working for one release with a
-   validator WARN, then fail. The only known deployment is the UHF demo.
+   validator WARN, then fail. The only known deployment is the demo instance.
 
 ## Script audit (first pass by grep, not a line-by-line review)
 
@@ -131,7 +131,7 @@ that deployed authority must come from the instantiated `charter.md`.
 - Rollout gate G-01 of the Router/Worker self-review is partly absorbed by
   decision 8; its other parts are unchanged.
 
-## Migration of the UHF demo instance
+## Migration of the demo instance
 
 1. Commit the current working tree on a local-only branch in the old checkout
    as a snapshot. Nothing is pushed.
@@ -188,5 +188,5 @@ per-project seeds, so they are instantiated like the charter.
       roots and fails on a missing required file (R4).
 - [ ] Ledger headers carry normative rules that are frozen at bootstrap; move
       them to a kit document so upgrades reach them.
-- [x] `scripts/migrate-to-instance.sh` for single-root deployments; the UHF demo
+- [x] `scripts/migrate-to-instance.sh` for single-root deployments; the demo
       instance was migrated on 2026-11-12.
