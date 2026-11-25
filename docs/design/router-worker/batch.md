@@ -516,9 +516,11 @@ a narrower pattern would miss `oauth/` or `authz.js`.
   same reviewer can lose one. The
   brief holds, for each ticket R must review: the goal and acceptance, the
   reason it was flagged, and the flagged files as absolute paths to open with
-  the Read tool; the diff of those tickets from the batch's start, untracked
-  files included (inline up to 60,000 characters, otherwise the reviewer opens
-  each changed path); R's rules as `id: text`; the ADRs as absolute paths; the
+  the Read tool, each to be read whole (the judging counts only a Read with no
+  offset and no limit, and its refusal says so); the diff of those tickets from
+  the batch's start, untracked files included (inline up to 60,000 characters,
+  otherwise the reviewer opens each changed path, and for a ticket that resumed
+  earlier work the brief names its patch in the team's folder); R's rules as `id: text`; the ADRs as absolute paths; the
   output tail of each verification command; the batch-review protocol
   (`agents/router-worker-review.md`); and the report schema, to be returned as
   the last fenced json block. It never holds a worker's report, the checker's

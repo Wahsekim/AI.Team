@@ -106,7 +106,7 @@ export function evidenceOf({ transcript, text, projectsRoot, wrapper, reviewer, 
   const opened = new Set(assistant.flatMap(entry => entry.message.content.filter(block => block?.type === 'tool_use' && block.name === 'Read' && typeof block.input?.file_path === 'string'
     && succeeded.has(block.id) && whole(block.input)).map(block => block.input.file_path)));
   const unopened = flaggedOf(brief, product).filter(item => !opened.has(item.absolute));
-  if (unopened.length) gap('REVIEW_TRANSCRIPT_NO_OPEN', `The transcript shows no Read of ${unopened.slice(0, 5).map(item => plain(item.absolute)).join(', ')}`);
+  if (unopened.length) gap('REVIEW_TRANSCRIPT_NO_OPEN', `The transcript shows no whole Read of ${unopened.slice(0, 5).map(item => plain(item.absolute)).join(', ')}; a Read counts only with no offset and no limit, so read each of these whole`);
   // A message streamed in several entries shares one id; the report is the last fenced json block of the last one.
   const lastId = assistant.at(-1)?.message.id, last = assistant.filter(entry => lastId !== undefined && entry.message.id === lastId).map(entry => textOf(entry.message.content)).join('\n');
   const blocks = [...last.matchAll(/(`{3,})json[ \t]*\n([\s\S]*?)\n\1[ \t]*(?=\n|$)/g)];

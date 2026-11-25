@@ -5,6 +5,7 @@ import { writeFileSync, mkdirSync, readFileSync, existsSync, symlinkSync, chmodS
 import { join, dirname } from 'node:path';
 import { BATCH_FILE } from '../src/router-worker/batch.mjs';
 import { afterBatch } from '../src/router-worker/batch-close.mjs';
+import { reviewBrief } from '../src/router-worker/review-brief.mjs';
 import { readLease } from '../src/router-worker/lease.mjs';
 import { runWorkflow, makeAgentImpl } from '../scripts/lib/workflow-harness.mjs';
 import { git } from './fixtures/router-worker/standing-team.mjs';
@@ -140,4 +141,18 @@ test('resumed work left as before applied it raises no unexplained write', async
   const closed = afterBatch({ ...f.common, result });
   assert.equal(closed.errors, undefined, JSON.stringify(closed.errors));
   assert.deepEqual(closed.findings.map(finding => finding.code), []); assert.deepEqual(closed.tickets[0].changedPaths, ['src/list/a.js', 'src/list/new.js']);
+});
+
+test('a reviewer of a resumed ticket whose diff is too large for the brief is pointed to the patch', async t => {
+  const f = withPatch(t, product => write(product, 'src/list/big.js', `${'// filler line of a large resumed change\n'.repeat(2000)}`));
+  const open = await f.before({ ...batchOf(ticket('T-1', ['src/list/**'], { expectedPaths: ['src/list/a.js'], resume: 'handoff/T-1/left.patch', riskFlags: ['payments'] })), verificationCommands: f.commands });
+  assert.equal(open.errors, undefined, JSON.stringify(open.errors));
+  const quiet = () => ({ outcome: 'done', progress: true, filesTouched: [], decisionsCount: 1, selfReportTokens: 100, blocked: false, terminalStop: false, notes: 'nothing to add' });
+  const verifier = () => ({ pass: true, staticPass: true, e2ePass: true, summary: 'ok', commandsRun: f.commands.map(command => ({ command, exitCode: 0 })), failures: [] });
+  const { result } = await runWorkflow({ scriptPath: join(f.root, '.claude/workflows/run-n-rounds.js'), args: open.args, agentImpl: makeAgentImpl({ worker: quiet, verifier }) });
+  assert.deepEqual(afterBatch({ ...f.common, result }).reviews.security.tickets, ['T-1']);
+  const made = reviewBrief({ ...f.common, reviewer: 'security' });
+  assert.equal(made.errors, undefined, JSON.stringify(made.errors));
+  assert.match(made.brief, /over the cap of 60000, so it is not included/);
+  assert.ok(made.brief.includes(`T-1 resumed earlier work: its patch is ${join(f.root, 'handoff/T-1/left.patch')}; read it whole`));
 });
