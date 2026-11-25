@@ -295,6 +295,11 @@ export function commitBatch({ teamRoot, instanceRoot }) {
       need(sha && sha !== parent && parentOf(sha) === parent, `The commit of ticket ${commit.ticket} did not land on the product branch. ${ABANDON}`);
       // A hook may have put other paths into the commit: what it holds must be the ticket's paths, nothing else.
       need(holds(sha, commit.paths), `The commit of ticket ${commit.ticket} (${sha.slice(0, 8)}) does not hold exactly that ticket's paths; a commit hook may have added or dropped some. It is left as it is. ${ABANDON}`);
+      // And each file holds the bytes after saw, which a hook that rewrites and stages a file would change (review finding R23-01).
+      const was = after.tickets.find(ticket => ticket.id === commit.ticket)?.content ?? {};
+      const blob = path => { const shown = gitRun(product, ['cat-file', 'blob', `${sha}:${path}`], { encoding: 'buffer' }); return shown.status === 0 ? bytesDigest(shown.stdout) : null; };
+      const rewritten = commit.paths.filter(path => typeof was[path] === 'string' && blob(path) !== was[path]);
+      need(!rewritten.length, `The commit of ticket ${commit.ticket} (${sha.slice(0, 8)}) holds other bytes than after saw in ${rewritten.slice(0, 5).map(plain).join(', ')}; a commit hook may have rewritten them. It is left as it is: inspect the hooks and the commit before anything else. ${ABANDON}`);
       done.push({ ticket: commit.ticket, sha });
       replace(progressPath, { schemaVersion: 1, runId: batch.runId, commits: done });
     }

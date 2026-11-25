@@ -130,6 +130,9 @@ export function derive(report, brief, reviewer, product) {
     const rows = brief.ruleIds.map(rule => report.rules.find(row => row?.rule === rule && same(row.ticket, id) && RESULTS.includes(row.result)));
     const missing = brief.ruleIds.filter((_, i) => !rows[i]);
     if (missing.length) gap('REVIEW_RULE_MISSING', `Ticket ${id}: no pass, fail or not-checked for ${missing.join(', ')}`);
+    // A result alone is not evidence: each row says what was checked, or why it was not (review finding R23-03).
+    const bare = brief.ruleIds.filter((_, i) => rows[i] && !(typeof rows[i].note === 'string' && rows[i].note.trim() && !/^<.*>$/.test(rows[i].note.trim())));
+    if (bare.length) gap('REVIEW_RULE_NO_EVIDENCE', `Ticket ${id}: ${bare.join(', ')} carry no note; each rule row says what was checked (file and line when there is one), or why it was not checked`);
     const fails = brief.ruleIds.filter((_, i) => rows[i]?.result === 'fail'), notChecked = brief.ruleIds.filter((_, i) => rows[i]?.result === 'not-checked');
     if (brief.ruleIds.length && notChecked.length === brief.ruleIds.length) gap('REVIEW_ALL_NOT_CHECKED', `Ticket ${id}: every rule is not-checked`);
     if (new Set(report.items.filter(entry => same(entry?.ticket, id)).map(entry => entry.verdict)).size > 1) gap('REVIEW_ITEM_CONFLICT', `Ticket ${id}: listed more than once with different verdicts`);
