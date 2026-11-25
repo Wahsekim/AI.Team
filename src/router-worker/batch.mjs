@@ -431,7 +431,7 @@ export function abortBatch({ teamRoot, instanceRoot }) {
       // Commits the kit already made for this batch are named: they are on the branch and stay there.
       const made = (readJSON(join(instance, PROGRESS_FILE))?.commits ?? []).filter(commit => typeof commit?.ticket === 'string' && TICKET_ID.test(commit.ticket) && /^[a-f0-9]{40}$/.test(commit?.sha ?? '')).map(commit => `${commit.ticket} ${commit.sha.slice(0, 8)}`);
       // A resolve already took the held tickets out of the work tree; their patches stay where it saved them.
-      const patches = Array.isArray(readJSON(join(instance, RESOLUTION_FILE))?.removed) && !id.startsWith('unreadable-') ? `; the tickets resolve held are patches under reviews/held/${id}/ and are not put back` : '';
+      const patches = readJSON(join(instance, RESOLUTION_FILE))?.removed?.length > 0 && !id.startsWith('unreadable-') ? `; the tickets resolve held are patches under reviews/held/${id}/ and are not put back` : '';
       const work = (made.length ? `${made.length} commit(s) were already made by the kit and stay on the branch (${made.join(', ')}); the rest of what the batch changed is still in the product work tree` : 'Nothing was committed by the kit; what the batch changed is still in the product work tree') + patches;
       const stamp = new Date().toISOString(), note = { schemaVersion: 1, stage: 'batch-archived-without-commit', runId: id, archivedAt: stamp, commitsMade: made, boundary: boundary ? 'closed' : 'not-restored', lockReleased,
         next: `${hooksMoved}${work}: commit it by hand on the working branch, or discard it.${boundary ? '' : ' The write-boundary file is missing or was changed: a mode switch to specialist and back rebuilds it.'}` };
