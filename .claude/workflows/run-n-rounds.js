@@ -683,6 +683,7 @@ for (let i = 0; i < iters; i++) {
     terminalStopRequested, scopeDrift, ownershipViolation,
     verificationRequired: p.isCodeShipping,
     worker, verifier,               // redacted at capture — safe to persist (R-03)
+    verifierDispatched,             // the LAST attempt called the verifier (verifier is null when that call failed)
     workerTokens, verifierTokens,   // SEPARATE per-spawn harness deltas (per-spawn attribution rule) — of the LAST attempt
     attempts, priorAttempts,        // bounded retry: earlier attempts of this ticket with their own per-spawn deltas
     estimates,                      // F-07 typed observations (null when the plan item carried no estimate)

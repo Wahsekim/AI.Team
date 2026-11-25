@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, lstatSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { digest, bytesDigest } from '../loop/contracts.mjs';
-import { accountRun } from './run-args.mjs';
+import { accountRun, checkerCalled } from './run-args.mjs';
 import { createRetryJournal, advanceRetryJournal } from './retries.mjs';
 import { createSettlementLedger, advanceSettlementLedger, usageEventFromMeterRow, settleAgainstJournal } from './settlement.mjs';
 import { settleRun } from './run-settlement.mjs';
@@ -158,7 +158,7 @@ export function settleEngineRun({ launch, close, result, meter, rules }) {
   const expected = [];
   for (let i = 0; i < account.calls.tickets; i++) for (let k = 1; k <= account.attempts[i]; k++) {
     expected.push({ index: i, attempt: k, duty: 'exec', agentType: plan[i].agentType });
-    if (k < account.attempts[i] || result.results[i].estimates.verifier !== null) expected.push({ index: i, attempt: k, duty: 'check', agentType: plan[i].verifierAgentType });
+    if (k < account.attempts[i] || checkerCalled(result.results[i])) expected.push({ index: i, attempt: k, duty: 'check', agentType: plan[i].verifierAgentType });
   }
   expected.push({ index: null, attempt: null, duty: 'guard', agentType: guardType });
   need(rows.length === expected.length && rows.every((row, i) => row.agentType === expected[i].agentType), 'The metered agents are not the calls of this run, in order');

@@ -66,6 +66,7 @@ test('in a batch a worker\'s shell runs the confirmed verification commands from
   const at = root => command => decideCall({ boundary: { productRoot: root, wrappers: { [exec]: { duty: 'exec', writePaths: [], commands: ['npm test'] } } }, input: { tool_name: 'Bash', agent_type: exec, cwd: '/t', tool_input: { command } } }).decision;
   assert.deepEqual([at('/x/My Project')('cd "/x/My Project" && npm test'), at('/x/My Project')('cd /x/My Project && npm test'), at('/x/p[1]')('cd /x/p[1] && npm test'), at('/x/a$b')('cd "/x/a$b" && npm test')], ['approve', 'deny', 'deny', 'deny']);
   assert.match(shell(exec, 'ls').reason, new RegExp(`only the verification commands confirmed for this team.*cd "${f.product}" && npm test`), 'the refusal says what does run');
+  assert.match(shell(exec, 'npm test; echo "exit=$?"').reason, /append nothing to a command: the Bash tool reports the exit code$/, 'a refused exit echo is told how to retry');
   assert.equal(shell('tag-list-fixture-worker-guard', `cd "${f.product}" && npm test`).decision, 'deny', 'the Guardian runs no command');
   assert.equal(shell('tag-list-fixture-architect', 'ls').decision, 'allow'); assert.equal(shell(null, 'ls').decision, 'allow');
   // The hook as the runtime runs it: an approval is the permission decision on stdout, a refusal is exit 2 with the reason.

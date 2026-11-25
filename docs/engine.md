@@ -336,6 +336,8 @@ in lifecycle headers).
   ran — invalid args (`errorCode: 'invalid-args'` + `validationErrors`),
   budget/ceiling semantics error, or malformed plan. Fix the invocation; do
   not count it as a loop.
+- `results[i].verifierDispatched` is `true` when the ticket's last attempt
+  called the verifier, even if that call failed (`verifier` is then `null`).
 - `results[i].workerTokens` / `results[i].verifierTokens` are the per-spawn
   harness figures for lifecycle attribution and coaching KPIs;
   `selfReportTokens` is the distrusted M4 self-report (dual-record >30%
