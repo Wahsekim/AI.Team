@@ -139,8 +139,9 @@ test('an archived list of the wrong shape counts as none kept: the whole list go
 
 test('the kit triggers cover lock files, build manifests, credentials and nested CI and deploy folders', t => {
   const f = live(t), review = loadReview({ instance: f.root }), flagged = path => flagPaths(review, [path]).because.map(entry => entry.trigger);
-  for (const path of ['pnpm-lock.yaml', 'yarn.lock', 'pom.xml', 'app/build.gradle', 'build.gradle.kts', '.npmrc', 'Gemfile', 'Gemfile.lock'])
+  for (const path of ['pnpm-lock.yaml', 'yarn.lock', 'pom.xml', 'app/build.gradle', 'build.gradle.kts', '.npmrc', 'Gemfile', 'Gemfile.lock', 'pubspec.yaml', 'pubspec.lock', 'ios/Podfile', 'Package.swift'])
     assert.ok(flagged(path).includes('kit.dependency-manifest'), path);
+  for (const path of ['analysis_options.yaml', 'packages/core/analysis_options.yaml']) assert.ok(flagged(path).includes('kit.lint-test-config'), path);
   for (const path of ['config/credentials.yml', 'src/author.md']) assert.ok(flagged(path).includes('kit.sensitive-word'), path);
   for (const path of ['.github/workflows/ci.yml', 'svc/.github/workflows/ci.yml', 'deploy/run.sh', 'svc/deploy/run.sh']) assert.ok(flagged(path).includes('kit.ci-deploy'), path);
 });

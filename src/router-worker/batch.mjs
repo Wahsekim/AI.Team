@@ -273,11 +273,18 @@ function liveTeam(teamRoot, instanceRoot) {
   return { instance, profile, productRoot, limits };
 }
 
+// In a batch a worker's shell runs the commands the owner confirmed for the team, and no other.
+function confirmedOnly(batch, limits) {
+  const unconfirmed = batch.verificationCommands.filter(command => !limits.allowedCommands.includes(command));
+  need(!unconfirmed.length, `These verification commands are not among the commands the owner confirmed for this team (${unconfirmed.slice(0, 5).map(plain).join(' | ')}); the workers could not run them. The owner adds them at an interactive terminal with: node kit/scripts/team-mode.mjs limits <LIMITS.json> --instance <instance-root>   (LIMITS.json: {"allowedCommands": [...]}, the whole list)`);
+}
+
 export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = false, manifest }) {
   let lease = null, opened = false, instance, productRoot;
   const applied = [];
   try {
-    ({ instance, productRoot } = liveTeam(teamRoot, instanceRoot));
+    let early;
+    ({ instance, productRoot, limits: early } = liveTeam(teamRoot, instanceRoot));
     need(!exists(join(instance, BATCH_FILE)) && !exists(join(instance, AFTER_FILE)), `A batch is already open (${BATCH_FILE}); close it with after and commit, or abort it, before starting another`);
     const standing = readBoundary(instance);
     need(!standing?.periodic || stateOf(standing) !== 'review', `A periodic review (${plain(standing?.runId)}) is not over: no batch opens until each due reviewer has an outcome. Brief it with: rw-batch.mjs periodic-brief --reviewer <reviewer> --instance <instance-root>, and judge it with: rw-batch.mjs periodic --reviewer <reviewer> --transcript <agent-*.jsonl> --instance <instance-root>`);
@@ -289,6 +296,8 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     const archivedRecords = archives.filter(id => !id.startsWith('.')).map(id => readJSON(join(instance, ARCHIVE, id, 'batch.json'))).filter(record => record && typeof record === 'object');
     const archived = archivedRecords.flatMap(record => Array.isArray(record.tickets) ? record.tickets : []).filter(entry => typeof entry?.id === 'string');
     checkBatch(batch, new Set(archived.map(entry => entry.id.toLowerCase())));
+    // Read again under the lock below; checked now as well, since it needs nothing from the product.
+    confirmedOnly(batch, early);
     // Owner rule of 2026-11-20: an escalated ticket blocks only itself and the tickets related to it; the rest of the plan goes on.
     const blocked = blockedTickets({ instance, tickets: batch.tickets, archived });
     need(!blocked.length, `These tickets are blocked by an escalation the owner has not acknowledged: ${blocked.slice(0, 10).map(entry => `${plain(entry.ticket)} (${plain(entry.escalation)})`).join(', ')}. A ticket is blocked when it is the escalated ticket, its paths overlap that ticket's paths, or it depends on a blocked ticket. Report the escalation to the owner and replan: a batch without these tickets opens. The owner lifts an escalation at an interactive terminal with: team-mode.mjs acknowledge <escalation id> --instance <instance-root>`, 'TICKET_ESCALATED');
@@ -317,8 +326,7 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     const { profile, limits } = liveTeam(teamRoot, instanceRoot), product = checkProduct(productRoot, startAsIs === true), count = batch.tickets.length;
     // In a batch a worker's shell runs the commands the owner confirmed for the team, and no other, from the product root.
     need(quotable(productRoot), UNQUOTABLE);
-    const unconfirmed = batch.verificationCommands.filter(command => !limits.allowedCommands.includes(command));
-    need(!unconfirmed.length, `These verification commands are not among the commands the owner confirmed for this team (${unconfirmed.slice(0, 5).map(plain).join(' | ')}); the workers could not run them. The owner adds them with: team-mode.mjs limits <LIMITS.json> --instance <instance-root>   (LIMITS.json: {"allowedCommands": [...]}, the whole list)`);
+    confirmedOnly(batch, limits);
     // Decision 11: paths already changed are kept out of the tickets' commits, so none may lie where a ticket writes.
     const mixed = product.preexisting.filter(path => batch.tickets.some(ticket => ticket.paths.some(grant => covers(grant, path))));
     need(!mixed.length, `These paths are already changed and lie where a ticket of this batch writes (${mixed.slice(0, 5).map(plain).join(', ')}); they could not be kept out of its commit. Commit or discard them first`);

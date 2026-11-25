@@ -41,7 +41,7 @@ const flags = (rest, allowed, bare = []) => {
 //   Prints a REQUEST.json for the switch, drafted from profiles/project.md with the ADR's staffing and limits.
 if (process.argv[2] === 'request') {
   const options = flags(process.argv.slice(3), ['--instance', '--model'], ['--ui']);
-  if (!options?.['--instance']) { console.error('usage: node scripts/team-mode.mjs request --instance <instance-root> [--model <roster model id>] [--ui]'); process.exit(1); }
+  if (!options?.['--instance']) { console.error('usage: node kit/scripts/team-mode.mjs request --instance <instance-root> [--model <roster model id>] [--ui]'); process.exit(1); }
   const instanceRoot = resolve(options['--instance']);
   const drafted = draftRequest({ teamRoot: join(instanceRoot, 'kit'), instanceRoot, ...(options['--model'] ? { model: options['--model'] } : {}), ui: options['--ui'] === true });
   if (drafted.errors) finish(drafted, false);
@@ -53,7 +53,7 @@ if (process.argv[2] === 'request') {
 //   Changes the limits of a live Router/Worker team; confirmed like a switch.
 if (process.argv[2] === 'limits') {
   const [file, ...rest] = process.argv.slice(3), options = file ? flags(rest, ['--instance']) : null;
-  if (!options?.['--instance']) { console.error('usage: node scripts/team-mode.mjs limits <LIMITS.json> --instance <instance-root>   (LIMITS.json: {"outputAllowancePerTicket"?: n, ...})'); process.exit(1); }
+  if (!options?.['--instance']) { console.error('usage: node kit/scripts/team-mode.mjs limits <LIMITS.json> --instance <instance-root>   (LIMITS.json: only the limits to change, e.g. {"outputAllowancePerTicket": 55000} or {"allowedCommands": [...the whole list]})'); process.exit(1); }
   const instanceRoot = resolve(options['--instance']), common = { teamRoot: join(instanceRoot, 'kit'), instanceRoot };
   let limits; try { limits = JSON.parse(readFileSync(file, 'utf8')); } catch { finish({ errors: [{ code: 'LIMITS_REFUSED', field: 'limits', reason: `${file} is not readable JSON` }] }, false); }
   const proposal = proposeLimits({ ...common, limits });
@@ -66,7 +66,7 @@ if (process.argv[2] === 'limits') {
 //   The owner lifts an escalated ticket's block (ADR 0011, decisions 16 and 17); confirmed like a switch.
 if (process.argv[2] === 'acknowledge') {
   const [id, ...rest] = process.argv.slice(3), options = id && !id.startsWith('--') ? flags(rest, ['--instance']) : null;
-  if (!options?.['--instance']) { console.error('usage: node scripts/team-mode.mjs acknowledge <escalation id> --instance <instance-root>   (the open escalations are in reviews/escalations.jsonl)'); process.exit(1); }
+  if (!options?.['--instance']) { console.error('usage: node kit/scripts/team-mode.mjs acknowledge <escalation id> --instance <instance-root>   (the open escalations are in reviews/escalations.jsonl)'); process.exit(1); }
   const instanceRoot = resolve(options['--instance']), common = { teamRoot: join(instanceRoot, 'kit'), instanceRoot, id };
   const proposal = proposeAcknowledge(common);
   if (proposal.errors) finish(proposal, false);
@@ -110,7 +110,7 @@ const [command, specPath, outputPath, ...rest] = argv;
 const [stagingPath, ...extra] = command === 'stage' ? rest : [undefined, ...rest];
 if (!['preview', 'draft', 'verify', 'stage'].includes(command) || !specPath || extra.length || (flag !== -1 && !instance[0])
   || (command === 'preview' ? outputPath !== undefined : !outputPath) || (command === 'stage' && (!stagingPath || !instance[0]))) {
-  console.error('usage: node scripts/team-mode.mjs preview <spec.json> | draft <spec.json> <new-file.rw-draft.json> | verify <spec.json> <draft.json> [--instance <instance-root>] | stage <spec.json> <draft.json> <new-dir.rw-staging> --instance <instance-root> (never activates a team)');
+  console.error('usage: node kit/scripts/team-mode.mjs preview <spec.json> | draft <spec.json> <new-file.rw-draft.json> | verify <spec.json> <draft.json> [--instance <instance-root>] | stage <spec.json> <draft.json> <new-dir.rw-staging> --instance <instance-root> (never activates a team)');
   process.exitCode = 1;
 } else {
   try {

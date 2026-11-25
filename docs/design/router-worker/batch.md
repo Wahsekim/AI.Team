@@ -8,8 +8,8 @@ escalation to the owner are built ("Review triggers", "Review state and brief",
 "Review verdict, commit gate and escalation"), and so are "Resolve" (held
 tickets saved as patches, the rest verified again), sensitive tickets and the
 cost of each reviewer call, set at "settle", and the periodic review
-("Periodic review"). Not yet used
-on a real team.
+("Periodic review"). Used on a real team since 2026-11-24; the review path has
+not yet run there.
 [ADR 0010](../../../decisions/0010-router-worker-second-mode.md), decisions 8 to 12.
 
 ```sh
