@@ -67,6 +67,7 @@ Instantiated names; pre-bootstrap, the `.template.md` seed stands in.
 | `scripts/preflight-run.mjs` | static launch preflight (engine dry-validation, live-wrapper registry, session freshness, product candidate) + frozen launch-bundle digest | PM |
 | `scripts/reconcile-run.mjs` | atomic engine-run reconciliation (ledgers + counter, per-target idempotent; `--monitoring` Q3/Q4 attestation) | PM |
 | `scripts/now-utc.sh` | the only sanctioned ledger timestamp source (host UTC) | PM |
+| `scripts/check-public-data.sh` | CI gate: no tracker ids or denylisted client names in the tracked tree (names in the `PUBLIC_DATA_DENYLIST` secret) | owner |
 | `scripts/measure-spawn.mjs` | per-subagent token meter from Claude Code transcripts (M4 fallback, lifecycle Harness Rule 9) | PM |
 | `scripts/lessons-stats.sh` | lesson citation counts from lifecycle `Lessons:` lines (Coach thresholds in `agents/coach.md`) | Coach |
 | `scripts/measure-context.sh` + `docs/context-budget.md` | cold-start context ratchet | PM + Coach |

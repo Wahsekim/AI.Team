@@ -21,7 +21,7 @@ jobs:
         os: [ubuntu-latest, macos-latest]
         node: [22, 24]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
@@ -69,12 +69,24 @@ jobs:
             ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
             detect --source /repo --log-opts=--all --redact -v
 
+  public-data:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      # Client names come from a secret so this public file does not list them;
+      # a fork PR has no secret and is checked for tracker ids only.
+      - name: No client identifiers in the tracked tree
+        env:
+          PUBLIC_DATA_DENYLIST: ${{ secrets.PUBLIC_DATA_DENYLIST }}
+        run: bash scripts/check-public-data.sh .
+
   # Single stable check name for a branch ruleset (R5-09): require 'ci-required'
   # instead of chasing matrix-expanded job names.
   ci-required:
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [test, shellcheck, secret-scan]
+    needs: [test, shellcheck, secret-scan, public-data]
     if: always()
     steps:
       - name: All required jobs green
@@ -85,3 +97,4 @@ jobs:
           [ "${{ needs.test.result }}" = "success" ]
           [ "${{ needs.shellcheck.result }}" = "success" ]
           [ "${{ needs.secret-scan.result }}" = "success" ]
+          [ "${{ needs.public-data.result }}" = "success" ]

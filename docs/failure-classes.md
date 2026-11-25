@@ -245,7 +245,7 @@ exact file/feature, (d) residual risk, honestly stated.
   REQUIRED landing or acceptance step did not happen (commit denied, gate not
   run); the harness reads the green execution tick as "ticket done" and no
   recovery fires. Optimistic self-assessment plus a single success boolean.
-- **Observed as (UHF Locator POC, 2026-09-24, US-02):** worker report said the
+- **Observed as (test project, 2026-09-24, US-02):** worker report said the
   commit was denied, yet `progress=true, blocked=false` produced
   `workerStatus=succeeded`, `verificationStatus=not_applicable`,
   `needsRecovery=false`; attended PM reading caught it.

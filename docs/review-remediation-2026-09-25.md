@@ -1,6 +1,6 @@
 # Review remediation — deployment evidence review of 2026-09-25
 
-Source: the independent deployment-evidence review of the UHF Locator POC
+Source: the independent deployment-evidence review of the test project
 pilot (reviewer round 1, goal `46a0a1d13a61bcdb`), which classified the pilot's
 22 incidents into six P2 findings, one P3 finding and 18 recommendation
 dispositions, and proposed development slices A–F. This file maps every
