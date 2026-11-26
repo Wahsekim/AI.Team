@@ -120,6 +120,10 @@ When the owner says `start {{PROJECT_NAME | localized at bootstrap}}` or
    `docs/owner-contract.md`.
 7. Run one cycle only, report, and sleep — unless the owner delegated a
    count-directed loop (charter loop modes; engine contract in `docs/engine.md`).
+   If `profiles/team-mode.json` has `"mode": "router-worker"` and
+   `"status": "live"`, a cycle and a count-directed loop alike are one batch,
+   run with `scripts/rw-batch.mjs` step by step as in
+   `docs/design/router-worker/batch.md` ("The order of a batch").
 
 ## Hard Rules
 

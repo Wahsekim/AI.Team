@@ -39,4 +39,6 @@ Run kit scripts from this folder and pass it as the root:
 Then read `kit/CLAUDE.md` and follow it with the path rule above: its
 authority map, PM Start Protocol and Hard Rules apply to this instance. When
 the owner says `start {{PROJECT_NAME | localized at bootstrap}}` or
-`start team`, begin at its PM Start Protocol.
+`start team`, begin at its PM Start Protocol. When `profiles/team-mode.json`
+says the team is live in Router/Worker mode, each cycle is a batch: run
+`kit/scripts/rw-batch.mjs` in the order of `kit/docs/design/router-worker/batch.md`.

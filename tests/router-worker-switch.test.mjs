@@ -53,6 +53,8 @@ test('the switch packs the specialist team into holiday/ and makes the three wor
   assert.deepEqual(f.wrappers(), ['architect', 'auditor', 'coach', 'security', 'worker-check', 'worker-exec', 'worker-guard'].map(role => `tag-list-fixture-${role}.md`).sort());
   assert.ok(!f.read('.claude/agents/tag-list-fixture-worker-exec.md').includes('Do not run from this draft'), 'the workers are live, not drafts');
   assert.match(f.read('agents/roster.md'), /\| worker-exec \|/);
+  const routing = f.read('agents/router-worker-router.md');
+  assert.ok(routing.includes('node kit/scripts/rw-batch.mjs') && routing.includes('kit/docs/design/router-worker/batch.md'), 'the live routing supplement sends the PM to the batch command and its order');
   const mode = JSON.parse(f.read('profiles/team-mode.json'));
   assert.equal(mode.mode, 'router-worker'); assert.equal(mode.status, 'live'); assert.equal(mode.dispatch, 'engine'); assert.deepEqual(mode.limits, DEFAULT_LIMITS);
   assert.equal(mode.confirmedProposal, result.proposalDigest); assert.ok(mode.ownFiles.includes('agents/worker-exec.md'));
