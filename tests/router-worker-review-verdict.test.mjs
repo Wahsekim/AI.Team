@@ -2,17 +2,22 @@
 // on the verdicts, and escalates a ticket that keeps failing review to the owner without stopping unrelated work.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, readFileSync, mkdtempSync, rmSync, appendFileSync, existsSync, utimesSync } from 'node:fs';
+import { writeFileSync, readFileSync, mkdtempSync, rmSync, appendFileSync, existsSync, utimesSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { digest } from '../src/loop/contracts.mjs';
 import { spawnSync, spawn } from 'node:child_process';
 import { abortBatch } from '../src/router-worker/batch.mjs';
 import { markNotMetered } from '../src/router-worker/batch-settle.mjs';
-import { recordNoAnswer, VERDICTS_FILE } from '../src/router-worker/review-judge.mjs';
+import { VERDICTS_FILE } from '../src/router-worker/review-judge.mjs';
+import { REVIEW_FILE } from '../src/router-worker/review-brief.mjs';
 import { proposeAcknowledge, acknowledgeEscalation, recordOutcomes, blockedTickets } from '../src/router-worker/escalations.mjs';
 import { git } from './fixtures/router-worker/standing-team.mjs';
 import { refusal, ticket, batchOf, live, changed, runBatch, edits, reportOf, failing, transcriptOf } from './fixtures/router-worker/review.mjs';
+
+// Security's review as before its first brief: no brief, no verdict, no dispatch.
+const fresh = f => { for (const path of [join(f.root, VERDICTS_FILE), join(f.root, REVIEW_FILE('security')), f.projectsRoot]) rmSync(path, { recursive: true, force: true }); };
+const escaped = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 test('a passed review lets the flagged ticket commit and resolve ends the review state; commit waits for the review and the resolution', async t => {
   const f = live(t);
@@ -44,14 +49,14 @@ test('a failed rule rejects its ticket: it is held as a patch, the other tickets
   const { open } = await runBatch(f, paths.map((path, i) => ticket(`US-0${i + 1}`, [path])), edits(paths));
   const made = f.brief('security'), base = reportOf(made);
   const report = failing({ ...base, items: base.items.map(item => item.ticket === 'US-01' ? { ...item, verdict: 'AMBER', finding: 'the session lifetime is long' } : item) }, 'US-03', 'kit.sec.secret-in-code');
-  const verdict = f.judge('security', transcriptOf(f, made, { report }));
+  const rejecting = transcriptOf(f, made, { report }), verdict = f.judge('security', rejecting);
   assert.equal(verdict.outcome, 'accepted', JSON.stringify(verdict));
   assert.deepEqual(verdict.tickets.map(item => [item.id, item.verdict, item.fails]), [['US-01', 'passed', []], ['US-03', 'rejected', ['kit.sec.secret-in-code']]]);
   assert.equal(verdict.tickets[0].finding, 'the session lifetime is long', 'the AMBER concern is kept for the PM\'s backlog');
   assert.deepEqual(f.lines('reviews/tickets.jsonl').map(line => [line.ticket, line.runId, line.reviewer, line.outcome, line.finding]), [['US-03', open.runId, 'security', 'rejected', 'a token is written in code']]);
-  // Deleting the verdicts lets the reviewer be judged again; the lines across batches still hold the rejection.
+  // Deleting the verdicts and the judged transcript lets the reviewer be judged again; the lines across batches still hold the rejection.
   const kept = f.read(VERDICTS_FILE);
-  rmSync(join(f.root, VERDICTS_FILE)); assert.equal(f.judge('security', transcriptOf(f, made)).outcome, 'accepted');
+  rmSync(join(f.root, VERDICTS_FILE)); rmSync(rejecting); assert.equal(f.judge('security', transcriptOf(f, made)).outcome, 'accepted');
   assert.match(refusal(f.commit()).reason, /US-03.*rejected.*reviews\/tickets\.jsonl/);
   writeFileSync(join(f.root, VERDICTS_FILE), kept);
   assert.equal(f.resolve().errors, undefined);
@@ -67,7 +72,7 @@ test('the kit refuses a report that does not show the work, and a transcript tha
   const f = live(t);
   await runBatch(f, [ticket('US-01', ['src/authz.js'])], edits(['src/authz.js']));
   const check = (why, code, shape) => {
-    rmSync(join(f.root, VERDICTS_FILE), { force: true });
+    fresh(f);
     const made = f.brief('security'), verdict = f.judge('security', ...shape(made));
     assert.equal(verdict.errors, undefined, `${why}: ${JSON.stringify(verdict.errors)}`);
     assert.equal(verdict.outcome, 'refused', why); assert.ok(verdict.refusals.some(item => item.code === code), `${why}: ${JSON.stringify(verdict.refusals)}`);
@@ -91,16 +96,101 @@ test('the kit refuses a report that does not show the work, and a transcript tha
   const flagged = join(f.product, 'src/authz.js');
   check('a Read that failed', 'REVIEW_TRANSCRIPT_NO_OPEN', made => [transcriptOf(f, made, { reads: [{ path: flagged, error: true }] })]);
   check('a Read that starts past the first line', 'REVIEW_TRANSCRIPT_NO_OPEN', made => [transcriptOf(f, made, { reads: [{ path: flagged, input: { offset: 5 } }] })]);
-  check('a Read with a limit', 'REVIEW_TRANSCRIPT_NO_OPEN', made => [transcriptOf(f, made, { reads: [{ path: flagged, input: { limit: 3 } }] })]);
   check('a REPORT.json that is not the transcript\'s report', 'REVIEW_REPORT_MISMATCH', made => [transcriptOf(f, made), { ...reportOf(made), residualRisk: 'other' }]);
   // A single rule not checked is allowed and recorded in the ledger.
-  rmSync(join(f.root, VERDICTS_FILE), { force: true });
-  assert.match(refusal(f.judge('security', join(f.base, 'missing.jsonl'))).reason, /cannot be read/, 'a file that is not there is not an attempt');
+  fresh(f);
   const made = f.brief('security'), one = reportOf(made);
+  assert.match(refusal(f.judge('security', join(f.base, 'missing.jsonl'))).reason, /cannot be read/, 'a file that is not there is not an attempt');
   const reads = [{ path: flagged, input: { limit: 3 } }, { path: flagged, input: { offset: 1 } }];
   const verdict = f.judge('security', transcriptOf(f, made, { reads, report: { ...one, rules: one.rules.map((row, i) => i === 0 ? { ...row, result: 'not-checked' } : row) } }));
   assert.equal(verdict.outcome, 'accepted'); assert.deepEqual(verdict.tickets[0].notChecked, [made.record.ruleIds[0]]);
   assert.match(f.ledger(), new RegExp(`not checked: ${made.record.ruleIds[0]} on US-01`));
+});
+
+test('the successful Reads of a flagged file evidence it when together they cover each of its lines, however long it is', async t => {
+  const f = live(t), numbered = count => Array.from({ length: count }, (_, i) => `export const line${i + 1} = ${i + 1};\n`).join('');
+  await runBatch(f, [ticket('US-01', ['src/authz.js']), ticket('US-02', ['src/session.js'])], { 'src/authz.js': numbered(4500), 'src/session.js': numbered(10) });
+  const long = join(f.product, 'src/authz.js'), short = join(f.product, 'src/session.js');
+  const ranged = (...pairs) => pairs.map(([offset, limit]) => ({ path: long, input: { offset, limit } }));
+  const judged = reads => { fresh(f); const made = f.brief('security'); return { made, verdict: f.judge('security', transcriptOf(f, made, { reads })) }; };
+  const uncovered = (why, reads, file, line) => {
+    const { verdict } = judged(reads), gap = verdict.refusals?.find(item => item.code === 'REVIEW_TRANSCRIPT_NO_OPEN');
+    assert.equal(verdict.outcome, 'refused', why); assert.ok(gap?.detail.includes(`${file} from line ${line} `), `${why}: ${JSON.stringify(verdict.refusals)}`);
+  };
+  const covered = judged([...ranged([1, 2000], [2001, 2000], [4001, 2000]), short]);
+  assert.equal(covered.verdict.outcome, 'accepted', `three consecutive ranges, and one plain Read of a short file: ${JSON.stringify(covered.verdict.refusals)}`);
+  assert.match(covered.made.brief, new RegExp(`${escaped(long)} \\(4500 lines, \\d+ KB: read it in ranges, each Read with limit 2000, at offsets 1, 2001, 4001\\)`), 'the brief marks the file that takes ranged Reads with its ranges');
+  assert.ok(!covered.made.brief.includes(`${short} (`), 'a short file is not marked');
+  uncovered('one plain Read of a 4,500-line file', [long, short], long, 2001);
+  uncovered('ranges with a gap', [...ranged([1, 2000], [2002, 3000]), short], long, 2001);
+  uncovered('a Read whose result is an error covers nothing', [...ranged([1, 2000], [2001, 2000]), { path: long, input: { offset: 4001, limit: 2000 }, error: true }, short], long, 4001);
+  uncovered('a short file read only in part', [...ranged([1, 4500]), { path: short, input: { limit: 5 } }], short, 6);
+});
+
+test('the brief says how each flagged file is read and the judging asks for that: text in ranges sized by its bytes, an image or a PDF once, a binary file not at all', async t => {
+  const f = live(t), names = ['wide.js', 'logo.png', 'spec.pdf', 'blob.bin'];
+  // 1,000 lines of about 300 bytes; an image of half a megabyte with more newlines than one Read returns lines; a PDF; bytes with NULs.
+  const wide = Array.from({ length: 1000 }, (_, i) => `// ${String(i).padStart(4, '0')} ${'x'.repeat(290)}\n`).join('');
+  const image = `\u0089PNG\r\n\u001a\n${'\u0000ÿ\n'.repeat(130000)}`, pdf = `%PDF-1.4\n${'stream\n'.repeat(3000)}`, blob = `\u0000\u0001${'x'.repeat(100)}\n`.repeat(20);
+  await runBatch(f, [ticket('US-01', names.map(name => `src/auth/${name}`))], Object.fromEntries(names.map((name, i) => [`src/auth/${name}`, [wide, image, pdf, blob][i]])));
+  const [text, png, spec, bin] = names.map(name => join(f.product, 'src/auth', name));
+  const lines = 1000, limit = Math.floor(lines * 60 * 1024 / Buffer.byteLength(wide)), offsets = Array.from({ length: Math.ceil(lines / limit) }, (_, i) => 1 + i * limit);
+  assert.ok(limit < lines, `a range of ${limit} lines`);
+  const ranged = offsets.map(offset => ({ path: text, input: { offset, limit } })), pages = { path: spec, input: { pages: '1-5' } };
+  const first = f.brief('security');
+  assert.deepEqual(first.record.tickets[0].flaggedFiles, names.map(name => `src/auth/${name}`).sort());
+  assert.match(first.brief, new RegExp(`${escaped(text)} \\(1000 lines, \\d+ KB: read it in ranges, each Read with limit ${limit}, at offsets ${offsets.join(', ')}\\)`));
+  assert.ok(first.brief.includes(`${bin} (a binary file`), 'the binary file is named, not to be read');
+  const unread = f.judge('security', transcriptOf(f, first, { reads: [...ranged, pages] }));
+  assert.equal(unread.outcome, 'refused');
+  assert.deepEqual(unread.refusals.map(item => item.code), ['REVIEW_TRANSCRIPT_NO_OPEN']);
+  assert.ok(unread.refusals[0].detail.includes(png) && !unread.refusals[0].detail.includes(text) && !unread.refusals[0].detail.includes(bin), unread.refusals[0].detail);
+  const verdict = f.judge('security', transcriptOf(f, f.brief('security'), { reads: [...ranged, png, pages] }));
+  assert.equal(verdict.outcome, 'accepted', `one Read of the image and of the PDF, none of the binary file: ${JSON.stringify(verdict.refusals)}`);
+});
+
+test('one plain Read evidences a text file of 2,000 lines, and not one of 2,001', async t => {
+  const f = live(t), rows = count => Array.from({ length: count }, (_, i) => `// ${i + 1}\n`).join('');
+  await runBatch(f, [ticket('US-01', ['src/auth/fits.js', 'src/auth/over.js'])], { 'src/auth/fits.js': rows(2000), 'src/auth/over.js': rows(2001) });
+  const [fits, over] = ['fits.js', 'over.js'].map(name => join(f.product, 'src/auth', name));
+  const verdict = f.judge('security', transcriptOf(f, f.brief('security'), { reads: [fits, over] }));
+  const gap = verdict.refusals?.find(item => item.code === 'REVIEW_TRANSCRIPT_NO_OPEN');
+  assert.equal(verdict.outcome, 'refused');
+  assert.ok(gap?.detail.includes(`${over} from line 2001 of 2001`) && !gap.detail.includes(fits), JSON.stringify(verdict.refusals));
+});
+
+test('a reviewer that stopped without a report is judged from its transcript, not recorded as no answer, and the healthy second dispatch is accepted', async t => {
+  const f = live(t);
+  await runBatch(f, [ticket('US-01', ['src/authz.js'])], edits(['src/authz.js']));
+  const stopped = transcriptOf(f, f.brief('security'), { report: null });
+  const silenced = refusal(f.noAnswer('security', 'the reviewer stopped without a report'));
+  assert.equal(silenced?.code, 'REVIEW_REFUSED', 'no answer is refused while a transcript carries the latest brief');
+  assert.ok(silenced.reason.includes(realpathSync(stopped)) && /review --reviewer security --transcript/.test(silenced.reason), silenced.reason);
+  assert.equal(existsSync(join(f.root, VERDICTS_FILE)), false, 'nothing is recorded');
+  const judged = f.judge('security', stopped);
+  assert.deepEqual([judged.outcome, judged.attempt, judged.refusals.map(item => item.code)], ['refused', 1, ['REVIEW_NO_REPORT']]);
+  const healthy = f.judge('security', transcriptOf(f, f.brief('security')));
+  assert.deepEqual([healthy.outcome, healthy.attempt], ['accepted', 2], JSON.stringify(healthy));
+});
+
+test('of two dispatches with one brief the earlier is judged first; one with an earlier brief or another run\'s, and a judged transcript that grew, are not waited for', async t => {
+  const f = live(t);
+  const { open } = await runBatch(f, [ticket('US-01', ['src/authz.js'])], edits(['src/authz.js']));
+  const made = f.brief('security');
+  transcriptOf(f, made, { prompt: made.brief.replace(`run ${open.runId}`, 'run rw-another-run'), session: 'session-0' });
+  const first = transcriptOf(f, made, { reads: [] }), second = transcriptOf(f, made, { session: 'session-2' });
+  const refused = refusal(f.judge('security', second));
+  assert.equal(refused?.code, 'REVIEW_REFUSED'); assert.ok(refused.reason.includes(realpathSync(first)), refused.reason);
+  assert.ok(!refused.reason.includes('session-0'), 'a dispatch with another batch\'s brief is not one of this review');
+  assert.equal(existsSync(join(f.root, VERDICTS_FILE)), false, 'nothing is recorded');
+  assert.deepEqual([f.judge('security', first).outcome], ['refused'], 'the earlier dispatch uses the first attempt');
+  const again = f.brief('security');
+  assert.equal(again.record.attempt, 2);
+  // The first reviewer was resumed with the new brief after its judgment: its transcript grew, and still begins with the first brief.
+  appendFileSync(first, JSON.stringify({ type: 'user', message: { role: 'user', content: again.brief } }) + '\n');
+  const last = f.judge('security', transcriptOf(f, again, { session: 'session-3' }));
+  assert.deepEqual([last.outcome, last.attempt], ['accepted', 2], `neither the second dispatch nor the grown first one carries the latest brief, so neither is waited for: ${JSON.stringify(last)}`);
+  assert.deepEqual(JSON.parse(f.read(VERDICTS_FILE)).entries.map(entry => [entry.attempt, entry.outcome]), [[1, 'refused'], [2, 'accepted']]);
 });
 
 test('a report refused twice, or no answer, means review not obtained: the flagged ticket is held, the others commit', async t => {
@@ -109,12 +199,12 @@ test('a report refused twice, or no answer, means review not obtained: the flagg
   const first = f.brief('security'), refused = f.judge('security', transcriptOf(f, first, { reads: [] }));
   assert.equal(refused.outcome, 'refused');
   // The reviewer is told the rule it is judged by, and the refusal says how to meet it.
-  assert.match(first.brief, /Read each whole: one Read with no offset and no limit\. A Read of a part of a file is not counted/);
-  assert.match(JSON.stringify(refused), /a Read counts only with no offset and no limit, so read each of these whole/);
+  assert.match(first.brief, /Your Reads of a file must together cover every line of it/);
+  assert.match(JSON.stringify(refused), /do not cover \S+\/src\/authz\.js from line 1 .*must together cover every line/);
   assert.match(refusal(f.judge('security', transcriptOf(f, first))).reason, /brief again/, 'the next attempt needs a new brief');
   const second = f.brief('security');
   assert.match(second.record.retryReason, /REVIEW_TRANSCRIPT_NO_OPEN/); assert.match(second.brief, /earlier attempt was refused.*REVIEW_TRANSCRIPT_NO_OPEN/s);
-  const lost = recordNoAnswer({ ...f.common, reviewer: 'security', reason: 'the reviewer stopped without a report' });
+  const lost = f.noAnswer('security', 'the dispatch left no transcript');
   assert.equal(lost.outcome, 'not-obtained', JSON.stringify(lost)); assert.deepEqual(lost.tickets.map(item => [item.id, item.verdict]), [['US-02', 'not-obtained']]);
   assert.match(refusal(f.brief('security')).reason, /review of this batch is over \(not-obtained\)/);
   assert.deepEqual(f.lines('reviews/tickets.jsonl').map(line => [line.ticket, line.runId, line.outcome]), [['US-02', open.runId, 'not-obtained']]);

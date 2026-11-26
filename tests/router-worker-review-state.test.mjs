@@ -1,13 +1,15 @@
 // ADR 0011, decisions 4, 11 and 12: the review state a flagged batch enters at "after", and the brief a reviewer gets.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, readFileSync, existsSync, mkdirSync, rmSync } from 'node:fs';
+import { writeFileSync, readFileSync, existsSync, mkdirSync, rmSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { beforeBatch, abortBatch } from '../src/router-worker/batch.mjs';
 import { afterBatch, commitBatch } from '../src/router-worker/batch-close.mjs';
 import { markNotMetered } from '../src/router-worker/batch-settle.mjs';
 import { reviewBrief, REVIEW_FILE } from '../src/router-worker/review-brief.mjs';
+import { recordNoAnswer } from '../src/router-worker/review-judge.mjs';
+import { live as reviewed, runBatch, transcriptOf } from './fixtures/router-worker/review.mjs';
 import { runCommands } from '../src/router-worker/run-commands.mjs';
 import { readBoundary, decideCall } from '../src/router-worker/write-boundary.mjs';
 import { proposeLimits, changeLimits } from '../src/router-worker/switch.mjs';
@@ -133,7 +135,67 @@ test('review-brief gives the reviewer the goal, the diff, the flagged files to o
   assert.equal(elective.errors, undefined, JSON.stringify(elective.errors));
   assert.deepEqual(elective.record.tickets.map(item => [item.id, item.elective]), [['US-01', false], ['US-02', true]]);
   assert.ok(elective.brief.includes(`${f.product}/src/authz.js`) && elective.brief.includes('kit.arch.boundaries'));
+  // A brief may have been dispatched until a record judges it: no second one before.
+  assert.match(refusal(f.brief('security')).reason, /security's brief 1 has no judged transcript and no recorded no-answer/);
+  assert.equal(JSON.parse(f.read(REVIEW_FILE('security'))).entries.length, 1, 'nothing is appended');
+  assert.equal(recordNoAnswer({ ...f.common, reviewer: 'security', reason: 'the dispatch left no transcript', projectsRoot: join(f.base, 'projects') }).outcome, 'refused');
   assert.equal(f.brief('security').record.attempt, 2);
+});
+
+test('a brief whose verification command failed is made again before it is dispatched', async t => {
+  const f = await flagged(t), failing = ({ commands }) => commands.map(command => ({ command, exit: 1, timedOut: false, outputDigest: 'sha256:x', tail: 'flaky' }));
+  assert.match(reviewBrief({ ...f.common, reviewer: 'security', run: failing }).notice, /brief again/);
+  assert.equal(f.brief('security').record.attempt, 2);
+  assert.match(refusal(f.brief('security')).reason, /security's brief 2 has no judged transcript/, 'a brief whose commands passed waits for its judgment');
+});
+
+test('over the diff cap the brief shows each changed path in ticket order: whole while it fits, else its removed lines, else its counts', async t => {
+  const f = reviewed(t), lock = version => `{\n${Array.from({ length: 3000 }, (_, i) => `  "pkg-${i}": "${version}.${i}",\n`).join('')}}\n`;
+  writeFileSync(join(f.product, 'package-lock.json'), lock('1.0'));
+  const rows = (count, word) => Array.from({ length: count }, (_, i) => `// ${word} ${i}\n`).join('');
+  mkdirSync(join(f.product, 'src'), { recursive: true }); writeFileSync(join(f.product, 'src/authz.js'), 'export function can(user) {\n  if (!user.isAdmin) return false;\n  return true;\n}\n');
+  writeFileSync(join(f.product, 'src/authz-table.js'), rows(10, 'old row'));
+  git(f.product, 'add', '-A'); git(f.product, 'commit', '-q', '-m', 'seed');
+  await runBatch(f, [ticket('US-01', ['package-lock.json']), ticket('US-02', ['src/authz.js', 'src/authz-table.js'])],
+    { 'package-lock.json': lock('2.0'), 'src/authz.js': 'export function can(user) {\n  return true;\n}\n', 'src/authz-table.js': rows(4000, 'generated row') });
+  const made = f.brief('security');
+  assert.equal(made.errors, undefined, JSON.stringify(made.errors));
+  assert.ok(made.brief.includes('-  if (!user.isAdmin) return false;'), 'the removed check of the small edit is shown');
+  assert.match(made.brief, /package-lock\.json: not shown, 3000 lines added and 3000 removed/, 'the regenerated lock file is named with its counts');
+  assert.ok(!made.brief.includes('-  "pkg-0": "1.0.0",'), 'its removed lines do not fit and are not shown');
+  assert.ok(made.brief.includes('-// old row 9') && !made.brief.includes('+// generated row 0'), 'a file whose whole diff does not fit shows its removed lines alone');
+  assert.match(made.brief, /src\/authz-table\.js: its removed lines only, under their hunk headers; its 4000 added lines are not shown/);
+  assert.ok(made.brief.includes(`${join(f.product, 'package-lock.json')} (3002 lines, `) && made.brief.includes('read it in ranges, each Read with limit 2000, at offsets 1, 2001)'), 'the long flagged file is marked for ranged Reads');
+});
+
+test('over the cap every character of the diff section counts: it stays within 60,000 characters, names a binary file, and sends the reviewer to each path whose added lines it leaves out', async t => {
+  const f = reviewed(t);
+  mkdirSync(join(f.product, 'src'), { recursive: true }); writeFileSync(join(f.product, 'src/authz.js'), 'export function can(user) {\n  if (!user.isAdmin) return false;\n  return true;\n}\n');
+  git(f.product, 'add', '-A'); git(f.product, 'commit', '-q', '-m', 'seed');
+  // A new table whose own diff is just under the cap: shown whole, its label and fence would carry the section over it.
+  const table = Array.from({ length: 995 }, (_, i) => `${String(i).padStart(6, '0')} ${'x'.repeat(51)}\n`).join('');
+  await runBatch(f, [ticket('US-01', ['src/auth/table.txt']), ticket('US-02', ['src/authz.js', 'src/auth/blob.bin'])],
+    { 'src/auth/table.txt': table, 'src/authz.js': 'export function can(user) {\n  return true;\n}\n', 'src/auth/blob.bin': '\u0000\u0001 binary\n' });
+  const made = f.brief('security'), section = /\n## Diff from \S+\n\n([\s\S]*?)\n\n## Rules to check/.exec(made.brief)?.[1] ?? '';
+  assert.match(section, /^The diff is \d+ characters, over the cap of 60000/);
+  assert.ok(section.length <= 60000, `the diff section is ${section.length} characters`);
+  assert.match(section, /\nsrc\/auth\/table\.txt: its removed lines only, under their hunk headers; its 995 added lines are not shown: open it with your Read tool for them\n/);
+  assert.match(section, /\nsrc\/auth\/blob\.bin: a binary file/);
+  assert.ok(section.includes('-  if (!user.isAdmin) return false;'), 'the small edit is still shown');
+});
+
+test('a flagged symbolic link is shown with its target made plain, not as a deleted file, and is not read; a target changed since the brief refuses the judgment', async t => {
+  const f = reviewed(t), target = 'authz‮.js';
+  await runBatch(f, [ticket('US-01', ['src/auth-link.js'])], { 'src/auth-link.js': { link: target } });
+  const made = f.brief('security'), link = join(f.product, 'src/auth-link.js');
+  assert.equal(made.errors, undefined, JSON.stringify(made.errors));
+  assert.ok(made.brief.includes(`${link} (a symbolic link to "authz?.js"`), made.brief);
+  assert.ok(!made.brief.includes('deleted by the ticket'));
+  const dispatched = transcriptOf(f, made, { reads: [] });
+  rmSync(link); symlinkSync('session.js', link);
+  assert.match(refusal(f.judge('security', dispatched))?.reason ?? '', /src\/auth-link\.js changed since the brief/);
+  rmSync(link); symlinkSync(target, link);
+  assert.equal(f.judge('security', dispatched).outcome, 'accepted', 'no Read of the link is required');
 });
 
 test('review-brief refuses with no batch in review, for a reviewer with no ticket, and when a flagged file changed since after', async t => {

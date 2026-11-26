@@ -9,8 +9,9 @@ import { BATCH_FILE, AFTER_FILE, ARCHIVE, contentOf, plain } from './batch.mjs';
 import { intact, Refusal } from './batch-close.mjs';
 import { loadReview } from './review-triggers.mjs';
 import { rosterWrapper } from './switch.mjs';
-import { finalOf, evidenceOf, derive, said, projectsOf } from './review-judge.mjs';
-import { fenced, lines, REPORT, protocolOf } from './review-brief.mjs';
+import { finalOf, evidenceOf, derive, said, projectsOf, judgeFirst, changedSince } from './review-judge.mjs';
+import { fenced, lines, REPORT, protocolOf, OPEN_RULE, toOpen } from './review-brief.mjs';
+import { linksOf } from './read-coverage.mjs';
 
 // ADR 0011, decision 7: every HARDENING_INTERVAL committed tickets, Security once and Architect once read what was
 // committed since their last periodic review and that no triggered review of theirs passed, under the evidence rules
@@ -114,8 +115,7 @@ function briefsOf(instance, reviewer, id) {
 function render({ reviewer, id, attempt, interval, tickets, product, rules, adrs, protocol, retryReason }) {
   const ticketText = tickets.map(item => [`### ${item.id}: ${plain(item.title)}`, `Committed as ${item.shas.join(', ')} (run ${item.runs.join(', ')})`,
     `Goal: ${plain(item.goal)}`, 'Acceptance:', lines(item.acceptance.map(plain)),
-    'Files to open with your Read tool, every one, as they stand now, and to report in filesRead:',
-    lines(item.flaggedFiles.map(path => item.content[path] === null ? `${join(product, path)} (deleted since: nothing to open)` : join(product, path)))].join('\n')).join('\n\n');
+    `Files to open with your Read tool, every one, as they stand now, and to report in filesRead. ${OPEN_RULE}:`, toOpen(product, item, 'deleted since')].join('\n')).join('\n\n');
   return [heading(reviewer, id, attempt),
     `You review as ${reviewer} what the team committed since your last periodic review (one every ${interval} committed tickets), less what a triggered review of yours passed. This brief holds no diff and no verification output: open the files. You write nothing in the product and run no shell command. Follow the protocol.`,
     ...(retryReason ? ['## Why you are dispatched again', `Your earlier attempt was refused by the kit: ${retryReason}. This attempt is the last one.`] : []),
@@ -163,13 +163,16 @@ export function periodicBrief({ teamRoot, instanceRoot, reviewer }) {
       const item = byTicket.get(entry.ticket) ?? { id: entry.ticket, title: ticket?.title ?? '(the batch record cannot be read)', goal: ticket?.goal ?? '', acceptance: ticket?.acceptance ?? [], runs: [], shas: [], changedPaths: [] };
       byTicket.set(entry.ticket, { ...item, runs: [...item.runs, entry.runId], shas: [...item.shas, entry.sha], changedPaths: [...new Set([...item.changedPaths, ...changedPaths])] });
     }
-    const tickets = [...byTicket.values()].map(item => ({ ...item, flaggedFiles: item.changedPaths, content: contentOf(product, item.changedPaths) }));
+    const tickets = [...byTicket.values()].map(item => ({ ...item, flaggedFiles: item.changedPaths, content: contentOf(product, item.changedPaths), links: linksOf(product, item.changedPaths) }));
     if (!period.id) reviewBoundary({ teamRoot: instance, runId: id, reviewers: period.wrappers, periodic: true });
     const refused = triedOf(kept, reviewer, counted).at(-1), retryReason = refused ? refused.refusals.map(item => `${item.code}: ${item.detail}`).join('; ') : null;
-    const briefs = briefsOf(instance, reviewer, period.id), attempt = briefs.length + 1, rules = review.rules.filter(rule => rule.reviewer === reviewer);
+    const briefs = briefsOf(instance, reviewer, period.id), latest = briefs.at(-1), attempt = briefs.length + 1, rules = review.rules.filter(rule => rule.reviewer === reviewer);
+    // ADR 0011, decision 4, as in a batch review: a brief whose pinned files changed may be made again, since its dispatch could not be judged.
+    need(!latest || period.mine.some(line => line.briefAttempt === latest.attempt) || changedSince(product, latest).length,
+      `${reviewer}'s periodic brief ${latest?.attempt} has no judged transcript and no recorded no-answer; judge it first with: rw-batch.mjs periodic --reviewer ${reviewer} --transcript <agent-*.jsonl> --instance <instance-root>, or periodic --no-answer "<reason>" --reviewer ${reviewer} --instance <instance-root> if the dispatch left no transcript`);
     const body = render({ reviewer, id, attempt, interval, tickets, product, rules, adrs: review.adrs.map(path => join(instance, path)), protocol: protocolOf(instance), retryReason }), briefDigest = digest(body);
     const record = sealed({ schemaVersion: 1, stage: 'periodic-brief', id, reviewer, wrapper: period.wrappers[reviewer], attempt, briefDigest, madeAt: at, interval, intervalSource, counted,
-      tickets: tickets.map(({ id: ticket, runs, shas, changedPaths, flaggedFiles, content }) => ({ id: ticket, runs, shas, changedPaths, flaggedFiles, content })),
+      tickets: tickets.map(({ id: ticket, runs, shas, changedPaths, flaggedFiles, content, links }) => ({ id: ticket, runs, shas, changedPaths, flaggedFiles, content, links })),
       ruleIds: rules.map(rule => rule.id), adrs: review.adrs, ...(retryReason ? { retryReason } : {}) });
     const path = join(instance, BRIEF_FILE(reviewer));
     writeFileSync(`${path}.tmp`, JSON.stringify({ schemaVersion: 1, id, reviewer, entries: [...briefs, record] }, null, 2) + '\n'); renameSync(`${path}.tmp`, path);
@@ -213,11 +216,11 @@ function record({ instance, review, id, kept, brief }, reviewer, judged, meter) 
 export function judgePeriodic({ teamRoot, instanceRoot, reviewer, transcript, report: given, meter, projectsRoot = projectsOf() }) {
   try {
     const context = judging({ teamRoot, instanceRoot, reviewer }), { brief, product, id, kept } = context;
-    let text; try { text = readFileSync(transcript, 'utf8'); } catch { need(false, `${plain(transcript)} cannot be read; nothing was recorded`); }
+    let text, file; try { text = readFileSync(transcript, 'utf8'); file = realpathSync(transcript); } catch { need(false, `${plain(transcript)} cannot be read; nothing was recorded`); }
     const fileDigest = bytesDigest(text);
     need(!kept.some(line => line.id === id && line.transcript?.digest === fileDigest), 'This transcript was already judged; nothing was recorded');
-    const recorded = Object.assign({}, ...brief.tickets.map(item => item.content)), now = contentOf(product, Object.keys(recorded));
-    const moved = Object.keys(recorded).filter(path => now[path] !== recorded[path]);
+    judgeFirst({ projectsRoot, wrapper: brief.wrapper, heading: heading(reviewer, id, brief.attempt), since: brief.madeAt, file, reviewer, command: 'periodic' });
+    const moved = changedSince(product, brief);
     need(!moved.length, `${moved.slice(0, 5).map(plain).join(', ')} changed since the brief; brief again with: rw-batch.mjs periodic-brief --reviewer ${reviewer} --instance <instance-root>`);
     const evidence = evidenceOf({ transcript, text, projectsRoot, wrapper: brief.wrapper, reviewer, heading: heading(reviewer, id, brief.attempt), brief, product });
     const refusals = [...evidence.refusals];
@@ -228,9 +231,11 @@ export function judgePeriodic({ teamRoot, instanceRoot, reviewer, transcript, re
   } catch (error) { return refuse(error); }
 }
 
-export function recordPeriodicNoAnswer({ teamRoot, instanceRoot, reviewer, reason }) {
+export function recordPeriodicNoAnswer({ teamRoot, instanceRoot, reviewer, reason, projectsRoot = projectsOf() }) {
   try {
     need(said(reason), 'Give the reason there is no answer');
-    return record(judging({ teamRoot, instanceRoot, reviewer }), reviewer, { refusals: [{ code: 'REVIEW_NO_ANSWER', detail: said(reason) }], tickets: [] });
+    const context = judging({ teamRoot, instanceRoot, reviewer }), { brief, id } = context;
+    judgeFirst({ projectsRoot, wrapper: brief.wrapper, heading: heading(reviewer, id, brief.attempt), since: brief.madeAt, reviewer, command: 'periodic' });
+    return record(context, reviewer, { refusals: [{ code: 'REVIEW_NO_ANSWER', detail: said(reason) }], tickets: [] });
   } catch (error) { return refuse(error); }
 }

@@ -227,3 +227,40 @@ on the branch since the end of the newest batch archived on it, and freezes
 their ids in the batch record. It refuses nothing on that account, and the
 periodic review of decision 7 still counts only the commits the kit made.
 
+## Amendment of 2026-11-26: what counts as the reviewer's evidence
+
+Status: Accepted. The owner decided in session on 2026-11-26, accepting the
+recommendation of that day's review of the kit.
+
+Three rules make decisions 3, 4 and 13 hold in practice.
+
+A flagged file is read as its kind allows, and the brief and the judging
+decide that kind in one place. Text is read when the reviewer's successful
+Reads of it, taken together, cover every line of it: a file longer than one
+Read returns, such as a lock file, is read in the ranges the brief gives,
+each with a limit sized to about 60 KB of the file, and one Read of its first
+part no longer counts for the whole. An image, a PDF or a notebook is read by
+one Read. A binary file and a symbolic link are not read; the brief names
+them, a link with its target.
+
+Every dispatch with the reviewer's latest brief is judged, so the PM cannot
+choose which report counts, and a healthy review is not refused for it. No new
+brief is made while the latest one has no verdict, unless a verification
+command of it failed or a file it pinned changed. Of two dispatches with the
+latest brief, the earlier is judged first, which uses the attempt. "No
+answer" is refused while a transcript carries the latest brief: a reviewer
+that stopped without a report is judged from its transcript. Dispatches with
+an earlier brief are not waited for.
+
+A brief whose diff is over its cap still shows, per changed path in ticket
+order, the whole diff or else the removed lines while the section fits, every
+label and sentence counted, and otherwise names the path with its counts of
+added and removed lines. A path whose added lines are not shown is to be
+opened with the Read tool, and a rule resting on removed lines not shown is
+reported as not checked rather than guessed.
+
+Left open: a Read is credited from its input, so a range the tool cut still
+counts; a transcript deleted, or in a session under another configuration
+folder, is not seen; a periodic review aborted and briefed again leaves its
+earlier dispatch unjudged.
+

@@ -9,7 +9,6 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { digest } from '../src/loop/contracts.mjs';
 import { RETURN_FILE } from '../src/router-worker/batch.mjs';
-import { recordNoAnswer } from '../src/router-worker/review-judge.mjs';
 import { settleBatch } from '../src/router-worker/batch-settle.mjs';
 import { loadRetryRules } from '../src/router-worker/retries.mjs';
 import { boundLimits } from '../src/router-worker/switch.mjs';
@@ -69,7 +68,7 @@ async function batchOne(f) {
   assert.equal(f.judge('security', transcript).outcome, 'accepted');
   for (const attempt of [1, 2]) {
     assert.equal(f.brief('architect').errors, undefined);
-    recordNoAnswer({ ...f.common, reviewer: 'architect', reason: `no answer ${attempt}` });
+    f.noAnswer('architect', `no answer ${attempt}`);
   }
   assert.match(refusal(f.commit()).reason, /resolve/, 'commit waits for the resolution');
   const resolved = f.resolve();

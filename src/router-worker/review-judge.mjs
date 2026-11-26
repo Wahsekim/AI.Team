@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, renameSync, lstatSync, realpathSync, appendFileSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, lstatSync, realpathSync, appendFileSync, rmSync, readdirSync, statSync, openSync, readSync, closeSync } from 'node:fs';
 import { join, resolve, relative, dirname, basename, isAbsolute, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { digest, bytesDigest } from '../loop/contracts.mjs';
@@ -7,6 +7,7 @@ import { readBoundary, stateOf } from './write-boundary.mjs';
 import { AFTER_FILE, REVIEW_FILE, VERDICTS_FILE, contentOf, plain } from './batch.mjs';
 import { openBatch, intact, Refusal } from './batch-close.mjs';
 import { recordOutcomes, outcomesOf, TICKETS } from './escalations.mjs';
+import { READ_RULE, rangeOf, uncovered, readingOf, linksOf } from './read-coverage.mjs';
 
 // ADR 0011, decisions 13, 17 and 19: the kit judges a reviewer's report from the reviewer's own session transcript
 // and derives the verdict itself. Each judgment is appended, sealed, to rw-batch-reviews.json; commit reads it.
@@ -58,6 +59,13 @@ export function verdictsOf(instance, runId) {
   return kept.entries;
 }
 export const finalOf = (verdicts, reviewer) => verdicts.find(entry => entry.reviewer === reviewer && FINAL.includes(entry.outcome)) ?? null;
+export const headingOf = (reviewer, runId, attempt) => `# Batch review brief: ${reviewer}, run ${runId}, attempt ${attempt}`;
+// The paths of a brief that no longer hold what it pinned: a file's content digest, a link's target.
+export function changedSince(product, brief) {
+  const content = Object.assign({}, ...brief.tickets.map(item => item.content)), links = Object.assign({}, ...brief.tickets.map(item => item.links ?? {}));
+  const now = contentOf(product, Object.keys(content)), targets = linksOf(product, Object.keys(links));
+  return [...new Set([...Object.keys(content).filter(path => now[path] !== content[path]), ...Object.keys(links).filter(path => targets[path] !== links[path])])];
+}
 
 // The batch in review and this reviewer's latest brief, which no verdict has judged yet.
 function inReview({ teamRoot, instanceRoot, reviewer }) {
@@ -78,7 +86,51 @@ function inReview({ teamRoot, instanceRoot, reviewer }) {
 
 // The text of a transcript entry's content, whether a string or a list of blocks.
 const textOf = content => typeof content === 'string' ? content : Array.isArray(content) ? content.filter(block => block?.type === 'text' && typeof block.text === 'string').map(block => block.text).join('\n') : '';
-const flaggedOf = (brief, product) => brief.tickets.flatMap(item => item.flaggedFiles.filter(path => item.content[path] !== null).map(path => ({ ticket: item.id, path, absolute: join(product, path) })));
+// The flagged files a reviewer must Read: text and media. A link, a deleted path and a binary file are not read.
+const flaggedOf = (brief, product) => brief.tickets.flatMap(item => item.flaggedFiles.map(path => ({ ticket: item.id, ...readingOf(product, item, path) }))).filter(file => file.kind === 'text' || file.kind === 'media');
+const SUBAGENT = /^agent-[A-Za-z0-9_-]+\.jsonl$/;
+const agentTypeOf = file => { const meta = readJSON(join(dirname(file), basename(file).replace(/\.jsonl$/, '.meta.json'))); return typeof meta?.agentType === 'string' ? meta.agentType : null; };
+const entryOf = line => { try { const entry = JSON.parse(line); return entry && typeof entry === 'object' ? entry : null; } catch { return null; } };
+const entriesOf = text => text.split('\n').filter(Boolean).map(entryOf).filter(Boolean);
+// A transcript's first user entry, read no further than its line: a reviewer's transcript runs to megabytes.
+function firstUserOf(file) {
+  const fd = openSync(file, 'r'), chunk = Buffer.allocUnsafe(1 << 20);
+  let pending = Buffer.alloc(0), end;
+  try {
+    for (;;) {
+      const size = readSync(fd, chunk, 0, chunk.length, null);
+      pending = Buffer.concat([pending, chunk.subarray(0, size)]);
+      while ((end = pending.indexOf(10)) !== -1) {
+        const entry = entryOf(pending.subarray(0, end).toString('utf8'));
+        if (entry?.type === 'user') return entry;
+        pending = pending.subarray(end + 1);
+      }
+      if (!size) { const entry = entryOf(pending.toString('utf8')); return entry?.type === 'user' ? entry : null; }
+    }
+  } finally { closeSync(fd); }
+}
+// When a dispatch began, and whether its brief is the one whose first line is `heading`.
+const dispatchOf = (file, heading) => { const first = firstUserOf(file); return { file, at: typeof first?.timestamp === 'string' ? first.timestamp : '', carries: textOf(first?.message?.content).split('\n').includes(heading) }; };
+const earlier = (a, b) => a.at < b.at || (a.at === b.at && a.file < b.file);
+const foldersOf = dir => { try { return readdirSync(dir, { withFileTypes: true }).filter(entry => entry.isDirectory()).map(entry => join(dir, entry.name)); } catch { return []; } };
+// A file clock coarser than the brief's (FAT keeps two seconds) must not hide a transcript written just after the brief.
+const CLOCK_MS = 2000;
+
+// ADR 0011, decisions 3 and 4: a dispatch with the latest brief is judged before another transcript, and instead of no answer.
+// Refuses while a subagent transcript of `wrapper`, in any session under `projectsRoot`, carries the brief `heading` and was
+// dispatched before the transcript `file` (when that carries it too), or at all when there is no transcript. Only the files
+// written since the brief was made can carry it, so only those are opened. `command`: review or periodic.
+export function judgeFirst({ projectsRoot, wrapper, heading, since, file, reviewer, command }) {
+  const own = file ? dispatchOf(file, heading) : null, from = Date.parse(since) - CLOCK_MS;
+  let root; try { root = realpathSync(projectsRoot); } catch { return; }
+  if (own && !own.carries) return;
+  const waiting = foldersOf(root).flatMap(foldersOf).flatMap(session => {
+    const folder = join(session, 'subagents');
+    let names; try { names = readdirSync(folder).filter(name => SUBAGENT.test(name)); } catch { return []; }
+    return names.map(name => join(folder, name)).flatMap(path => { try { return statSync(path).mtimeMs >= from && agentTypeOf(path) === wrapper ? [dispatchOf(path, heading)] : []; } catch { return []; } });
+  }).filter(other => other.carries && (!own || (other.file !== own.file && earlier(other, own)))).sort((a, b) => earlier(a, b) ? -1 : 1);
+  need(!waiting.length, `${waiting.map(item => plain(item.file)).join(', ')} ${waiting.length > 1 ? 'carry' : 'carries'} ${reviewer}'s latest brief${own ? ' and began before this transcript' : ''}, and no record judged ${waiting.length > 1 ? 'them' : 'it'}. Judge ${waiting.length > 1 ? 'the first' : 'it'} with: rw-batch.mjs ${command} --reviewer ${reviewer} --transcript <that file> --instance <instance-root>; that uses the attempt, and a reviewer that stopped without a report is judged REVIEW_NO_REPORT. --no-answer is for a dispatch that left no transcript. Nothing was recorded`);
+}
 
 // What the transcript shows, and the report it ends with. Each gap is a refusal of the report.
 // `heading`: the first line of the brief, as the kit printed it.
@@ -88,25 +140,25 @@ export function evidenceOf({ transcript, text, projectsRoot, wrapper, reviewer, 
   try { real = realpathSync(transcript); root = realpathSync(projectsRoot); } catch { /* judged below */ }
   const parts = real && root ? relative(root, real).split(sep) : [];
   // An Agent-tool subagent's file: <projects>/<project>/<session>/subagents/agent-<id>.jsonl. An engine run's lies under workflows/.
-  if (!(parts.length === 4 && parts[0] !== '..' && !isAbsolute(parts[0]) && parts[2] === 'subagents' && /^agent-[A-Za-z0-9_-]+\.jsonl$/.test(parts[3])))
+  if (!(parts.length === 4 && parts[0] !== '..' && !isAbsolute(parts[0]) && parts[2] === 'subagents' && SUBAGENT.test(parts[3])))
     gap('REVIEW_TRANSCRIPT_PLACE', `The transcript is not a subagent transcript of a session under ${projectsRoot}/<project>/<session>/subagents/; an engine workflow's agent is not a reviewer`);
-  const meta = real ? readJSON(join(dirname(real), basename(real).replace(/\.jsonl$/, '.meta.json'))) : null, agentType = typeof meta?.agentType === 'string' ? meta.agentType : null;
+  const agentType = real ? agentTypeOf(real) : null;
   if (agentType !== wrapper) gap('REVIEW_NOT_REVIEWER', `The transcript's agent is ${plain(agentType ?? 'not named')}, not ${reviewer}'s wrapper ${wrapper}`);
-  const entries = text.split('\n').filter(Boolean).map(line => { try { return JSON.parse(line); } catch { return null; } }).filter(entry => entry && typeof entry === 'object');
+  const entries = entriesOf(text);
   const prompt = textOf(entries.find(entry => entry.type === 'user')?.message?.content);
   if (prompt.trimStart().startsWith('[Workflow harness')) gap('REVIEW_WORKFLOW_AGENT', 'The transcript starts with a task relayed by the workflow harness: the reviewer was not dispatched by the PM');
   // The brief is in the prompt as it was printed: its body has the digest the brief record holds.
   const start = prompt.indexOf(`${heading}\n`), end = start === -1 ? -1 : prompt.indexOf(`\nbriefDigest: ${brief.briefDigest}`, start);
   if (end === -1 || digest(prompt.slice(start, end)) !== brief.briefDigest) gap('REVIEW_BRIEF_NOT_FOUND', `The transcript's prompt does not carry brief attempt ${brief.attempt} (${brief.briefDigest}) unchanged`);
   const assistant = entries.filter(entry => entry.type === 'assistant' && entry.message && Array.isArray(entry.message.content));
-  // A Read counts when its result is not an error and it read the file from its first line with no limit.
+  // A Read counts when its result is not an error: once for media, and together the Reads of a text file cover each of its lines.
   const succeeded = new Set(entries.filter(entry => entry.type === 'user' && Array.isArray(entry.message?.content))
     .flatMap(entry => entry.message.content.filter(block => block?.type === 'tool_result' && block.is_error !== true).map(block => block.tool_use_id)));
-  const whole = input => input.limit === undefined && (input.offset === undefined || input.offset <= 1);
-  const opened = new Set(assistant.flatMap(entry => entry.message.content.filter(block => block?.type === 'tool_use' && block.name === 'Read' && typeof block.input?.file_path === 'string'
-    && succeeded.has(block.id) && whole(block.input)).map(block => block.input.file_path)));
-  const unopened = flaggedOf(brief, product).filter(item => !opened.has(item.absolute));
-  if (unopened.length) gap('REVIEW_TRANSCRIPT_NO_OPEN', `The transcript shows no whole Read of ${unopened.slice(0, 5).map(item => plain(item.absolute)).join(', ')}; a Read counts only with no offset and no limit, so read each of these whole`);
+  const reads = assistant.flatMap(entry => entry.message.content.filter(block => block?.type === 'tool_use' && block.name === 'Read' && typeof block.input?.file_path === 'string' && succeeded.has(block.id))
+    .map(block => ({ path: block.input.file_path, range: rangeOf(block.input) })));
+  const short = flaggedOf(brief, product).map(file => { const mine = reads.filter(read => read.path === file.absolute); return { ...file, from: file.kind === 'media' ? (mine.length ? null : 1) : uncovered(mine.map(read => read.range).filter(Boolean), file.lines) }; })
+    .filter(file => file.from !== null);
+  if (short.length) gap('REVIEW_TRANSCRIPT_NO_OPEN', `The Reads in the transcript do not cover ${short.map(file => file.kind === 'media' ? `${plain(file.absolute)}, which no Read opened` : `${plain(file.absolute)} from line ${file.from} of ${file.lines}`).join(', ')}. ${READ_RULE}`);
   // A message streamed in several entries shares one id; the report is the last fenced json block of the last one.
   const lastId = assistant.at(-1)?.message.id, last = assistant.filter(entry => lastId !== undefined && entry.message.id === lastId).map(entry => textOf(entry.message.content)).join('\n');
   const blocks = [...last.matchAll(/(`{3,})json[ \t]*\n([\s\S]*?)\n\1[ \t]*(?=\n|$)/g)];
@@ -178,14 +230,14 @@ export function judgeReview({ teamRoot, instanceRoot, reviewer, transcript, repo
   try {
     return judging({ teamRoot, instanceRoot }, () => {
       const context = inReview({ teamRoot, instanceRoot, reviewer }), { batch, brief, verdicts } = context, product = batch.productRoot;
-      let text; try { text = readFileSync(transcript, 'utf8'); } catch { need(false, `${plain(transcript)} cannot be read; nothing was recorded`); }
-      const fileDigest = bytesDigest(text);
+      let text, file; try { text = readFileSync(transcript, 'utf8'); file = realpathSync(transcript); } catch { need(false, `${plain(transcript)} cannot be read; nothing was recorded`); }
+      const fileDigest = bytesDigest(text), heading = headingOf(reviewer, batch.runId, brief.attempt);
       need(!verdicts.some(entry => entry.transcript?.digest === fileDigest), 'This transcript was already judged; nothing was recorded');
+      judgeFirst({ projectsRoot, wrapper: brief.wrapper, heading, since: brief.madeAt, file, reviewer, command: 'review' });
       // What the reviewer read must still be what is committed; a change since the brief is the PM's to undo, not the reviewer's attempt.
-      const recorded = Object.assign({}, ...brief.tickets.map(item => item.content)), now = contentOf(product, Object.keys(recorded));
-      const moved = Object.keys(recorded).filter(path => now[path] !== recorded[path]);
+      const moved = changedSince(product, brief);
       need(!moved.length, `${moved.slice(0, 5).map(plain).join(', ')} changed since the brief; the review would not judge what is committed. Restore it, or abort the batch`);
-      const evidence = evidenceOf({ transcript, text, projectsRoot, wrapper: brief.wrapper, reviewer, heading: `# Batch review brief: ${reviewer}, run ${batch.runId}, attempt ${brief.attempt}`, brief, product });
+      const evidence = evidenceOf({ transcript, text, projectsRoot, wrapper: brief.wrapper, reviewer, heading, brief, product });
       const refusals = [...evidence.refusals];
       if (evidence.report && given !== undefined && digest(given) !== digest(evidence.report)) refusals.push({ code: 'REVIEW_REPORT_MISMATCH', detail: 'The report file given is not the report the transcript ends with' });
       const derived = evidence.report ? derive(evidence.report, brief, reviewer, product) : { refusals: [], tickets: [] };
@@ -195,11 +247,15 @@ export function judgeReview({ teamRoot, instanceRoot, reviewer, transcript, repo
   } catch (error) { return refuse(error); }
 }
 
-// The reviewer gave no answer: an attempt with no report.
-export function recordNoAnswer({ teamRoot, instanceRoot, reviewer, reason }) {
+// The dispatch left no transcript: an attempt with no report.
+export function recordNoAnswer({ teamRoot, instanceRoot, reviewer, reason, projectsRoot = projectsOf() }) {
   try {
     need(said(reason), 'Give the reason there is no answer');
-    return judging({ teamRoot, instanceRoot }, () => record(inReview({ teamRoot, instanceRoot, reviewer }), reviewer, { refusals: [{ code: 'REVIEW_NO_ANSWER', detail: said(reason) }], tickets: [] }));
+    return judging({ teamRoot, instanceRoot }, () => {
+      const context = inReview({ teamRoot, instanceRoot, reviewer }), { batch, brief } = context;
+      judgeFirst({ projectsRoot, wrapper: brief.wrapper, heading: headingOf(reviewer, batch.runId, brief.attempt), since: brief.madeAt, reviewer, command: 'review' });
+      return record(context, reviewer, { refusals: [{ code: 'REVIEW_NO_ANSWER', detail: said(reason) }], tickets: [] });
+    });
   } catch (error) { return refuse(error); }
 }
 
