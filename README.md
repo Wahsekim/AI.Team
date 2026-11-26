@@ -228,7 +228,7 @@ procedure by step 7 of the PM Start Protocol in `CLAUDE.md`. `scripts/rw-batch.m
 tickets and the product repository, computes the ceiling, takes the lock and
 opens the write limits; `after` matches the engine's return against what was
 frozen, finds what was written outside the tickets' paths and closes the batch, and
-holds every commit when the hook logged no call of the batch's workers or fewer checker runs than the passed tickets need;
+holds every commit when the hook logged no call of the batch's workers or fewer checker runs than the passed tickets need, sets the work of a ticket that did not pass aside as a patch, and runs the passed tickets' commands itself on the tree it would commit;
 `commit` makes one commit per ticket that passed; `abort` clears a batch that
 will not run, and for a closed batch saves each ticket that was flagged and passed no review as a patch and takes it out of the work tree;
 `before` names in the ledger the commits made outside the kit since the last batch and each ticket whose work ran before without a commit;
