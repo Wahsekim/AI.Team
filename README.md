@@ -232,8 +232,8 @@ frozen, finds what was written outside the tickets' paths and closes the batch;
 will not run; a ticket's `resume` names a patch of work an earlier batch left, which `before` applies so the
 checker, the review and `commit` treat it as the ticket's own; a ticket may name the subset of the batch's
 `verificationCommands` its workers run; `commit` stops when a commit hook rewrites a ticket's bytes; only a problem
-the Guardian finds in the run (runaway, budget gate, a dropped failure) holds a batch, while an unwatched headless run
-is recorded; `settle` sets each ticket's measured usage against its
+the Guardian finds in the run (runaway, budget gate, a dropped failure) holds a batch, and the engine tells the Guardian
+of a batch that it runs unwatched by design, so a run with no problem is called clean; `settle` sets each ticket's measured usage against its
 authorization, names a worker call that stopped at its turn limit, and the next batch does not open until that is done or the batch
 is marked as not metered with a reason ([details](docs/design/router-worker/batch.md)). Only the owner
 changes the limits: the ledger line of the switch or of `team-mode.mjs limits` binds them, `before` refuses limits

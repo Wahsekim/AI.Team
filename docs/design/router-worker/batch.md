@@ -37,7 +37,7 @@ no network.
 | 1 | PM | `before BATCH.json`: the batch is checked, frozen and opened |
 | 2 | PM | runs `run-n-rounds` with the `args` of the batch record |
 | 3 | PM | `after RESULT.json`, with the engine's return: the run is checked, the write limits close, the lock is released |
-| 4 | PM | `node kit/scripts/reconcile-run.mjs RESULT.json .`: lifecycle and message ledgers, as in specialist mode |
+| 4 | PM | `node kit/scripts/reconcile-run.mjs RESULT.json . --monitoring ATTESTATION.json`: lifecycle and message ledgers, as in specialist mode, and the PM's attestation of the run (`docs/engine.md`): who watched, over which interval, and each owner stop or hardware halt it saw. The engine tells the Guardian of a batch that this attestation follows the run. A headless PM attests `"coverage": "partial"` and says in `notes` that no owner channel existed |
 | 5 | PM | a flagged batch only: `review-brief`, the reviewer's dispatch and `review` per reviewer, then `resolve` (see "Resolve") |
 | 6 | PM | `commit`: one commit per ticket that passed, or per ticket the resolution kept; the batch is archived. A batch whose commits are all held is archived with `abort` instead; `commit` refuses it |
 | 7 | PM | `node kit/scripts/measure-spawn.mjs <session-dir> --json > METER.json`, then `settle METER.json --run <run id>` (the batch is archived by now, so it is named): usage per ticket. The next `before` is refused until this is done |
@@ -185,8 +185,8 @@ opened. A patch already applied in step 8 is taken back out of the work tree.
    | `HOOKS_WRITTEN` | a path was changed where the hooks live or beside husky's stub folder, for instance through a worker's shell | all held |
    | `BOUNDARY_CHANGED` | the write-boundary file is not the one the batch opened | all held |
    | `PRODUCT_HEAD_MOVED`, `PRODUCT_BRANCH_CHANGED` | someone committed or changed branch during the batch | all held |
-   | `GUARDIAN_NOT_CLEAN` | the Guardian did not answer, asked to halt and investigate, or found a runaway or a failed check at risk of being dropped; or the engine's own figures show a budget gate that did not trip exactly when the spend crossed 80% of the ceiling (`budgetGate: inconsistent`) | all held |
-   | `GUARDIAN_ATTENTION` | the Guardian found no such problem but did not call the run clean, for instance because no observer watched it for an owner stop or a hardware halt (`missedHaltRisk`), which is true of every headless batch, or because it judged the ceiling too generous (`budgetGateCorrect: false` with consistent engine figures; the ceiling comes from the owner's limits). Its findings are in the engine's return for the PM to read. A batch held by another finding is not put in review | not held |
+   | `GUARDIAN_NOT_CLEAN` | the Guardian did not answer, asked to halt and investigate, or found a runaway or a failed check at risk of being dropped; or the engine's own figures show a budget gate that did not trip exactly when the spend crossed 80% of the ceiling (`budgetGate: inconsistent`). Only then do the engine's blockers name the Guardian (`guardian-unavailable` or `guardian-not-clean`) | all held |
+   | `GUARDIAN_ATTENTION` | the Guardian found no such problem but did not call the run clean (`missedHaltRisk`, or `budgetGateCorrect: false` with consistent engine figures). The engine tells the Guardian of a batch that no observer watches the run by design, that the PM attests an owner stop or a hardware halt after it (`reconcile-run.mjs --monitoring`), and that the ceiling comes from the owner's limits, so neither the missing observer nor a ceiling far above the spend is a finding, and a Guardian that finds nothing wrong answers `clean`. Its findings are in the engine's return for the PM to read; no blocker names the Guardian. A batch held by another finding is not put in review | not held |
    | `BOUNDARY_NOT_RESTORED`, `LOCK_RELEASE_FAILED`, `LOCK_NOT_HELD_BY_THIS_BATCH` | the batch could not be closed completely | not held |
 
 4. **The write boundary closes and the lock is released**, whatever the
@@ -1038,6 +1038,9 @@ The limits not being the ones the ledger binds is refused with its own code,
 
 ## Not covered
 
+- **Nothing checks that the PM attested the run** at the reconciliation step.
+  The Guardian of a batch is told the attestation follows; a PM that leaves
+  `--monitoring` out leaves no line, and no command refuses.
 - **A batch the engine ran and `abort` cleared before `after`** is not
   settled and does not hold the next batch: `abort` leaves no archive for it,
   and the kit cannot tell whether the engine ran. Its ledger line says only

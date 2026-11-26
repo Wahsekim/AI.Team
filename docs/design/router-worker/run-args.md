@@ -41,6 +41,7 @@ Exit 0 prints `{args, record}`; exit 2 is a refusal; exit 1 is usage.
 | `allowedAgentTypes` | wrappers of the `active` rows of `agents/roster.md` in the team root |
 | `executionMode` | always `wrappers` |
 | `failurePolicy` | always `halt-on-failure` (`continue` needs per-ticket isolation, which does not exist) |
+| `standingBatch` | `true` for a [standing batch](batch.md) only, absent otherwise: the engine tells the Guardian that no observer watches the run and that the ceiling comes from the owner's limits |
 
 ## Inputs that select a method
 
@@ -107,6 +108,12 @@ Guardian entry. Anything else is `unaccounted`. An accounted return reports the
 calls per duty and `blockers` (`guardian-unavailable`, `guardian-not-clean`,
 `budget-gate`, `fix-retest-pending`, `recovery-pending`, `run-incomplete`,
 `halt-requires-acknowledgement`). `accounted` is about bookkeeping, not quality.
+For arguments with `standingBatch`, `guardian-not-clean` appears only when the
+Guardian's answer holds the batch's commits (`GUARDIAN_NOT_CLEAN` in
+[after](batch.md#after)), and a verdict that holds nothing adds no blocker.
+Arguments frozen without it keep the earlier rule, every verdict but `clean`,
+because settlement recomputes the account and compares it with the one the
+batch was closed with.
 
 Writing the ledgers stays with `scripts/reconcile-run.mjs`, unchanged.
 

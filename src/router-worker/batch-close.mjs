@@ -3,7 +3,7 @@ import { join, resolve } from 'node:path';
 import { digest, bytesDigest } from '../loop/contracts.mjs';
 import { instanceOf } from './roots.mjs';
 import { git, gitRun, acquireLease, releaseLease, readLease } from './lease.mjs';
-import { accountRun } from './run-args.mjs';
+import { accountRun, guardianHold } from './run-args.mjs';
 import { readBoundary, closeBoundary, reviewBoundary, stateOf, within, LOG_FILE } from './write-boundary.mjs';
 import { flagPaths } from './review-triggers.mjs';
 import { reviewGate, verdictsOf } from './review-judge.mjs';
@@ -128,14 +128,9 @@ export function afterBatch({ teamRoot, instanceRoot, result }) {
     if ((git(product, 'rev-parse', 'HEAD')?.trim() ?? null) !== batch.productHead) findings.push({ code: 'PRODUCT_HEAD_MOVED' });
     if ((git(product, 'symbolic-ref', '--short', '-q', 'HEAD')?.trim() ?? null) !== batch.branch) findings.push({ code: 'PRODUCT_BRANCH_CHANGED' });
     if (hooksOf(product).digest !== batch.hooks?.digest) findings.push({ code: 'HOOKS_CHANGED' });
-    // ADR 0010, amendment of 2026-11-25: only a problem the Guardian found in the run holds the commits. No observer
-    // watching for an owner stop or a hardware halt (missedHaltRisk) is true of every headless batch, so it is recorded.
-    // The budget gate is judged from the engine's own figures: whether it tripped exactly when the spend crossed 80% of the
-    // ceiling. A Guardian that finds the ceiling too generous says so as attention; the ceiling is the owner's limits.
-    const budget = result.budgetStatus ?? {}, gateFault = !(Number.isFinite(budget.ceiling) && Number.isFinite(budget.loopSpent) && budget.tripped === (budget.loopSpent >= 0.8 * budget.ceiling));
-    const guardian = result.guardian ?? {}, problem = guardian.status !== 'ok' || guardian.verdict === 'halt-and-investigate'
-      || guardian.runawayDetected !== false || guardian.droppedFixRetest !== false || gateFault;
-    if (problem) findings.push({ code: 'GUARDIAN_NOT_CLEAN', status: plain(guardian.status ?? 'none'), verdict: plain(guardian.verdict ?? 'none'), ...(gateFault ? { budgetGate: 'inconsistent' } : {}) });
+    // accountRun applies the same rule to arguments frozen with standingBatch, so its blockers name the Guardian exactly when this holds the commits.
+    const guardian = result.guardian ?? {}, hold = guardianHold(result);
+    if (hold) findings.push({ code: 'GUARDIAN_NOT_CLEAN', status: plain(guardian.status ?? 'none'), verdict: plain(guardian.verdict ?? 'none'), ...(hold.gateFault ? { budgetGate: 'inconsistent' } : {}) });
     else if (guardian.verdict !== 'clean') findings.push({ code: 'GUARDIAN_ATTENTION', verdict: plain(guardian.verdict ?? 'none'), missedHaltRisk: guardian.missedHaltRisk === true, budgetGateCorrect: guardian.budgetGateCorrect === true });
 
     // What the batch changed: everything the work tree holds now that was not already there when it opened.

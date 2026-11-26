@@ -79,6 +79,8 @@ const invalidArgCases = [
   ['wrappers mode without guardianAgentType', { executionMode: 'wrappers' }],
   ['wrappers mode with general-purpose worker', { executionMode: 'wrappers', guardianAgentType: 'proj-chaos', plan: [{ ticket: 'T-1', agentType: 'general-purpose', brief: 'x', isCodeShipping: false }] }],
   ['wrappers mode code item without verifierAgentType', { executionMode: 'wrappers', guardianAgentType: 'proj-chaos', plan: mkPlan(1, { isCodeShipping: true }) }],
+  ['standingBatch false', { standingBatch: false }],
+  ['standingBatch as a string', { standingBatch: 'yes' }],
 ]
 
 for (const [name, over] of invalidArgCases) {
@@ -377,6 +379,44 @@ test('N-02: guardian clean verdict contradicting its own flags is demoted fail-c
   assert.equal(result.guardian.verdict, 'main-session-action-required')
   assert.equal(result.allPassed, false)
   assert.equal(result.nextInvocationBlocked, true)
+})
+
+// ADR 0010, amendment of 2026-11-26: a standing batch has no observer by design and a ceiling computed from the owner's limits.
+const OBSERVER_TEXT = [/no observer watches the run, by design/, /main session attests Q3 \(hardware\) and Q4 \(owner mid-loop input\) after the run \(reconcile-run\.mjs --monitoring\)/,
+  /absence of an observer is NOT a missed-halt risk/, /missedHaltRisk=true only when the run data above shows a halt signal the loop did not honour/]
+const CEILING_TEXT = [/ceiling is computed from the owner's limits/, /a ceiling far above the spend is NOT a budget-gate fault/,
+  /budgetGateCorrect judges only whether the gate tripped when the loop spend crossed the stop line \(80% of the ceiling\)/]
+const guardianAsked = calls => { const g = guardianCalls(calls)[0]; return { brief: g.prompt, fields: g.opts.schema.properties } }
+
+test('standing batch: the Guardian is told no observer watches the run and the ceiling comes from the owner\'s limits', async () => {
+  const { result, calls } = await run(mkArgs({ standingBatch: true }))
+  const { brief, fields } = guardianAsked(calls)
+  for (const text of [...OBSERVER_TEXT, ...CEILING_TEXT]) assert.match(brief, text)
+  assert.doesNotMatch(brief, /BLIND to Q3|vacuous ceiling/)
+  assert.match(fields.missedHaltRisk.description, /halt signal the loop did not honour/)
+  assert.match(fields.budgetGateCorrect.description, /computed from the owner limits/)
+  assert.doesNotMatch(fields.missedHaltRisk.description + fields.budgetGateCorrect.description, /must have watched|vacuous/)
+  assert.equal(result.guardian.verdict, 'clean')
+  assert.equal(result.allPassed, true)
+})
+
+test('without standingBatch the Guardian is asked as before', async () => {
+  const { calls } = await run(mkArgs())
+  const { brief, fields } = guardianAsked(calls)
+  for (const text of [...OBSERVER_TEXT, ...CEILING_TEXT]) assert.doesNotMatch(brief, text)
+  assert.ok(brief.includes('2. MISSED-HALT RISK — the script body is BLIND to Q3 (hardware) and Q4 (owner mid-loop input). Flag whether the main session must be confirmed to have watched for these around this run.\n'))
+  assert.ok(brief.includes('3. BUDGET GATE — did the Q5 token-burnout gate behave correctly given the spent trace and ceiling? A vacuous ceiling (spend far below it at count-complete) is a finding.\n'))
+  assert.equal(fields.missedHaltRisk.description, 'a legitimate Q3/Q4 halt may have been needed but the mechanical loop is blind to it — main session must have watched')
+  assert.equal(fields.budgetGateCorrect.description, 'Q5 token-burnout gate behaved correctly vs the spent trace + ceiling (a vacuous ceiling is a finding)')
+})
+
+test('standing batch: clean still needs every flag at its passing value', async () => {
+  const { result } = await run(mkArgs({ standingBatch: true }), {
+    guardian: () => ({ runawayDetected: false, missedHaltRisk: true, budgetGateCorrect: true, droppedFixRetest: false, verdict: 'clean', findings: [], newPatternCandidates: [] }),
+  })
+  assert.ok(result.guardianConsistencyFailure)
+  assert.equal(result.guardian.verdict, 'main-session-action-required')
+  assert.equal(result.allPassed, false)
 })
 
 test('N-02: on a clean, in-budget run allPassed and unblocked coincide (budget trips can split them — see R-04)', async () => {

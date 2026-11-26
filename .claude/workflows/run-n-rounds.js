@@ -43,6 +43,8 @@ export const meta = {
 //   launchManifestDigest?: string,        // 'sha256:<64 hex>' from scripts/preflight-run.mjs — binds this run to the frozen policy/input
 //                                         // bundle (wrappers, charter, profiles, product primer, plan). Echoed in results + BATCH header;
 //                                         // the engine cannot verify it (no IO in-loop) — provenance, not enforcement (review 2026-09-25 Slice B).
+//   standingBatch?: true,                 // set only by src/router-worker/run-args.mjs for a standing Router/Worker batch (ADR 0010): no observer
+//                                         // by design, Q3/Q4 attested after the run, ceiling computed from the owner's limits. Changes only the Guardian's questions.
 //   plan: [{
 //     ticket: string,                     // non-empty, <= 200 chars, no control characters (it lands in lifecycle headers)
 //     title?: string,                     // PRESENTATION ONLY (F-05): <= 120 chars, no control chars; shown in agent labels + ledgers.
@@ -124,6 +126,9 @@ if (A.runId !== undefined && !(typeof A.runId === 'string' && /^[A-Za-z0-9._-]{1
 }
 if (A.launchManifestDigest !== undefined && !(typeof A.launchManifestDigest === 'string' && /^sha256:[a-f0-9]{64}$/.test(A.launchManifestDigest))) {
   validationErrors.push("launchManifestDigest, when given, must be 'sha256:<64 lowercase hex>' as emitted by scripts/preflight-run.mjs")
+}
+if (A.standingBatch !== undefined && A.standingBatch !== true) {
+  validationErrors.push('standingBatch, when given, must be true (a standing Router/Worker batch, frozen by src/router-worker/run-args.mjs)')
 }
 // Presentation vocabulary (F-05): closed enum — a title never routes, a
 // workKind never grants, and neither is inferred from agentType.
@@ -309,13 +314,26 @@ const VERIFIER_SCHEMA = {
     summary: { type: 'string', maxLength: 4000 },
   },
 }
+// A standing batch has no observer by design and a ceiling computed from the owner's limits (ADR 0010, amendment of
+// 2026-11-26): neither is asked about as a finding there. What 'clean' requires is the same in both.
+const GUARDIAN_ASK = A.standingBatch === true ? {
+  missedHaltField: 'the run data shows a halt signal the loop did not honour. A standing batch has no observer by design and the main session attests Q3/Q4 after the run, so the absence of an observer is not a risk',
+  budgetGateField: 'Q5 token-burnout gate tripped when the loop spend crossed 80% of the ceiling. The ceiling is computed from the owner limits, so a ceiling far above the spend is not a fault',
+  missedHalt: '2. MISSED-HALT RISK — this is a standing batch: no observer watches the run, by design. The main session attests Q3 (hardware) and Q4 (owner mid-loop input) after the run (reconcile-run.mjs --monitoring), so the absence of an observer is NOT a missed-halt risk. Set missedHaltRisk=true only when the run data above shows a halt signal the loop did not honour.',
+  budgetGate: "3. BUDGET GATE — the ceiling is computed from the owner's limits, not chosen for this run, so a ceiling far above the spend is NOT a budget-gate fault. budgetGateCorrect judges only whether the gate tripped when the loop spend crossed the stop line (80% of the ceiling).",
+} : {
+  missedHaltField: 'a legitimate Q3/Q4 halt may have been needed but the mechanical loop is blind to it — main session must have watched',
+  budgetGateField: 'Q5 token-burnout gate behaved correctly vs the spent trace + ceiling (a vacuous ceiling is a finding)',
+  missedHalt: '2. MISSED-HALT RISK — the script body is BLIND to Q3 (hardware) and Q4 (owner mid-loop input). Flag whether the main session must be confirmed to have watched for these around this run.',
+  budgetGate: '3. BUDGET GATE — did the Q5 token-burnout gate behave correctly given the spent trace and ceiling? A vacuous ceiling (spend far below it at count-complete) is a finding.',
+}
 const GUARDIAN_SCHEMA = {
   type: 'object', additionalProperties: false,
   required: ['runawayDetected', 'missedHaltRisk', 'budgetGateCorrect', 'droppedFixRetest', 'verdict', 'findings', 'newPatternCandidates'],
   properties: {
     runawayDetected: { type: 'boolean', description: 'loop ran PAST a should-halt condition (repeated identical failures, ship-broken-N-times, no-progress pile-up)' },
-    missedHaltRisk: { type: 'boolean', description: 'a legitimate Q3/Q4 halt may have been needed but the mechanical loop is blind to it — main session must have watched' },
-    budgetGateCorrect: { type: 'boolean', description: 'Q5 token-burnout gate behaved correctly vs the spent trace + ceiling (a vacuous ceiling is a finding)' },
+    missedHaltRisk: { type: 'boolean', description: GUARDIAN_ASK.missedHaltField },
+    budgetGateCorrect: { type: 'boolean', description: GUARDIAN_ASK.budgetGateField },
     droppedFixRetest: { type: 'boolean', description: 'any verifier-FAIL items at risk of being silently dropped instead of handed to main-session fix-retest' },
     verdict: { type: 'string', enum: ['clean', 'main-session-action-required', 'halt-and-investigate'], description: "MUST be consistent with the booleans: 'clean' with any failure flag set is rejected by the engine as an inconsistent verdict (fail-closed demotion to main-session-action-required)." },
     findings: { type: 'array', maxItems: 100, items: { type: 'string', maxLength: 2000 } },
@@ -776,8 +794,8 @@ END UNTRUSTED WORKER-REPORTED DATA
 
 Audit for:
 1. RUNAWAY — did the loop keep dispatching past a point where it SHOULD have stopped? (same ticket failing the verifier every iter = ship-broken-N-times; no-progress iters piling up; identical failure repeated.)
-2. MISSED-HALT RISK — the script body is BLIND to Q3 (hardware) and Q4 (owner mid-loop input). Flag whether the main session must be confirmed to have watched for these around this run.
-3. BUDGET GATE — did the Q5 token-burnout gate behave correctly given the spent trace and ceiling? A vacuous ceiling (spend far below it at count-complete) is a finding.
+${GUARDIAN_ASK.missedHalt}
+${GUARDIAN_ASK.budgetGate}
 4. DROPPED FIX-RETEST — any verifier-FAIL (needsFixRetest=true) at risk of being silently dropped instead of handed to main-session same-session fix-retest?
 5. NEW PATTERNS — propose workflow-specific failure patterns for the chaos-role pattern catalog.
 

@@ -80,6 +80,7 @@ export async function freezeRun({ inputs, run, teamRoot, methodBundle, standingB
       executionMode: 'wrappers', failurePolicy: 'halt-on-failure', maxAttemptsPerTicket: run.maxAttemptsPerTicket ?? DEFAULT_ATTEMPTS[run.dispatch ?? 'engine'],
       budgetCeilingTokens: run.budgetCeilingTokens,
       ...(run.launchManifestDigest === undefined ? {} : { launchManifestDigest: run.launchManifestDigest }),
+      ...(standingBatch === true ? { standingBatch: true } : {}),
       guardianAgentType: policy.profiles.guard.wrapper, allowedAgentTypes: Object.values(staffed).sort(),
       plan: previews.map(preview => preview.enginePlanItem) };
     const engine = readRegular(teamRoot, ENGINE);
@@ -104,16 +105,29 @@ export async function freezeRun({ inputs, run, teamRoot, methodBundle, standingB
   }
 }
 
-function blockersOf(result) {
+// ADR 0010, amendments of 2026-11-25 and 2026-11-26: what holds a standing batch's commits is a problem in the run itself.
+// The budget gate is judged from the engine's own figures, not from the Guardian's view of the ceiling, which is the owner's limits.
+// Returns null when nothing holds them.
+export function guardianHold(result) {
+  const budget = result.budgetStatus ?? {}, gateFault = !(Number.isFinite(budget.ceiling) && Number.isFinite(budget.loopSpent) && budget.tripped === (budget.loopSpent >= 0.8 * budget.ceiling));
+  const guardian = result.guardian ?? {};
+  return guardian.status !== 'ok' || guardian.verdict === 'halt-and-investigate' || guardian.runawayDetected !== false || guardian.droppedFixRetest !== false || gateFault ? { gateFault } : null;
+}
+
+// Arguments frozen without standingBatch keep the earlier rule: settlement recomputes the account and compares it with the one the batch was closed with.
+function blockersOf(result, standing) {
+  const held = standing ? guardianHold(result) !== null : result.guardian.verdict !== 'clean';
   const specific = [
-    result.guardian.status !== 'ok' ? 'guardian-unavailable' : result.guardian.verdict !== 'clean' ? 'guardian-not-clean' : null,
+    result.guardian.status !== 'ok' ? 'guardian-unavailable' : held ? 'guardian-not-clean' : null,
     result.budgetGateTripped ? 'budget-gate' : null,
     result.fixRetestQueue.length ? 'fix-retest-pending' : null,
     result.recoveryQueue.length ? 'recovery-pending' : null,
     result.runIncomplete ? 'run-incomplete' : null,
     result.haltRequiresAcknowledgement ? 'halt-requires-acknowledgement' : null,
   ].filter(Boolean);
-  return specific.length || result.safeToContinue === true ? specific : ['not-safe-to-continue'];
+  // The engine's safeToContinue also requires a clean verdict; in a standing batch the verdict counts only through the hold above.
+  const safe = standing ? result.dispatchedCount > 0 && result.doneCount === result.dispatchedCount && result.planShortfall === false : result.safeToContinue === true;
+  return specific.length || safe ? specific : ['not-safe-to-continue'];
 }
 
 // Every call of an engine return is matched to the frozen arguments. 'accounted'
@@ -146,6 +160,6 @@ export function accountRun({ args, record, result }) {
         check: results.reduce((total, r) => total + r.attempts - 1 + (checkerCalled(r) ? 1 : 0), 0), guard: 1 },
       attempts: results.map(r => r.attempts),
       nextLifecycleNumberAfter: todo.nextLifecycleNumberAfter,
-      blockers: blockersOf(result) };
+      blockers: blockersOf(result, args.standingBatch === true) };
   } catch { return { status: 'unaccounted', findings: [...findings, 'RETURN_UNREADABLE'] }; }
 }
