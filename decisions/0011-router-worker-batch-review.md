@@ -277,6 +277,8 @@ earlier dispatch unjudged.
 
 ## Amendment of 2026-11-26: a rejection counts by its paths too
 
+Superseded by the amendment "a rejection counts with the work it resumes" below.
+
 Status: Accepted. The owner decided in session on 2026-11-26, accepting the
 recommendation of that day's review of the kit.
 
@@ -295,3 +297,29 @@ The comparison is by path alone. Two unrelated tickets rejected in two
 batches on one shared file count as the same work, so the second one is
 escalated, and that open escalation blocks every ticket whose paths overlap
 that file until the owner acknowledges it.
+
+## Amendment of 2026-11-26: a rejection counts with the work it resumes
+
+Status: Accepted. The owner decided in session on 2026-11-26, when asked, that
+a rejection counts with an earlier ticket only when the new ticket resumes that
+ticket's held patch. This replaces the rule of the amendment "a rejection
+counts by its paths too" of the same day, because under it unrelated tickets
+rejected on one shared file escalated each other.
+
+A ticket whose batch froze a held patch as its `resume` continues the work of
+the ticket the patch was held for. The kit tells a held patch by its place,
+`reviews/held/<run id>/<ticket>.patch`, or, for a copy placed elsewhere in the
+team folder, by bytes equal to a held patch under `reviews/held/`. Each adverse
+outcome the kit records names the held work its ticket resumed. A ticket's
+adverse outcomes are those under its id and those of every ticket whose work
+it continues, followed from link to link; paths count for nothing. An outcome
+recorded with paths and no link counts by its id only. A second time is still
+a second batch, and what an escalation blocks does not change.
+
+The kit does not see a ticket filed under a new id and done again from
+nothing, nor one that resumes a copy of a held patch edited outside
+`reviews/held/`: each is new work, and its count starts at its own first
+rejection. Nor does it follow a link through a ticket whose review
+passed: such a ticket leaves no outcome, so when it is held for another reason
+and resumed again, the chain ends at it and the earlier rejection is not
+counted.

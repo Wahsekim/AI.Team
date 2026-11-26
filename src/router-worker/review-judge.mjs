@@ -212,7 +212,7 @@ function record({ instance, batch, after, brief, verdicts, mine }, reviewer, jud
   // The lines across batches go first: they are written once, so a judgment that died before its verdict is judged again.
   const outcomes = tickets.filter(item => item.verdict !== 'passed').map(item => ({ ticket: item.id, outcome: item.verdict, finding: item.verdict === 'rejected' ? item.finding : said(reason) }));
   // An escalation carries the paths the ticket changed, which are the paths of its held patch, not its grants.
-  const changed = batch.tickets.map(ticket => ({ id: ticket.id, paths: after.tickets.find(entry => entry.id === ticket.id)?.changedPaths ?? ticket.paths }));
+  const changed = batch.tickets.map(ticket => ({ id: ticket.id, paths: after.tickets.find(entry => entry.id === ticket.id)?.changedPaths ?? ticket.paths, resume: ticket.resume }));
   const escalated = outcomes.length ? recordOutcomes({ instance, runId: batch.runId, reviewer, outcomes, tickets: changed, at }) : [];
   const path = join(instance, VERDICTS_FILE);
   writeFileSync(`${path}.tmp`, JSON.stringify({ schemaVersion: 1, runId: batch.runId, entries: [...verdicts, entry] }, null, 2) + '\n'); renameSync(`${path}.tmp`, path);

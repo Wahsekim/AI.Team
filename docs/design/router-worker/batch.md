@@ -828,15 +828,19 @@ offline on transcript fixtures.
   attempt is refused the same way, and the batch is aborted.
 - **Across batches.** Each final outcome that is not a pass is appended to
   `reviews/tickets.jsonl` as `{ticket, runId, reviewer, outcome:
-  "rejected"|"not-obtained", finding, paths, at}`, once per ticket, run and
-  reviewer; `paths` are the paths the ticket changed in that batch. A ticket's
-  adverse outcomes are the lines under its id (compared without case) and the
-  lines under any other id whose `paths` overlap the paths it changed (the
-  comparison of two tickets claiming one file), so the same work filed again
-  under a new id, with the held patch as its `resume`, keeps its count
+  "rejected"|"not-obtained", finding, resumedFrom?, at}`, once per ticket, run
+  and reviewer. `resumedFrom: {runId, ticket}` is present when the batch record
+  froze a held patch as the ticket's `resume`: a patch at
+  `reviews/held/<run id>/<ticket>.patch`, or a copy elsewhere in the team folder
+  whose digest is that of a file under `reviews/held/`. A ticket's adverse
+  outcomes are the lines under its id (compared without case) and the lines of
+  every ticket whose work it continues, followed from `resumedFrom` to
+  `resumedFrom`, so the same work filed again under a new id with its held
+  patch as `resume` keeps its count
   ([ADR 0011](../../../decisions/0011-router-worker-batch-review.md), amendment
-  of 2026-11-26, "a rejection counts by its paths too"). A line written before
-  lines carried `paths` counts by its id only. A ticket with adverse outcomes in
+  of 2026-11-26, "a rejection counts with the work it resumes"). Paths count for
+  nothing: a line written with `paths` and no `resumedFrom` counts by its id
+  only. A ticket with adverse outcomes in
   two distinct batches is escalated, whether they are two rejections, two
   reviews not obtained, or one of each (PM decision of 2026-11-22): `{id:
   "ESC-<ticket>-<run>", kind: "second-rejection"|"review-not-obtained-again"|"repeated-adverse",
@@ -844,7 +848,7 @@ offline on transcript fixtures.
   finding}], at}` (`paths`: the paths the ticket changed in that batch, which
   are the paths of its held patch; `findings` name each line counted, under
   whichever id) in `reviews/escalations.jsonl`, an `ESCALATED` ledger line,
-  which names the other ids (`ticket <id> (on the paths of <other id>)`), and
+  which names the other ids (`ticket <id> (resuming the work of <other id>)`), and
   the verdict's `escalated` list. Two reviewers rejecting the same ticket in one
   batch count once.
 - **What an escalation blocks** (owner rule of 2026-11-20: report to the human,
@@ -1496,12 +1500,13 @@ The limits not being the ones the ledger binds is refused with its own code,
   counted, nor is an archive whose batch record cannot be read, and an archive
   whose after record cannot be read counts as no earlier run. The archives
   are files a PM session can rewrite.
-- **A rejection counts by its id and by the paths it changed.** The same work
-  filed again with changes that overlap none of the rejected ones is not
-  counted; another ticket rejected on the same file is counted as the same
-  work. A line written before lines carried paths counts by its id only. An
-  escalation still blocks by the escalated ticket's id and paths, not by the
-  ids it was counted with.
+- **A rejection counts by its id and by the held patch it resumes.** The same
+  work filed again under a new id and done again from nothing, or resumed from
+  a copy of its held patch edited outside `reviews/held/`, is new work and is
+  not counted with the earlier ticket. An escalation still blocks by the
+  escalated ticket's id and paths, not by the ids it was counted with: an
+  escalated ticket that changed a file most tickets touch blocks every ticket
+  on that file until the owner acknowledges it.
 - **`left` saves what `after` recorded as each ticket's changes.** A path a
   ticket changed that `after` could not see (a Git-ignored file), or one
   changed by hand since, is named as no ticket's work and left. On an older
