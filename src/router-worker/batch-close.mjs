@@ -131,7 +131,7 @@ export function afterBatch({ teamRoot, instanceRoot, result }) {
     if ((git(product, 'symbolic-ref', '--short', '-q', 'HEAD')?.trim() ?? null) !== batch.branch) findings.push({ code: 'PRODUCT_BRANCH_CHANGED' });
     if (hooksOf(product).digest !== batch.hooks?.digest) findings.push({ code: 'HOOKS_CHANGED' });
     // accountRun applies the same rule to arguments frozen with standingBatch, so its blockers name the Guardian exactly when this holds the commits.
-    const guardian = result.guardian ?? {}, hold = guardianHold(result);
+    const guardian = result.guardian ?? {}, hold = guardianHold(result, batch.args.standingBatch === true);
     if (hold) findings.push({ code: 'GUARDIAN_NOT_CLEAN', status: plain(guardian.status ?? 'none'), verdict: plain(guardian.verdict ?? 'none'), ...(hold.gateFault ? { budgetGate: 'inconsistent' } : {}) });
     else if (guardian.verdict !== 'clean') findings.push({ code: 'GUARDIAN_ATTENTION', verdict: plain(guardian.verdict ?? 'none'), missedHaltRisk: guardian.missedHaltRisk === true, budgetGateCorrect: guardian.budgetGateCorrect === true });
 

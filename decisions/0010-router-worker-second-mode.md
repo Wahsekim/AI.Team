@@ -430,3 +430,26 @@ amendment, whose record lacks `hookLogsCommands`, is not counted. The log is a
 file in the team folder, and a confirmed command that runs a file the exec
 worker may write (a test file) can append lines that read as the checker's runs
 or as worker calls: `after` cannot tell them from the hook's.
+
+### 2026-11-26: the budget gate of a batch is judged from the engine's trace
+
+Status: Accepted.
+
+The amendment of 2026-11-25 holds a batch for a budget gate that did not
+behave, and the kit compared the engine's `tripped` with its final spend. Both
+come from the same expression at the same moment, so the check could not see a
+call dispatched after the stop line. The owner decided in session on
+2026-11-26, accepting the recommendation of that day's review of the kit.
+
+For a run with `standingBatch`, the engine's return lists each gate decision
+before a worker, retry or checker call, with the spend at that moment and
+whether it dispatched (`budgetStatus.gateTrace`). `after` and the blockers hold
+the batch (`GUARDIAN_NOT_CLEAN`, `budgetGate: inconsistent`) when that trace is
+missing or malformed, when a call was dispatched at or above 80% of the ceiling
+or declined below it, or when its dispatched calls differ from the exec and
+checker calls the return reports. The check still trusts the engine's return,
+as `after` does everywhere: a hand-edited return can carry any trace. A batch
+frozen without `standingBatch` keeps the earlier rule and still settles. A batch
+frozen with `standingBatch` and closed before this amendment has no trace, so it
+is held and its account no longer matches at settlement; no such batch exists
+outside the kit's tests. Specialist mode does not change.

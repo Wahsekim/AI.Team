@@ -109,8 +109,10 @@ calls per duty and `blockers` (`guardian-unavailable`, `guardian-not-clean`,
 `budget-gate`, `fix-retest-pending`, `recovery-pending`, `run-incomplete`,
 `halt-requires-acknowledgement`). `accounted` is about bookkeeping, not quality.
 For arguments with `standingBatch`, `guardian-not-clean` appears only when the
-Guardian's answer holds the batch's commits (`GUARDIAN_NOT_CLEAN` in
-[after](batch.md#after)), and a verdict that holds nothing adds no blocker.
+Guardian's answer or the engine's budget figures hold the batch's commits
+(`GUARDIAN_NOT_CLEAN` in [after](batch.md#after)), and a verdict that holds
+nothing adds no blocker. One rule, `guardianHold(result, standing)`, decides
+both; only for these arguments does it read the engine's gate trace.
 Arguments frozen without it keep the earlier rule, every verdict but `clean`,
 because settlement recomputes the account and compares it with the one the
 batch was closed with.

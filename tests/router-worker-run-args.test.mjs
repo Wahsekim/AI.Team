@@ -116,6 +116,19 @@ test('Q5 budget stop before the verifier: no check call, no later ticket, Guardi
   assert.ok(account.blockers.includes('budget-gate') && account.blockers.includes('run-incomplete'), JSON.stringify(account.blockers));
 });
 
+test('for arguments frozen with standingBatch, the blockers judge the budget gate from the engine\'s trace of its decisions', async t => {
+  const team = fixture(t), standing = await freezeRun({ inputs: [inputFixture(), second()], run: RUN, teamRoot: team, standingBatch: true }), budget = makeBudget({ total: 100_000_000 }), impl = makeAgentImpl({});
+  const { result } = await engine(team, standing.args, { budgetImpl: budget, agentImpl: (p, o, i) => { budget.bump(40_000); return impl(p, o, i); } });
+  assert.deepEqual(result.budgetStatus.gateTrace.map(entry => [entry.spawn, entry.iter, entry.loopSpent, entry.dispatched]), [['worker', 1, 0, true], ['verifier', 1, 40_000, false], ['worker', 2, 40_000, false]]);
+  const blockers = (frozen, budgetStatus) => accountRun({ args: frozen.args, record: frozen.record, result: { ...result, budgetStatus } }).blockers;
+  assert.ok(!blockers(standing, result.budgetStatus).includes('guardian-not-clean'), 'a gate that stopped at the stop line is not a Guardian blocker');
+  const { gateTrace, ...untraced } = result.budgetStatus;
+  assert.ok(blockers(standing, untraced).includes('guardian-not-clean'), 'a standing return without its trace');
+  assert.ok(blockers(standing, { ...result.budgetStatus, gateTrace: gateTrace.map((entry, i) => i === 1 ? { ...entry, dispatched: true } : entry) }).includes('guardian-not-clean'), 'a checker call past the stop line, and one the return does not report');
+  const specialist = await freeze(team);
+  assert.ok(!blockers(specialist, untraced).includes('guardian-not-clean'), 'arguments without standingBatch keep the earlier rule');
+});
+
 test('a missing Guardian fails closed: work that passed is still not continuable', async t => {
   const team = fixture(t), { args, record } = await freeze(team);
   const { result } = await engine(team, args, { agentImpl: makeAgentImpl({ guardian: () => { throw new Error('guardian unavailable'); } }) });
