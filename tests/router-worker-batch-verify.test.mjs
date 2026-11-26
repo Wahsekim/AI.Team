@@ -1,15 +1,17 @@
-// ADR 0010, amendment of 2026-11-26: after runs the batch's verification commands on the product as it stands, before it
-// pins what it would commit; a failure holds every commit. A claim on the close names its process.
+// ADR 0010, amendment of 2026-11-26: after sets aside the work of each ticket that did not pass, runs the passed tickets'
+// verification commands on a tree that holds only the planned commits, before it pins what it would commit; a failure holds
+// every commit. A claim on the close names its process.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { writeFileSync, readFileSync, mkdirSync } from 'node:fs';
+import { join, dirname } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { bytesDigest } from '../src/loop/contracts.mjs';
 import { afterBatch } from '../src/router-worker/batch-close.mjs';
-import { AFTER_FILE } from '../src/router-worker/batch.mjs';
+import { AFTER_FILE, beforeBatch, abortBatch } from '../src/router-worker/batch.mjs';
+import { markNotMetered } from '../src/router-worker/batch-settle.mjs';
 import { git, passing } from './fixtures/router-worker/standing-team.mjs';
-import { refusal, ticket, live, changed, engineRun, COMMANDS } from './fixtures/router-worker/review.mjs';
+import { refusal, ticket, live, changed, engineRun, batchOf, agentsOf, COMMANDS } from './fixtures/router-worker/review.mjs';
 
 // Neither ticket is flagged for review.
 const TWO = [ticket('US-01', ['src/list/a.js']), ticket('US-03', ['src/list/b.js'])], EDITS = { 'src/list/a.js': '// a\n', 'src/list/b.js': '// b\n' };
@@ -85,4 +87,115 @@ test('a claim on the close names its process: one whose process is alive is runn
   const closed = afterBatch({ ...f.common, result, run: args => { seen = JSON.parse(readFileSync(path, 'utf8')); return passing(args); } });
   assert.equal(closed.errors, undefined, JSON.stringify(closed.errors)); assert.equal(closed.stage, 'batch-closed'); assert.equal(closed.commits.length, 2);
   assert.deepEqual([seen.stage, seen.pid], ['batch-closing', process.pid], 'while the commands run, the claim names this process');
+});
+
+// The command fails while any file under src holds the word; the second ticket writes it and does not pass.
+const BROKEN = '! grep -rq BROKEN src';
+const LEFT_TWO = [ticket('US-01', ['src/list/a.js']), ticket('US-03', ['src/app.js'])], LEFT_WORK = { 'src/list/a.js': '// a\n', 'src/app.js': 'export const x = 2; // BROKEN\n' };
+const failedCheck = commands => ({ pass: false, staticPass: false, e2ePass: false, summary: 'broken', commandsRun: commands.map(command => ({ command, exitCode: 1 })), failures: ['a test fails'] });
+const secondFails = commands => { let n = 0; const pass = agentsOf(commands).verifier; return { verifier: () => ++n === 2 ? failedCheck(commands) : pass() }; };
+const inTree = (f, path) => readFileSync(join(f.product, path), 'utf8');
+const left = (f, ...args) => {
+  const run = spawnSync(process.execPath, [join(f.kit, 'scripts/rw-batch.mjs'), 'left', '--instance', f.root, ...args], { encoding: 'utf8' });
+  return { status: run.status, out: run.stdout ? JSON.parse(run.stdout) : null, refused: run.stderr ? JSON.parse(run.stderr).errors?.[0] : null };
+};
+const none = () => assert.fail('no command is run');
+
+test('after sets aside the work of a ticket that did not pass as a patch, then runs the real commands on the passed tickets alone; commit commits them, left names the patch, a later batch resumes it', async t => {
+  const f = live(t, { commands: [BROKEN] }), { open, result } = await engineRun(f, LEFT_TWO, LEFT_WORK, {}, secondFails([BROKEN]));
+  const closed = afterBatch({ ...f.common, result }), patch = `left/${open.runId}/US-03.patch`;
+  assert.equal(closed.errors, undefined, JSON.stringify(closed.errors));
+  assert.deepEqual(closed.tickets.map(entry => [entry.id, entry.status]), [['US-01', 'passed'], ['US-03', 'not-passed']]);
+  assert.deepEqual(closed.setAside, [{ ticket: 'US-03', state: 'patch', patch, resume: patch }]);
+  assert.equal(inTree(f, 'src/app.js'), git(f.product, 'show', 'HEAD:src/app.js'), 'the ticket\'s path holds what HEAD holds');
+  assert.deepEqual(closed.verification.commands.map(run => [run.command, run.exit, run.timedOut]), [[BROKEN, 0, false]]); assert.equal(closed.verification.failed, false);
+  assert.ok(!closed.findings.some(finding => ['VERIFICATION_FAILED', 'VERIFICATION_NOT_RUN'].includes(finding.code)), JSON.stringify(closed.findings));
+  assert.equal(closed.holdAll, false); assert.deepEqual(closed.commits.map(commit => [commit.ticket, commit.paths]), [['US-01', ['src/list/a.js']]]); assert.deepEqual(closed.left, []);
+  assert.match(closed.next.join('\n'), new RegExp(`US-03 \\(${patch}\\).*set aside`)); assert.match(closed.next.join('\n'), new RegExp(`US-03 "resume": "${patch}"`));
+  assert.match(f.ledger(), new RegExp(`BATCH ${open.runId} CLOSED .*1 ticket\\(s\\) set aside as patches`));
+  git(f.product, 'apply', join(f.root, patch));
+  assert.equal(inTree(f, 'src/app.js'), LEFT_WORK['src/app.js'], 'the patch gives back the same bytes');
+  git(f.product, 'apply', '-R', join(f.root, patch));
+  const done = f.commit();
+  assert.equal(done.errors, undefined, JSON.stringify(done.errors)); assert.deepEqual(done.commits.map(commit => commit.ticket), ['US-01']);
+  assert.equal(git(f.product, 'log', '--format=%s', `${open.productHead}..HEAD`).trim(), 'US-01: Ticket US-01'); assert.deepEqual(changed(f), []);
+  const ledger = f.ledger(), saved = left(f);
+  assert.equal(saved.status, 0, JSON.stringify(saved.refused));
+  assert.deepEqual(saved.out.tickets, [{ ticket: 'US-03', state: 'patch', patch, by: 'after', resume: patch }]); assert.equal(f.ledger(), ledger, 'left saved nothing');
+  assert.equal(markNotMetered({ ...f.common, reason: 'not measured in this test', runId: open.runId }).errors, undefined);
+  const next = await beforeBatch({ ...f.common, batch: { ...batchOf(ticket('US-03', ['src/app.js'], { resume: saved.out.tickets[0].resume })), verificationCommands: f.commands } });
+  assert.equal(next.errors, undefined, JSON.stringify(next.errors)); assert.equal(inTree(f, 'src/app.js'), LEFT_WORK['src/app.js']);
+});
+
+test('abort of a closed batch leaves the patches after set aside and names them; left names them as after\'s', async t => {
+  const f = live(t, { commands: [BROKEN] }), { open, result } = await engineRun(f, LEFT_TWO, LEFT_WORK, {}, secondFails([BROKEN]));
+  assert.equal(afterBatch({ ...f.common, result }).errors, undefined);
+  const patch = `left/${open.runId}/US-03.patch`, bytes = f.read(patch), aborted = abortBatch(f.common);
+  assert.equal(aborted.errors, undefined, JSON.stringify(aborted.errors)); assert.match(aborted.next, new RegExp(`Set aside by after as patches, out of the work tree: US-03 ${patch}`));
+  assert.match(f.ledger(), new RegExp(`ARCHIVED WITHOUT COMMIT.*Set aside by after as patches, out of the work tree: US-03 ${patch}`));
+  const saved = left(f);
+  assert.equal(saved.status, 0, JSON.stringify(saved.refused));
+  assert.deepEqual(saved.out.tickets.map(entry => [entry.ticket, entry.state, entry.patch, entry.by]), [['US-01', 'patch', `left/${open.runId}/US-01.patch`, 'left'], ['US-03', 'patch', patch, 'after']]);
+  assert.equal(f.read(patch), bytes, 'the patch after saved is not saved again'); assert.deepEqual(changed(f), []);
+});
+
+test('a ticket that did not pass and cannot be set aside stays whole in the tree; no command runs, the record says why, and the passed ticket is planned', async t => {
+  const f = live(t, { commands: [BROKEN] }), { open, result } = await engineRun(f, LEFT_TWO, LEFT_WORK, {}, secondFails([BROKEN]));
+  const taken = join(f.root, `left/${open.runId}/US-03.patch`);
+  mkdirSync(dirname(taken), { recursive: true }); writeFileSync(taken, 'another patch\n');
+  const closed = afterBatch({ ...f.common, result, run: none });
+  assert.equal(closed.errors, undefined, JSON.stringify(closed.errors));
+  assert.deepEqual(closed.setAside.map(entry => [entry.ticket, entry.state, entry.paths]), [['US-03', 'in-tree', ['src/app.js']]]); assert.match(closed.setAside[0].problem, /already holds another patch/);
+  assert.equal(inTree(f, 'src/app.js'), LEFT_WORK['src/app.js'], 'nothing of it is removed'); assert.equal(readFileSync(taken, 'utf8'), 'another patch\n');
+  assert.equal(closed.verification.ran, false); assert.deepEqual(closed.verification.paths, ['src/app.js']); assert.match(closed.verification.reason, /did not pass/);
+  const notRun = closed.findings.find(finding => finding.code === 'VERIFICATION_NOT_RUN');
+  assert.deepEqual(notRun?.paths, ['src/app.js']); assert.equal(notRun.reason, closed.verification.reason);
+  assert.equal(closed.holdAll, false); assert.deepEqual(closed.commits.map(commit => commit.ticket), ['US-01']); assert.deepEqual(closed.left, ['src/app.js']);
+  assert.match(closed.next.join('\n'), /did not verify the tree it will commit/); assert.match(closed.next.join('\n'), /LEFT IN THE WORK TREE: US-03/);
+});
+
+test('a path outside every ticket, or one changed before a batch started as is, keeps the kit from running the commands; the tickets are still planned', async t => {
+  const f = live(t), outside = await engineRun(f, TWO, { ...EDITS, 'notes.txt': 'scratch\n' });
+  const first = afterBatch({ ...f.common, result: outside.result, run: none });
+  assert.equal(first.errors, undefined, JSON.stringify(first.errors));
+  assert.deepEqual(first.findings.find(finding => finding.code === 'VERIFICATION_NOT_RUN')?.paths, ['notes.txt']); assert.equal(first.verification.ran, false);
+  assert.deepEqual(first.commits.map(commit => commit.ticket), ['US-01', 'US-03']); assert.match(first.next.join('\n'), /did not verify the tree it will commit/);
+  const g = live(t);
+  writeFileSync(join(g.product, 'stray.txt'), 'pre-existing\n');
+  const asIs = await engineRun({ ...g, before: batch => beforeBatch({ ...g.common, batch, startAsIs: true }) }, TWO, EDITS);
+  const second = afterBatch({ ...g.common, result: asIs.result, run: none });
+  assert.equal(second.errors, undefined, JSON.stringify(second.errors));
+  assert.deepEqual(second.findings.find(finding => finding.code === 'VERIFICATION_NOT_RUN')?.paths, ['stray.txt']); assert.match(second.verification.reason, /before the batch/);
+  assert.deepEqual(second.commits.map(commit => commit.ticket), ['US-01', 'US-03']);
+});
+
+test('after runs the union of the passed tickets\' own commands, in the batch\'s order; a command no passed ticket lists is not run', async t => {
+  const commands = ['pwd', 'test -e no-such-file', 'echo verified-by-kit'];
+  const f = live(t, { commands }), tickets = [ticket('US-01', ['src/list/a.js'], { verificationCommands: ['echo verified-by-kit'] }), ticket('US-03', ['src/list/b.js'], { verificationCommands: ['pwd'] })];
+  const { result } = await engineRun(f, tickets, EDITS);
+  const closed = afterBatch({ ...f.common, result });
+  assert.equal(closed.errors, undefined, JSON.stringify(closed.errors));
+  assert.deepEqual(closed.verification.commands.map(run => [run.command, run.exit]), [['pwd', 0], ['echo verified-by-kit', 0]]);
+  assert.equal(closed.verification.failed, false); assert.equal(closed.holdAll, false); assert.deepEqual(closed.commits.map(commit => commit.ticket), ['US-01', 'US-03']);
+});
+
+test('a command that writes where Git runs the hooks from, or beside husky\'s stub folder, holds every commit', async t => {
+  const f = live(t, { commands: ['pwd', 'echo hook > .git/hooks/pre-commit'] }), { result } = await engineRun(f, TWO, EDITS);
+  const changedHooks = afterBatch({ ...f.common, result });
+  assert.equal(changedHooks.errors, undefined, JSON.stringify(changedHooks.errors));
+  assert.ok(changedHooks.findings.some(finding => finding.code === 'HOOKS_CHANGED'), JSON.stringify(changedHooks.findings));
+  assert.equal(changedHooks.holdAll, true); assert.deepEqual(changedHooks.commits, []); assert.match(changedHooks.next.join('\n'), /remove every hook the batch added or changed/);
+  const g = live(t, { commands: ['pwd', 'echo hook > .husky/pre-commit'] });
+  mkdirSync(join(g.product, '.husky/_'), { recursive: true }); writeFileSync(join(g.product, '.husky/_/h'), '# husky\n');
+  git(g.product, 'add', '-A'); git(g.product, 'commit', '-q', '-m', 'husky'); git(g.product, 'config', 'core.hooksPath', '.husky/_');
+  const husky = await engineRun(g, TWO, EDITS), written = afterBatch({ ...g.common, result: husky.result });
+  assert.equal(written.errors, undefined, JSON.stringify(written.errors));
+  assert.deepEqual(written.findings.find(finding => finding.code === 'HOOKS_WRITTEN')?.paths, ['.husky/pre-commit']);
+  assert.equal(written.holdAll, true); assert.deepEqual(written.commits, []);
+});
+
+test('a claim whose process is alive names abort for the case where that process is no longer an after of this batch', async t => {
+  const f = live(t), { open, result } = await engineRun(f, TWO, EDITS);
+  writeFileSync(join(f.root, AFTER_FILE), JSON.stringify({ stage: 'batch-closing', runId: open.runId, claimedAt: new Date().toISOString(), pid: process.ppid }));
+  assert.match(refusal(afterBatch({ ...f.common, result, run: passing })).reason, new RegExp(`process ${process.ppid}.*not an after of this batch.*rw-batch\\.mjs abort`));
 });

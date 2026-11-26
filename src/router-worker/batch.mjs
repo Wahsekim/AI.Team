@@ -14,6 +14,7 @@ import { resumePathProblem, resumePlan, applyResume, revertResume } from './batc
 import { holdUnpassed, savedWhole, attributable, BY_HAND } from './review-resolve.mjs';
 import { earlierRuns } from './earlier-runs.mjs';
 import { LEFT_COMMAND } from './batch-close.mjs';
+import { leftAt } from './batch-left.mjs';
 
 // ADR 0010, decisions 8 to 12: the one command a PM runs before a batch in a standing Router/Worker team.
 // It builds the engine's inputs from the PM's tickets, checks the product repository, computes the ceiling,
@@ -471,14 +472,17 @@ export function abortBatch({ teamRoot, instanceRoot }) {
       const made = (readJSON(join(instance, PROGRESS_FILE))?.commits ?? []).filter(commit => typeof commit?.ticket === 'string' && TICKET_ID.test(commit.ticket) && /^[a-f0-9]{40}$/.test(commit?.sha ?? '')).map(commit => `${commit.ticket} ${commit.sha.slice(0, 8)}`);
       // ADR 0011, amendment of 2026-11-26: no ticket flagged for review that no review passed is left for a commit by hand.
       // left refuses a batch whose records were changed, so its work is saved by hand.
-      const traced = attributable(record, readJSON(join(instance, AFTER_FILE))), unknown = `the batch's records are not the ones before and after wrote, so ${BY_HAND}`;
+      const closed = readJSON(join(instance, AFTER_FILE)), traced = attributable(record, closed), unknown = `the batch's records are not the ones before and after wrote, so ${BY_HAND}`;
       const holds = holdUnpassed({ instance, productRoot, runId: id }), [out, stuck, gone] = ['patch', 'in-tree', 'not-in-tree'].map(state => holds.filter(entry => entry.state === state));
+      // after saved these and took them out of the tree; they stay patches.
+      const aside = traced && Array.isArray(closed.setAside) ? closed.setAside.filter(entry => entry?.state === 'patch' && TICKET_ID.test(entry.ticket ?? '') && entry.patch === leftAt(closed.runId, entry.ticket) && exists(join(instance, entry.patch))) : [];
       const work = (made.length ? `${made.length} commit(s) were already made by the kit and stay on the branch (${made.join(', ')}); the rest of what the batch changed is still in the product work tree` : 'Nothing was committed by the kit; what the batch changed is still in the product work tree') + (out.length ? ', less the tickets held as patches' : '');
-      const named = [out.length ? `Held as patches, out of the work tree: ${out.map(entry => `${entry.ticket} (${entry.reason}${entry.by === 'resolve' ? ', by resolve' : ''}) ${entry.patch}`).join(', ')}` : '',
+      const named = [aside.length ? `Set aside by after as patches, out of the work tree: ${aside.map(entry => `${entry.ticket} ${entry.patch}`).join(', ')}` : '',
+        out.length ? `Held as patches, out of the work tree: ${out.map(entry => `${entry.ticket} (${entry.reason}${entry.by === 'resolve' ? ', by resolve' : ''}) ${entry.patch}`).join(', ')}` : '',
         stuck.length ? `LEFT IN THE WORK TREE with no review passed, since abort could not take them out: ${stuck.map(entry => `${entry.ticket} (${entry.reason}; ${entry.problem}${entry.patch ? `; ${savedWhole(entry.patch)}` : ''})`).join(', ')}` : '',
         gone.length ? `Flagged for review, not passed, and no longer in the work tree: ${gone.map(entry => `${entry.ticket} (${entry.reason})`).join(', ')}` : ''].filter(Boolean).map(text => ` ${text}.`).join('');
       const stamp = new Date().toISOString(), note = { schemaVersion: 1, stage: 'batch-archived-without-commit', runId: id, archivedAt: stamp, commitsMade: made, held: holds, boundary: boundary ? 'closed' : 'not-restored', lockReleased,
-        next: `${hooksMoved}${work}: ${traced ? `save the work each ticket left as a patch, out of the work tree, with: ${LEFT_COMMAND}, then commit by hand on the working branch, or discard, only what belongs to no ticket${stuck.length ? '; a ticket left in the work tree that no review passed is never committed by hand: once the cause named below is gone, left saves it, unless abort already saved its patch' : ''}` : unknown}.${named}${out.length || stuck.length ? ' A held patch comes back as the resume of a ticket of a later batch, where it is checked and reviewed as that ticket\'s work.' : ''}${boundary ? '' : ' The write-boundary file is missing or was changed: a mode switch to specialist and back rebuilds it.'}` };
+        next: `${hooksMoved}${work}: ${traced ? `save the work each ticket left as a patch, out of the work tree, with: ${LEFT_COMMAND}, then commit by hand on the working branch, or discard, only what belongs to no ticket${stuck.length ? '; a ticket left in the work tree that no review passed is never committed by hand: once the cause named below is gone, left saves it, unless abort already saved its patch' : ''}` : unknown}.${named}${out.length || stuck.length || aside.length ? ' A held patch comes back as the resume of a ticket of a later batch, where it is checked and reviewed as that ticket\'s work.' : ''}${boundary ? '' : ' The write-boundary file is missing or was changed: a mode switch to specialist and back rebuilds it.'}` };
       appendFileSync(join(instance, LEDGER), `${stamp.slice(0, 10)} BATCH ${id} ARCHIVED WITHOUT COMMIT by rw-batch.mjs abort: the batch was not finished by the kit. ${work}${traced ? '' : `: ${unknown}`}.${named}\n`);
       archiveBatch(instance, id, { 'abandoned.json': { ...note, digest: digest(note) } }, RECORDS);
       return { ...note, digest: digest(note) };

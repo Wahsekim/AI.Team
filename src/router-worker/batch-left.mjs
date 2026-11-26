@@ -17,8 +17,22 @@ const MODE_FILE = 'profiles/team-mode.json', JOURNAL = 'holiday/.switch-in-progr
 const need = (condition, reason) => { if (!condition) throw new Refusal(reason); };
 const exists = path => Boolean(lstatSync(path, { throwIfNoEntry: false }));
 const readJSON = path => { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; } };
-const leftAt = (runId, ticket) => `${LEFT}/${runId}/${ticket}.patch`;
+export const leftAt = (runId, ticket) => `${LEFT}/${runId}/${ticket}.patch`;
 const listed = paths => `${paths.slice(0, 10).map(plain).join(', ')}${paths.length > 10 ? ', ...' : ''}`;
+
+// The value a ticket of the next batch names as its `resume` for this patch, or why "before" would refuse it as it stands.
+export function resumeOf({ instance, productRoot, ticket, patch }) {
+  let checked; try { checked = resumePlan({ instance, productRoot, ticket: { id: ticket.id, resume: patch, paths: ticket.paths } }); } catch (error) { checked = { problem: plain(error?.message ?? error) }; }
+  return checked.plan ? { resume: patch } : { resume: null, resumeProblem: checked.problem };
+}
+const kept = entry => `${entry.ticket} (${entry.problem}; ${entry.patch ? savedWhole(entry.patch) : 'nothing of it was removed: run left again once that is fixed'})`;
+// What the PM does with each ticket's work that was set aside or could not be: the sentences after and left both print.
+export const patchAdvice = entries => {
+  const ready = entries.filter(entry => entry.resume), refused = entries.filter(entry => entry.state === 'patch' && !entry.resume), stuck = entries.filter(entry => entry.state === 'in-tree');
+  return { ready: ready.length ? `Name each patch as the "resume" of a ticket of the next batch whose paths cover what it changes: ${ready.map(entry => `${entry.ticket} "resume": "${entry.resume}"`).join(', ')}` : '',
+    refused: refused.length ? `before would refuse as a resume, as it stands, ${refused.map(entry => `${entry.ticket} (${entry.patch}: ${entry.resumeProblem})`).join(', ')}: make the patch again from its edits and new files, and declare the ticket's moves and deletes; the saved patch keeps all of the work` : '',
+    stuck: stuck.length ? `LEFT IN THE WORK TREE: ${stuck.map(kept).join(', ')}. A ticket's work is never committed by hand` : '' };
+};
 
 // Each archived batch with its batch record as read, null when it cannot be read.
 function archivesOf(instance) {
@@ -76,6 +90,7 @@ export function saveLeftWork({ teamRoot, instanceRoot, runId }) {
 
     const committed = committedIn(instance, id);
     const removed = resolution?.removed, resolved = new Set((Array.isArray(removed) ? removed : []).map(entry => entry?.ticket)), abandoned = at('abandoned.json');
+    const byAfter = new Map((Array.isArray(after.setAside) ? after.setAside : []).filter(entry => entry?.state === 'patch').map(entry => [entry.ticket, entry.patch]));
     // abort saved these and could not take all of them out: each patch already holds the whole of its ticket's work.
     const partial = new Map((intact(abandoned, 'batch-archived-without-commit') && Array.isArray(abandoned.held) ? abandoned.held : [])
       .filter(entry => entry?.state === 'in-tree' && typeof entry.patch === 'string' && entry.patch === heldAt(entry.patch.split('/')[2], entry.ticket) && exists(join(instance, entry.patch))).map(entry => [entry.ticket, entry.patch]));
@@ -85,27 +100,21 @@ export function saveLeftWork({ teamRoot, instanceRoot, runId }) {
     // A path no ticket of this batch changed may be what a ticket of another archived batch left.
     const claims = outside.length ? claimsOf(instance, all, id) : [], claimOf = path => claims.find(entry => entry.paths.includes(path));
     const claimed = outside.flatMap(path => { const claim = claimOf(path); return claim ? [{ path, runId: claim.runId, ticket: claim.ticket }] : []; }), unclaimed = outside.filter(path => !claimOf(path));
-    const resumeOf = (ticket, patch) => {
-      let checked; try { checked = resumePlan({ instance, productRoot, ticket: { id: ticket.id, resume: patch, paths: ticket.paths } }); } catch (error) { checked = { problem: plain(error?.message ?? error) }; }
-      return checked.plan ? { resume: patch } : { resume: null, resumeProblem: checked.problem };
-    };
     const done = tickets.map(({ ticket, recorded }) => {
       const whole = partial.get(ticket.id), inTree = changed.some(path => recorded.includes(path)), found = whole ? [whole] : [heldAt(after.runId, ticket.id), heldAt(id, ticket.id), leftAt(id, ticket.id)];
       const out = whole ? setAside({ instance, productRoot, head, changed, recorded, problem: 'abort saved this ticket\'s patch and could not take all of it out of the work tree', patch: whole, found })
         : setAside({ instance, productRoot, head, changed, recorded, patch: leftAt(id, ticket.id), found });
       if (out.state === 'not-in-tree') return null;
       if (out.state === 'in-tree') return { entry: { ticket: ticket.id, ...out, ...(whole ? { patch: whole } : {}) }, now: false };
-      const by = out.patch.startsWith(`${LEFT}/`) ? 'left' : resolved.has(ticket.id) ? 'resolve' : 'abort', also = [...new Set(found)].filter(path => path && path !== out.patch && exists(join(instance, path)));
-      return { entry: { ticket: ticket.id, state: 'patch', patch: out.patch, by, ...(also.length ? { also } : {}), ...resumeOf(ticket, out.patch) }, now: inTree };
+      const by = out.patch === byAfter.get(ticket.id) ? 'after' : out.patch.startsWith(`${LEFT}/`) ? 'left' : resolved.has(ticket.id) ? 'resolve' : 'abort', also = [...new Set(found)].filter(path => path && path !== out.patch && exists(join(instance, path)));
+      return { entry: { ticket: ticket.id, state: 'patch', patch: out.patch, by, ...(also.length ? { also } : {}), ...resumeOf({ instance, productRoot, ticket, patch: out.patch }) }, now: inTree };
     }).filter(Boolean);
 
-    const entries = done.map(({ entry }) => entry), now = done.filter(({ now: saved }) => saved).map(({ entry }) => entry);
-    const ready = entries.filter(entry => entry.resume), refused = entries.filter(entry => entry.state === 'patch' && !entry.resume), stuck = entries.filter(entry => entry.state === 'in-tree');
-    const kept = entry => `${entry.ticket} (${entry.problem}; ${entry.patch ? savedWhole(entry.patch) : 'nothing of it was removed: run left again once that is fixed'})`;
-    const next = [ready.length ? `Name each patch as the "resume" of a ticket of the next batch whose paths cover what it changes: ${ready.map(entry => `${entry.ticket} "resume": "${entry.resume}"`).join(', ')}` : '',
-      refused.length ? `before would refuse as a resume, as it stands, ${refused.map(entry => `${entry.ticket} (${entry.patch}: ${entry.resumeProblem})`).join(', ')}: make the patch again from its edits and new files, and declare the ticket's moves and deletes; the saved patch keeps all of the work` : '',
+    const entries = done.map(({ entry }) => entry), now = done.filter(({ now: saved }) => saved).map(({ entry }) => entry), stuck = entries.filter(entry => entry.state === 'in-tree');
+    const advice = patchAdvice(entries);
+    const next = [advice.ready, advice.refused,
       entries.some(entry => entry.also) ? `These tickets also have a patch written before the one named: ${entries.filter(entry => entry.also).map(entry => `${entry.ticket} (${entry.also.join(', ')})`).join(', ')}` : '',
-      stuck.length ? `LEFT IN THE WORK TREE: ${stuck.map(kept).join(', ')}. A ticket's work is never committed by hand` : '',
+      advice.stuck,
       claimed.length ? `These changed paths are work a ticket of another archived batch left, and were left as they are: ${claimed.slice(0, 10).map(entry => `${plain(entry.path)} (${entry.ticket} of batch ${entry.runId})`).join(', ')}${claimed.length > 10 ? ', ...' : ''}; save it with: ${[...new Set(claimed.map(entry => entry.runId))].map(run => `${LEFT_COMMAND} --run ${run}`).join(', then ')}` : '',
       unclaimed.length ? `These changed paths are no ticket's work and were left as they are: ${listed(unclaimed)}; commit or discard them by hand, or start the next batch as is` : ''].filter(Boolean);
     const savedAt = new Date().toISOString();

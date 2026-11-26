@@ -491,15 +491,33 @@ after an earlier ticket's checker passed, and a ticket that names its own
 review ran the commands again. The owner decided in session on 2026-11-26,
 accepting the recommendation of that day's review of the kit.
 
-`after` runs the batch's whole frozen command list, as far as the owner still
-confirms it, on the product as it stands, under the lock the batch holds, and
-records the run. It does so before it pins content and plans commits, so what
-is pinned is what the commands left. A command that fails or times out, or no
+`after` first sets aside the work of each ticket that did not pass, or was not
+run, as a patch at `left/<run id>/<ticket>.patch`, with the step `left` uses,
+and takes it out of the product tree: the engine halts a batch at its first
+failed ticket, so earlier tickets passed and the last one failed is the usual
+shape of a batch with a failure, and that ticket's code would fail the
+commands of the passed ones. In three real batches the PM saved that work by
+hand to resume it. A ticket that cannot be set aside keeps all its work in the
+tree. Then, only when every changed path in the tree is a path of a passed
+ticket, `after` runs the union of the passed tickets' own verification
+commands (a ticket without its own list uses the batch's list), in the batch's
+order and as far as the owner still confirms them, on the product as it
+stands, under the lock the batch holds, and records the run. A command every
+passed ticket left out is one the PM said they do not need. This narrows the
+amendment of 2026-11-25 on per-ticket commands for `after` alone: the review
+brief still runs the batch's whole list. `after` runs the commands before it
+pins content and plans commits, so what is pinned is what they left, and it judges the commit hooks
+again on the tree they leave. A command that fails or times out, or no
 confirmed command left to run, holds every commit (`VERIFICATION_FAILED`): the
-kit cannot tell which ticket broke the tree. A batch another finding already
-holds, or one with no ticket passed, runs no command. The run does not verify
-the intermediate commits or each ticket alone. Since `after` now runs as long
-as the product's checks, its claim on the close names its process: a claim
-whose process is alive is running, however old. The write grant per ticket
-and a snapshot per ticket are not adopted, since the hook has no ticket
-identity.
+kit cannot tell which ticket broke the tree. When the tree holds anything else
+(a path outside every ticket, a path changed before the batch, a ticket that
+could not be set aside), `after` runs nothing, records why
+(`VERIFICATION_NOT_RUN`, which holds nothing), says in `next` that the kit did
+not verify the tree it will commit, and plans the passed tickets as before. A
+batch another finding already holds, or one with no ticket passed, sets
+nothing aside and runs no command. The run does not verify the intermediate
+commits or each ticket alone. Since `after` now runs as long as the product's
+checks, its claim on the close names its process: a claim whose process is
+alive is running, however old, and the refusal names `abort` for a process id
+that is no longer this batch's `after`. The write grant per ticket and a
+snapshot per ticket are not adopted, since the hook has no ticket identity.

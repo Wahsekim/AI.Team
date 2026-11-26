@@ -9,6 +9,8 @@ import { flagPaths } from './review-triggers.mjs';
 import { reviewGate, verdictsOf } from './review-judge.mjs';
 import { escalationsOf } from './escalations.mjs';
 import { runCommands, confirmedOf } from './run-commands.mjs';
+import { setAside, productState } from './review-resolve.mjs';
+import { leftAt, resumeOf, patchAdvice } from './batch-left.mjs';
 import { BATCH_FILE, AFTER_FILE, PROGRESS_FILE, RETURN_FILE, RESOLUTION_FILE, RECORDS, ARCHIVE, RUN_ID, TICKET_ID, oneLine, changedPaths, contentOf, hooksOf, archiveBatch, plain, proposedTokens, HOOKS_FIRST, HOOKS_MOVED } from './batch.mjs';
 
 // ADR 0010, decisions 12 and 13: what a PM runs when a batch ends in a standing Router/Worker team.
@@ -104,13 +106,34 @@ function outcomeOf(outcome) {
   return passed ? { status: 'passed' } : { status: 'not-passed', workerStatus: plain(outcome.workerStatus ?? 'none'), verificationStatus: plain(outcome.verificationStatus ?? 'none') };
 }
 
-// ADR 0010, amendment of 2026-11-26: the batch's frozen commands the owner still confirms, run by the kit on the product as it stands.
-// No confirmed command left to run proves nothing about the tree.
-function verifyTree(instance, batch, run) {
-  const { allowed, commands, dropped } = confirmedOf(instance, batch.verificationCommands);
+// ADR 0010, amendment of 2026-11-26: the commands the passed tickets verify with, in the batch's order, as far as the owner still
+// confirms them, run by the kit on the product as it stands. No confirmed command left to run proves nothing about the tree.
+function verifyTree(instance, batch, passed, run) {
+  const needed = batch.verificationCommands.filter(command => passed.some(ticket => (ticket.verificationCommands ?? batch.verificationCommands).includes(command)));
+  const { allowed, commands, dropped } = confirmedOf(instance, needed);
   const runs = run({ productRoot: batch.productRoot, commands, frozen: batch.verificationCommands, allowed });
   need(!runs.errors, runs.errors?.[0]?.reason);
   return { ran: true, failed: !runs.length || failedRuns(runs).length > 0, commands: runs.map(({ command, exit, timedOut, outputDigest, tail }) => ({ command, exit, timedOut, outputDigest, tail })), dropped };
+}
+
+// Each ticket that did not pass and left changes is saved at left/<run id>/<ticket>.patch and taken out of the tree, as left would.
+function setAsideUnpassed(instance, batch, outcomes, worked) {
+  const product = batch.productRoot, { head, changed, problem } = productState(product, {});
+  return batch.tickets.flatMap((ticket, i) => {
+    const recorded = worked.filter(path => !path.endsWith('/') && within(path, ticket.paths)), patch = leftAt(batch.runId, ticket.id);
+    if (outcomes[i].status === 'passed' || !recorded.length) return [];
+    const out = setAside({ instance, productRoot: product, head, changed, problem, recorded, patch, found: [patch] });
+    return [out.state === 'patch' ? { ticket: ticket.id, state: 'patch', patch, ...resumeOf({ instance, productRoot: product, ticket, patch }) } : { ticket: ticket.id, ...out }];
+  });
+}
+
+// Why the tree holds more than the planned commits, by the kind of each path in the way.
+function inTheWay(batch, outcomes, paths) {
+  const unpassed = batch.tickets.filter((ticket, i) => outcomes[i].status !== 'passed');
+  const kinds = [[paths.filter(path => batch.preexisting.includes(path)), 'a path changed before the batch'],
+    [paths.filter(path => !batch.preexisting.includes(path) && unpassed.some(ticket => within(path, ticket.paths))), 'the work of a ticket that did not pass and could not be set aside'],
+    [paths.filter(path => !batch.preexisting.includes(path) && !unpassed.some(ticket => within(path, ticket.paths))), 'a path no planned commit holds']];
+  return `the work tree also holds ${kinds.filter(([found]) => found.length).map(([, kind]) => kind).join(', ')}`;
 }
 
 export function afterBatch({ teamRoot, instanceRoot, result, run = runCommands }) {
@@ -130,7 +153,7 @@ export function afterBatch({ teamRoot, instanceRoot, result, run = runCommands }
     // An after runs the verification commands, as long as they take: its claim stands while its process lives. A claim
     // with no process, no readable time, or a time in the future, is not a running after.
     need(!resumed || (earlier.pid === undefined ? !(age >= 0 && age <= CLAIM_MS) : !alive(earlier.pid)),
-      `Another after is closing this batch${earlier?.pid === undefined ? '; if none is running, run the command again in a minute' : ` (process ${plain(earlier.pid)}); it may be running the verification commands: wait for it to end`}`);
+      `Another after is closing this batch${earlier?.pid === undefined ? '; if none is running, run the command again in a minute' : ` (process ${plain(earlier.pid)}); it may be running the verification commands: wait for it to end. If process ${plain(earlier.pid)} is not an after of this batch (its id was given to another program), archive the batch with: rw-batch.mjs abort --instance <instance-root>`}`);
     if (resumed) replace(afterPath, claim());
     else {
       try { writeFileSync(afterPath, JSON.stringify(claim()) + '\n', { flag: 'wx' }); }
@@ -153,8 +176,9 @@ export function afterBatch({ teamRoot, instanceRoot, result, run = runCommands }
 
     // What the batch changed: everything the work tree holds now that was not already there when it opened.
     const changedNow = () => changedPaths(product).filter(path => !batch.preexisting.includes(path)), worked = changedNow();
-    // A path changed where the hooks live, or beside husky's stub folder, through a worker's shell: it would run at the commit.
-    const hooked = worked.filter(path => (batch.hooks?.guarded ?? []).some(guard => path === guard || path.startsWith(`${guard}/`)));
+    // A path changed where the hooks live, or beside husky's stub folder: it would run at the commit.
+    const hookedIn = paths => paths.filter(path => (batch.hooks?.guarded ?? []).some(guard => path === guard || path.startsWith(`${guard}/`)));
+    const hooked = hookedIn(worked);
     if (hooked.length) findings.push({ code: 'HOOKS_WRITTEN', paths: hooked });
     const outcomes = batch.tickets.map((ticket, i) => outcomeOf(result.results[i]));
     const { refused, checkRuns, ...hook } = hookSeen(instance, workers, batch.args.plan[0].verifierAgentType, batch.openedAt);
@@ -168,12 +192,29 @@ export function afterBatch({ teamRoot, instanceRoot, result, run = runCommands }
         seen: checkRuns.filter(run => run === command).length })).filter(entry => entry.seen < entry.needed);
       if (short.length) findings.push({ code: 'CHECK_RUNS_MISSING', commands: short });
     }
+    const outsideOf = paths => paths.filter(path => !path.endsWith('/') && !batch.tickets.some(ticket => within(path, ticket.paths))), strays = outsideOf(worked);
     // ADR 0010, amendment of 2026-11-26: the commands run before anything is pinned, so what is pinned is what they left; they run
-    // under the lock the batch still holds. A batch held already, or with no ticket passed, has nothing they could clear.
-    const verification = findings.some(finding => HOLD_ALL.includes(finding.code)) || !outcomes.some(outcome => outcome.status === 'passed')
-      ? { ran: false, failed: false, commands: [], dropped: [] } : verifyTree(instance, batch, run);
-    if (verification.failed) findings.push({ code: 'VERIFICATION_FAILED', commands: failedRuns(verification.commands).map(({ command, exit, timedOut }) => ({ command, exit, timedOut })), dropped: verification.dropped });
-    const changed = verification.ran ? changedNow() : worked;
+    // under the lock the batch still holds, on a tree that holds the planned commits and nothing else. A batch held already, or
+    // with no ticket passed, has nothing they could clear.
+    const passedTickets = batch.tickets.filter((ticket, i) => outcomes[i].status === 'passed');
+    let verification = { ran: false, failed: false, commands: [], dropped: [] }, setAsideList = [];
+    if (!findings.some(finding => HOLD_ALL.includes(finding.code)) && passedTickets.length) {
+      setAsideList = setAsideUnpassed(instance, batch, outcomes, worked);
+      const planned = path => !batch.preexisting.includes(path) && !path.endsWith('/') && passedTickets.some(ticket => within(path, ticket.paths));
+      const blocking = changedPaths(product).filter(path => !planned(path));
+      if (blocking.length) {
+        verification = { ...verification, reason: inTheWay(batch, outcomes, blocking), paths: blocking };
+        findings.push({ code: 'VERIFICATION_NOT_RUN', reason: verification.reason, paths: blocking });
+      } else {
+        verification = verifyTree(instance, batch, passedTickets, run);
+        if (verification.failed) findings.push({ code: 'VERIFICATION_FAILED', commands: failedRuns(verification.commands).map(({ command, exit, timedOut }) => ({ command, exit, timedOut })), dropped: verification.dropped });
+        // A command that writes where the hooks live holds every commit, as a worker's write does.
+        if (hooksOf(product).digest !== batch.hooks?.digest) findings.push({ code: 'HOOKS_CHANGED' });
+        const hookedByRun = hookedIn(changedNow());
+        if (hookedByRun.length) findings.push({ code: 'HOOKS_WRITTEN', paths: hookedByRun });
+      }
+    }
+    const changed = changedNow();
     // A changed path that is a directory is a repository of its own inside the product: Git would commit a link to it, not its files.
     const nested = changed.filter(path => path.endsWith('/')), files = changed.filter(path => !path.endsWith('/'));
     if (nested.length) findings.push({ code: 'NESTED_REPOSITORY', paths: nested });
@@ -189,7 +230,8 @@ export function afterBatch({ teamRoot, instanceRoot, result, run = runCommands }
       ticket.content = contentOf(product, ticket.changedPaths);
     }
     const reviews = Object.fromEntries(batch.review.reviewers.map(name => [name, { tickets: tickets.filter(ticket => ticket.review?.required.includes(name)).map(ticket => ticket.id) }]).filter(([, entry]) => entry.tickets.length));
-    const outside = files.filter(path => !batch.tickets.some(ticket => within(path, ticket.paths)));
+    // The workers' writes outside every ticket, and those of the kit's run of the commands.
+    const outside = [...new Set([...strays, ...outsideOf(files)])].sort();
     if (outside.length) findings.push({ code: 'WRITE_OUTSIDE_PATHS', paths: outside });
 
     // ADR 0011, decision 4: a batch whose changes need a review leaves the workers closed and the reviewers judged.
@@ -214,7 +256,12 @@ export function afterBatch({ teamRoot, instanceRoot, result, run = runCommands }
     const hooksTouched = findings.some(finding => ['HOOKS_CHANGED', 'HOOKS_WRITTEN'].includes(finding.code));
     if (holdAll) next.push(`No ticket of this batch is committed by the kit. ${hooksTouched ? `${HOOKS_FIRST}. ` : ''}${ABANDON}`);
     const broke = findings.find(finding => finding.code === 'VERIFICATION_FAILED');
-    if (broke) next.push(`The kit ran the batch's verification commands on the product as it stands and ${broke.commands.length ? `${broke.commands.map(entry => `${plain(entry.command)} (${entry.timedOut ? 'timed out' : `exit ${entry.exit}`})`).join(', ')} did not pass` : `no verification command confirmed for the team was left to run (${broke.dropped.map(plain).join(' | ')})`}: the kit cannot tell which ticket broke the tree, so it commits none. Read the output in the record's verification`);
+    if (broke) next.push(`The kit ran the passed tickets' verification commands on the product as it stands and ${broke.commands.length ? `${broke.commands.map(entry => `${plain(entry.command)} (${entry.timedOut ? 'timed out' : `exit ${entry.exit}`})`).join(', ')} did not pass` : `no verification command confirmed for the team was left to run (${broke.dropped.map(plain).join(' | ')})`}: the kit cannot tell which ticket broke the tree, so it commits none. Read the output in the record's verification`);
+    const aside = setAsideList.filter(entry => entry.state === 'patch'), stuck = setAsideList.filter(entry => entry.state === 'in-tree'), advice = patchAdvice(setAsideList);
+    if (aside.length) next.push(`The work of ${aside.map(entry => `${entry.ticket} (${entry.patch})`).join(', ')}, which did not pass, was set aside as a patch, out of the work tree, so that the kit verifies only what it commits`);
+    next.push(...[advice.ready, advice.refused, advice.stuck].filter(Boolean));
+    const notRun = findings.find(finding => finding.code === 'VERIFICATION_NOT_RUN');
+    if (notRun) next.push(`The kit did not verify the tree it will commit: ${notRun.reason} (${notRun.paths.slice(0, 10).map(plain).join(', ')}${notRun.paths.length > 10 ? ', ...' : ''}), and a run would have judged that with the planned commits. Run the passed tickets' verification commands yourself on a tree that holds only the planned commits before you build on them`);
     if (findings.some(finding => finding.code === 'HOOK_SAW_NO_WORKER')) next.push('The hook logged no call of this batch\'s workers: either the session that ran the batch did not load the write-boundary hook of the team root (.claude/settings.json), so the write limits were not enforced, or the hook ran and could not append to its log (.claude/rw-write-boundary.log.jsonl), so what it decided is not known. Inspect every changed path before any commit by hand, and run the next batch from a session that loads the hook, with that log writable');
     const missing = findings.find(finding => finding.code === 'CHECK_RUNS_MISSING')?.commands ?? [];
     if (missing.length) next.push(`The checker ran ${missing.map(entry => `${plain(entry.command)} (${entry.seen} of ${entry.needed})`).join(', ')} fewer times than the tickets that passed verify with it: a ticket passed without its checker running its verification commands, and the log cannot say which. Run the verification commands yourself before any commit by hand`);
@@ -222,12 +269,12 @@ export function afterBatch({ teamRoot, instanceRoot, result, run = runCommands }
     const reviewers = Object.keys(reviews);
     if (reviewers.length) next.push(`The batch is in review: brief each reviewer with ${reviewers.map(reviewer => `rw-batch.mjs review-brief --reviewer ${reviewer} --instance <instance-root>`).join(', and ')}; no batch, switch or change of limits starts until the review is over`);
     const status = () => findings.length || account.blockers.length || reviewers.length ? 'review' : 'clean';
-    try { appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} BATCH ${batch.runId} CLOSED (${status()}): ${passed} of ${tickets.length} ticket(s) passed; ${commits.length} to commit, ${left.length} changed path(s) left${reviewers.length ? `; review required by ${reviewers.join(', ')}` : ''}${findings.length ? `; findings: ${findings.map(finding => finding.code).join(', ')}` : ''}.\n`); }
+    try { appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} BATCH ${batch.runId} CLOSED (${status()}): ${passed} of ${tickets.length} ticket(s) passed; ${commits.length} to commit, ${left.length} changed path(s) left${setAsideList.length ? `; ${aside.length} ticket(s) set aside as patches${stuck.length ? `, ${stuck.length} could not be` : ''}` : ''}${reviewers.length ? `; review required by ${reviewers.join(', ')}` : ''}${findings.length ? `; findings: ${findings.map(finding => finding.code).join(', ')}` : ''}.\n`); }
     catch { findings.push({ code: 'LEDGER_NOT_WRITTEN' }); }
     // The engine's return is kept beside the record, which carries its digest: the settlement of usage needs it, and so does anyone who audits the batch.
     const kept = JSON.parse(JSON.stringify(result));
     const record = sealed({ schemaVersion: 1, stage: 'batch-closed', runId: batch.runId, batchDigest: batch.digest, closedAt: at, status: status(),
-      account, returnDigest: digest(kept), tickets, reviews, commits, left, holdAll, hook, verification, findings, limits: limitsReached(batch.limits, result, refused), boundaryClosed, leaseReleased, next });
+      account, returnDigest: digest(kept), tickets, reviews, commits, left, holdAll, hook, setAside: setAsideList, verification, findings, limits: limitsReached(batch.limits, result, refused), boundaryClosed, leaseReleased, next });
     replace(join(instance, RETURN_FILE), kept);
     replace(afterPath, record);
     return record;

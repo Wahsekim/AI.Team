@@ -318,7 +318,7 @@ test('after matches the engine return, closes the boundary and frees the lock; c
   assert.equal(next.errors, undefined, JSON.stringify(next.errors)); assert.notEqual(next.runId, f.open.runId);
 });
 
-test('a ticket that did not pass is not committed and stays in the work tree; a write outside every ticket is reported and left', async t => {
+test('a ticket that did not pass is not committed and is set aside as a patch; a write outside every ticket is reported and left', async t => {
   let checks = 0;
   const f = await ran(t, { tickets: two, agents: { verifier: () => ++checks === 1 ? { pass: true, staticPass: true, e2ePass: true, summary: 'ok', commandsRun: [{ command: 'npm test', exitCode: 0 }], failures: [] }
     : { pass: false, staticPass: false, e2ePass: false, summary: 'broken', commandsRun: [{ command: 'npm test', exitCode: 1 }], failures: ['tags test fails'] } },
@@ -327,15 +327,17 @@ test('a ticket that did not pass is not committed and stays in the work tree; a 
   assert.equal(closed.errors, undefined, JSON.stringify(closed.errors)); assert.equal(closed.status, 'review');
   assert.deepEqual(closed.tickets.map(entry => [entry.id, entry.status]), [['US-01', 'passed'], ['US-02', 'not-passed']]);
   assert.deepEqual(closed.findings.find(finding => finding.code === 'WRITE_OUTSIDE_PATHS').paths, ['package-lock.json']);
-  assert.deepEqual(closed.commits.map(entry => entry.ticket), ['US-01']); assert.deepEqual(closed.left, ['package-lock.json', 'src/api/tags.js']);
+  assert.deepEqual(closed.setAside.map(entry => [entry.ticket, entry.state, entry.patch]), [['US-02', 'patch', `left/${f.open.runId}/US-02.patch`]]);
+  assert.deepEqual(closed.findings.find(finding => finding.code === 'VERIFICATION_NOT_RUN')?.paths, ['package-lock.json'], 'the path of no ticket keeps the kit from verifying');
+  assert.deepEqual(closed.commits.map(entry => entry.ticket), ['US-01']); assert.deepEqual(closed.left, ['package-lock.json']);
   const done = f.commit();
-  assert.equal(done.errors, undefined, JSON.stringify(done.errors)); assert.deepEqual(f.log(), ['US-01: Ticket US-01']); assert.deepEqual(done.left, ['package-lock.json', 'src/api/tags.js']);
-  assert.match(f.read('pm-decisions.md'), /COMMITTED on work: 1 commit\(s\).*2 changed path\(s\) left uncommitted \(package-lock\.json, src\/api\/tags\.js\)/);
+  assert.equal(done.errors, undefined, JSON.stringify(done.errors)); assert.deepEqual(f.log(), ['US-01: Ticket US-01']); assert.deepEqual(done.left, ['package-lock.json']);
+  assert.match(f.read('pm-decisions.md'), /COMMITTED on work: 1 commit\(s\).*1 changed path\(s\) left uncommitted \(package-lock\.json\)/);
   // What is left makes the next batch refuse until the PM deals with it, or starts as is.
   f.unmetered();
   assert.match(refusal(await f.before(batchOf(ticket('US-03', ['src/b.js'])))).reason, /uncommitted changes/);
   const next = await f.before(batchOf(ticket('US-03', ['src/b.js'])), { startAsIs: true });
-  assert.equal(next.errors, undefined, JSON.stringify(next.errors)); assert.deepEqual(next.preexisting, ['package-lock.json', 'src/api/tags.js']);
+  assert.equal(next.errors, undefined, JSON.stringify(next.errors)); assert.deepEqual(next.preexisting, ['package-lock.json']);
 });
 
 test('after refuses a return that is not this batch\'s and changes nothing; findings that question the run hold every commit', async t => {
@@ -419,14 +421,15 @@ test('commit refuses when the product changed after the batch was closed, keeps 
   assert.equal(git(dirty.product, 'status', '--porcelain').trim(), 'A  notes.txt', 'and is still staged, as the owner left it');
 });
 
-test('CLI: after runs the verification commands on the product, exits 2 in review; commit exits 0', async t => {
+test('CLI: after exits 2 in review and runs no command on a tree that holds a path outside every ticket; commit exits 0', async t => {
   const f = await ran(t, { tickets: two, seed: { 'package.json': '{ "scripts": { "test": "exit 0" } }\n' }, edits: { 'src/app.js': 'export const x = 2;\n', 'stray.txt': 'x\n' } }), file = join(f.base, 'result.json');
   const run = (...argv) => spawnSync(process.execPath, [join(f.kit, 'scripts/rw-batch.mjs'), ...argv], { encoding: 'utf8' });
   writeFileSync(file, JSON.stringify(f.result));
   assert.equal(run('after', file).status, 1); assert.equal(run('after', join(f.base, 'absent.json'), '--instance', f.root).status, 2);
   const closed = run('after', file, '--instance', f.root);
   assert.equal(closed.status, 2, 'a batch in review'); assert.equal(JSON.parse(closed.stdout).status, 'review');
-  assert.deepEqual(JSON.parse(closed.stdout).verification.commands.map(entry => [entry.command, entry.exit]), [['npm test', 0]], 'the real command, run from the product root');
+  assert.deepEqual(JSON.parse(closed.stdout).findings.find(finding => finding.code === 'VERIFICATION_NOT_RUN')?.paths, ['stray.txt'], 'the path in the way is named');
+  assert.equal(JSON.parse(closed.stdout).verification.ran, false);
   const done = run('commit', '--instance', f.root);
   assert.equal(done.status, 0, done.stderr); assert.equal(JSON.parse(done.stdout).commits.length, 1); assert.equal(run('commit', '--instance', f.root).status, 2);
 });

@@ -332,9 +332,15 @@ recommendation of that day's review of the kit.
 `resolve` held a batch on a failed run of the verification commands at a brief
 only when the tree held nothing but what would be committed. A path `after`
 left, a path changed before the batch or a ticket a review held let the
-failure through as a record, and such a tree is ordinary. `resolve` now refuses
-whenever the latest complete run at a brief failed, and names `abort` and
-`left`; an earlier failure that a later complete run cleared is still recorded.
+failure through as a record, and such a tree is ordinary. When the latest
+complete run at a brief failed, `resolve` now runs the batch's frozen commands
+once itself, under the lock, on the tree as it stands, before it removes
+anything: a single flaky run must not end a reviewed batch. When every frozen
+command passes, it resolves and records both runs (`failedAtBrief` and
+`rerun`). Otherwise it refuses, whatever else the tree holds, names both runs,
+says that a reviewer can be briefed again only while its verdict is not final,
+and names `abort` and `left`. An earlier failure that a later complete run
+cleared is still recorded, with no run by `resolve`.
 
 A file a command wrote at a brief (a cache, a generated file) made `commit`
 refuse because the product had changed, with `abort` as the only way out.
