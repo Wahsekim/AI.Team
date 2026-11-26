@@ -430,7 +430,10 @@ attestation <runId>: …`); a differing attestation for the same run fails close
 (append a dated correction instead). Without `--monitoring` the reconciler
 prints a WARN and the ledger stays silent: coverage is UNKNOWN, which is never
 read as "no stop occurred" — the guardian's `missedHaltRisk` stays
-action-required.
+action-required. A standing Router/Worker batch (`standingBatch`) differs: its
+Guardian is told that the attestation follows the run, so the batch order
+passes `--monitoring` at its reconciliation step
+(`docs/design/router-worker/batch.md`).
 
 **Delivery-pending records (F-01).** `deliveryStatus` `pending`/`failed` means
 an accepted candidate is waiting to land. Landing it is a PM action under

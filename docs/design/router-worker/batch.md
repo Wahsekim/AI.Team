@@ -37,7 +37,7 @@ no network.
 | 1 | PM | `before BATCH.json`: the batch is checked, frozen and opened |
 | 2 | PM | runs `run-n-rounds` with the `args` of the batch record |
 | 3 | PM | `after RESULT.json`, with the engine's return: the run is checked, the write limits close, the lock is released |
-| 4 | PM | `node kit/scripts/reconcile-run.mjs RESULT.json .`: lifecycle and message ledgers, as in specialist mode |
+| 4 | PM | `node kit/scripts/reconcile-run.mjs RESULT.json . --monitoring ATTESTATION.json`: lifecycle and message ledgers, as in specialist mode, and the PM's attestation of the run (`docs/engine.md`): who watched, over which interval, and each owner stop or hardware halt it saw. The engine tells the Guardian of a batch that this attestation follows the run. A headless PM attests `"coverage": "partial"` and says in `notes` that no owner channel existed |
 | 5 | PM | a flagged batch only: `review-brief`, the reviewer's dispatch and `review` per reviewer, then `resolve` (see "Resolve") |
 | 6 | PM | `commit`: one commit per ticket that passed, or per ticket the resolution kept; the batch is archived. A batch whose commits are all held is archived with `abort` instead; `commit` refuses it |
 | 7 | PM | `node kit/scripts/measure-spawn.mjs <session-dir> --json > METER.json`, then `settle METER.json --run <run id>` (the batch is archived by now, so it is named): usage per ticket. The next `before` is refused until this is done |
@@ -1038,6 +1038,9 @@ The limits not being the ones the ledger binds is refused with its own code,
 
 ## Not covered
 
+- **Nothing checks that the PM attested the run** at the reconciliation step.
+  The Guardian of a batch is told the attestation follows; a PM that leaves
+  `--monitoring` out leaves no line, and no command refuses.
 - **A batch the engine ran and `abort` cleared before `after`** is not
   settled and does not hold the next batch: `abort` leaves no archive for it,
   and the kit cannot tell whether the engine ran. Its ledger line says only

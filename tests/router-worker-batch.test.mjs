@@ -587,7 +587,8 @@ test('each finding that questions the run holds every commit; each check of comm
   const generous = (await ran(t, { tickets: two, edits, agents: { guardian: audit({ budgetGateCorrect: false }) } })).after();
   assert.equal(generous.holdAll, false); assert.equal(generous.findings.find(finding => finding.code === 'GUARDIAN_ATTENTION')?.budgetGateCorrect, false);
   const forged = await ran(t, { tickets: two, edits }), untripped = { ...forged.result, budgetStatus: { ...forged.result.budgetStatus, loopSpent: forged.result.budgetStatus.ceiling, tripped: false } };
-  holds(afterBatch({ teamRoot: forged.kit, instanceRoot: forged.root, result: untripped }), 'GUARDIAN_NOT_CLEAN');
+  const gateFault = afterBatch({ teamRoot: forged.kit, instanceRoot: forged.root, result: untripped });
+  holds(gateFault, 'GUARDIAN_NOT_CLEAN'); assert.deepEqual(gateFault.account.blockers, ['guardian-not-clean'], 'a clean verdict over inconsistent budget figures is still a blocker');
   holds((await ran(t, { tickets: two, edits, agents: { guardian: audit({}, 'halt-and-investigate') } })).after(), 'GUARDIAN_NOT_CLEAN');
   // No observer watched the run, as in every headless batch: recorded, nothing held.
   const unwatched = (await ran(t, { tickets: two, edits, agents: { guardian: audit({ missedHaltRisk: true }) } })).after();
