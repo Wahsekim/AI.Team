@@ -82,7 +82,7 @@ export function triggerChanges(previous, review) {
   return { previous: previous.digest, added: [...minus(atoms(review), atoms(previous)), ...was.filter(glob => !now.includes(glob)).map(glob => `generated ${glob} withdrawn`)],
     removed: [...minus(atoms(previous), atoms(review)), ...now.filter(glob => !was.includes(glob)).map(glob => `generated ${glob}`)] };
 }
-// Called once the batch record is written. With no earlier list kept, the whole list goes to the owner's spot review.
+// Called before the batch record is written. With no earlier list kept, the whole list goes to the owner's spot review.
 export function recordFrozen({ instance, review, changes, runId, at }) {
   const day = at.slice(0, 10), lines = changes.previous
     ? [changes.added.length ? `${day} BATCH ${runId} REVIEW TRIGGERS ADDED: ${shown(changes.added)}.` : null, changes.removed.length ? `${day} BATCH ${runId} REVIEW TRIGGERS REMOVED OR NARROWED (owner spot review): ${shown(changes.removed)}.` : null].filter(Boolean)

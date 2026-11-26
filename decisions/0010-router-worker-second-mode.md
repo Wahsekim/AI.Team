@@ -522,3 +522,30 @@ checks, its claim on the close names its process: a claim whose process is
 alive is running, however old, and the refusal names `abort` for a process id
 that is no longer this batch's `after`. The write grant per ticket and a
 snapshot per ticket are not adopted, since the hook has no ticket identity.
+
+### 2026-11-26: a dead command's lock, one spelling of a path, and the order of two writes
+
+Status: Accepted.
+
+A command killed while it held the lock on the product left the next one no way
+on but `abort`, which archives the batch without commit; `before` accepted a
+path its grant covered only in another case, whose work `after` then found
+outside every ticket; and two writes in the wrong order left an open batch the
+ledger did not name, or limits the ledger bound and the profile did not hold.
+The owner decided in session on 2026-11-26, accepting the recommendation of
+that day's review of the kit.
+
+A lock taken by a command for its own length names the command's process; once
+that process is gone, the next command of the same team takes it over. A lock
+held across commands (a batch's, a launch's), one held by a live process, and
+another team's are never taken over. `abort` refuses while a command of the
+team that holds the lock, or the `after` that claimed the batch, still runs.
+Whether two tickets claim one file is still judged without case; whether a
+path lies inside a ticket's grant is judged with case, as `after` and the hook
+judge it, and a path that names a file or folder of the product in another
+case than Git or the file system spells it is refused with the spelling to
+use. `before` appends its ledger lines before it writes the batch record, and a
+change of limits that died before its rename is finished by the next `limits`
+command when the last ledger line binds the limits it holds: that change was
+confirmed at a terminal, so finishing it is not a new change. Any other
+leftover is removed and applies nothing.

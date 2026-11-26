@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync, appendFileSync, renameSync, rmSync, lstatS
 import { join, resolve } from 'node:path';
 import { digest, bytesDigest } from '../loop/contracts.mjs';
 import { instanceOf } from './roots.mjs';
-import { git, gitRun, acquireLease, releaseLease, readLease } from './lease.mjs';
+import { git, gitRun, acquireLease, releaseLease, readLease, alive } from './lease.mjs';
 import { accountRun, guardianHold } from './run-args.mjs';
 import { readBoundary, closeBoundary, reviewBoundary, stateOf, within, LOG_FILE } from './write-boundary.mjs';
 import { flagPaths } from './review-triggers.mjs';
@@ -24,7 +24,7 @@ export const IN_PROGRESS = ['index.lock', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REV
 export const HOLD_ALL = ['BOUNDARY_CHANGED', 'PRODUCT_HEAD_MOVED', 'PRODUCT_BRANCH_CHANGED', 'GUARDIAN_NOT_CLEAN', 'HOOKS_CHANGED', 'HOOKS_WRITTEN', 'HOOK_SAW_NO_WORKER', 'CHECK_RUNS_MISSING', 'VERIFICATION_FAILED'];
 // A claim that names no process, an earlier kit's, is taken to be running while it is this recent.
 const CLAIM_MS = 60000;
-export const alive = pid => { if (!Number.isSafeInteger(pid) || pid === process.pid) return false; try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; } };
+export { alive };
 export const LEFT_COMMAND = 'rw-batch.mjs left --instance <instance-root>';
 export const ABANDON = `If the batch cannot be committed by the kit, archive it with: rw-batch.mjs abort --instance <instance-root>, which saves each ticket flagged for review that no review passed as a patch under reviews/held/<run id>/ and takes it out of the work tree; then save the work each other ticket left as a patch, out of the work tree, with: ${LEFT_COMMAND}, and commit or discard the rest by hand`;
 
@@ -345,7 +345,7 @@ export function commitBatch({ teamRoot, instanceRoot }) {
     // ADR 0011, decisions 14 and 15: a reviewed batch commits what its resolution kept; the tickets it held are patches.
     const { plan, held, wrote, reviewed } = resolutionOf(instance, batch, after);
     product = batch.productRoot;
-    const taken = acquireLease({ teamRoot: instance, productRoot: product });
+    const taken = acquireLease({ teamRoot: instance, productRoot: product, command: true });
     need(!taken.errors, `The lock on the product repository could not be taken: ${taken.errors?.[0]?.reason}`);
     lease = taken.lease.digest;
 

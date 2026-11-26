@@ -117,14 +117,22 @@ budget per ticket. Those come from the team.
    the owner has not acknowledged (see "Review verdict, commit gate and
    escalation"; refused with `TICKET_ESCALATED`).
 2. **The tickets**: each is complete, and no two tickets claim the same file. A
-   folder grant claims every file under it; paths are compared without case.
-   Each file a ticket moves or deletes is one plain path inside its `paths`
-   (see "Moves and deletions"). Every verification command of the batch is one
+   folder grant claims every file under it; for this question alone paths are
+   compared without case, since on a case-insensitive file system `src/A.js`
+   and `src/a.js` are one file. Each file a ticket moves or deletes is one
+   plain path inside its `paths` (see "Moves and deletions"), compared with
+   case, as `after` and the hook compare: a path that its grant covers only in
+   another case is refused with the spelling to use. Every verification command of the batch is one
    of the commands the owner confirmed for the team (`allowedCommands` in its
    limits); this is checked right after the tickets, before the escalations and
    the product, and again under the lock.
 3. **The product repository**: on a branch that is not a default branch, no Git
-   operation in progress, nothing uncommitted or untracked. Git-ignored files
+   operation in progress, nothing uncommitted or untracked. Under the lock
+   (step 4), a ticket's path, folder grant, expected path, move or delete that
+   names a tracked file, or an existing file or folder, in another case than
+   Git or the file system gives it is refused, and the refusal gives the
+   spelling to use: Git reports the work in its own spelling, and `after`
+   would find it outside the ticket. Git-ignored files
    are not counted. The team's own files are never counted: the team lives
    outside the product.
 4. **The lock** on the product repository is taken. The team and the product
@@ -155,8 +163,12 @@ budget per ticket. Those come from the team.
    commands of the tickets' moves and deletions; see "The workers' shell".
    Each ticket's `resume` patch is then applied to the work tree (see
    "Resuming left work").
-9. **The batch record** `rw-batch.json` is written in the team's folder and
-   printed. Its `args` are the arguments the PM passes to `run-n-rounds`. It
+9. **The batch record** `rw-batch.json` is written in the team's folder, last,
+   and printed. The ledger lines of the batch (started as is, commits made
+   outside the kit, runs again, resumes, review triggers) are appended just
+   before it: a `before` that dies between leaves lines of a batch that never
+   opened (no record, no archive under that run id), and the next `before`
+   writes them again under its own run id. Its `args` are the arguments the PM passes to `run-n-rounds`. It
    also holds what "after" will need: the branch and commit, the paths that
    were already changed, each ticket's paths, the sensitive paths, the
    verification commands, the limits. It holds `outsideCommits`, the commits
@@ -417,9 +429,10 @@ With its file tools a worker can write a file but not rename or delete one
 - each `from`, `to` and deleted path is one plain file path: no folder grant,
   no `.` or `..` part, none of `` " $ ` \ ! * ? [ ] { } : ``, no control,
   bidirectional or zero-width character, written in composed Unicode (NFC),
-  not under `.git` or `.claude`; it lies inside the ticket's `paths`, and no
-  path is named twice in the ticket's moves and deletes (compared without
-  case);
+  not under `.git` or `.claude`; it lies inside the ticket's `paths`, compared
+  with case as `after` compares, and is spelled as Git and the file system
+  spell what it names; no path is named twice in the ticket's moves and
+  deletes (compared without case);
 - each `from` and each deleted path is a file tracked at the product's HEAD;
   a `from` is not a symbolic link, at HEAD or in the work tree, since a later
   path could reach through a moved link out of the grant (a deleted path may
@@ -431,7 +444,8 @@ With its file tools a worker can write a file but not rename or delete one
   its tickets, compared without case: the commands run one after another, and
   the first could redirect the second;
 - each `to` does not exist, and the nearest folder of it that exists is a real
-  folder of the product, not a link;
+  folder of the product, not a link, judged by its real path as the file
+  system stores it (case included);
 - at most 100 moves and deletions over the whole batch.
 
 No move lands in a submodule: a product whose index holds one opens no batch
@@ -562,7 +576,8 @@ it should cost the team is the PM's and the owner's to decide.
 
 `commit` makes the planned commits on the batch's branch, in the order of the
 tickets, then moves the batch's records to `batches/<run id>/` and appends one
-line to `pm-decisions.md`. It takes the lock for its length. It pushes nothing.
+line to `pm-decisions.md`. It takes the lock for its length (see "The lock of
+a command"). It pushes nothing.
 
 - It refuses when the product is no longer on the batch's branch, when a Git
   operation is in progress, when the commit hooks were changed or moved, when
@@ -602,6 +617,9 @@ line to `pm-decisions.md`. It takes the lock for its length. It pushes nothing.
 - A commit is made with the repository's identity, or the one given in
   `GIT_AUTHOR_*` and `GIT_COMMITTER_*`. Every other `GIT_*` variable is ignored.
 - A `commit` that died after archiving the batch is finished by the next call.
+  One that died between two commits (a tool timeout, a closed terminal) left
+  its lock and its recorded commits: the next `commit` takes the lock over and
+  makes only the commits still missing, as after a hook's refusal.
 - What is not committed stays in the work tree and is listed (`left`): a ticket
   that did not pass and that `after` did not set aside (a held batch, a batch
   in which no ticket passed, a set-aside that failed), a path outside every ticket (one `after`'s own run of the
@@ -1033,9 +1051,9 @@ digest). The work tree it expects is `after`'s, less the removed paths, plus
 
 **Resume.** While it works the record has `stage: "batch-resolving"` and
 carries each patch as soon as it is saved, the verification outcome once the
-commands ran, the lock's
-digest and the process id. A `resolve` that died is
-finished by the next one: it takes over the lock when that process is gone,
+commands ran, and the process id. A `resolve` that died is
+finished by the next one: it takes over the lock as any command does (see "The
+lock of a command"),
 checks each saved patch against its digest, removes again what is not yet
 removed, does not run the commands twice, and holds after a recorded failure
 what the failure holds. A ticket a recorded failure holds is not compared with
@@ -1135,6 +1153,21 @@ tickets: [{id, runs, shas, changedPaths, flaggedFiles, content, links}], ruleIds
 adrs, retryReason?}`. The ledger gets one `PERIODIC REVIEW <id> <reviewer>`
 line per judgment.
 
+## The lock of a command
+
+The lock on the product repository has two kinds of holder. A batch holds it
+across commands, from `before` to `after`; so does a disposable launch. A
+command holds it for its own length: `commit`, `resolve`, `left`, `abort`'s
+removals, a change of limits and a mode switch. A command's lock names its
+process (`commandPid` in the lease file). A command that asks for the lock and
+finds a command's lock of this team whose process is gone takes it over, under
+the same lock file that serializes releases, so of two commands that find one
+dead lock exactly one takes it. A lock held by a command that still runs, by a
+batch, or by another team is refused, and the refusal says which, with the
+process id for a running command. `before` takes over a dead command's lock
+too; the lock it takes is the batch's. A command that died holding the lock
+needs no `abort`: running a command again is the way on.
+
 ## When the kit will not commit a batch
 
 A batch that `after` closed and `commit` refuses (all commits held, the branch
@@ -1152,9 +1185,9 @@ flagged ticket that `abort` could not take out is named as left in the work
 tree with no review passed; it is never committed by hand. When `abort` saved
 its patch before the removal failed, that patch is the complete one and what
 is left of the ticket in the tree is discarded; otherwise `left` saves it once
-the cause is gone. `abort` releases any lock this team holds, so it must not be
-run while a `commit` of the same team is running; it takes nothing out while a
-`resolve` of the batch is still running (see "Abort"). The next "before" then
+the cause is gone. `abort` refuses while a command of this team that holds the
+lock still runs, or while the `after` that claimed the batch does, and names
+the process to wait for or stop (see "Abort"). The next "before" then
 needs a clean repository or "start as is", as after any batch that left paths
 behind, and it names every commit made by hand since (see "What before does,
 in order").
@@ -1214,6 +1247,12 @@ committed.
 `abort` clears a batch that will not be run, and what a "before" that died
 left behind: it closes the write boundary (also from the review state), releases the lock if this team holds
 it, removes the batch record and appends one line to `pm-decisions.md`. It
+refuses, and changes nothing, while the lock is held by a command of this team
+whose process is alive, or while `rw-batch-after.json` is the claim of an
+`after` whose process is alive; the refusal names the process to wait for or
+stop, and what to do if that id now belongs to another program (release the
+lock with `lease-router-worker.mjs release`, or remove the claim file). A
+command's lock whose process is gone, and the batch's own lock, it releases. It
 checks nothing about the work; that is the "after" command. It never releases
 another team's lock. It does not know whether the engine is running: aborting a
 batch that is being run takes its lock and its write paths away mid-run.
@@ -1267,9 +1306,15 @@ cleaned (in the product, `git add -A`, then `git diff --cached --binary HEAD`
 into a file outside the product). They say the same, and name no `left`, when
 the batch record is not the one `before` sealed or the after record belongs to
 another batch. A `resolve` of this batch is still running: its record is
-`batch-resolving` and the process it names is alive. `abort` releases this
-team's lock, which that `resolve` holds, so taking files out under it would
-race its own removals.
+`batch-resolving` and the process it names is alive. While that `resolve`
+holds the lock `abort` refuses; a record whose process id is alive with the
+lock free is still taken as running, and nothing is taken out.
+
+When the records cannot be traced (an `after` that died part-way left only its
+claim, or a record was changed), the note and the ledger line also list the
+patch files already under `left/<run id>/` and `reviews/held/<run id>/`,
+"Already saved as patches for this batch": an `after` that died while it set
+work aside saved them, and they are not saved again by hand.
 
 `abort` still archives the batch when a ticket cannot be taken out: when the
 lock cannot be taken, a Git operation is in progress in the product, the
@@ -1617,11 +1662,13 @@ The limits not being the ones the ledger binds is refused with its own code,
   of it, and the PM discards the rest.
 - **The brief's verification runs without the lock.** Nothing else starts while
   the batch is in review, but the PM's own session can still change the product.
-- **`abort` does not wait for an `after` that is running the verification
-  commands.** It releases the lock and archives the records under it; it must
-  not be run while an `after` of the team runs. The claim of a running `after`
-  names its process; the kit cannot tell whether a live process of that id is
-  still that `after`.
+- **A process id is taken for the command or the `after` it names.** A lock
+  or a claim whose process id was given since to another program reads as
+  still running: the command and `abort` refuse, and the refusal says how to
+  clear it by hand. The lock is a file in the product's Git directory; a
+  command on another host that shares it is judged by a process id of this
+  host. A claim of an earlier kit names no process, and `abort` does not wait
+  for it.
 - **`after` sets aside the work of a ticket that did not pass only when it
   would verify.** In a batch another finding holds, or one in which no ticket
   passed, that work stays in the work tree until the PM runs `left`. A ticket

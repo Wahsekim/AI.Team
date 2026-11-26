@@ -6,10 +6,10 @@ import fs, { mkdirSync, writeFileSync, readFileSync, rmSync, cpSync, existsSync,
 import { join } from 'node:path';
 import { syncBuiltinESMExports } from 'node:module';
 import { spawnSync } from 'node:child_process';
-import { proposeSwitch, switchMode, recoverSwitch, DEFAULT_LIMITS } from '../src/router-worker/switch.mjs';
+import { proposeSwitch, switchMode, recoverSwitch, proposeLimits, changeLimits, DEFAULT_LIMITS, AT_TERMINAL } from '../src/router-worker/switch.mjs';
 import { acquireLease, readLease } from '../src/router-worker/lease.mjs';
 import { readBoundary, decideCall, boundaryGap } from '../src/router-worker/write-boundary.mjs';
-import { bytesDigest } from '../src/loop/contracts.mjs';
+import { bytesDigest, digest } from '../src/loop/contracts.mjs';
 import { fixture, git, CLI } from './fixtures/router-worker/standing-team.mjs';
 
 const SHARED = ['charter.md', 'CLAUDE.md', 'agents/lifecycle.md', 'agents/lessons.md', 'memory/pm.md', 'profiles/project.md', 'profiles/stack.md', 'kit.lock'];
@@ -449,4 +449,27 @@ test('a product root a quoted shell command cannot hold is refused at the switch
   const f = fixture(t), odd = join(f.base, 'pro!duct');
   const request = { spec: { ...f.spec, project: { ...f.spec.project, productRoot: odd } } };
   assert.match(refusal(proposeSwitch({ to: 'router-worker', request, ...f.common, productRoot: odd })).reason, /cannot be written inside a quoted shell command/);
+});
+
+test('a change of limits that died after its ledger line is finished by the next limits command; any other leftover is removed, named, and changes nothing', t => {
+  const f = fixture(t), common = { teamRoot: f.kit, instanceRoot: f.root }, profile = join(f.root, 'profiles/team-mode.json'), leftover = `${profile}.tmp`;
+  assert.equal(f.apply().errors, undefined);
+  const stored = JSON.parse(f.read('profiles/team-mode.json')), confirmed = { ...stored.limits, outputAllowancePerTicket: 20000 };
+  // Killed between its ledger line and its rename: the line binds limits the profile does not hold.
+  writeFileSync(leftover, JSON.stringify({ ...stored, limits: confirmed }, null, 2) + '\n');
+  appendFileSync(join(f.root, 'pm-decisions.md'), `2026-11-26 LIMITS CHANGED: outputAllowancePerTicket 15000 -> 20000; proposal sha256:${'2'.repeat(64)} was confirmed ${AT_TERMINAL}; limits ${digest(confirmed)}.\n`);
+  const next = proposeLimits({ ...common, limits: { attemptsPerTicket: 2 } });
+  assert.equal(next.errors, undefined, JSON.stringify(next.errors));
+  assert.deepEqual(next.from, confirmed, 'the confirmed change is in force'); assert.match(next.leftover, /team-mode\.json\.tmp.*finished/);
+  assert.equal(existsSync(leftover), false); assert.deepEqual(JSON.parse(f.read('profiles/team-mode.json')), { ...stored, limits: confirmed });
+  assert.match(refusal(proposeLimits({ ...common, limits: {} })).reason, /already has/, 'nothing is left to confirm');
+  // A leftover the ledger does not bind was never confirmed: it is removed and named, and nothing of it is applied.
+  writeFileSync(leftover, JSON.stringify({ ...stored, limits: { ...confirmed, attemptsPerTicket: 3 } }));
+  const proposal = proposeLimits({ ...common, limits: { attemptsPerTicket: 2 } });
+  assert.equal(proposal.errors, undefined, JSON.stringify(proposal.errors)); assert.match(proposal.leftover, /team-mode\.json\.tmp.*removed/);
+  assert.deepEqual(proposal.from, confirmed); assert.equal(existsSync(leftover), false);
+  writeFileSync(leftover, '{"half": ');
+  const changed = changeLimits({ ...common, limits: { attemptsPerTicket: 2 }, confirm: proposal.digest, atTerminal: true });
+  assert.equal(changed.errors, undefined, JSON.stringify(changed.errors)); assert.match(changed.leftover, /removed/);
+  assert.equal(JSON.parse(f.read('profiles/team-mode.json')).limits.attemptsPerTicket, 2); assert.equal(readLease({ productRoot: f.product }).status, 'free');
 });
