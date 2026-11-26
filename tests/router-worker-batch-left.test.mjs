@@ -2,11 +2,16 @@
 // per ticket, and before counts the earlier runs of a ticket's work that the kit did not commit.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, readFileSync, existsSync, mkdirSync, rmSync, chmodSync } from 'node:fs';
+import { writeFileSync, readFileSync, existsSync, mkdirSync, rmSync, chmodSync, statSync, mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { spawn, spawnSync } from 'node:child_process';
+import { once } from 'node:events';
 import { beforeBatch, abortBatch } from '../src/router-worker/batch.mjs';
 import { markNotMetered } from '../src/router-worker/batch-settle.mjs';
+import { earlierRuns } from '../src/router-worker/earlier-runs.mjs';
+import { acquireLease, releaseLease } from '../src/router-worker/lease.mjs';
+import { reviewBoundary, closeBoundary } from '../src/router-worker/write-boundary.mjs';
 import { git } from './fixtures/router-worker/standing-team.mjs';
 import { ticket, live, changed, runBatch, batchOf, agentsOf, edits, COMMANDS } from './fixtures/router-worker/review.mjs';
 
@@ -125,19 +130,134 @@ test('before freezes and logs the earlier runs of a ticket the kit did not commi
   // Batch 2: US-01 does not pass again, and the engine halts before it runs US-04.
   const two = await runBatch(f, [ticket('US-01', ['src/list/a.js']), ticket('US-04', ['src/list/d.js'])], edits(['src/list/a.js']), {}, checker(1));
   assert.deepEqual(two.after.tickets.map(entry => entry.status), ['not-passed', 'not-run']);
-  assert.deepEqual(two.open.tickets.map(entry => entry.earlierRuns), [[{ runId: one.open.runId, ticket: 'US-01', status: 'not-passed' }], []]);
+  assert.deepEqual(two.open.tickets.map(entry => entry.earlierRuns), [{ runs: [{ runId: one.open.runId, ticket: 'US-01', status: 'not-passed' }], count: 1 }, { runs: [], count: 0 }]);
   assert.equal(f.commit().errors, undefined); discard(); settled(f, two.open.runId);
 
   const runs = [{ runId: one.open.runId, ticket: 'US-01', status: 'not-passed' }, { runId: two.open.runId, ticket: 'US-01', status: 'not-passed' }];
   const third = await f.before(batchOf(ticket('US-01', ['src/list/a.js']), ticket('US-02', ['src/list/b.js']), ticket('US-04', ['src/list/d.js'])));
   assert.equal(third.errors, undefined, JSON.stringify(third.errors));
-  assert.deepEqual(third.tickets.map(entry => entry.earlierRuns), [runs, [], []], 'a ticket the kit committed, or the engine never ran, has none');
+  assert.deepEqual(third.tickets.map(entry => entry.earlierRuns), [{ runs, count: 2 }, { runs: [], count: 0 }, { runs: [], count: 0 }], 'a ticket the kit committed, or the engine never ran, has none');
   assert.deepEqual(lines(), [`${two.open.openedAt.slice(0, 10)} BATCH ${two.open.runId} RUNS US-01 AGAIN (owner spot review): 1 earlier run(s) by the engine that the kit did not commit: ${one.open.runId} as US-01 (not-passed).`,
     `${third.openedAt.slice(0, 10)} BATCH ${third.runId} RUNS US-01 AGAIN (owner spot review): 2 earlier run(s) by the engine that the kit did not commit: ${one.open.runId} as US-01 (not-passed), ${two.open.runId} as US-01 (not-passed).`]);
   assert.equal(abortBatch(f.common).errors, undefined);
 
   // The same work under a new id: its folder grant overlaps US-01's file.
   const renamed = await f.before(batchOf(ticket('US-11', ['src/list/**'], { expectedPaths: ['src/list/a.js'] })));
-  assert.equal(renamed.errors, undefined, JSON.stringify(renamed.errors)); assert.deepEqual(renamed.tickets[0].earlierRuns, runs);
+  assert.equal(renamed.errors, undefined, JSON.stringify(renamed.errors)); assert.deepEqual(renamed.tickets[0].earlierRuns, { runs, count: 2 });
   assert.equal(lines().length, 3); assert.match(lines()[2], new RegExp(`BATCH ${renamed.runId} RUNS US-11 AGAIN \\(owner spot review\\): 2 earlier run\\(s\\)`));
+});
+
+test('a ticket whose removal failed part-way is named with the patch left saved, the complete one, on every later run, until what is left of it is discarded', async t => {
+  const f = live(t), work = { 'src/app.js': 'export const x = 3;\n', 'src/gen/b.js': '// b\n' };
+  const { open } = await runBatch(f, [ticket('US-08', ['src/app.js', 'src/gen/**'], { expectedPaths: ['src/app.js', 'src/gen/b.js'] })], work);
+  assert.equal(abortBatch(f.common).errors, undefined);
+  const patch = `left/${open.runId}/US-08.patch`, whole = new RegExp(`US-08 .*its saved patch ${patch} is the complete one: discard what is left of that ticket`);
+  // The edit is restored first; the new file lies in a folder nothing can be deleted from.
+  chmodSync(join(f.product, 'src/gen'), 0o555);
+  let first; try { first = left(f); } finally { chmodSync(join(f.product, 'src/gen'), 0o755); }
+  assert.equal(first.status, 2); assert.deepEqual(first.out.tickets.map(entry => [entry.ticket, entry.state, entry.patch]), [['US-08', 'in-tree', patch]]);
+  assert.match(first.out.next, whole); assert.deepEqual(changed(f), ['src/gen/b.js']);
+  const saved = readFileSync(join(f.root, patch)), again = left(f);
+  assert.equal(again.status, 2); assert.deepEqual(again.out.tickets.map(entry => [entry.ticket, entry.state, entry.patch]), [['US-08', 'in-tree', patch]]);
+  assert.match(again.out.next, whole); assert.doesNotMatch(again.out.next, /nothing of it was removed/);
+  assert.ok(readFileSync(join(f.root, patch)).equals(saved), 'the saved patch is not written over'); assert.deepEqual(changed(f), ['src/gen/b.js']);
+  rmSync(join(f.product, 'src/gen'), { recursive: true });
+  const done = left(f);
+  assert.equal(done.status, 0, JSON.stringify(done.refused)); assert.deepEqual(done.out.tickets.map(entry => [entry.ticket, entry.state, entry.patch, entry.by]), [['US-08', 'patch', patch, 'left']]);
+  git(f.product, 'apply', join(f.root, patch));
+  assert.deepEqual(Object.keys(work).map(path => inTree(f, path)), Object.values(work), 'the saved patch holds the edit and the new file');
+});
+
+test('left refuses an archive whose after record was changed, and says its work is saved by hand before the work tree is cleaned', async t => {
+  const f = live(t);
+  await runBatch(f, [ticket('US-09', ['src/list/a.js'])], { 'src/list/a.js': '// a\n' });
+  const path = join(f.root, 'rw-batch-after.json'); writeFileSync(path, JSON.stringify({ ...JSON.parse(readFileSync(path, 'utf8')), note: 'changed by hand' }));
+  assert.equal(abortBatch(f.common).errors, undefined);
+  const refused = left(f);
+  assert.equal(refused.status, 2); assert.match(refused.refused.reason, /no command of the kit can tell which ticket.*save it by hand before the work tree is cleaned.*git add -A.*git diff --cached --binary HEAD/);
+  assert.deepEqual(changed(f), ['src/list/a.js']);
+});
+
+test('left refuses while a resolve of the archived batch is still running, and saves the work once that process is gone', async t => {
+  const f = live(t);
+  const { open } = await runBatch(f, [ticket('US-01', ['src/auth/x.js'])], { 'src/auth/x.js': '// x\n' });
+  const sleeper = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 120000)']); t.after(() => sleeper.kill());
+  writeFileSync(join(f.root, 'rw-batch-resolution.json'), JSON.stringify({ schemaVersion: 1, stage: 'batch-resolving', runId: open.runId, pid: sleeper.pid, removed: [] }));
+  const aborted = abortBatch(f.common);
+  assert.equal(aborted.errors, undefined, JSON.stringify(aborted.errors)); assert.deepEqual(aborted.held.map(entry => [entry.ticket, entry.state]), [['US-01', 'in-tree']]);
+  const refused = left(f);
+  assert.equal(refused.status, 2); assert.match(refused.refused.reason, new RegExp(`resolve of batch ${open.runId} is still running \\(process ${sleeper.pid}\\)`));
+  assert.deepEqual(changed(f), ['src/auth/x.js']); assert.equal(existsSync(join(f.root, 'left')), false);
+  sleeper.kill(); await once(sleeper, 'exit');
+  const saved = left(f);
+  assert.equal(saved.status, 0, JSON.stringify(saved.refused)); assert.deepEqual(saved.out.tickets.map(entry => [entry.ticket, entry.state, entry.by]), [['US-01', 'patch', 'left']]);
+  assert.deepEqual(changed(f), []);
+});
+
+test('left names the paths an older archived batch left as that batch\'s work, with the command that saves them, not as paths to discard', async t => {
+  const f = live(t);
+  const x = await runBatch(f, [ticket('US-01', ['src/list/a.js'])], { 'src/list/a.js': '// a\n' }, {}, checker(1));
+  assert.equal(abortBatch(f.common).errors, undefined); settled(f, x.open.runId);
+  const asIs = { ...f, before: batch => beforeBatch({ ...f.common, batch, startAsIs: true }) };
+  const y = await runBatch(asIs, [ticket('US-02', ['src/list/b.js'])], { 'src/list/b.js': '// b\n' });
+  assert.equal(abortBatch(f.common).errors, undefined);
+  const newest = left(f);
+  assert.equal(newest.status, 0, JSON.stringify(newest.refused)); assert.equal(newest.out.runId, y.open.runId);
+  assert.deepEqual(newest.out.outside, []); assert.deepEqual(newest.out.claimed, [{ path: 'src/list/a.js', runId: x.open.runId, ticket: 'US-01' }]);
+  assert.match(newest.out.next, new RegExp(`src/list/a\\.js \\(US-01 of batch ${x.open.runId}\\).*rw-batch\\.mjs left --instance <instance-root> --run ${x.open.runId}`));
+  assert.doesNotMatch(newest.out.next, /discard/); assert.deepEqual(changed(f), ['src/list/a.js']);
+  // --run names an archive that is not the newest: left saves that batch's work.
+  const older = left(f, '--run', x.open.runId);
+  assert.equal(older.status, 0, JSON.stringify(older.refused)); assert.deepEqual(older.out.tickets.map(entry => [entry.ticket, entry.state, entry.patch]), [['US-01', 'patch', `left/${x.open.runId}/US-01.patch`]]);
+  assert.deepEqual(changed(f), []);
+});
+
+test('left names the patch written last when a ticket has both a held patch and one left saved, and names the other', async t => {
+  const f = live(t);
+  const { open } = await runBatch(f, [ticket('US-01', ['src/auth/x.js'])], { 'src/auth/x.js': '// x\n' });
+  const held = `reviews/held/${open.runId}/US-01.patch`, mine = `left/${open.runId}/US-01.patch`;
+  assert.deepEqual(abortBatch(f.common).held.map(entry => [entry.ticket, entry.state, entry.patch]), [['US-01', 'patch', held]]);
+  // The PM brings the held work back to read it, and edits it further.
+  git(f.product, 'apply', join(f.root, held)); writeFileSync(join(f.product, 'src/auth/x.js'), '// x, edited\n');
+  const named = entry => [entry.ticket, entry.state, entry.patch, entry.by, entry.also];
+  const saved = left(f);
+  assert.equal(saved.status, 0, JSON.stringify(saved.refused)); assert.deepEqual(saved.out.tickets.map(named), [['US-01', 'patch', mine, 'left', [held]]]);
+  const again = left(f);
+  assert.deepEqual(again.out.tickets.map(named), [['US-01', 'patch', mine, 'left', [held]]]); assert.match(again.out.next, new RegExp(`US-01 .*${held}`));
+});
+
+test('a patch left saves gives back, byte for byte, an edit, a new binary file, a deleted file and a mode change', async t => {
+  const f = live(t), worker = agentsOf(COMMANDS).worker;
+  for (const [path, text] of [['src/old.js', '// old\n'], ['src/run.sh', 'echo run\n']]) writeFileSync(join(f.product, path), text);
+  git(f.product, 'add', '-A'); git(f.product, 'commit', '-q', '-m', 'more files');
+  const { open } = await runBatch(f, [ticket('US-10', ['src/app.js', 'src/img.bin', 'src/old.js', 'src/run.sh'])], { 'src/app.js': 'export const x = 4;\r\n', 'src/img.bin': Buffer.from([0, 1, 2, 255, 254, 0, 10, 13, 128]) },
+    {}, { worker: () => { rmSync(join(f.product, 'src/old.js')); chmodSync(join(f.product, 'src/run.sh'), 0o755); return worker(); } });
+  assert.equal(abortBatch(f.common).errors, undefined);
+  const paths = ['src/app.js', 'src/img.bin', 'src/old.js', 'src/run.sh'], patch = `left/${open.runId}/US-10.patch`;
+  const state = () => paths.map(path => existsSync(join(f.product, path)) ? [readFileSync(join(f.product, path)), statSync(join(f.product, path)).mode & 0o777] : null);
+  const worked = state(), out = left(f);
+  assert.equal(out.status, 0, JSON.stringify(out.refused)); assert.equal(out.out.tickets[0].patch, patch); assert.deepEqual(changed(f), []);
+  assert.deepEqual([worked[2], worked[3][1]], [null, 0o755], 'the work deleted a file and made one executable');
+  git(f.product, 'apply', join(f.root, patch));
+  assert.deepEqual(state(), worked, 'the patch gives back the same bytes, the deletion and the mode');
+});
+
+test('left refuses during a review, while another command holds the lock, and for a run no archive holds; it touches nothing', async t => {
+  const f = live(t);
+  await runBatch(f, [ticket('US-05', ['src/list/e.js'])], { 'src/list/e.js': '// e\n' });
+  assert.equal(abortBatch(f.common).errors, undefined);
+  reviewBoundary({ teamRoot: f.root, runId: 'periodic-1', reviewers: { security: 'fixture-security-reviewer' }, periodic: true });
+  assert.match(left(f).refused.reason, /write boundary is in the review state/); closeBoundary({ teamRoot: f.root });
+  const lease = acquireLease({ teamRoot: f.root, productRoot: f.product });
+  try { assert.match(left(f).refused.reason, /lock on the product repository could not be taken/); } finally { releaseLease({ productRoot: f.product, lease: lease.lease.digest }); }
+  assert.match(left(f, '--run', 'rw-none').refused.reason, /No batch rw-none is archived/);
+  assert.deepEqual(changed(f), ['src/list/e.js']); assert.equal(existsSync(join(f.root, 'left')), false);
+});
+
+test('the earlier runs frozen for a ticket are the newest twenty, oldest first, with how many there are', t => {
+  const instance = mkdtempSync(join(tmpdir(), 'rw-earlier-')); t.after(() => rmSync(instance, { recursive: true, force: true }));
+  const archived = Array.from({ length: 25 }, (_, i) => ({ id: `rw-run-${String(i).padStart(2, '0')}`, record: { openedAt: `2026-11-01T00:00:${String(i).padStart(2, '0')}.000Z`, tickets: [{ id: 'US-01', paths: ['src/a.js'] }] } }));
+  for (const { id } of archived) { mkdirSync(join(instance, 'batches', id), { recursive: true }); writeFileSync(join(instance, 'batches', id, 'after.json'), JSON.stringify({ tickets: [{ id: 'US-01', status: 'not-passed' }] })); }
+  const frozen = earlierRuns(instance, archived)({ id: 'US-01', paths: ['src/a.js'] });
+  assert.equal(frozen.count, 25); assert.deepEqual(frozen.runs.map(run => run.runId), archived.slice(5).map(({ id }) => id));
 });

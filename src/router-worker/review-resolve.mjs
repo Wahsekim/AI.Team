@@ -24,6 +24,7 @@ const replace = (path, record) => { writeFileSync(`${path}.tmp`, JSON.stringify(
 const ok = step => step.status === 0 && !step.error;
 const literal = (product, args, paths, options = {}) => gitRun(product, ['--literal-pathspecs', ...args, '--pathspec-from-file=-', '--pathspec-file-nul'], { ...options, input: paths.join('\0') });
 const alive = pid => { if (!Number.isSafeInteger(pid) || pid === process.pid) return false; try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; } };
+export const resolving = resolution => resolution?.stage === 'batch-resolving' && alive(resolution.pid);
 
 // The paths' change from the batch's start as a binary patch, untracked files included, through an index of its own.
 function patchOf(product, head, paths) {
@@ -51,6 +52,12 @@ const savePatch = (instance, patch, bytes) => { const file = join(instance, patc
 export const heldAt = (runId, ticket) => typeof runId === 'string' && RUN_ID.test(runId) ? `${HELD}/${runId}/${ticket}.patch` : null;
 // What a ticket whose removal failed part-way still has in the tree is also in the patch saved before the removal.
 export const savedWhole = patch => `its saved patch ${patch} is the complete one: discard what is left of that ticket in the work tree, and do not save it again`;
+// Which ticket a changed path belongs to is told only by the records before and after sealed.
+export const attributable = (batch, after) => intact(batch, 'batch-open') && intact(after, 'batch-closed') && after.batchDigest === batch.digest && Array.isArray(batch.tickets) && Array.isArray(after.tickets);
+export const BY_HAND = 'no command of the kit can tell which ticket each changed path belongs to: save it by hand before the work tree is cleaned (in the product: git add -A, then git diff --cached --binary HEAD > <a file outside the product>)';
+// A patch is one section per file: a saved patch holds what is left of its ticket when it holds each section of that part.
+const sections = bytes => bytes.toString('latin1').split(/^(?=diff --git )/m);
+const holdsAll = (saved, part) => { const whole = new Set(sections(saved)); return sections(part).every(section => whole.has(section)); };
 export const productState = (productRoot, taken) => {
   const head = git(productRoot, 'rev-parse', 'HEAD')?.trim(), gitDir = git(productRoot, 'rev-parse', '--absolute-git-dir')?.trim(), busy = IN_PROGRESS.filter(name => gitDir && exists(join(gitDir, name)));
   let changed = null; try { changed = changedPaths(productRoot); } catch { /* named below */ }
@@ -61,15 +68,24 @@ export const productState = (productRoot, taken) => {
 
 // One ticket's work in the work tree (`changed` less what is not `recorded` as its own) saved at `patch` against `head`, then
 // taken out. Nothing is removed before its patch is on disk, and a patch already there is never written over: one with the
-// same bytes is the work of a run that died after saving it. Out of the tree, the ticket is named by the first of `found` on disk.
+// same bytes is the work of a run that died after saving it, one that holds all that is left is a removal that failed part-way.
+// Out of the tree, the ticket is named by the one of `found` on disk written last.
 export function setAside({ instance, productRoot, head, changed, problem, recorded, patch, found }) {
   const paths = changed ? changed.filter(path => recorded.includes(path)) : recorded;
-  if (changed && !paths.length) { const at = found.find(path => path && exists(join(instance, path))); return at ? { state: 'patch', patch: at } : { state: 'not-in-tree' }; }
+  if (changed && !paths.length) {
+    const at = [...new Set(found)].filter(path => path && exists(join(instance, path))).sort((a, b) => lstatSync(join(instance, a)).mtimeMs - lstatSync(join(instance, b)).mtimeMs).at(-1);
+    return at ? { state: 'patch', patch: at } : { state: 'not-in-tree' };
+  }
   let saved = false;
   try {
     need(!problem, problem);
     const bytes = patchOf(productRoot, head, paths), file = join(instance, patch);
-    if (exists(file)) need(readFileSync(file).equals(bytes), `${patch} already holds another patch, which is not written over`); else savePatch(instance, patch, bytes);
+    const kept = exists(file) ? readFileSync(file) : null;
+    if (!kept) savePatch(instance, patch, bytes);
+    else if (!kept.equals(bytes)) {
+      saved = holdsAll(kept, bytes);
+      need(false, saved ? `what is left of this ticket in the work tree is all in ${patch}, saved before a removal that failed part-way` : `${patch} already holds another patch, which is not written over`);
+    }
     saved = true;
     removeFrom(productRoot, head, paths);
     return { state: 'patch', patch };
@@ -97,7 +113,7 @@ export function holdUnpassed({ instance, productRoot, runId }) {
   const held = tickets.map(ticket => ({ ticket: ticket.id, reason: reasonOf(ticket), recorded: ticket.changedPaths })).filter(entry => entry.reason);
   if (!held.length) return [];
   // abort releases this team's lock, which a resolve still running holds: its removals are not raced.
-  if (resolution?.stage === 'batch-resolving' && alive(resolution.pid))
+  if (resolving(resolution))
     return held.map(({ ticket, reason, recorded }) => ({ ticket, reason, state: 'in-tree', paths: recorded, problem: `A resolve of this batch is still running (process ${resolution.pid}); nothing is taken out while it runs` }));
   const taken = acquireLease({ teamRoot: instance, productRoot });
   try {

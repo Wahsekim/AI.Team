@@ -215,6 +215,24 @@ test('abort trusts no flag of an after record changed since after wrote it: it t
   assert.deepEqual(changed(f), ['src/auth/x.js', 'src/auth/y.js', 'src/list/a.js']);
 });
 
+test('abort of a batch whose after record was changed says no command of the kit can tell the tickets\' work apart, and how to save it by hand before the tree is cleaned', async t => {
+  const { f, open } = await flaggedBatch(t), path = join(f.root, 'rw-batch-after.json');
+  writeFileSync(path, JSON.stringify({ ...JSON.parse(readFileSync(path, 'utf8')), note: 'changed by hand' }));
+  const aborted = abortBatch(f.common), byHand = /no command of the kit can tell which ticket.*save it by hand before the work tree is cleaned.*git add -A.*git diff --cached --binary HEAD/;
+  assert.equal(aborted.errors, undefined, JSON.stringify(aborted.errors));
+  assert.match(aborted.next, byHand); assert.doesNotMatch(aborted.next, /rw-batch\.mjs left|left saves it/);
+  assert.match(f.ledger().split('\n').find(line => line.includes(`BATCH ${open.runId} ARCHIVED WITHOUT COMMIT`)), byHand);
+});
+
+test('abort takes a flagged ticket out when the resolve its record names is a process that has ended', async t => {
+  const { f, open } = await flaggedBatch(t), ended = spawnSync(process.execPath, ['-e', '']).pid;
+  writeFileSync(join(f.root, RESOLUTION), JSON.stringify({ schemaVersion: 1, stage: 'batch-resolving', runId: open.runId, pid: ended, removed: [] }));
+  const aborted = abortBatch(f.common);
+  assert.equal(aborted.errors, undefined, JSON.stringify(aborted.errors));
+  assert.deepEqual(aborted.held, [{ ticket: 'US-01', reason: 'not-reviewed', state: 'patch', patch: `reviews/held/${open.runId}/US-01.patch`, by: 'abort' }]);
+  assert.deepEqual(changed(f), ['src/list/a.js']);
+});
+
 // The kit's own run of the commands when a reviewer is briefed; the command fails only once the marker exists.
 const GATE = base => [`test ! -f "${base}/gate-fails"`];
 test('a command that failed or timed out when the review was briefed holds resolve when the tree held only what would be committed; the verdict is left as the reviewer gave it', async t => {

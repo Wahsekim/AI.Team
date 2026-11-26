@@ -290,3 +290,8 @@ as two tickets claiming one file are; an outcome recorded before outcomes
 carried paths counts by its id only. A second time is still a second batch,
 and how verdicts are judged does not change. Escalations already written keep
 blocking, and are lifted, as before.
+
+The comparison is by path alone. Two unrelated tickets rejected in two
+batches on one shared file count as the same work, so the second one is
+escalated, and that open escalation blocks every ticket whose paths overlap
+that file until the owner acknowledges it.
