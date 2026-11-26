@@ -8,7 +8,7 @@ import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { freezeRun, accountRun } from '../src/router-worker/run-args.mjs';
+import { freezeRun, accountRun, guardianHold } from '../src/router-worker/run-args.mjs';
 import { compile } from '../src/router-worker/compile.mjs';
 import { digest } from '../src/loop/contracts.mjs';
 import { runWorkflow, makeAgentImpl, makeBudget } from '../scripts/lib/workflow-harness.mjs';
@@ -125,6 +125,12 @@ test('for arguments frozen with standingBatch, the blockers judge the budget gat
   const { gateTrace, ...untraced } = result.budgetStatus;
   assert.ok(blockers(standing, untraced).includes('guardian-not-clean'), 'a standing return without its trace');
   assert.ok(blockers(standing, { ...result.budgetStatus, gateTrace: gateTrace.map((entry, i) => i === 1 ? { ...entry, dispatched: true } : entry) }).includes('guardian-not-clean'), 'a checker call past the stop line, and one the return does not report');
+  // Each rule alone, by the name guardianHold gives it.
+  const fault = trace => guardianHold({ ...result, budgetStatus: { ...result.budgetStatus, gateTrace: trace } }, true)?.gateFault;
+  assert.equal(fault(gateTrace.map((entry, i) => i === 0 ? { ...entry, loopSpent: result.budgetStatus.ceiling } : entry)), 'dispatched-at-stop-line');
+  assert.equal(fault(gateTrace.map((entry, i) => i === 1 ? { ...entry, loopSpent: 0 } : entry)), 'declined-below-stop-line');
+  assert.equal(fault(gateTrace.slice(1)), 'calls-not-traced');
+  assert.equal(guardianHold({ ...result, budgetStatus: untraced }, true)?.gateFault, 'trace-missing');
   const specialist = await freeze(team);
   assert.ok(!blockers(specialist, untraced).includes('guardian-not-clean'), 'arguments without standingBatch keep the earlier rule');
 });

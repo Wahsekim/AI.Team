@@ -6,6 +6,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { fileURLToPath } from 'node:url'
 import { runWorkflow, makeAgentImpl, makeBudget } from '../scripts/lib/workflow-harness.mjs'
+import { guardianHold } from '../src/router-worker/run-args.mjs'
 
 const SCRIPT = fileURLToPath(new URL('../.claude/workflows/run-n-rounds.js', import.meta.url))
 
@@ -502,6 +503,7 @@ test('standing batch: the return traces each gate decision, one dispatched entry
   const retried = await spending(mkArgs({ standingBatch: true, maxAttemptsPerTicket: 2, plan: mkPlan(1, { isCodeShipping: true }) }), 1000, { verifier: failOnce })
   assert.equal(retried.result.results[0].attempts, 2)
   assert.deepEqual(retried.result.budgetStatus.gateTrace, [entry('worker', 1, 1, 0), entry('verifier', 1, 1, 1000), entry('worker', 1, 2, 2000), entry('verifier', 1, 2, 3000)])
+  assert.equal(guardianHold(retried.result, true), null, 'the kit counts a retried ticket\'s calls as the trace lists them')
 })
 
 test('standing batch: a gate that stops the loop is traced as a declined entry at the spend that crossed the stop line', async () => {
