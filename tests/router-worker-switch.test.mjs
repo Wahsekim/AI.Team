@@ -451,25 +451,30 @@ test('a product root a quoted shell command cannot hold is refused at the switch
   assert.match(refusal(proposeSwitch({ to: 'router-worker', request, ...f.common, productRoot: odd })).reason, /cannot be written inside a quoted shell command/);
 });
 
-test('a change of limits that died after its ledger line is finished by the next limits command; any other leftover is removed, named, and changes nothing', t => {
+test('a change of limits that died after its ledger line is finished only by a change confirmed at a terminal; a proposal names a leftover and changes nothing', t => {
   const f = fixture(t), common = { teamRoot: f.kit, instanceRoot: f.root }, profile = join(f.root, 'profiles/team-mode.json'), leftover = `${profile}.tmp`;
   assert.equal(f.apply().errors, undefined);
   const stored = JSON.parse(f.read('profiles/team-mode.json')), confirmed = { ...stored.limits, outputAllowancePerTicket: 20000 };
   // Killed between its ledger line and its rename: the line binds limits the profile does not hold.
   writeFileSync(leftover, JSON.stringify({ ...stored, limits: confirmed }, null, 2) + '\n');
   appendFileSync(join(f.root, 'pm-decisions.md'), `2026-11-26 LIMITS CHANGED: outputAllowancePerTicket 15000 -> 20000; proposal sha256:${'2'.repeat(64)} was confirmed ${AT_TERMINAL}; limits ${digest(confirmed)}.\n`);
-  const next = proposeLimits({ ...common, limits: { attemptsPerTicket: 2 } });
+  const untouched = () => { assert.equal(existsSync(leftover), true, 'the leftover is still there'); assert.deepEqual(JSON.parse(f.read('profiles/team-mode.json')), stored, 'the profile is unchanged'); };
+  const next = proposeLimits({ ...common, limits: {} });
   assert.equal(next.errors, undefined, JSON.stringify(next.errors));
-  assert.deepEqual(next.from, confirmed, 'the confirmed change is in force'); assert.match(next.leftover, /team-mode\.json\.tmp.*finished/);
+  assert.deepEqual(next.from, confirmed, 'the confirmed change is the one in force'); assert.match(next.leftover, /team-mode\.json\.tmp.*finished when this change is confirmed at a terminal/);
+  untouched();
+  assert.equal(changeLimits({ ...common, limits: {}, confirm: next.digest, atTerminal: false }).errors?.[0].code, 'LIMITS_NOT_CONFIRMED'); untouched();
+  const finished = changeLimits({ ...common, limits: {}, confirm: next.digest, atTerminal: true });
+  assert.equal(finished.errors, undefined, JSON.stringify(finished.errors)); assert.match(finished.leftover, /team-mode\.json\.tmp.*was finished/);
   assert.equal(existsSync(leftover), false); assert.deepEqual(JSON.parse(f.read('profiles/team-mode.json')), { ...stored, limits: confirmed });
   assert.match(refusal(proposeLimits({ ...common, limits: {} })).reason, /already has/, 'nothing is left to confirm');
-  // A leftover the ledger does not bind was never confirmed: it is removed and named, and nothing of it is applied.
+  // A leftover the ledger does not bind was never confirmed: a proposal names it, and a confirmed change removes it and applies nothing of it.
   writeFileSync(leftover, JSON.stringify({ ...stored, limits: { ...confirmed, attemptsPerTicket: 3 } }));
   const proposal = proposeLimits({ ...common, limits: { attemptsPerTicket: 2 } });
-  assert.equal(proposal.errors, undefined, JSON.stringify(proposal.errors)); assert.match(proposal.leftover, /team-mode\.json\.tmp.*removed/);
-  assert.deepEqual(proposal.from, confirmed); assert.equal(existsSync(leftover), false);
+  assert.equal(proposal.errors, undefined, JSON.stringify(proposal.errors)); assert.match(proposal.leftover, /team-mode\.json\.tmp.*removed when this change is confirmed/);
+  assert.deepEqual(proposal.from, confirmed); assert.equal(existsSync(leftover), true);
   writeFileSync(leftover, '{"half": ');
   const changed = changeLimits({ ...common, limits: { attemptsPerTicket: 2 }, confirm: proposal.digest, atTerminal: true });
-  assert.equal(changed.errors, undefined, JSON.stringify(changed.errors)); assert.match(changed.leftover, /removed/);
+  assert.equal(changed.errors, undefined, JSON.stringify(changed.errors)); assert.match(changed.leftover, /was removed/); assert.equal(existsSync(leftover), false);
   assert.equal(JSON.parse(f.read('profiles/team-mode.json')).limits.attemptsPerTicket, 2); assert.equal(readLease({ productRoot: f.product }).status, 'free');
 });

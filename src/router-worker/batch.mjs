@@ -204,32 +204,48 @@ function checkFiles(ticket) {
   need(twice === undefined, `Ticket ${ticket.id} names ${twice} twice in its moves and deletes`);
 }
 // A move lands where nothing is, in a real folder of the product: a link would carry the file out of it. The native
-// real path gives the case the file system stores.
+// real path gives the case the file system stores, and the Unicode form, which may not be the ticket's composed one.
 function landsInside(productRoot, path) {
   let folder = dirname(join(productRoot, path));
   while (!exists(folder)) folder = dirname(folder);
-  return lstatSync(folder).isDirectory() && realpathSync.native(folder) === folder;
+  return lstatSync(folder).isDirectory() && realpathSync.native(folder).normalize('NFC') === folder.normalize('NFC');
 }
-// How the product spells `path` (a file, or a folder grant's folder) when it names a tracked path, or an existing file or
-// folder, in another case; null when it is spelled so or names nothing there. Git reports a path, and after judges it, in that spelling.
-function spelledIn(productRoot, path) {
-  const parts = path.split('/'), real = [];
-  for (let dir = productRoot; real.length < parts.length;) {
-    let names; try { names = readdirSync(dir); } catch { break; }
-    const part = parts[real.length], name = names.find(other => fold(other) === fold(part));
+// Each path and folder Git tracks, by its folded form, with the spellings Git has for it.
+export function trackedSpellings(entries) {
+  const spellings = new Map();
+  for (const entry of entries) entry.split('/').forEach((_, i, parts) => { const prefix = parts.slice(0, i + 1).join('/'), key = fold(prefix); spellings.set(key, (spellings.get(key) ?? new Set()).add(prefix)); });
+  return spellings;
+}
+// Whether the file system folds case is read from what it does: .GIT reaching the repository's .git.
+function productListings(productRoot) {
+  const listed = git(productRoot, 'ls-files', '-z');
+  need(listed !== null, 'The index of the product repository cannot be read');
+  const [lower, upper] = ['.git', '.GIT'].map(name => lstatSync(join(productRoot, name), { throwIfNoEntry: false }));
+  return { tracked: trackedSpellings(listed.split('\0').filter(Boolean)), names: folder => { try { return readdirSync(join(productRoot, folder)); } catch { return null; } },
+    foldsCase: Boolean(lower && upper && lower.dev === upper.dev && lower.ino === upper.ino) };
+}
+// How the product spells `path` (a file, or a folder grant's folder), and which listing gave it; null when it is spelled so.
+// Git reports a path, and after judges it, as Git spells it: Git decides each part it tracks, the disk only a part Git does not
+// know. An exact name wins; a name in another case is the same file only where the file system folds case.
+export function spelledIn(path, { tracked, names, foldsCase }) {
+  if (!foldsCase) return null;
+  const parts = path.split('/'), real = [], by = new Set();
+  for (const part of parts) {
+    const folder = real.join('/'), under = folder ? `${folder}/` : '';
+    const known = [...(tracked.get(fold(under + part)) ?? [])].filter(entry => entry.startsWith(under)).map(entry => entry.slice(under.length));
+    const listing = known.length ? known : names(folder) ?? [], exact = known.length ? other => other === part : other => other.normalize('NFC') === part.normalize('NFC');
+    const name = listing.some(exact) ? part : listing.find(other => fold(other) === fold(part));
     if (name === undefined) break;
-    real.push(name.normalize('NFC') === part.normalize('NFC') ? part : name); dir = join(dir, name);
+    if (name !== part) by.add(known.length ? 'Git' : 'the file system');
+    real.push(name);
   }
-  const onDisk = [...real, ...parts.slice(real.length)].join('/');
-  if (onDisk !== path) return onDisk;
-  const listed = git(productRoot, 'ls-files', '-z', '--', `:(icase,literal)${path}`) ?? '';
-  const tracked = listed.split('\0').find(entry => fold(entry) === fold(path) || fold(entry).startsWith(`${fold(path)}/`));
-  return tracked && tracked.slice(0, path.length) !== path ? tracked.slice(0, path.length) : null;
+  const spelled = [...real, ...parts.slice(real.length)].join('/');
+  return spelled === path ? null : { spelled, by: [...by].join(' and ') };
 }
-function checkSpelling(productRoot, ticket) {
+function checkSpelling(product, ticket) {
   for (const named of [...ticket.paths, ...(ticket.expectedPaths ?? []), ...(ticket.moves ?? []).flatMap(move => [move.from, move.to]), ...(ticket.deletes ?? [])]) {
-    const path = named.endsWith('/**') ? named.slice(0, -3) : named, spelled = spelledIn(productRoot, path);
-    need(spelled === null, `Ticket ${ticket.id} names ${plain(named)}, which the product spells ${plain(spelled + named.slice(path.length))}: write it so, or after would find the work outside the ticket`);
+    const path = named.endsWith('/**') ? named.slice(0, -3) : named, spelling = spelledIn(path, product);
+    need(spelling === null, `Ticket ${ticket.id} names ${plain(named)}, which the product spells ${plain(spelling?.spelled + named.slice(path.length))} (as ${spelling?.by} ${spelling?.by.includes(' and ') ? 'have' : 'has'} it): write it so, or after would find the work outside the ticket`);
   }
 }
 // The mode HEAD records at each of these paths; a path it does not hold as a file or a link is not in the map.
@@ -394,7 +410,8 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     // Decision 11: paths already changed are kept out of the tickets' commits, so none may lie where a ticket writes.
     const mixed = product.preexisting.filter(path => batch.tickets.some(ticket => ticket.paths.some(grant => covers(grant, path))));
     need(!mixed.length, `These paths are already changed and lie where a ticket of this batch writes (${mixed.slice(0, 5).map(plain).join(', ')}); they could not be kept out of its commit. Commit or discard them first`);
-    for (const ticket of batch.tickets) { checkSpelling(productRoot, ticket); checkFilesInProduct(productRoot, ticket); }
+    const listings = productListings(productRoot);
+    for (const ticket of batch.tickets) { checkSpelling(listings, ticket); checkFilesInProduct(productRoot, ticket); }
     const resumes = batch.tickets.map(ticket => ticket.resume === undefined ? null : resumePlan({ instance, productRoot, ticket }));
     for (const resume of resumes) need(!resume?.problem, resume?.problem);
     const plans = resumes.map(resume => resume?.plan ?? null), resumedPaths = plans.flatMap(plan => plan?.paths ?? []);

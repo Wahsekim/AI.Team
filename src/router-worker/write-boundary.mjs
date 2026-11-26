@@ -224,14 +224,18 @@ const linkedTo = path => { let current = path; for (let hops = 0; hops < 40; hop
 const resolvedOr = path => { try { return realTarget(path) ?? linkedTo(path); } catch { return linkedTo(path); } };
 const statOf = path => { try { return statSync(path); } catch { return null; } };
 
-// The call writes the team's limits file: by its path as resolved, whatever its case, or as the same file under another name.
+// The call writes the team's limits file, or the .tmp a change of limits renames into it: by its path as resolved, whatever
+// its case, or as the same file under another name.
 function writesLimits(input, projectDir) {
   const raw = input.tool_input?.file_path ?? input.tool_input?.notebook_path;
   if (typeof projectDir !== 'string' || !isAbsolute(projectDir) || typeof raw !== 'string' || !raw) return false;
-  const target = resolvedOr(resolve(typeof input.cwd === 'string' ? input.cwd : projectDir, raw)), limits = resolvedOr(join(projectDir, LIMITS_FILE));
-  if (target.toLowerCase() === limits.toLowerCase()) return true;
-  const [a, b] = [target, limits].map(statOf);
-  return Boolean(a && b && a.dev === b.dev && a.ino === b.ino);
+  const target = resolvedOr(resolve(typeof input.cwd === 'string' ? input.cwd : projectDir, raw));
+  return [LIMITS_FILE, `${LIMITS_FILE}.tmp`].some(file => {
+    const limits = resolvedOr(join(projectDir, file));
+    if (target.toLowerCase() === limits.toLowerCase()) return true;
+    const [a, b] = [target, limits].map(statOf);
+    return Boolean(a && b && a.dev === b.dev && a.ino === b.ino);
+  });
 }
 
 // `boundary` is null when the file is missing, unreadable or edited. 'allow' leaves the call to the session's own

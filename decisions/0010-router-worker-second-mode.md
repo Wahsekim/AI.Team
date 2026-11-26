@@ -543,9 +543,14 @@ team that holds the lock, or the `after` that claimed the batch, still runs.
 Whether two tickets claim one file is still judged without case; whether a
 path lies inside a ticket's grant is judged with case, as `after` and the hook
 judge it, and a path that names a file or folder of the product in another
-case than Git or the file system spells it is refused with the spelling to
-use. `before` appends its ledger lines before it writes the batch record, and a
-change of limits that died before its rename is finished by the next `limits`
-command when the last ledger line binds the limits it holds: that change was
-confirmed at a terminal, so finishing it is not a new change. Any other
-leftover is removed and applies nothing.
+case than Git spells it, or, for a part Git does not track, the file system, is
+refused with the spelling to use and which of the two gave it. An exact name
+always wins, and a name in another case counts as the same file only where the
+file system folds case. `before` appends its ledger lines before it writes the
+batch record, and a change of limits that died before its rename is finished by
+the next change of limits confirmed at a terminal when the last ledger line
+binds the limits it holds: that change was confirmed at a terminal, so
+finishing it is not a new change. Any other leftover is removed by that change
+and applies nothing. A proposal names the leftover and changes nothing, and
+the hook refuses a file-tool write of the leftover as it refuses the limits
+file.

@@ -130,8 +130,9 @@ budget per ticket. Those come from the team.
    operation in progress, nothing uncommitted or untracked. Under the lock
    (step 4), a ticket's path, folder grant, expected path, move or delete that
    names a tracked file, or an existing file or folder, in another case than
-   Git or the file system gives it is refused, and the refusal gives the
-   spelling to use: Git reports the work in its own spelling, and `after`
+   Git gives it, or, for a part Git does not track, the file system, is
+   refused where the file system folds case (an exact name always wins), and
+   the refusal gives the spelling to use and which of the two gave it: Git reports the work in its own spelling, and `after`
    would find it outside the ticket. Git-ignored files
    are not counted. The team's own files are never counted: the team lives
    outside the product.
@@ -430,8 +431,8 @@ With its file tools a worker can write a file but not rename or delete one
   no `.` or `..` part, none of `` " $ ` \ ! * ? [ ] { } : ``, no control,
   bidirectional or zero-width character, written in composed Unicode (NFC),
   not under `.git` or `.claude`; it lies inside the ticket's `paths`, compared
-  with case as `after` compares, and is spelled as Git and the file system
-  spell what it names; no path is named twice in the ticket's moves and
+  with case as `after` compares, and is spelled as Git spells what it tracks
+  and, for what Git does not track, as the file system does; no path is named twice in the ticket's moves and
   deletes (compared without case);
 - each `from` and each deleted path is a file tracked at the product's HEAD;
   a `from` is not a symbolic link, at HEAD or in the work tree, since a later
@@ -445,7 +446,7 @@ With its file tools a worker can write a file but not rename or delete one
   the first could redirect the second;
 - each `to` does not exist, and the nearest folder of it that exists is a real
   folder of the product, not a link, judged by its real path as the file
-  system stores it (case included);
+  system stores it (case included, composed and decomposed Unicode compared as one);
 - at most 100 moves and deletions over the whole batch.
 
 No move lands in a submodule: a product whose index holds one opens no batch
