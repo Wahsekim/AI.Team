@@ -25,6 +25,20 @@ const left = (f, ...args) => {
 };
 const settled = (f, runId) => assert.equal(markNotMetered({ ...f.common, reason: 'not measured in this test', runId }).errors, undefined);
 
+test('the work of a ticket that after set aside, applied back by the PM, is that ticket\'s work to left, not the work of no ticket', async t => {
+  const f = live(t);
+  const { open, after } = await runBatch(f, [ticket('US-01', ['src/list/a.js']), ticket('US-02', ['src/app.js'])], { 'src/list/a.js': '// a\n', 'src/app.js': 'export const x = 2;\n' }, {}, checker(2));
+  const at = `left/${open.runId}/US-02.patch`;
+  assert.deepEqual(after.setAside.map(entry => [entry.ticket, entry.patch, entry.paths]), [['US-02', at, ['src/app.js']]]);
+  assert.equal(f.commit().errors, undefined);
+  git(f.product, 'apply', join(f.root, at));
+  const saved = left(f);
+  assert.equal(saved.status, 0, JSON.stringify(saved.refused));
+  assert.deepEqual(saved.out.tickets, [{ ticket: 'US-02', state: 'patch', patch: at, by: 'after', resume: at }]);
+  assert.deepEqual(saved.out.outside, []); assert.doesNotMatch(saved.out.next, /no ticket's work/);
+  assert.deepEqual(changed(f), [], 'left took the ticket\'s work out again');
+});
+
 test('left saves the work each ticket of an archived batch left in the work tree as a patch, takes it out, and prints its resume; a second run changes nothing', async t => {
   const f = live(t);
   // US-01 passes and is not flagged, US-03 passes and is flagged for Security, US-02 does not pass. notes.txt is no ticket's.
@@ -33,19 +47,21 @@ test('left saves the work each ticket of an archived batch left in the work tree
   const { open, after } = await runBatch(f, tickets, work, {}, checker(3));
   assert.deepEqual(after.tickets.map(entry => [entry.id, entry.status]), [['US-01', 'passed'], ['US-03', 'passed'], ['US-02', 'not-passed']]);
   assert.match(after.next.join(' '), /rw-batch\.mjs left --instance/, 'after names the command for the work it leaves');
-  const early = left(f);
-  assert.equal(early.status, 2); assert.match(early.refused.reason, /A batch is open/); assert.deepEqual(changed(f), Object.keys(work).sort(), 'nothing is touched while the batch is open');
+  const at = id => `left/${open.runId}/${id}.patch`;
+  assert.deepEqual(after.setAside.map(entry => [entry.ticket, entry.patch]), [['US-02', at('US-02')]], 'after set aside the ticket that did not pass');
+  const tree = changed(f), early = left(f);
+  assert.equal(early.status, 2); assert.match(early.refused.reason, /A batch is open/); assert.deepEqual(changed(f), tree, 'nothing is touched while the batch is open');
 
-  const aborted = abortBatch(f.common), held = `reviews/held/${open.runId}/US-03.patch`, at = id => `left/${open.runId}/${id}.patch`;
+  const aborted = abortBatch(f.common), held = `reviews/held/${open.runId}/US-03.patch`;
   assert.equal(aborted.errors, undefined, JSON.stringify(aborted.errors)); assert.deepEqual(aborted.held.map(entry => [entry.ticket, entry.patch]), [['US-03', held]]);
   assert.match(aborted.next, /rw-batch\.mjs left --instance/, 'abort names the command for the rest of the work');
   const saved = left(f);
   assert.equal(saved.status, 0, JSON.stringify(saved.refused));
   assert.deepEqual(saved.out.tickets, [{ ticket: 'US-01', state: 'patch', patch: at('US-01'), by: 'left', resume: at('US-01') },
-    { ticket: 'US-03', state: 'patch', patch: held, by: 'abort', resume: held }, { ticket: 'US-02', state: 'patch', patch: at('US-02'), by: 'left', resume: at('US-02') }]);
+    { ticket: 'US-03', state: 'patch', patch: held, by: 'abort', resume: held }, { ticket: 'US-02', state: 'patch', patch: at('US-02'), by: 'after', resume: at('US-02') }]);
   assert.deepEqual(saved.out.outside, ['notes.txt']); assert.deepEqual(changed(f), ['notes.txt'], 'the path of no ticket is left as it is');
   assert.equal(inTree(f, 'src/app.js'), 'export const x = 1;\n'); assert.match(saved.out.next, /"resume".*notes\.txt/);
-  assert.match(f.ledger(), new RegExp(`BATCH ${open.runId} LEFT WORK SAVED by rw-batch\\.mjs left: US-01 ${at('US-01')}, US-02 ${at('US-02')}; 1 path\\(s\\) of no ticket left as they are \\(notes\\.txt\\)\\.`));
+  assert.match(f.ledger(), new RegExp(`BATCH ${open.runId} LEFT WORK SAVED by rw-batch\\.mjs left: US-01 ${at('US-01')}; 1 path\\(s\\) of no ticket left as they are \\(notes\\.txt\\)\\.`));
   for (const [id, paths] of [['US-01', ['src/list/a.js']], ['US-02', ['src/app.js', 'src/list/new/c.js']]]) {
     git(f.product, 'apply', join(f.root, at(id)));
     assert.deepEqual(paths.map(path => inTree(f, path)), paths.map(path => work[path]), `${id}: the patch gives back the same bytes`);

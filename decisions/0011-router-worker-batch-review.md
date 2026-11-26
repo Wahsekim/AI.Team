@@ -323,3 +323,15 @@ rejection. Nor does it follow a link through a ticket whose review
 passed: such a ticket leaves no outcome, so when it is held for another reason
 and resumed again, the chain ends at it and the earlier rejection is not
 counted.
+
+## Amendment of 2026-11-26: what appeared since after is left
+
+Status: Accepted. The owner decided in session on 2026-11-26, accepting the
+recommendation of that day's review of the kit.
+
+A file a command wrote at a brief (a cache, a generated file) made `commit`
+refuse because the product had changed, with `abort` as the only way out.
+`resolve` now records, whether or not it runs the commands again, each path
+changed since `after` closed the batch that no ticket to commit holds; `commit`
+leaves those uncommitted and names them. A path of a ticket to commit whose
+content changed is still refused.

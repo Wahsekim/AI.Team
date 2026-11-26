@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { proposeSwitch, switchMode } from '../../../src/router-worker/switch.mjs';
-import { bytesDigest } from '../../../src/loop/contracts.mjs';
+import { afterBatch as closeBatch } from '../../../src/router-worker/batch-close.mjs';
+import { bytesDigest, digest } from '../../../src/loop/contracts.mjs';
 import { draftSpecFixture } from './draft-spec.mjs';
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
@@ -55,3 +56,6 @@ export function runUnderHook(root, agentType, commands) {
 }
 // What the hook logs in a real run of an open batch: its checker runs each ticket's verification commands once.
 export const checksRan = (root, record) => runUnderHook(root, record.args.plan[0].verifierAgentType, record.tickets.flatMap(entry => entry.verificationCommands ?? record.verificationCommands));
+// after runs the batch's commands on the product; a test about something else gets them passing, and no command is started.
+export const passing = ({ commands }) => commands.map(command => ({ command, exit: 0, timedOut: false, outputDigest: digest(''), tail: '' }));
+export const afterBatch = args => closeBatch({ run: passing, ...args });

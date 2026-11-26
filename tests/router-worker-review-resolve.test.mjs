@@ -9,12 +9,11 @@ import { tmpdir } from 'node:os';
 import { spawnSync, execFileSync } from 'node:child_process';
 import { bytesDigest, digest } from '../src/loop/contracts.mjs';
 import { abortBatch, beforeBatch } from '../src/router-worker/batch.mjs';
-import { afterBatch } from '../src/router-worker/batch-close.mjs';
 import { AT_TERMINAL } from '../src/router-worker/switch.mjs';
 import { runWorkflow, makeAgentImpl } from '../scripts/lib/workflow-harness.mjs';
 import { reviewBrief } from '../src/router-worker/review-brief.mjs';
 import { readLease } from '../src/router-worker/lease.mjs';
-import { git, checksRan } from './fixtures/router-worker/standing-team.mjs';
+import { git, checksRan, afterBatch } from './fixtures/router-worker/standing-team.mjs';
 import { refusal, ticket, live, changed, runBatch, reportOf, failing, transcriptOf, batchOf, agentsOf } from './fixtures/router-worker/review.mjs';
 
 // The engine refuses a no-op verification command such as true, so pwd stands for a command that passes.
@@ -264,6 +263,24 @@ test('a command that failed when the review was briefed on a tree holding more t
   assert.deepEqual(resolved.failedAtBrief, [{ reviewer: 'security', attempt: 1, command: f.commands[0], exit: 1, timedOut: false }]); assert.deepEqual(resolved.removed, []);
   assert.match(f.ledger(), new RegExp(`BATCH ${open.runId} RESOLVED: nothing held; 1 to commit; verification failed when the review was briefed: .*gate-fails.* \\(security's brief 1: exit 1\\)`));
   assert.deepEqual(f.commit().commits.map(commit => commit.ticket), ['US-01']);
+});
+
+test('a path that appeared after after closed the batch, outside every ticket to commit, is recorded by resolve and left uncommitted by commit', async t => {
+  // A cache the commands write once the marker exists, as the brief runs them.
+  const f = live(t, { commands: base => [`test ! -e "${base}/briefed" || echo cache > cache.txt`] });
+  const { open } = await runBatch(f, [ticket('US-01', ['src/authz.js'])], { 'src/authz.js': 'export const x = 2;\n' });
+  writeFileSync(join(f.base, 'briefed'), '');
+  const made = f.brief('security');
+  assert.equal(made.record.verification[0].exit, 0); assert.deepEqual(changed(f), ['cache.txt', 'src/authz.js']);
+  assert.equal(f.judge('security', transcriptOf(f, made)).outcome, 'accepted');
+  const resolved = f.resolve();
+  assert.equal(resolved.errors, undefined, JSON.stringify(resolved.errors));
+  assert.equal(resolved.verification.ran, false); assert.deepEqual(resolved.verification.wrote, ['cache.txt']); assert.deepEqual(resolved.commits.map(commit => commit.ticket), ['US-01']);
+  assert.match(f.ledger(), new RegExp(`BATCH ${open.runId} RESOLVED: nothing held; 1 to commit; written since after, left uncommitted: cache\\.txt`));
+  const committed = f.commit();
+  assert.equal(committed.errors, undefined, JSON.stringify(committed.errors));
+  assert.deepEqual(committed.commits.map(commit => commit.ticket), ['US-01']); assert.deepEqual(committed.left, ['cache.txt']);
+  assert.deepEqual(changed(f), ['cache.txt']); assert.match(f.ledger(), /COMMITTED on work: 1 commit\(s\).*1 changed path\(s\) left uncommitted \(cache\.txt\)/);
 });
 
 test('the most recent run of the commands decides, whichever reviewer it was briefed for: a later passing brief clears an earlier failure, which is recorded; review-brief tells the PM of a failure', async t => {

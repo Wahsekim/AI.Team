@@ -22,6 +22,6 @@ export function runCommands({ productRoot, commands, frozen, allowed, timeoutMs 
   return commands.map(command => {
     const run = spawnSync('/bin/sh', ['-c', command], { cwd: productRoot, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024, killSignal: 'SIGKILL' });
     const output = `${run.stdout ?? ''}${run.stderr ? `\n[stderr]\n${run.stderr}` : ''}`;
-    return { command, exit: run.status, timedOut: run.error?.code === 'ETIMEDOUT', outputDigest: digest(output), tail: output.slice(-TAIL) };
+    return { command, exit: run.status, timedOut: run.error?.code === 'ETIMEDOUT', ...(run.error?.code === 'ENOBUFS' ? { overflowed: true } : {}), outputDigest: digest(output), tail: output.slice(-TAIL) };
   });
 }

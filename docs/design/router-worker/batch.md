@@ -37,12 +37,12 @@ Exit 0 done, 2 refused or (for `after` and `settle`) a batch in review, or (for
 |---|---|---|
 | 1 | PM | `before BATCH.json`: the batch is checked, frozen and opened |
 | 2 | PM | runs `run-n-rounds` with the `args` of the batch record |
-| 3 | PM | `after RESULT.json`, with the engine's return: the run is checked, the write limits close, the lock is released |
+| 3 | PM | `after RESULT.json`, with the engine's return: the run is checked, the work of each ticket that did not pass is set aside as a patch, the kit runs the passed tickets' verification commands on a tree that holds only the planned commits, the write limits close, the lock is released. Since `after` runs the commands, the PM starts it with a timeout as long as the product's commands need (up to 15 minutes each), or in the background, and does not start it a second time while the first is alive: the claim refuses the second |
 | 4 | PM | `node kit/scripts/reconcile-run.mjs RESULT.json . --monitoring ATTESTATION.json`: lifecycle and message ledgers, as in specialist mode, and the PM's attestation of the run (`docs/engine.md`): who watched, over which interval, and each owner stop or hardware halt it saw. The engine tells the Guardian of a batch that this attestation follows the run. A headless PM attests `"coverage": "partial"` and says in `notes` that no owner channel existed |
 | 5 | PM | a flagged batch only: `review-brief`, the reviewer's dispatch and `review` per reviewer, then `resolve` (see "Resolve") |
 | 6 | PM | `commit`: one commit per ticket that passed, or per ticket the resolution kept; the batch is archived. A batch whose commits are all held is archived with `abort` instead; `commit` refuses it |
 | 7 | PM | `node kit/scripts/measure-spawn.mjs <session-dir> --json > METER.json`, then `settle METER.json --run <run id>` (the batch is archived by now, so it is named): usage per ticket. The next `before` is refused until this is done |
-| 8 | PM | when the batch left work in the product work tree (a ticket that did not pass, a held batch, the engine stopped): `left`, which saves each ticket's left work as a patch and takes it out of the tree (see "Resuming left work"); the next batch names each patch as a ticket's `resume` |
+| 8 | PM | when the batch left work in the product work tree (a held batch, a batch in which no ticket passed, a ticket `after` could not set aside): `left`, which saves each ticket's left work as a patch and takes it out of the tree (see "Resuming left work"); the next batch names each patch as a ticket's `resume` |
 
 **A PM with no owner present** can run a batch from a headless session started
 in the team's root (`claude -p "<instructions>"`). The session has the
@@ -52,7 +52,9 @@ not leave a background shell running when it finishes: `claude -p` does not
 exit while one is alive, and one run on 2026-11-25 stayed up 45 minutes after
 its report. It stops only processes it started: a `pkill` by name also ends the
 owner's own (one run's `pkill -x caffeinate` let the machine sleep). Start it
-with `caffeinate -i` on a Mac, or the machine can sleep mid-run. Its user settings apply too (see `docs/claude-integration.md`, "Your
+with `caffeinate -i` on a Mac, or the machine can sleep mid-run. It gives
+`after`, which runs the product's verification commands, a timeout as long as
+those commands need, or runs it in the background and waits for its end. Its user settings apply too (see `docs/claude-integration.md`, "Your
 Own Claude Code Settings").
 
 After the last step the PM writes its next-wake notes in `memory/pm.md`, as in
@@ -227,37 +229,103 @@ the scan stays small however many batches a team archived.
    in order, the Guardian's record, the lifecycle count. A return that does not
    match is refused and **nothing changes**: the lock stays held and the write
    boundary stays open.
-2. **What the batch changed**: every path the work tree holds now that was not
-   already there when the batch opened. Each path belongs to the ticket whose
-   `paths` cover it, or to none.
-3. **Findings**:
+2. **What the workers did.** The findings that need no command come first:
+   the boundary, the branch, the hooks, the Guardian, the hook log
+   (`HOOK_SAW_NO_WORKER`, `CHECK_RUNS_MISSING`) and the paths the workers
+   changed outside every ticket (`WRITE_OUTSIDE_PATHS`). They describe the run,
+   so they are judged on the tree the workers left, before anything below
+   changes it.
+3. **The work of each ticket that did not pass is set aside.** When none of
+   those findings holds every commit and at least one ticket passed, each
+   ticket that did not pass, or was not run, and whose paths show as changed is
+   saved as a binary patch at `left/<run id>/<ticket>.patch` in the team folder
+   and taken out of the product tree, with the step `left` uses (see "Resuming
+   left work"): nothing is removed before the patch is on disk, and a patch
+   already at that place is never written over. The engine halts a batch at its
+   first failed ticket, so "earlier tickets passed, the last one failed" is the
+   usual shape of a batch with a failure, and that ticket's code would
+   otherwise fail the commands of the passed ones. The record lists each in
+   `setAside`: `{ticket, state: "patch", patch, paths, resume, resumeProblem?}`,
+   where `paths` are the paths taken out, which `left` counts as that ticket's
+   once the PM has applied the patch back, and `resume` is the value a ticket
+   of a later batch names to take the work back, or null with `resumeProblem`
+   when `before` would refuse the patch as it stands; or `{ticket, state: "in-tree", paths, problem, patch?}` for a ticket
+   that could not be set aside (a Git operation in progress, a patch with other
+   bytes already there, a removal that failed), of which nothing was removed,
+   or, after a removal that failed part-way, whose saved patch is the complete
+   one. `next` names each patch and its `resume` value, and the ledger line
+   names each ticket set aside with its patch. An `after` that takes over from
+   one that died between two set-asides finds the patch the dead one saved for
+   a ticket no longer in the tree and lists that ticket the same way, its
+   `paths` read from the patch.
+4. **The kit verifies the tree it would commit.** Only when every changed path
+   in the tree is a path of a passed ticket (no path outside every ticket, no
+   path changed before the batch, no ticket left in the tree by a failed
+   set-aside, no nested repository) does `after` run the commands. It runs the
+   union of the passed tickets' own `verificationCommands` (a ticket without
+   its own list uses the batch's list), in the batch's order: a command every
+   passed ticket left out is one the PM said they do not need. It runs them on
+   the product as it stands, from the product root, under the lock the batch
+   still holds, as `review-brief` runs its commands: only those that are both
+   frozen in the batch and still in the team's confirmed `allowedCommands`
+   (`/bin/sh -c`, 15 minutes each, output truncated and digested). A command
+   that failed or timed out is run once more, after the others: `after` cannot
+   be run again once it closed the batch, so one flaky run must not hold it for
+   good. The record keeps the run in `verification`: `{ran, failed, commands:
+   [{command, exit, timedOut, overflowed?, outputDigest, tail, again?}],
+   dropped}`, where `again` is the second run of that command (`{exit,
+   timedOut, overflowed?, outputDigest, tail}`) and `overflowed` is true when
+   the output passed the runner's buffer limit (64 MiB), which also stops the
+   command. A command whose second run failed too, or no confirmed command
+   left to run, is the finding `VERIFICATION_FAILED`: the kit cannot tell which ticket broke the tree, so
+   it commits none. Then the hooks are judged again on the tree as the
+   commands left it: a command that writes into the folder Git runs hooks from
+   (`HOOKS_CHANGED`) or beside husky's stub folder (`HOOKS_WRITTEN`) holds every
+   commit, as a worker's write does. When something else is in the tree,
+   `after` runs no command: `verification` is `{ran: false, failed: false,
+   commands: [], dropped: [], reason, paths}`, with the paths in the way, the
+   finding `VERIFICATION_NOT_RUN` carries the same `reason` and `paths`, `next`
+   says that the kit did not verify the tree it will commit and why, and the
+   passed tickets are planned as before. A batch another finding holds, or one
+   with no ticket passed, sets nothing aside and runs no command
+   (`ran: false`, no `reason`). A batch an earlier kit opened is verified the
+   same way, from the commands its record froze.
+5. **What the batch changed**, read again after the commands ran, since they
+   may write files (a generator, a formatter): every path the work tree holds
+   now that was not already there when the batch opened. Each path belongs to
+   the ticket whose `paths` cover it, or to none. What `after` pins is what the
+   commands left, a path one of them wrote outside every ticket is added to
+   `WRITE_OUTSIDE_PATHS`, and `commit` compares the tree with that.
+6. **Findings**:
 
    | Finding | Meaning | Commits |
    |---|---|---|
-   | `WRITE_OUTSIDE_PATHS` | paths changed that no ticket covers, for instance through a worker's shell | the paths are left uncommitted; the tickets are still committed |
+   | `WRITE_OUTSIDE_PATHS` | paths changed that no ticket covers, through a worker's shell (judged at step 2) or written by the kit's run of the commands (step 5) | the paths are left uncommitted; the tickets are still committed |
    | `HOOK_SAW_NO_WORKER` | files changed and the hook logged no call of the batch's three workers since the batch opened (a call of another agent of the team does not count): the session did not load it, so the write limits were not enforced during the run, or the hook ran and could not append to its log. A resumed path that still holds what `before` applied is not such a change | all held |
+   | `VERIFICATION_FAILED` | the kit's own run of the passed tickets' verification commands on the tree of the planned commits (step 4) had a command that failed or timed out, and again when run a second time (`commands`: each with the second run's `exit`, `timedOut`, and `overflowed` when its output passed the buffer limit), or no confirmed command left to run (`commands` empty, `dropped` the ones the passed tickets need). `next` names the commands, then `abort` and `left` | all held |
+   | `VERIFICATION_NOT_RUN` | the kit did not run the commands, since the tree held more than the planned commits after step 3 (`reason`, and `paths`: each path in the way, changed before the batch, outside every planned commit, or of a ticket that could not be set aside). `next` says the kit did not verify the tree it will commit, and why | not held |
    | `CHECK_RUNS_MISSING` | for a verification command of the batch, the hook logged fewer approved runs of it by the checker since the batch opened than there are passed tickets that verify with it (a ticket without its own `verificationCommands` verifies with the batch's whole list). Lists each such command with `needed` and `seen`. A run by the exec worker does not count. The log does not say which ticket's checker skipped its run, so no ticket is told apart. Not checked for a batch an earlier kit opened, whose hook did not log approved commands | all held |
    | `NESTED_REPOSITORY` | a worker created a Git repository inside the product; Git would commit a link to it, not its files | the folder is left uncommitted |
    | `PREEXISTING_PATH_CHANGED` | a path that was already changed when the batch started as is was changed again | not held; the path is never committed |
    | `LEDGER_NOT_WRITTEN` | `pm-decisions.md` could not be appended | not held |
-   | `HOOKS_CHANGED` | the folder Git runs commit hooks from was moved, or a file in it was added, removed or changed since the batch opened. A commit by hand runs the hooks as the PM, so `next`, the refusal of `commit` and `abort` tell the PM to inspect that folder and remove every hook the batch added or changed before any commit by hand | all held |
-   | `HOOKS_WRITTEN` | a path was changed where the hooks live or beside husky's stub folder, for instance through a worker's shell | all held |
+   | `HOOKS_CHANGED` | the folder Git runs commit hooks from was moved, or a file in it was added, removed or changed since the batch opened, judged before the kit's run of the commands and again after it. A commit by hand runs the hooks as the PM, so `next`, the refusal of `commit` and `abort` tell the PM to inspect that folder and remove every hook the batch added or changed before any commit by hand | all held |
+   | `HOOKS_WRITTEN` | a path was changed where the hooks live or beside husky's stub folder, through a worker's shell, or by the kit's run of the commands (judged again after it) | all held |
    | `BOUNDARY_CHANGED` | the write-boundary file is not the one the batch opened | all held |
    | `PRODUCT_HEAD_MOVED`, `PRODUCT_BRANCH_CHANGED` | someone committed or changed branch during the batch | all held |
    | `GUARDIAN_NOT_CLEAN` | the Guardian did not answer, asked to halt and investigate, or found a runaway or a failed check at risk of being dropped; or the engine's own figures show a budget gate that did not behave (`budgetGate: inconsistent`): `tripped` does not match the final spend against 80% of the ceiling, or, for a standing batch, the engine's trace of its gate decisions (`budgetStatus.gateTrace`) is missing or malformed, shows a call dispatched at or above that line or one declined below it, or shows fewer or more dispatched exec and checker calls than the return reports. Only then do the engine's blockers name the Guardian (`guardian-unavailable` or `guardian-not-clean`) | all held |
    | `GUARDIAN_ATTENTION` | the Guardian found no such problem but did not call the run clean (`missedHaltRisk`, or `budgetGateCorrect: false` with consistent engine figures). The engine tells the Guardian of a batch that no observer watches the run by design, that the PM attests an owner stop or a hardware halt after it (`reconcile-run.mjs --monitoring`), and that the ceiling comes from the owner's limits, so neither the missing observer nor a ceiling far above the spend is a finding, and a Guardian that finds nothing wrong answers `clean`. Its findings are in the engine's return for the PM to read; no blocker names the Guardian. A batch held by another finding is not put in review | not held |
    | `BOUNDARY_NOT_RESTORED`, `LOCK_RELEASE_FAILED`, `LOCK_NOT_HELD_BY_THIS_BATCH` | the batch could not be closed completely | not held |
 
-4. **The write boundary closes and the lock is released**, whatever the
+7. **The write boundary closes and the lock is released**, whatever the
    findings: a lock must not outlive its batch. When a ticket is flagged for a
    reviewer the boundary goes to the review state instead of closed (see
    "Review state and brief").
-5. **The commit plan**: one commit for each ticket that passed and changed
+8. **The commit plan**: one commit for each ticket that passed and changed
    something, of that ticket's own paths. A ticket that did not pass, or was not
    run because the batch halted, is not in the plan. A ticket passed when the
    engine's record says it is done and nothing else in that record says
    otherwise (a failed verification, a pending fix or recovery).
-6. **The record** `rw-batch-after.json` and one line in `pm-decisions.md`.
+9. **The record** `rw-batch-after.json` and one line in `pm-decisions.md`.
    `status` is `clean` when there is no finding, the engine reports no
    blocker and no ticket is flagged for a reviewer, otherwise `review`. `next` says what the PM must do when something
    is left or held. `limits` lists each limit that stopped work, for the owner
@@ -268,16 +336,22 @@ the scan stays small however many batches a team archived.
    command the hook refused during the batch (`allowedCommands`, observed as the
    command's text, at most 20). Empty when none applies.
 
-The close is claimed before anything is changed. A second `after` on the same
-batch is refused while the first is under a minute old; an `after` that died is
-taken up by the next call, which recognises the boundary it already closed
-(the batch's own three workers, no write path) and the lock it already
-released. A claim with no readable time, or one from the future, counts as
-dead. The take-over is not exclusive: an `after` that runs for more than a
-minute could be taken over while it still runs.
+The close is claimed before anything is changed, and the claim names the
+process that made it (`pid`). Since `after` runs the verification commands, it
+can run for as long as the product's checks take: a second `after` on the same
+batch is refused while the claim's process is alive, however old the claim.
+The refusal names `abort` as the way out when that process is not an `after`
+of this batch any more (the system gave its id to another program). An
+`after` whose process is gone is taken up by the next call, which
+recognises the boundary it already closed (the batch's own three workers, no
+write path) and the lock it already released, and runs the commands again. A
+claim that names no process, written by an earlier kit, is taken to be running
+while it is under a minute old; one with no readable time, or one from the
+future, counts as dead.
 
 "All held" means the kit commits nothing of that batch: what ran is not what
-was frozen, and the PM or the owner judges it by hand. Such a batch is not put
+was frozen, or the tree fails its verification and no ticket can be told
+apart, and the PM or the owner judges it by hand. Such a batch is not put
 in review. Each ticket still keeps the reviewers it needs (`tickets[].review`).
 `next` names `abort`, which archives the batch and takes each ticket flagged for
 review out of the work tree as a patch (see "Abort"), then `left`, which does
@@ -529,9 +603,12 @@ line to `pm-decisions.md`. It takes the lock for its length. It pushes nothing.
   `GIT_AUTHOR_*` and `GIT_COMMITTER_*`. Every other `GIT_*` variable is ignored.
 - A `commit` that died after archiving the batch is finished by the next call.
 - What is not committed stays in the work tree and is listed (`left`): a ticket
-  that did not pass, a path outside every ticket, a path a verification command
-  wrote during `resolve`. A ticket `resolve` held is a patch, not a change in the
-  work tree. The next "before" then refuses until the PM deals with those
+  that did not pass and that `after` did not set aside (a held batch, a batch
+  in which no ticket passed, a set-aside that failed), a path outside every ticket (one `after`'s own run of the
+  verification commands wrote included), a path written since `after` that
+  `resolve` recorded (`wrote`: a cache a verification command wrote when a
+  review was briefed, for instance). A ticket `resolve` held, or `after` set
+  aside, is a patch, not a change in the work tree. The next "before" then refuses until the PM deals with those
   paths, or starts as is: `left` saves each ticket's work among them as a
   patch and takes it out (see "Resuming left work"), and the PM commits or
   discards by hand only what belongs to no ticket.
@@ -925,10 +1002,18 @@ never changed by it. Then:
    changed the content of a path still to be committed, every ticket after the
    first removed one is also saved as a patch and removed, with the reason
    `verification-failed-after-removal`. If a command changed an earlier
-   ticket's path, the holding starts at that ticket. Other paths the commands
-   wrote are recorded as `wrote` and left uncommitted.
-4. The review state closes, a `BATCH <run> RESOLVED` line goes to
-   `pm-decisions.md`, the lock is released.
+   ticket's path, the holding starts at that ticket.
+4. **Paths written since `after`.** Every time, whether the commands ran again
+   or not, each path that is changed in the product now, was not left by
+   `after`, and is no path of a ticket to commit is recorded as `wrote`: a
+   cache or a generated file a verification command wrote when a review was
+   briefed or at step 3, or a file written by hand. `commit` leaves these
+   uncommitted and names them, and the next `before` sees them as any path left
+   in the tree. A path of a ticket to commit whose content changed is still
+   refused, as above.
+5. The review state closes, a `BATCH <run> RESOLVED` line goes to
+   `pm-decisions.md`, naming the paths written since `after`, and the lock is
+   released.
 
 Exit 0 when nothing is held, 2 when a ticket is held. A second `resolve` returns
 the same record.
@@ -948,7 +1033,8 @@ digest). The work tree it expects is `after`'s, less the removed paths, plus
 
 **Resume.** While it works the record has `stage: "batch-resolving"` and
 carries each patch as soon as it is saved, the verification outcome once the
-commands ran, the lock's digest and the process id. A `resolve` that died is
+commands ran, the lock's
+digest and the process id. A `resolve` that died is
 finished by the next one: it takes over the lock when that process is gone,
 checks each saved patch against its digest, removes again what is not yet
 removed, does not run the commands twice, and holds after a recorded failure
@@ -1097,12 +1183,23 @@ decision 3), so this adds no access they did not have during the batch.
 
 `after` trusts the engine's return for what happened in the run; it checks that
 the return fits the frozen batch and that a ticket's own record is consistent.
-That the checker ran is checked first-hand only by count: for each verification
+The tree it would commit is verified first-hand when nothing else is in it:
+`after` sets aside the work of each ticket that did not pass, then runs the
+passed tickets' commands on a tree that holds only the planned commits, after
+the last ticket, and holds every commit when a command fails. When the tree
+holds anything else (a path outside every ticket, a path changed before the
+batch, a ticket it could not set aside), it runs nothing and says so
+(`VERIFICATION_NOT_RUN`): the planned commits are then verified only by the
+checkers. The run says nothing of the intermediate commits (the tree with the
+first ticket committed and not the second), nor of each ticket alone: a ticket
+that passes only with a later ticket's change is committed first all the same,
+and a ticket is judged by the union of the passed tickets' commands on the
+final tree, not by its own list alone. That the checker ran is checked first-hand only by count: for each verification
 command, the hook must have approved at least as many runs of it by the checker
 as there are passed tickets that verify with it. The count does not tell the
 tickets apart, so a checker that runs a command twice for one ticket covers for
 another that ran it not at all. Nor does the hook see the command's exit code:
-that a run passed is the checker's word. The log is a file in the team folder,
+that the checker's run passed is the checker's word. The log is a file in the team folder,
 and a confirmed command runs files the exec worker may write (a test file), so
 such a command can append lines that read as the checker's runs or as worker
 calls; neither count can tell them from the hook's. The batch records carry digests that detect an
@@ -1135,7 +1232,9 @@ batch), and `false` when the lock is held by another team or cannot be read.
 
 **A batch `after` closed** ([ADR 0011](../../../decisions/0011-router-worker-batch-review.md),
 amendment of 2026-11-26), in review or not, resolved or not, is archived
-instead (see "When the kit will not commit a batch"). Before that, `abort`
+instead (see "When the kit will not commit a batch"). The patches `after` set
+aside stay where they are; the note and the ledger line name them ("Set aside
+by after as patches, out of the work tree"). Before that, `abort`
 holds each ticket that `after` recorded as needing a reviewer
 (`tickets[].review.required`, kept when a finding holds every commit and the
 batch is not put in review) and that has no passed verdict from each of those
@@ -1255,10 +1354,12 @@ kept out of the tickets' commits by the "after" command.
 ## Resuming left work
 
 A worker can end without a verdict and leave its work in the product's work
-tree: a turn limit, an output ceiling, a halt. A ticket that did not pass, and
-every ticket of a held batch or of a batch the PM aborted, leaves its work
-there too, and `--start-as-is` keeps it out of the next batch's commits, so
-without this field it could only be committed by hand, unchecked.
+tree: a turn limit, an output ceiling, a halt. Every ticket of a held batch, of
+a batch in which no ticket passed, or of a batch the PM aborted, leaves its
+work there too, and so does a ticket that did not pass and that `after` could
+not set aside; `after` saves the others as `left` would (see "After").
+`--start-as-is` keeps that work out of the next batch's commits, so without
+this field it could only be committed by hand, unchecked.
 
 **`left --instance <instance-root> [--run <run id>]`**
 ([ADR 0010](../../../decisions/0010-router-worker-second-mode.md), amendment of
@@ -1292,8 +1393,9 @@ not commit:
   is discarded by hand, and the next run names the patch. The path carries the run id, so a ticket's
   work from two runs never shares a file and a second run finds its own patch;
   it lies outside `reviews/held/`, so a patch there always means a review hold.
-- A ticket `resolve` or `abort` already held is named with its patch (looked
-  up under the batch's run id and under the archive's id) and not saved again.
+- A ticket `resolve` or `abort` already held, or `after` set aside, is named
+  with its patch (looked up under the batch's run id and under the archive's
+  id), with `by` naming the command that saved it, and not saved again.
   When a ticket has more than one of these patches (a held patch brought back
   to the tree and saved again by `left`), the one written last is named, and
   `also` lists the others.
@@ -1315,7 +1417,7 @@ the advice to commit or discard it. Only an archive whose records `left --run`
 would accept counts, and those records are read once, only when such a path
 exists. The output: `{stage:
 "left-work-saved", runId, savedAt, tickets: [{ticket, state: "patch", patch,
-by: "left"|"abort"|"resolve", also?, resume, resumeProblem?} | {ticket, state:
+by: "left"|"after"|"abort"|"resolve", also?, resume, resumeProblem?} | {ticket, state:
 "in-tree", paths, problem, patch?}], outside, claimed: [{path, runId,
 ticket}], next}`. `resume` is the value to put in the ticket of the
 next `BATCH.json`, or null when `before` would refuse the patch as it stands
@@ -1327,7 +1429,7 @@ when it saved a patch or could not; a run that finds nothing left writes none,
 so it can run any number of times. Exit 2 when a ticket's work is still in the
 tree.
 
-A patch `resolve` or `abort` held, or one `left` saved, is named in the
+A patch `resolve` or `abort` held, or one `after` or `left` saved, is named in the
 ticket's `resume`: `"resume": "left/<run id>/<ticket>.patch"` or
 `"reviews/held/<run id>/<ticket>.patch"` brings the work back as the ticket's,
 to be checked and reviewed again. It is checked like any other: the patch of a
@@ -1362,8 +1464,8 @@ From then on the resumed work is the ticket's own: `after` counts it in the
 ticket's changed paths (a resumed path that still holds what "before" applied
 is not taken for a write no worker made, `HOOK_SAW_NO_WORKER`), the checker verifies it, the review triggers and the
 ticket's risk flags apply to it, and `commit` commits it with what the worker
-added. If the ticket does not pass, the work stays in the work tree as any
-batch's does.
+added. If the ticket does not pass, `after` sets it aside again as a patch, as
+any batch's.
 
 ## Refusals (`BATCH_REFUSED`)
 
@@ -1515,11 +1617,28 @@ The limits not being the ones the ledger binds is refused with its own code,
   of it, and the PM discards the rest.
 - **The brief's verification runs without the lock.** Nothing else starts while
   the batch is in review, but the PM's own session can still change the product.
-- **A ticket that did not pass keeps its changes in the work tree until the PM
-  runs `left`.** No other command saves them aside; ADR 0011 does that for a
-  rejected ticket, and `abort` for a flagged one no review passed. A ticket that
-  did not pass is never flagged, whatever paths it changed: its work is
+- **`abort` does not wait for an `after` that is running the verification
+  commands.** It releases the lock and archives the records under it; it must
+  not be run while an `after` of the team runs. The claim of a running `after`
+  names its process; the kit cannot tell whether a live process of that id is
+  still that `after`.
+- **`after` sets aside the work of a ticket that did not pass only when it
+  would verify.** In a batch another finding holds, or one in which no ticket
+  passed, that work stays in the work tree until the PM runs `left`. A ticket
+  that did not pass is never flagged, whatever paths it changed: its work is
   reviewed when it comes back as a `resume` and the triggers flag it there.
+- **A patch `after` saved and the PM brought back to the tree** is not saved
+  again by `left` once the PM edited it: the patch is never written over, so
+  `left` leaves that ticket in the tree and says so.
+- **The kit runs no command on a tree that holds more than the planned
+  commits.** A path outside every ticket, or a batch started as is, is enough:
+  `VERIFICATION_NOT_RUN` says so, and the commits rest on the checkers' word.
+- **A verification command that writes a file Git does not ignore outside
+  every ticket** (a cache) gets `VERIFICATION_NOT_RUN` in every batch: the
+  path is in the tree at the first batch and, once that batch is started as
+  is, counts as changed before the next. No command of the kit clears it.
+  The owner ignores such paths in the product's `.gitignore` to get the
+  verification; `next` says so.
 - **Git-ignored files a worker wrote are invisible**, inside or outside the
   tickets' paths. ADR 0010 tolerates ignored build output; nothing compares it
   with the state before the batch.
