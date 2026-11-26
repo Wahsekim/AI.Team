@@ -2,10 +2,10 @@
 // on the verdicts, and escalates a ticket that keeps failing review to the owner without stopping unrelated work.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, readFileSync, mkdtempSync, rmSync, appendFileSync, existsSync, utimesSync, realpathSync, symlinkSync } from 'node:fs';
+import { writeFileSync, readFileSync, mkdtempSync, mkdirSync, rmSync, appendFileSync, existsSync, utimesSync, realpathSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { digest } from '../src/loop/contracts.mjs';
+import { digest, bytesDigest } from '../src/loop/contracts.mjs';
 import { spawnSync, spawn } from 'node:child_process';
 import { abortBatch } from '../src/router-worker/batch.mjs';
 import { markNotMetered } from '../src/router-worker/batch-settle.mjs';
@@ -399,7 +399,6 @@ test('a ticket rejected in a second batch is escalated: only a batch with it or 
   assert.deepEqual(one.verdict.escalated, [], 'a first rejection goes back to the backlog');
   const two = await rejectOnce(), [escalation] = two.verdict.escalated;
   assert.equal(escalation.kind, 'second-rejection'); assert.equal(escalation.ticket, 'US-02');
-  assert.deepEqual(f.lines('reviews/tickets.jsonl').map(line => [line.ticket, line.paths]), [['US-02', ['src/authz.js']], ['US-02', ['src/authz.js']]], 'each row carries the paths the ticket changed');
   assert.deepEqual(escalation.runIds, [one.open.runId, two.open.runId]); assert.deepEqual(escalation.paths, ['src/authz.js']);
   assert.deepEqual(f.lines('reviews/escalations.jsonl').map(line => line.id), [escalation.id]);
   assert.deepEqual(two.committed.escalations.map(item => item.id), [escalation.id], 'the commit record reports it for the human');
@@ -431,8 +430,28 @@ process.stdout.write(JSON.stringify(acknowledgeEscalation(${JSON.stringify({ ...
   assert.equal((await f.before(batchOf(ticket('US-02', ['src/authz.js'])))).errors, undefined, 'the owner lifted the block');
 });
 
+test('a rejected ticket filed again under another id with its held patch as resume is escalated at the second rejection, naming both ids', async t => {
+  const f = live(t), discard = () => { git(f.product, 'checkout', '-q', '--', '.'); git(f.product, 'clean', '-fdq'); };
+  const reject = async (item, text) => {
+    const { open } = await runBatch(f, [item], { 'src/authz.js': text });
+    const made = f.brief('security'), verdict = f.judge('security', transcriptOf(f, made, { report: failing(reportOf(made), item.id, 'kit.sec.secret-in-code') }));
+    assert.equal(f.resolve().errors, undefined); assert.equal(f.commit().errors, undefined);
+    discard(); assert.equal(markNotMetered({ ...f.common, reason: 'not measured in this test', runId: open.runId }).errors, undefined);
+    return { open, verdict };
+  };
+  const one = await reject(ticket('US-02', ['src/authz.js']), '// first\n'), held = `reviews/held/${one.open.runId}/US-02.patch`;
+  assert.deepEqual(one.verdict.escalated, []); assert.ok(existsSync(join(f.root, held)), 'resolve held the rejected ticket as a patch');
+  const two = await reject(ticket('US-12', ['src/authz.js'], { resume: held }), '// first\n// again\n'), [escalation] = two.verdict.escalated;
+  assert.equal(escalation?.ticket, 'US-12'); assert.deepEqual(escalation.runIds, [one.open.runId, two.open.runId]);
+  assert.deepEqual(escalation.findings.map(item => item.ticket), ['US-02', 'US-12']);
+  assert.deepEqual(f.lines('reviews/tickets.jsonl').map(line => [line.ticket, line.resumedFrom]), [['US-02', undefined], ['US-12', { runId: one.open.runId, ticket: 'US-02' }]]);
+  assert.match(f.ledger(), new RegExp(`ESCALATED ${escalation.id}: ticket US-12 \\(resuming the work of US-02\\) was rejected in batches ${one.open.runId} and ${two.open.runId}`));
+  const refused = refusal(await f.before(batchOf(ticket('US-12', ['src/other.js']))));
+  assert.equal(refused?.code, 'TICKET_ESCALATED'); assert.match(refused.reason, new RegExp(escalation.id));
+});
+
 const escalationsIn = () => { const instance = mkdtempSync(join(tmpdir(), 'rw-escalations-')); return { instance, at: new Date().toISOString(),
-  outcome: (runId, ticket, outcome, paths = ['src/a.js']) => recordOutcomes({ instance, runId, reviewer: 'security', outcomes: [{ ticket, outcome, finding: 'x' }], tickets: [{ id: ticket, paths }], at: new Date().toISOString() }) }; };
+  outcome: (runId, ticket, outcome, paths = ['src/a.js'], resume) => recordOutcomes({ instance, runId, reviewer: 'security', outcomes: [{ ticket, outcome, finding: 'x' }], tickets: [{ id: ticket, paths, resume }], at: new Date().toISOString() }) }; };
 
 test('only an acknowledgement typed at a terminal, for the escalation as it stands, lifts its block', t => {
   const { instance, outcome } = escalationsIn(); t.after(() => rmSync(instance, { recursive: true, force: true }));
@@ -461,18 +480,58 @@ test('two adverse outcomes of one ticket in two batches escalate, mixed or not',
   assert.match(readFileSync(join(instance, 'pm-decisions.md'), 'utf8'), /ESCALATED ESC-T-2-r2: ticket T-2 was rejected or could not be reviewed in batches r1 and r2/);
 });
 
-test('a ticket filed again under another id on the same paths is escalated at its second rejection; another id on other paths is not; a row with no paths counts by id', t => {
+// A held patch as resolve writes it, and the frozen resume of a ticket that names a patch of the team folder.
+const hold = (instance, path, text) => { mkdirSync(join(instance, path, '..'), { recursive: true }); writeFileSync(join(instance, path), text); return path; };
+const resumeOf = (instance, patch) => ({ patch, digest: bytesDigest(readFileSync(join(instance, patch))) });
+const rowsOf = instance => readFileSync(join(instance, 'reviews/tickets.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+const ledgerOf = instance => readFileSync(join(instance, 'pm-decisions.md'), 'utf8');
+
+test('a ticket that resumes the held patch of a rejected ticket, at its place or copied elsewhere, is escalated at its own first rejection', t => {
   const { instance, outcome } = escalationsIn(); t.after(() => rmSync(instance, { recursive: true, force: true }));
-  const rows = () => readFileSync(join(instance, 'reviews/tickets.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
   assert.deepEqual(outcome('r1', 'T-1', 'rejected', ['src/a.js']), []);
-  assert.deepEqual(outcome('r2', 'T-9', 'rejected', ['src/b.js']), [], 'another id on other paths is other work');
-  const [again] = outcome('r3', 'T-5', 'rejected', ['src/A.js', 'src/c.js']);
-  assert.equal(again?.kind, 'second-rejection'); assert.equal(again.ticket, 'T-5'); assert.deepEqual(again.runIds, ['r1', 'r3']);
-  assert.deepEqual(again.findings.map(item => [item.ticket, item.runId]), [['T-1', 'r1'], ['T-5', 'r3']]);
-  assert.deepEqual(rows().map(row => [row.ticket, row.paths]), [['T-1', ['src/a.js']], ['T-9', ['src/b.js']], ['T-5', ['src/A.js', 'src/c.js']]], 'each row carries the paths its ticket changed');
-  assert.match(readFileSync(join(instance, 'pm-decisions.md'), 'utf8'), /ESCALATED ESC-T-5-r3: ticket T-5 \(on the paths of T-1\) was rejected in batches r1 and r3/);
-  // A row written before rows carried paths is matched by its id alone.
-  appendFileSync(join(instance, 'reviews/tickets.jsonl'), JSON.stringify({ ticket: 'T-7', runId: 'r0', reviewer: 'security', outcome: 'rejected', finding: 'x', at: '2026-11-20T00:00:00.000Z' }) + '\n');
-  assert.deepEqual(outcome('r4', 'T-6', 'rejected', ['src/old.js']), [], 'a row with no paths overlaps nothing');
+  const held = hold(instance, 'reviews/held/r1/T-1.patch', 'patch of T-1\n');
+  const [again] = outcome('r2', 'T-5', 'rejected', ['src/a.js'], resumeOf(instance, held));
+  assert.equal(again?.kind, 'second-rejection'); assert.equal(again.ticket, 'T-5'); assert.deepEqual(again.runIds, ['r1', 'r2']);
+  assert.deepEqual(again.findings.map(item => [item.ticket, item.runId]), [['T-1', 'r1'], ['T-5', 'r2']]);
+  assert.deepEqual(rowsOf(instance).map(row => [row.ticket, row.resumedFrom]), [['T-1', undefined], ['T-5', { runId: 'r1', ticket: 'T-1' }]], 'the row names the ticket whose work it continues');
+  assert.match(ledgerOf(instance), /ESCALATED ESC-T-5-r2: ticket T-5 \(resuming the work of T-1\) was rejected in batches r1 and r2/);
+
+  assert.deepEqual(outcome('r3', 'U-1', 'rejected', ['src/u.js']), []);
+  hold(instance, 'reviews/held/r3/U-1.patch', 'patch of U-1\n');
+  const copy = hold(instance, 'handoff/U-1/again.patch', 'patch of U-1\n');
+  const [copied] = outcome('r4', 'U-2', 'rejected', ['src/u.js'], resumeOf(instance, copy));
+  assert.deepEqual(copied?.findings.map(item => [item.ticket, item.runId]), [['U-1', 'r3'], ['U-2', 'r4']], 'a copy of a held patch is told by its bytes');
+  assert.match(ledgerOf(instance), /ESCALATED ESC-U-2-r4: ticket U-2 \(resuming the work of U-1\) was rejected in batches r3 and r4/);
+});
+
+test('the count follows a chain of resumes: a third id resuming the second\'s held patch is counted with the first and the second', t => {
+  const { instance, outcome } = escalationsIn(); t.after(() => rmSync(instance, { recursive: true, force: true }));
+  outcome('r1', 'A-1', 'rejected', ['src/a.js']);
+  const [second] = outcome('r2', 'B-1', 'rejected', ['src/a.js'], resumeOf(instance, hold(instance, 'reviews/held/r1/A-1.patch', 'first\n')));
+  const next = [{ id: 'C-1', paths: ['src/a.js'] }], blocked = () => blockedTickets({ instance, tickets: next, archived: [] }).map(entry => entry.ticket);
+  assert.deepEqual(blocked(), ['C-1'], 'the open escalation of B-1 blocks a ticket on its paths');
+  appendFileSync(join(instance, 'reviews/acknowledged.jsonl'), JSON.stringify({ id: second.id, escalationDigest: digest(second), atTerminal: true }) + '\n');
+  assert.deepEqual(blocked(), [], 'acknowledged');
+  const [third] = outcome('r3', 'C-1', 'rejected', ['src/a.js'], resumeOf(instance, hold(instance, 'reviews/held/r2/B-1.patch', 'second\n')));
+  assert.equal(third?.id, 'ESC-C-1-r3'); assert.deepEqual(third.runIds, ['r1', 'r2', 'r3']);
+  assert.deepEqual(third.findings.map(item => item.ticket), ['A-1', 'B-1', 'C-1']);
+  assert.match(ledgerOf(instance), /ESCALATED ESC-C-1-r3: ticket C-1 \(resuming the work of A-1, B-1\) was rejected in batches r1 and r2 and r3/);
+});
+
+test('tickets that share a file but resume nothing are counted apart: no escalation, and a third ticket on that file is not blocked', t => {
+  const { instance, outcome } = escalationsIn(); t.after(() => rmSync(instance, { recursive: true, force: true }));
+  assert.deepEqual(outcome('r1', 'T-1', 'rejected', ['locales/table.json', 'src/a.js']), []);
+  assert.deepEqual(outcome('r2', 'T-2', 'rejected', ['locales/table.json', 'src/b.js']), [], 'two unrelated tickets on one shared file');
+  assert.deepEqual(outcome('r3', 'T-3', 'rejected', ['src/a.js']), [], 'a new id on the same paths with no resume is new work');
+  assert.deepEqual(blockedTickets({ instance, tickets: [{ id: 'T-4', paths: ['locales/table.json'] }], archived: [] }), []);
+  assert.equal(existsSync(join(instance, 'reviews/escalations.jsonl')), false);
+  assert.doesNotMatch(readFileSync(join(instance, 'reviews/tickets.jsonl'), 'utf8'), /"paths"/, 'a row carries no paths: nothing counts by them');
+});
+
+test('a row written with paths and no link, as the kit wrote them on 2026-11-26, counts by its id only', t => {
+  const { instance, outcome } = escalationsIn(); t.after(() => rmSync(instance, { recursive: true, force: true }));
+  mkdirSync(join(instance, 'reviews'), { recursive: true });
+  appendFileSync(join(instance, 'reviews/tickets.jsonl'), JSON.stringify({ ticket: 'T-7', runId: 'r0', reviewer: 'security', outcome: 'rejected', finding: 'x', paths: ['src/shared.js'], at: '2026-11-26T09:00:00.000Z' }) + '\n');
+  assert.deepEqual(outcome('r4', 'T-6', 'rejected', ['src/shared.js']), [], 'its paths count for no other id');
   assert.deepEqual(outcome('r5', 't-7', 'rejected', ['src/new.js'])[0]?.runIds, ['r0', 'r5']);
 });
