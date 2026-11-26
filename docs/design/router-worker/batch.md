@@ -40,7 +40,7 @@ no network.
 | 4 | PM | `node kit/scripts/reconcile-run.mjs RESULT.json .`: lifecycle and message ledgers, as in specialist mode |
 | 5 | PM | a flagged batch only: `review-brief`, the reviewer's dispatch and `review` per reviewer, then `resolve` (see "Resolve") |
 | 6 | PM | `commit`: one commit per ticket that passed, or per ticket the resolution kept; the batch is archived. A batch whose commits are all held is archived with `abort` instead; `commit` refuses it |
-| 7 | PM | `node kit/scripts/measure-spawn.mjs <session-dir> --json > METER.json`, then `settle METER.json`: usage per ticket. The next `before` is refused until this is done |
+| 7 | PM | `node kit/scripts/measure-spawn.mjs <session-dir> --json > METER.json`, then `settle METER.json --run <run id>` (the batch is archived by now, so it is named): usage per ticket. The next `before` is refused until this is done |
 
 **A PM with no owner present** can run a batch from a headless session started
 in the team's root (`claude -p "<instructions>"`). The session has the
