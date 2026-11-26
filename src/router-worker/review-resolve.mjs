@@ -6,7 +6,7 @@ import { git, gitRun, acquireLease, releaseLease, readLease } from './lease.mjs'
 import { readBoundary, closeBoundary, stateOf } from './write-boundary.mjs';
 import { runCommands, confirmedOf } from './run-commands.mjs';
 import { AFTER_FILE, RESOLUTION_FILE, RUN_ID, TICKET_ID, changedPaths, contentOf, hooksOf, plain, HOOKS_MOVED } from './batch.mjs';
-import { openBatch, intact, Refusal, IN_PROGRESS, ABANDON, HELD_REASONS } from './batch-close.mjs';
+import { openBatch, intact, Refusal, IN_PROGRESS, ABANDON, HELD_REASONS, alive } from './batch-close.mjs';
 import { reviewGate, verdictsOf, briefsOf, finalOf } from './review-judge.mjs';
 
 // ADR 0011, decisions 14 and 15, with the owner's answer of 2026-11-20: once the reviews are over, each ticket a review
@@ -23,7 +23,6 @@ const sealed = body => ({ ...body, digest: digest(body) });
 const replace = (path, record) => { writeFileSync(`${path}.tmp`, JSON.stringify(record, null, 2) + '\n'); renameSync(`${path}.tmp`, path); };
 const ok = step => step.status === 0 && !step.error;
 const literal = (product, args, paths, options = {}) => gitRun(product, ['--literal-pathspecs', ...args, '--pathspec-from-file=-', '--pathspec-file-nul'], { ...options, input: paths.join('\0') });
-const alive = pid => { if (!Number.isSafeInteger(pid) || pid === process.pid) return false; try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; } };
 export const resolving = resolution => resolution?.stage === 'batch-resolving' && alive(resolution.pid);
 
 // The paths' change from the batch's start as a binary patch, untracked files included, through an index of its own.
@@ -146,9 +145,9 @@ export function resolveBatch({ teamRoot, instanceRoot, run = runCommands }) {
     const reviewsDigest = digest(verdictsOf(instance, batch.runId));
     need(!kept || kept.reviewsDigest === reviewsDigest, `${RESOLUTION_FILE} was started on other verdicts than those in the team now. ${ABANDON}`);
     const { reasons } = reviewGate(instance, batch, after);
-    // The latest complete brief's run of the commands decides, whichever reviewer it was for: a failure there holds the batch when
-    // the tree is exactly what would be committed; otherwise every failure is recorded. A record made before
-    // briefs were numbered (no seq) comes before every numbered one.
+    // The latest complete brief's run of the commands decides, whichever reviewer it was for: a failure there holds the batch,
+    // whatever else the tree held (ADR 0011, amendment of 2026-11-26); an earlier failure it cleared is recorded. A record made
+    // before briefs were numbered (no seq) comes before every numbered one.
     const briefs = batch.review.reviewers.flatMap(reviewer => briefsOf(instance, reviewer, batch.runId))
       .sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0) || (a.madeAt > b.madeAt) - (a.madeAt < b.madeAt));
     const failing = brief => (brief?.verification ?? []).filter(run => run.exit !== 0 || run.timedOut).map(({ command, exit, timedOut }) => ({ reviewer: brief.reviewer, attempt: brief.attempt, command, exit, timedOut }));
@@ -156,7 +155,7 @@ export function resolveBatch({ teamRoot, instanceRoot, run = runCommands }) {
     const complete = briefs.filter(brief => brief.verification?.length && !brief.dropped?.length);
     const failedAtBrief = briefs.flatMap(failing), holding = complete.length ? briefs.slice(briefs.lastIndexOf(complete.at(-1))).flatMap(failing) : failedAtBrief;
     const named = runs => runs.map(run => `${plain(run.command)} (${run.reviewer}'s brief ${run.attempt}: ${run.timedOut ? 'timed out' : `exit ${run.exit}`})`).join(', '), failures = named(failedAtBrief);
-    need(!holding.length || batch.preexisting.length || after.left.length || reasons.some(Boolean), `A verification command failed when the review was briefed, on a work tree that held only what would be committed: ${named(holding)}. ${ABANDON}`);
+    need(!holding.length, `A verification command failed when the review was briefed: ${named(holding)}. The kit cannot tell which ticket broke the tree, so it commits none. ${ABANDON}`);
     product = batch.productRoot;
     // The lock of a resolve that died is taken over; one that still runs is not.
     const held = readLease({ productRoot: product });
@@ -199,25 +198,28 @@ export function resolveBatch({ teamRoot, instanceRoot, run = runCommands }) {
     commits.forEach((commit, i) => { if (reasons[i]) hold(commit, reasons[i]); });
 
     if (first !== -1 && !journal.verification && commits.slice(first + 1).some(commit => !isRemoved(commit.ticket))) {
-      const toCommit = commits.filter(commit => !isRemoved(commit.ticket)), committing = new Set(toCommit.flatMap(commit => commit.paths));
-      const ours = list => list.filter(file => !batch.preexisting.includes(file)), before = new Set(ours(changedPaths(product)));
+      const toCommit = commits.filter(commit => !isRemoved(commit.ticket));
       const { allowed, commands, dropped } = confirmedOf(instance, batch.verificationCommands);
       const runs = run({ productRoot: product, commands, frozen: batch.verificationCommands, allowed });
       need(!runs.errors, runs.errors?.[0]?.reason);
       // No confirmed command left to run proves nothing about the tickets that remain.
       const failed = !runs.length || runs.some(entry => entry.exit !== 0 || entry.timedOut);
       save({ ...journal, verification: { ran: true, failed, commands: runs.map(({ command, exit, timedOut, outputDigest, tail }) => ({ command, exit, timedOut, outputDigest, tail })), dropped,
-        changed: drift(toCommit).sort(), wrote: ours(changedPaths(product)).filter(file => !before.has(file) && !committing.has(file)) } });
+        changed: drift(toCommit).sort() } });
     }
     for (const commit of heldAfterVerification(commits, first, journal.verification)) hold(commit, AFTER_REMOVAL);
 
     const now = readBoundary(instance);
     if (now && stateOf(now) === 'review') closeBoundary({ teamRoot: instance });
     const at = new Date().toISOString(), removed = journal.removed, plan = commits.filter(commit => !isRemoved(commit.ticket));
-    const verification = journal.verification ?? { ran: false, failed: false, commands: [], dropped: [], changed: [], wrote: [] };
+    // A path changed now that after did not leave and no ticket to commit holds was written since after: by a command, at a
+    // brief or here, or by hand. commit leaves it uncommitted and names it.
+    const seen = new Set([...after.left, ...plan.flatMap(commit => commit.paths)]);
+    const wrote = changedPaths(product).filter(file => !batch.preexisting.includes(file) && !seen.has(file));
+    const verification = { ...(journal.verification ?? { ran: false, failed: false, commands: [], dropped: [], changed: [] }), wrote };
     const record = sealed({ schemaVersion: 1, stage: 'batch-resolved', runId: batch.runId, batchDigest: batch.digest, afterDigest: after.digest, reviewsDigest, resolvedAt: at,
       removed, verification, failedAtBrief, commits: plan, left: after.left });
-    const again = verification.ran ? `; verification run again ${verification.failed ? 'FAILED' : 'passed'}${verification.changed.length ? `, changed ${verification.changed.slice(0, 10).map(plain).join(', ')}` : ''}${verification.wrote.length ? `, wrote ${verification.wrote.slice(0, 10).map(plain).join(', ')} (left uncommitted)` : ''}` : '';
+    const again = `${verification.ran ? `; verification run again ${verification.failed ? 'FAILED' : 'passed'}${verification.changed.length ? `, changed ${verification.changed.slice(0, 10).map(plain).join(', ')}` : ''}` : ''}${wrote.length ? `; written since after, left uncommitted: ${wrote.slice(0, 10).map(plain).join(', ')}` : ''}`;
     appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} BATCH ${batch.runId} RESOLVED: ${removed.length ? `held ${removed.map(entry => `${entry.ticket} (${entry.reason})`).join(', ')} as patches under ${HELD}/${batch.runId}/` : 'nothing held'}; ${plan.length} to commit${again}${failures ? `; verification failed when the review was briefed: ${failures}` : ''}.\n`);
     replace(path, record);
     return record;

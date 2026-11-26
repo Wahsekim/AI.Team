@@ -4,11 +4,10 @@ import assert from 'node:assert/strict';
 import { writeFileSync, mkdirSync, readFileSync, existsSync, symlinkSync, chmodSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { BATCH_FILE } from '../src/router-worker/batch.mjs';
-import { afterBatch } from '../src/router-worker/batch-close.mjs';
 import { reviewBrief } from '../src/router-worker/review-brief.mjs';
 import { readLease } from '../src/router-worker/lease.mjs';
 import { runWorkflow, makeAgentImpl } from '../scripts/lib/workflow-harness.mjs';
-import { git, checksRan } from './fixtures/router-worker/standing-team.mjs';
+import { git, checksRan, afterBatch } from './fixtures/router-worker/standing-team.mjs';
 import { live, ticket, batchOf, refusal } from './fixtures/router-worker/review.mjs';
 
 const taskData = brief => JSON.parse(brief.split('\n').find(line => line.startsWith('{"assignmentId"')));

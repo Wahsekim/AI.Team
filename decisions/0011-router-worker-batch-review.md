@@ -323,3 +323,22 @@ rejection. Nor does it follow a link through a ticket whose review
 passed: such a ticket leaves no outcome, so when it is held for another reason
 and resumed again, the chain ends at it and the earlier rejection is not
 counted.
+
+## Amendment of 2026-11-26: a failed verification at a brief holds, and what appeared since after is left
+
+Status: Accepted. The owner decided in session on 2026-11-26, accepting the
+recommendation of that day's review of the kit.
+
+`resolve` held a batch on a failed run of the verification commands at a brief
+only when the tree held nothing but what would be committed. A path `after`
+left, a path changed before the batch or a ticket a review held let the
+failure through as a record, and such a tree is ordinary. `resolve` now refuses
+whenever the latest complete run at a brief failed, and names `abort` and
+`left`; an earlier failure that a later complete run cleared is still recorded.
+
+A file a command wrote at a brief (a cache, a generated file) made `commit`
+refuse because the product had changed, with `abort` as the only way out.
+`resolve` now records, whether or not it runs the commands again, each path
+changed since `after` closed the batch that no ticket to commit holds; `commit`
+leaves those uncommitted and names them. A path of a ticket to commit whose
+content changed is still refused.

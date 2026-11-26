@@ -5,7 +5,7 @@ import { writeFileSync, readFileSync, existsSync, mkdirSync, rmSync, appendFileS
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { beforeBatch, abortBatch, BATCH_FILE, AFTER_FILE, RETURN_FILE, RECORDS } from '../src/router-worker/batch.mjs';
-import { afterBatch, commitBatch, HOLD_ALL } from '../src/router-worker/batch-close.mjs';
+import { commitBatch, HOLD_ALL } from '../src/router-worker/batch-close.mjs';
 import { settleBatch, markNotMetered } from '../src/router-worker/batch-settle.mjs';
 import { loadRetryRules } from '../src/router-worker/retries.mjs';
 import { runWorkflow, makeAgentImpl, makeBudget } from '../scripts/lib/workflow-harness.mjs';
@@ -13,7 +13,7 @@ import { readLease, acquireLease, releaseLease } from '../src/router-worker/leas
 import { observeIsolation } from '../src/router-worker/isolation.mjs';
 import { readBoundary, decideCall, closeBoundary } from '../src/router-worker/write-boundary.mjs';
 import { DEFAULT_LIMITS, proposeLimits, changeLimits, boundLimits } from '../src/router-worker/switch.mjs';
-import { fixture, git, runUnderHook, checksRan } from './fixtures/router-worker/standing-team.mjs';
+import { fixture, git, runUnderHook, checksRan, afterBatch } from './fixtures/router-worker/standing-team.mjs';
 import { meterOf } from './fixtures/router-worker/meter.mjs';
 import { digest } from '../src/loop/contracts.mjs';
 
@@ -275,8 +275,10 @@ test('CLI: before prints the batch record with the preflight manifest chained in
 });
 
 // A batch run by the real engine with mock agents; `edits` is what the workers leave in the product, `spend` the output tokens of each agent call.
-async function ran(t, { tickets, agents = {}, edits = {}, hook = true, extra = {}, hooks = () => ({}), fields = {}, spend = 0 }) {
+async function ran(t, { tickets, agents = {}, edits = {}, hook = true, extra = {}, hooks = () => ({}), fields = {}, spend = 0, seed = {} }) {
   const f = live(t);
+  // Files the product's history holds before the batch opens.
+  for (const [path, text] of Object.entries(seed)) { writeFileSync(join(f.product, path), text); git(f.product, 'add', path); git(f.product, 'commit', '-q', '-m', `seed ${path}`); }
   // Commit hooks the repository had before the batch; one written later is a finding.
   for (const [name, script] of Object.entries(hooks(f))) writeFileSync(join(f.product, '.git/hooks', name), script, { mode: 0o755 });
   const open = await f.before({ ...batchOf(...tickets), ...fields }, extra);
@@ -417,13 +419,14 @@ test('commit refuses when the product changed after the batch was closed, keeps 
   assert.equal(git(dirty.product, 'status', '--porcelain').trim(), 'A  notes.txt', 'and is still staged, as the owner left it');
 });
 
-test('CLI: after exits 0 clean and 2 in review; commit exits 0', async t => {
-  const f = await ran(t, { tickets: two, edits: { 'src/app.js': 'export const x = 2;\n', 'stray.txt': 'x\n' } }), file = join(f.base, 'result.json');
+test('CLI: after runs the verification commands on the product, exits 2 in review; commit exits 0', async t => {
+  const f = await ran(t, { tickets: two, seed: { 'package.json': '{ "scripts": { "test": "exit 0" } }\n' }, edits: { 'src/app.js': 'export const x = 2;\n', 'stray.txt': 'x\n' } }), file = join(f.base, 'result.json');
   const run = (...argv) => spawnSync(process.execPath, [join(f.kit, 'scripts/rw-batch.mjs'), ...argv], { encoding: 'utf8' });
   writeFileSync(file, JSON.stringify(f.result));
   assert.equal(run('after', file).status, 1); assert.equal(run('after', join(f.base, 'absent.json'), '--instance', f.root).status, 2);
   const closed = run('after', file, '--instance', f.root);
   assert.equal(closed.status, 2, 'a batch in review'); assert.equal(JSON.parse(closed.stdout).status, 'review');
+  assert.deepEqual(JSON.parse(closed.stdout).verification.commands.map(entry => [entry.command, entry.exit]), [['npm test', 0]], 'the real command, run from the product root');
   const done = run('commit', '--instance', f.root);
   assert.equal(done.status, 0, done.stderr); assert.equal(JSON.parse(done.stdout).commits.length, 1); assert.equal(run('commit', '--instance', f.root).status, 2);
 });
@@ -572,7 +575,7 @@ test('a commit that died after archiving is finished by the next call; nothing i
 });
 
 test('each finding that questions the run holds every commit; each check of commit refuses on its own', async t => {
-  assert.deepEqual([...HOLD_ALL].sort(), ['BOUNDARY_CHANGED', 'CHECK_RUNS_MISSING', 'GUARDIAN_NOT_CLEAN', 'HOOKS_CHANGED', 'HOOKS_WRITTEN', 'HOOK_SAW_NO_WORKER', 'PRODUCT_BRANCH_CHANGED', 'PRODUCT_HEAD_MOVED']);
+  assert.deepEqual([...HOLD_ALL].sort(), ['BOUNDARY_CHANGED', 'CHECK_RUNS_MISSING', 'GUARDIAN_NOT_CLEAN', 'HOOKS_CHANGED', 'HOOKS_WRITTEN', 'HOOK_SAW_NO_WORKER', 'PRODUCT_BRANCH_CHANGED', 'PRODUCT_HEAD_MOVED', 'VERIFICATION_FAILED']);
   const edits = { 'src/app.js': 'x\n' }, holds = (closed, code) => { assert.ok(closed.findings.some(finding => finding.code === code), `${code}: ${JSON.stringify(closed.findings)}`); assert.equal(closed.holdAll, true); assert.deepEqual(closed.commits, []); };
   const boundary = await ran(t, { tickets: two, edits }), file = join(boundary.root, '.claude/rw-write-boundary.json'), body = (({ digest: _old, ...rest }) => rest)(JSON.parse(readFileSync(file, 'utf8')));
   const widened = { ...body, wrappers: { ...body.wrappers, 'tag-list-fixture-worker-exec': { duty: 'exec', writePaths: ['**'] } } };

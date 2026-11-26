@@ -5,7 +5,7 @@ import { writeFileSync, readFileSync, existsSync, mkdirSync, rmSync, symlinkSync
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { beforeBatch, abortBatch } from '../src/router-worker/batch.mjs';
-import { afterBatch, commitBatch } from '../src/router-worker/batch-close.mjs';
+import { commitBatch } from '../src/router-worker/batch-close.mjs';
 import { markNotMetered } from '../src/router-worker/batch-settle.mjs';
 import { reviewBrief, REVIEW_FILE } from '../src/router-worker/review-brief.mjs';
 import { recordNoAnswer } from '../src/router-worker/review-judge.mjs';
@@ -16,7 +16,7 @@ import { readBoundary, decideCall } from '../src/router-worker/write-boundary.mj
 import { proposeLimits, changeLimits } from '../src/router-worker/switch.mjs';
 import { runWorkflow, makeAgentImpl } from '../scripts/lib/workflow-harness.mjs';
 import { readLease } from '../src/router-worker/lease.mjs';
-import { fixture, git, checksRan } from './fixtures/router-worker/standing-team.mjs';
+import { fixture, git, checksRan, afterBatch } from './fixtures/router-worker/standing-team.mjs';
 
 const refusal = result => result.errors?.[0];
 const ticket = (id, paths, extra = {}) => ({ id, title: `Ticket ${id}`, goal: `Goal of ${id}`, acceptance: [`${id} acceptance holds`], paths, estimate: { execTokens: 12000, checkTokens: 6000, reworkTokens: 6000 }, ...extra });

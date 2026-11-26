@@ -8,6 +8,7 @@ import { readBoundary, closeBoundary, reviewBoundary, stateOf, within, LOG_FILE 
 import { flagPaths } from './review-triggers.mjs';
 import { reviewGate, verdictsOf } from './review-judge.mjs';
 import { escalationsOf } from './escalations.mjs';
+import { runCommands, confirmedOf } from './run-commands.mjs';
 import { BATCH_FILE, AFTER_FILE, PROGRESS_FILE, RETURN_FILE, RESOLUTION_FILE, RECORDS, ARCHIVE, RUN_ID, TICKET_ID, oneLine, changedPaths, contentOf, hooksOf, archiveBatch, plain, proposedTokens, HOOKS_FIRST, HOOKS_MOVED } from './batch.mjs';
 
 // ADR 0010, decisions 12 and 13: what a PM runs when a batch ends in a standing Router/Worker team.
@@ -16,10 +17,12 @@ import { BATCH_FILE, AFTER_FILE, PROGRESS_FILE, RETURN_FILE, RESOLUTION_FILE, RE
 // commit: one commit per such ticket, on the batch's branch, then the batch is archived. Nothing is pushed.
 const LEDGER = 'pm-decisions.md';
 export const IN_PROGRESS = ['index.lock', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'BISECT_LOG', 'rebase-merge', 'rebase-apply'];
-// Findings after which no ticket of the batch is committed by the kit: what ran is not what was frozen.
-export const HOLD_ALL = ['BOUNDARY_CHANGED', 'PRODUCT_HEAD_MOVED', 'PRODUCT_BRANCH_CHANGED', 'GUARDIAN_NOT_CLEAN', 'HOOKS_CHANGED', 'HOOKS_WRITTEN', 'HOOK_SAW_NO_WORKER', 'CHECK_RUNS_MISSING'];
-// An after that was claimed this recently is taken to be running; an older claim is one that died.
+// Findings after which no ticket of the batch is committed by the kit: what ran is not what was frozen, or the tree it
+// would commit fails its verification and no ticket can be told apart.
+export const HOLD_ALL = ['BOUNDARY_CHANGED', 'PRODUCT_HEAD_MOVED', 'PRODUCT_BRANCH_CHANGED', 'GUARDIAN_NOT_CLEAN', 'HOOKS_CHANGED', 'HOOKS_WRITTEN', 'HOOK_SAW_NO_WORKER', 'CHECK_RUNS_MISSING', 'VERIFICATION_FAILED'];
+// A claim that names no process, an earlier kit's, is taken to be running while it is this recent.
 const CLAIM_MS = 60000;
+export const alive = pid => { if (!Number.isSafeInteger(pid) || pid === process.pid) return false; try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; } };
 export const LEFT_COMMAND = 'rw-batch.mjs left --instance <instance-root>';
 export const ABANDON = `If the batch cannot be committed by the kit, archive it with: rw-batch.mjs abort --instance <instance-root>, which saves each ticket flagged for review that no review passed as a patch under reviews/held/<run id>/ and takes it out of the work tree; then save the work each other ticket left as a patch, out of the work tree, with: ${LEFT_COMMAND}, and commit or discard the rest by hand`;
 
@@ -30,6 +33,7 @@ const exists = path => Boolean(lstatSync(path, { throwIfNoEntry: false }));
 const readJSON = path => { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; } };
 export const intact = (value, stage) => { if (!value || typeof value !== 'object') return false; const { digest: recorded, ...body } = value; return recorded === digest(body) && value.stage === stage; };
 const sealed = body => ({ ...body, digest: digest(body) });
+const failedRuns = runs => runs.filter(run => run.exit !== 0 || run.timedOut);
 const replace = (path, record) => { writeFileSync(`${path}.tmp`, JSON.stringify(record, null, 2) + '\n'); renameSync(`${path}.tmp`, path); };
 
 // The open batch of this team. Its record is a file the PM can write: what reaches a path, the ledger or a
@@ -100,7 +104,16 @@ function outcomeOf(outcome) {
   return passed ? { status: 'passed' } : { status: 'not-passed', workerStatus: plain(outcome.workerStatus ?? 'none'), verificationStatus: plain(outcome.verificationStatus ?? 'none') };
 }
 
-export function afterBatch({ teamRoot, instanceRoot, result }) {
+// ADR 0010, amendment of 2026-11-26: the batch's frozen commands the owner still confirms, run by the kit on the product as it stands.
+// No confirmed command left to run proves nothing about the tree.
+function verifyTree(instance, batch, run) {
+  const { allowed, commands, dropped } = confirmedOf(instance, batch.verificationCommands);
+  const runs = run({ productRoot: batch.productRoot, commands, frozen: batch.verificationCommands, allowed });
+  need(!runs.errors, runs.errors?.[0]?.reason);
+  return { ran: true, failed: !runs.length || failedRuns(runs).length > 0, commands: runs.map(({ command, exit, timedOut, outputDigest, tail }) => ({ command, exit, timedOut, outputDigest, tail })), dropped };
+}
+
+export function afterBatch({ teamRoot, instanceRoot, result, run = runCommands }) {
   try {
     const { instance, batch } = openBatch(teamRoot, instanceRoot), product = batch.productRoot, afterPath = join(instance, AFTER_FILE);
     // A return that is not this batch's return changes nothing: the lock stays held and the boundary open.
@@ -110,12 +123,14 @@ export function afterBatch({ teamRoot, instanceRoot, result }) {
       `${BATCH_FILE} holds no frozen review trigger list or reviewer wrappers: an earlier kit opened it. ${ABANDON}`);
     // The close is claimed before anything is changed, so two calls never close the same batch together and
     // one that died is taken up again, not judged as if someone had tampered with the batch.
-    const earlier = readJSON(afterPath), claim = () => ({ stage: 'batch-closing', runId: batch.runId, claimedAt: new Date().toISOString() });
+    const earlier = readJSON(afterPath), claim = () => ({ stage: 'batch-closing', runId: batch.runId, claimedAt: new Date().toISOString(), pid: process.pid });
     need(!exists(afterPath) || earlier?.stage === 'batch-closing' || earlier?.stage !== 'batch-closed', 'This batch was already closed; finish it with: rw-batch.mjs commit --instance <instance-root>');
     need(!exists(afterPath) || earlier?.stage === 'batch-closing', `${AFTER_FILE} cannot be read. ${ABANDON}`);
     const resumed = earlier?.stage === 'batch-closing', age = resumed ? Date.now() - Date.parse(earlier.claimedAt) : null;
-    // A claim with no readable time, or one from the future, is not a running after.
-    need(!resumed || !(age >= 0 && age <= CLAIM_MS), 'Another after is closing this batch; if none is running, run the command again in a minute');
+    // An after runs the verification commands, as long as they take: its claim stands while its process lives. A claim
+    // with no process, no readable time, or a time in the future, is not a running after.
+    need(!resumed || (earlier.pid === undefined ? !(age >= 0 && age <= CLAIM_MS) : !alive(earlier.pid)),
+      `Another after is closing this batch${earlier?.pid === undefined ? '; if none is running, run the command again in a minute' : ` (process ${plain(earlier.pid)}); it may be running the verification commands: wait for it to end`}`);
     if (resumed) replace(afterPath, claim());
     else {
       try { writeFileSync(afterPath, JSON.stringify(claim()) + '\n', { flag: 'wx' }); }
@@ -137,17 +152,35 @@ export function afterBatch({ teamRoot, instanceRoot, result }) {
     else if (guardian.verdict !== 'clean') findings.push({ code: 'GUARDIAN_ATTENTION', verdict: plain(guardian.verdict ?? 'none'), missedHaltRisk: guardian.missedHaltRisk === true, budgetGateCorrect: guardian.budgetGateCorrect === true });
 
     // What the batch changed: everything the work tree holds now that was not already there when it opened.
-    const changed = changedPaths(product).filter(path => !batch.preexisting.includes(path));
+    const changedNow = () => changedPaths(product).filter(path => !batch.preexisting.includes(path)), worked = changedNow();
+    // A path changed where the hooks live, or beside husky's stub folder, through a worker's shell: it would run at the commit.
+    const hooked = worked.filter(path => (batch.hooks?.guarded ?? []).some(guard => path === guard || path.startsWith(`${guard}/`)));
+    if (hooked.length) findings.push({ code: 'HOOKS_WRITTEN', paths: hooked });
+    const outcomes = batch.tickets.map((ticket, i) => outcomeOf(result.results[i]));
+    const { refused, checkRuns, ...hook } = hookSeen(instance, workers, batch.args.plan[0].verifierAgentType, batch.openedAt);
+    // A resumed path that still holds what "before" applied was written by the PM, not by a worker.
+    const applied = Object.assign({}, ...batch.tickets.map(ticket => ticket.resume?.content ?? {})), now = contentOf(product, Object.keys(applied));
+    if (worked.some(path => !Object.hasOwn(applied, path) || applied[path] !== now[path]) && hook.workerCalls === 0) findings.push({ code: 'HOOK_SAW_NO_WORKER' });
+    // The log does not say which ticket a run was for, so the runs are counted against every passed ticket. An earlier kit's hook logged no approved command.
+    if (batch.hookLogsCommands === true) {
+      const short = batch.verificationCommands.map(command => ({ command,
+        needed: outcomes.filter((outcome, i) => outcome.status === 'passed' && (batch.tickets[i].verificationCommands ?? batch.verificationCommands).includes(command)).length,
+        seen: checkRuns.filter(run => run === command).length })).filter(entry => entry.seen < entry.needed);
+      if (short.length) findings.push({ code: 'CHECK_RUNS_MISSING', commands: short });
+    }
+    // ADR 0010, amendment of 2026-11-26: the commands run before anything is pinned, so what is pinned is what they left; they run
+    // under the lock the batch still holds. A batch held already, or with no ticket passed, has nothing they could clear.
+    const verification = findings.some(finding => HOLD_ALL.includes(finding.code)) || !outcomes.some(outcome => outcome.status === 'passed')
+      ? { ran: false, failed: false, commands: [], dropped: [] } : verifyTree(instance, batch, run);
+    if (verification.failed) findings.push({ code: 'VERIFICATION_FAILED', commands: failedRuns(verification.commands).map(({ command, exit, timedOut }) => ({ command, exit, timedOut })), dropped: verification.dropped });
+    const changed = verification.ran ? changedNow() : worked;
     // A changed path that is a directory is a repository of its own inside the product: Git would commit a link to it, not its files.
     const nested = changed.filter(path => path.endsWith('/')), files = changed.filter(path => !path.endsWith('/'));
     if (nested.length) findings.push({ code: 'NESTED_REPOSITORY', paths: nested });
-    // A path changed where the hooks live, or beside husky's stub folder, through a worker's shell: it would run at the commit.
-    const hooked = changed.filter(path => (batch.hooks?.guarded ?? []).some(guard => path === guard || path.startsWith(`${guard}/`)));
-    if (hooked.length) findings.push({ code: 'HOOKS_WRITTEN', paths: hooked });
     const was = batch.preexistingContent ?? {}, is = contentOf(product, batch.preexisting);
     const rechanged = batch.preexisting.filter(path => Object.hasOwn(was, path) && was[path] !== is[path]);
     if (rechanged.length) findings.push({ code: 'PREEXISTING_PATH_CHANGED', paths: rechanged });
-    const tickets = batch.tickets.map((ticket, i) => ({ id: ticket.id, ...outcomeOf(result.results[i]), changedPaths: files.filter(path => within(path, ticket.paths)) }));
+    const tickets = batch.tickets.map((ticket, i) => ({ id: ticket.id, ...outcomes[i], changedPaths: files.filter(path => within(path, ticket.paths)) }));
     // ADR 0011, decision 3: the reviewers each passed ticket's changes require, by the list frozen at "before"; commit is gated on their verdicts.
     // Every changed path is pinned, flagged or not: an elective review reads what after saw, not what is there later.
     // A passed ticket that changed nothing is not committed, so it is not flagged, even when it declared itself sensitive.
@@ -158,17 +191,6 @@ export function afterBatch({ teamRoot, instanceRoot, result }) {
     const reviews = Object.fromEntries(batch.review.reviewers.map(name => [name, { tickets: tickets.filter(ticket => ticket.review?.required.includes(name)).map(ticket => ticket.id) }]).filter(([, entry]) => entry.tickets.length));
     const outside = files.filter(path => !batch.tickets.some(ticket => within(path, ticket.paths)));
     if (outside.length) findings.push({ code: 'WRITE_OUTSIDE_PATHS', paths: outside });
-    const { refused, checkRuns, ...hook } = hookSeen(instance, workers, batch.args.plan[0].verifierAgentType, batch.openedAt);
-    // A resumed path that still holds what "before" applied was written by the PM, not by a worker.
-    const applied = Object.assign({}, ...batch.tickets.map(ticket => ticket.resume?.content ?? {})), now = contentOf(product, Object.keys(applied));
-    if (changed.some(path => !Object.hasOwn(applied, path) || applied[path] !== now[path]) && hook.workerCalls === 0) findings.push({ code: 'HOOK_SAW_NO_WORKER' });
-    // The log does not say which ticket a run was for, so the runs are counted against every passed ticket. An earlier kit's hook logged no approved command.
-    if (batch.hookLogsCommands === true) {
-      const short = batch.verificationCommands.map(command => ({ command,
-        needed: tickets.filter((ticket, i) => ticket.status === 'passed' && (batch.tickets[i].verificationCommands ?? batch.verificationCommands).includes(command)).length,
-        seen: checkRuns.filter(run => run === command).length })).filter(entry => entry.seen < entry.needed);
-      if (short.length) findings.push({ code: 'CHECK_RUNS_MISSING', commands: short });
-    }
 
     // ADR 0011, decision 4: a batch whose changes need a review leaves the workers closed and the reviewers judged.
     // A batch whose commits are all held is not reviewed: no verdict could release them.
@@ -191,6 +213,8 @@ export function afterBatch({ teamRoot, instanceRoot, result }) {
     if (!boundaryClosed) next.push('The write-boundary file is missing or was changed: every subagent write and shell command is refused until a mode switch to specialist and back rebuilds it');
     const hooksTouched = findings.some(finding => ['HOOKS_CHANGED', 'HOOKS_WRITTEN'].includes(finding.code));
     if (holdAll) next.push(`No ticket of this batch is committed by the kit. ${hooksTouched ? `${HOOKS_FIRST}. ` : ''}${ABANDON}`);
+    const broke = findings.find(finding => finding.code === 'VERIFICATION_FAILED');
+    if (broke) next.push(`The kit ran the batch's verification commands on the product as it stands and ${broke.commands.length ? `${broke.commands.map(entry => `${plain(entry.command)} (${entry.timedOut ? 'timed out' : `exit ${entry.exit}`})`).join(', ')} did not pass` : `no verification command confirmed for the team was left to run (${broke.dropped.map(plain).join(' | ')})`}: the kit cannot tell which ticket broke the tree, so it commits none. Read the output in the record's verification`);
     if (findings.some(finding => finding.code === 'HOOK_SAW_NO_WORKER')) next.push('The hook logged no call of this batch\'s workers: either the session that ran the batch did not load the write-boundary hook of the team root (.claude/settings.json), so the write limits were not enforced, or the hook ran and could not append to its log (.claude/rw-write-boundary.log.jsonl), so what it decided is not known. Inspect every changed path before any commit by hand, and run the next batch from a session that loads the hook, with that log writable');
     const missing = findings.find(finding => finding.code === 'CHECK_RUNS_MISSING')?.commands ?? [];
     if (missing.length) next.push(`The checker ran ${missing.map(entry => `${plain(entry.command)} (${entry.seen} of ${entry.needed})`).join(', ')} fewer times than the tickets that passed verify with it: a ticket passed without its checker running its verification commands, and the log cannot say which. Run the verification commands yourself before any commit by hand`);
@@ -203,7 +227,7 @@ export function afterBatch({ teamRoot, instanceRoot, result }) {
     // The engine's return is kept beside the record, which carries its digest: the settlement of usage needs it, and so does anyone who audits the batch.
     const kept = JSON.parse(JSON.stringify(result));
     const record = sealed({ schemaVersion: 1, stage: 'batch-closed', runId: batch.runId, batchDigest: batch.digest, closedAt: at, status: status(),
-      account, returnDigest: digest(kept), tickets, reviews, commits, left, holdAll, hook, findings, limits: limitsReached(batch.limits, result, refused), boundaryClosed, leaseReleased, next });
+      account, returnDigest: digest(kept), tickets, reviews, commits, left, holdAll, hook, verification, findings, limits: limitsReached(batch.limits, result, refused), boundaryClosed, leaseReleased, next });
     replace(join(instance, RETURN_FILE), kept);
     replace(afterPath, record);
     return record;

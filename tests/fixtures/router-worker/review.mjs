@@ -4,13 +4,13 @@ import assert from 'node:assert/strict';
 import { writeFileSync, existsSync, mkdirSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { beforeBatch } from '../../../src/router-worker/batch.mjs';
-import { afterBatch, commitBatch } from '../../../src/router-worker/batch-close.mjs';
+import { commitBatch } from '../../../src/router-worker/batch-close.mjs';
 import { reviewBrief } from '../../../src/router-worker/review-brief.mjs';
 import { judgeReview, recordNoAnswer } from '../../../src/router-worker/review-judge.mjs';
 import { resolveBatch } from '../../../src/router-worker/review-resolve.mjs';
 import { readBoundary } from '../../../src/router-worker/write-boundary.mjs';
 import { runWorkflow, makeAgentImpl } from '../../../scripts/lib/workflow-harness.mjs';
-import { fixture, git, checksRan } from './standing-team.mjs';
+import { fixture, git, checksRan, afterBatch } from './standing-team.mjs';
 
 export const refusal = result => result.errors?.[0];
 export const ticket = (id, paths, extra = {}) => ({ id, title: `Ticket ${id}`, goal: `Goal of ${id}`, acceptance: [`${id} acceptance holds`], paths, estimate: { execTokens: 12000, checkTokens: 6000, reworkTokens: 6000 }, ...extra });
@@ -35,9 +35,9 @@ export function live(t, { commands = COMMANDS, blank = false } = {}) {
     lines: file => existsSync(join(f.root, file)) ? f.read(file).split('\n').filter(Boolean).map(line => JSON.parse(line)) : [] };
 }
 export const changed = f => git(f.product, 'status', '--porcelain', '--untracked-files=all').split('\n').filter(Boolean).map(line => line.slice(3)).sort();
-// A batch run by the real engine with mock agents; `edits` is what the workers leave in the product (a text, a Buffer of bytes,
-// or { link } for a symbolic link), `fields` other batch fields, `agents` mock agents in the place of the default ones.
-export async function runBatch(f, tickets, edits, fields = {}, agents = {}) {
+// A batch run by the real engine with mock agents and left for after; `edits` is what the workers leave in the product (a text,
+// a Buffer of bytes, or { link } for a symbolic link), `fields` other batch fields, `agents` mock agents in the place of the default ones.
+export async function engineRun(f, tickets, edits, fields = {}, agents = {}) {
   const open = await f.before({ ...batchOf(...tickets), verificationCommands: f.commands, ...fields });
   assert.equal(open.errors, undefined, JSON.stringify(open.errors));
   // The Guardian's brief names the run; settle reads it from the Guardian's transcript.
@@ -45,7 +45,11 @@ export async function runBatch(f, tickets, edits, fields = {}, agents = {}) {
   const { result } = await runWorkflow({ scriptPath: join(f.root, '.claude/workflows/run-n-rounds.js'), args: open.args, agentImpl });
   for (const [path, text] of Object.entries(edits)) { mkdirSync(join(f.product, path, '..'), { recursive: true }); if (typeof text === 'string' || Buffer.isBuffer(text)) writeFileSync(join(f.product, path), text); else symlinkSync(text.link, join(f.product, path)); }
   checksRan(f.root, open);
-  const after = afterBatch({ ...f.common, result });
+  return { open, result, guardianBrief };
+}
+// The same batch closed by after.
+export async function runBatch(f, ...args) {
+  const { open, result, guardianBrief } = await engineRun(f, ...args), after = afterBatch({ ...f.common, result });
   assert.equal(after.errors, undefined, JSON.stringify(after.errors));
   return { open, after, guardianBrief };
 }

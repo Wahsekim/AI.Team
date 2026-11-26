@@ -479,3 +479,27 @@ accepting the recommendation of that day's review of the kit.
   spot review. It refuses nothing on that account: whether a count should stop
   a batch is the owner's to decide, and ADR 0008 sets the attempts within one
   run.
+
+### 2026-11-26: after verifies the tree it would commit
+
+Status: Accepted.
+
+What the kit committed was not what any check had seen. The exec worker may
+write every ticket's paths, so a later ticket's worker could change a file
+after an earlier ticket's checker passed, and a ticket that names its own
+`verificationCommands` may have been checked by a formatter alone. Only a
+review ran the commands again. The owner decided in session on 2026-11-26,
+accepting the recommendation of that day's review of the kit.
+
+`after` runs the batch's whole frozen command list, as far as the owner still
+confirms it, on the product as it stands, under the lock the batch holds, and
+records the run. It does so before it pins content and plans commits, so what
+is pinned is what the commands left. A command that fails or times out, or no
+confirmed command left to run, holds every commit (`VERIFICATION_FAILED`): the
+kit cannot tell which ticket broke the tree. A batch another finding already
+holds, or one with no ticket passed, runs no command. The run does not verify
+the intermediate commits or each ticket alone. Since `after` now runs as long
+as the product's checks, its claim on the close names its process: a claim
+whose process is alive is running, however old. The write grant per ticket
+and a snapshot per ticket are not adopted, since the hook has no ticket
+identity.

@@ -6,11 +6,10 @@ import { writeFileSync, mkdirSync, existsSync, symlinkSync, rmSync } from 'node:
 import { join, dirname } from 'node:path';
 import { spawnSync, execFileSync } from 'node:child_process';
 import { BATCH_FILE, abortBatch } from '../src/router-worker/batch.mjs';
-import { afterBatch } from '../src/router-worker/batch-close.mjs';
 import { readLease } from '../src/router-worker/lease.mjs';
 import { readBoundary, decideCall } from '../src/router-worker/write-boundary.mjs';
 import { runWorkflow, makeAgentImpl } from '../scripts/lib/workflow-harness.mjs';
-import { git, checksRan } from './fixtures/router-worker/standing-team.mjs';
+import { git, checksRan, afterBatch } from './fixtures/router-worker/standing-team.mjs';
 import { live, ticket, batchOf, refusal } from './fixtures/router-worker/review.mjs';
 
 const [EXEC, CHECK, GUARD] = ['exec', 'check', 'guard'].map(duty => `tag-list-fixture-worker-${duty}`);

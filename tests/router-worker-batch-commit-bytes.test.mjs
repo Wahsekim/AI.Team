@@ -3,9 +3,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { afterBatch } from '../src/router-worker/batch-close.mjs';
 import { runWorkflow, makeAgentImpl } from '../scripts/lib/workflow-harness.mjs';
-import { git, checksRan } from './fixtures/router-worker/standing-team.mjs';
+import { git, checksRan, afterBatch } from './fixtures/router-worker/standing-team.mjs';
 import { live, ticket, batchOf, refusal } from './fixtures/router-worker/review.mjs';
 
 const write = (root, path, text, mode) => { mkdirSync(dirname(join(root, path)), { recursive: true }); writeFileSync(join(root, path), text, mode ? { mode } : undefined); };
