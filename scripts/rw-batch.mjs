@@ -6,7 +6,9 @@
 // BATCH.json: {"tickets": [{"id", "title", "goal", "acceptance": [...], "paths": [...], "estimate": {"execTokens", "checkTokens", "reworkTokens"}}],
 //              "verificationCommands": [...], "sensitivePaths": [...], "nextLifecycleNumber": n, "runId"?, "date"?}
 // abort --instance <instance-root>
-//   Clears a batch that will not be run, or what a "before" that died left behind. Also ends a review.
+//   Clears a batch that will not be run, or what a "before" that died left behind. Also ends a review. A batch that
+//   "after" closed is archived; each ticket flagged for review that no review passed is saved as a patch under
+//   reviews/held/<run id>/ and taken out of the work tree.
 // after RESULT.json --instance <instance-root>
 //   RESULT.json is the engine's return. Matches it against the frozen batch, compares the product with the
 //   tickets' paths, closes the write boundary, releases the lock and plans the commits. Exit 2 when in review.

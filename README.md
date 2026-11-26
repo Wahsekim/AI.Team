@@ -230,7 +230,8 @@ opens the write limits; `after` matches the engine's return against what was
 frozen, finds what was written outside the tickets' paths and closes the batch, and
 holds every commit when the hook logged no call of the batch's workers or fewer checker runs than the passed tickets need;
 `commit` makes one commit per ticket that passed; `abort` clears a batch that
-will not run; a ticket's `resume` names a patch of work an earlier batch left, which `before` applies so the
+will not run, and for a closed batch saves each ticket that was flagged and passed no review as a patch and takes it out of the work tree;
+`before` names in the ledger the commits made outside the kit since the last batch; a ticket's `resume` names a patch of work an earlier batch left, which `before` applies so the
 checker, the review and `commit` treat it as the ticket's own; a ticket may name the subset of the batch's
 `verificationCommands` its workers run; `commit` stops when a commit hook rewrites a ticket's bytes; only a problem
 the Guardian finds in the run (runaway, a dropped failure) or the engine's trace of its budget-gate decisions shows holds a batch, and the engine tells the Guardian

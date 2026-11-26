@@ -20,7 +20,7 @@ export const IN_PROGRESS = ['index.lock', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REV
 export const HOLD_ALL = ['BOUNDARY_CHANGED', 'PRODUCT_HEAD_MOVED', 'PRODUCT_BRANCH_CHANGED', 'GUARDIAN_NOT_CLEAN', 'HOOKS_CHANGED', 'HOOKS_WRITTEN', 'HOOK_SAW_NO_WORKER', 'CHECK_RUNS_MISSING'];
 // An after that was claimed this recently is taken to be running; an older claim is one that died.
 const CLAIM_MS = 60000;
-export const ABANDON = 'If the batch cannot be committed by the kit, archive it with: rw-batch.mjs abort --instance <instance-root>, then commit or discard its changes by hand';
+export const ABANDON = 'If the batch cannot be committed by the kit, archive it with: rw-batch.mjs abort --instance <instance-root>, which saves each ticket flagged for review that no review passed as a patch under reviews/held/<run id>/ and takes it out of the work tree; then commit or discard the rest of its changes by hand';
 
 export class Refusal extends Error {}
 const need = (condition, reason) => { if (!condition) throw new Refusal(reason); };
@@ -211,7 +211,7 @@ export function afterBatch({ teamRoot, instanceRoot, result }) {
 
 // The plan of a batch: after's commits, or for a reviewed batch the commits of its resolution, checked again against
 // the verdicts, after's plan and the held patches on disk.
-const HELD_REASONS = ['rejected', 'review-not-obtained', 'verification-failed-after-removal'];
+export const HELD_REASONS = ['rejected', 'review-not-obtained', 'verification-failed-after-removal'];
 function resolutionOf(instance, batch, after) {
   const { reasons, flagged } = reviewGate(instance, batch, after);
   if (!flagged) return { plan: after.commits, held: [], wrote: [], reviewed: false };

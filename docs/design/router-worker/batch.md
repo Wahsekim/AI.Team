@@ -155,10 +155,29 @@ budget per ticket. Those come from the team.
    printed. Its `args` are the arguments the PM passes to `run-n-rounds`. It
    also holds what "after" will need: the branch and commit, the paths that
    were already changed, each ticket's paths, the sensitive paths, the
-   verification commands, the limits.
+   verification commands, the limits. It holds `outsideCommits`, the commits
+   made outside the kit (below): `{since: {runId, commit}, commits: [id,
+   ...]}`, oldest first, or `{since, commits: null, reason}` when they could
+   not be told (`since` is null when no batch was archived on the branch).
 
 Any refusal after step 4 releases the lock, and closes the boundary if it was
 opened. A patch already applied in step 8 is taken back out of the work tree.
+
+**Commits made outside the kit** ([ADR 0011](../../../decisions/0011-router-worker-batch-review.md),
+amendment of 2026-11-26) are read with the lock held. The newest archived
+batch whose record is on the same branch (by `openedAt`) ended at its last kit
+commit (`commit.json`, or `commits.json` for a batch aborted part-way through
+`commit`), or at its start commit when the kit committed nothing. When that end
+is an ancestor of HEAD, every commit between them was made outside `commit`:
+by hand, by a merge, or during the batch itself. Their ids are frozen in the
+record, and once the record is written one ledger line names them for the
+owner's spot review: `BATCH <run> COMMITS MADE OUTSIDE THE KIT (owner spot
+review): <n> commit(s) on <branch> since batch <run> ended at <commit> (<the
+first ten ids>, ...)`. There is no line when there are none. With no archived
+batch on the branch, or an end that is not an ancestor of HEAD (the branch was
+rebuilt, or the commit is gone), the record says the comparison was not
+possible, and nothing is refused. A batch aborted before `after` is not
+archived, so the next batch names the same commits again.
 
 ## After
 
@@ -219,7 +238,11 @@ dead. The take-over is not exclusive: an `after` that runs for more than a
 minute could be taken over while it still runs.
 
 "All held" means the kit commits nothing of that batch: what ran is not what
-was frozen, and the PM or the owner judges it by hand.
+was frozen, and the PM or the owner judges it by hand. Such a batch is not put
+in review. Each ticket still keeps the reviewers it needs (`tickets[].review`).
+`next` names `abort`, which archives the batch and takes each ticket flagged for
+review out of the work tree as a patch (see "Abort"): only the rest of the
+batch's changes may then be committed by hand.
 
 ## The workers' shell
 
@@ -778,9 +801,9 @@ what the failure holds. A ticket a recorded failure holds is not compared with
 its pinned content, since a command may have changed it.
 
 **Abort after resolve** re-applies nothing: the held tickets stay patches under
-`reviews/held/<run id>/`, the removed paths stay removed, and the note says so.
-To take a held ticket back, `git apply reviews/held/<run id>/<ticket>.patch`
-from the product root on the batch's start commit.
+`reviews/held/<run id>/`, the removed paths stay removed, and the note names
+each with `by: "resolve"`. To take a held ticket back, name its patch as the
+`resume` of a ticket of a later batch (see "Resuming left work").
 
 ## Periodic review
 
@@ -861,14 +884,21 @@ line per judgment.
 A batch that `after` closed and `commit` refuses (all commits held, the branch
 moved, a hook changed a commit, the records were edited) is not stuck:
 `abort` closes the write boundary and releases the lock if `after` did not get
-that far, archives the records under `batches/<run id>/` with a note, writes
-"ARCHIVED WITHOUT COMMIT" to `pm-decisions.md`, and commits nothing. Commits
-the kit had already made for the batch stay on the branch and are named. The
-rest of what the batch changed is still in the product work tree; the PM or the
-owner commits it by hand on the working branch, or discards it. `abort`
+that far, takes out of the work tree each ticket flagged for review that no
+review passed (see "Abort"), archives the records under `batches/<run id>/`
+with a note, writes "ARCHIVED WITHOUT COMMIT" to `pm-decisions.md`, and
+commits nothing. Commits the kit had already made for the batch stay on the
+branch and are named. The rest of what the batch changed is still in the
+product work tree; the PM or the owner commits it by hand on the working
+branch, or discards it. A flagged ticket that `abort` could not take out is
+named as left in the work tree with no review passed. The PM saves it as a
+patch, discards it, and resumes it in a later batch; it is never committed by
+hand. `abort`
 releases any lock this team holds, so it must not be run while a `commit` of
 the same team is running. The next "before" then needs a
-clean repository or "start as is", as after any batch that left paths behind.
+clean repository or "start as is", as after any batch that left paths behind,
+and it names every commit made by hand since (see "What before does, in
+order").
 
 ## Commit hooks
 
@@ -929,6 +959,44 @@ that is not closed, refuses and names `abort`.
 Its output's `lockReleased` is `true` when it released this team's lock,
 `"already-free"` when no lock was held (`after` releases it when it closes a
 batch), and `false` when the lock is held by another team or cannot be read.
+
+**A batch `after` closed** ([ADR 0011](../../../decisions/0011-router-worker-batch-review.md),
+amendment of 2026-11-26), in review or not, resolved or not, is archived
+instead (see "When the kit will not commit a batch"). Before that, `abort`
+holds each ticket that `after` recorded as needing a reviewer
+(`tickets[].review.required`, kept when a finding holds every commit and the
+batch is not put in review) and that has no passed verdict from each of those
+reviewers, and each ticket `resolve` already held. The reason is `rejected`,
+`review-not-obtained`, `not-reviewed` (a required reviewer has no final
+verdict, or the verdicts cannot be read), or the reason `resolve` recorded.
+With the lock taken, each held ticket whose changed paths (as `after` recorded
+them) still show as changed is saved and removed with `resolve`'s own
+functions: a binary patch of those paths against the product's HEAD at
+`reviews/held/<run id>/<ticket>.patch`, then each path back to HEAD. The
+product's HEAD is the batch's start unless someone, or the kit, committed
+since. A patch already at that place is never written over: one with the same
+bytes (an `abort` that died after saving it) is used, one with other bytes
+leaves the ticket in the tree. A ticket `resolve` held is out of the tree; its
+patch is named and not touched. Unflagged tickets, and flagged ones every
+required reviewer passed, stay in the tree.
+
+`abort` still archives the batch when a ticket cannot be taken out: when the
+lock cannot be taken, a Git operation is in progress in the product, the
+patch cannot be made or saved, or a patch with other bytes is already there.
+It then removes nothing of that ticket, and names it as left in the work tree
+with no review passed. A removal that fails part-way, after its patch was
+saved, is named the same way, with the patch.
+
+The note `abandoned.json` lists them in `held`, one entry per ticket by where
+its work is: `{ticket, reason, state: "patch", patch, by: "abort"|"resolve"}`;
+`{ticket, reason, state: "in-tree", paths, problem, patch?}` for a ticket left in
+the tree; `{ticket, reason, state: "not-in-tree"}` for one whose paths no longer
+show as changed and that has no patch (committed or discarded by hand). The
+ledger line names the same tickets, with each patch, in sentences that start
+"Held as patches, out of the work tree", "LEFT IN THE WORK TREE with no review
+passed" and "Flagged for review, not passed, and no longer in the work tree".
+A held patch comes back through the `resume` of a ticket of a later batch (see
+"Resuming left work").
 
 ## What decides the limits
 
@@ -998,7 +1066,13 @@ without this field it could only be committed by hand, unchecked.
 
 The PM saves the left work as a patch in the team's folder
 (`git add -A -N && git diff --binary HEAD > <team>/handoff/<ticket>/left.patch`),
-cleans the product, and names the patch in the ticket's `resume`. "before":
+cleans the product, and names the patch in the ticket's `resume`. A patch
+`resolve` or `abort` held is already such a file:
+`"resume": "reviews/held/<run id>/<ticket>.patch"` brings the held work back as
+the ticket's, to be checked and reviewed again. It is checked like any other:
+the patch of a held ticket that deleted or renamed a file, or created an
+executable one, is refused, and the PM makes it again from its edits and new
+files and declares the moves and deletes on the ticket. "before":
 
 - accepts `resume` only as a relative path in the team's folder, outside
   `kit/`, with no `.` or `..` part, naming a regular file (a link is not
@@ -1116,12 +1190,21 @@ The limits not being the ones the ledger binds is refused with its own code,
   roles keep the shell their own permissions give them.
 - **The periodic review reads files as they stand, not each commit's diff.** A
   path a later ticket changed again is read in its later state, and a path
-  deleted since is not read. Commits made by hand, outside `commit`, are not
-  counted.
+  deleted since is not read. Commits made by hand, outside `commit`, are named
+  in the ledger by the next `before` for the owner's spot review, but the
+  periodic review does not count or read them.
+- **`abort` weighs only the reviewers `after` required.** An elective review
+  (`review-brief --ticket`) is not weighed: a ticket that only an elective
+  reviewer rejected stays in the work tree after `abort`.
+- **The commits made outside the kit are told by the archive's end commit**,
+  which a PM session can rewrite with the archive. A branch rebuilt since the
+  last archived batch, or one with no archived batch, is not compared.
 - **The brief's verification runs without the lock.** Nothing else starts while
   the batch is in review, but the PM's own session can still change the product.
 - **A ticket that did not pass keeps its changes in the work tree.** They are
-  not saved aside and removed; ADR 0011 does that for a rejected ticket.
+  not saved aside and removed; ADR 0011 does that for a rejected ticket, and
+  `abort` for a flagged one no review passed. A ticket that did not pass is
+  never flagged, whatever paths it changed.
 - **Git-ignored files a worker wrote are invisible**, inside or outside the
   tickets' paths. ADR 0010 tolerates ignored build output; nothing compares it
   with the state before the batch.
