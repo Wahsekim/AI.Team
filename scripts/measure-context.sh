@@ -1,8 +1,9 @@
 #!/bin/bash
-# measure-context.sh — measure the cold-start prompt load of the PM wake set
-# and a representative worker read set (remediation plan P1-05).
+# measure-context.sh — measure the cold-start prompt load of the PM wake set,
+# a representative worker read set (remediation plan P1-05) and the
+# Router/Worker runbook a PM reads for every batch.
 #
-# Usage: scripts/measure-context.sh [--budget-pm TOKENS] [--budget-worker TOKENS] [ROOT]
+# Usage: scripts/measure-context.sh [--budget-pm TOKENS] [--budget-worker TOKENS] [--budget-runbook TOKENS] [ROOT]
 #
 # Tokens are ESTIMATED as bytes/4 (order-of-magnitude gauge, not billing).
 # Budgets are RATCHETS: exceeding one exits 1 so doc growth is a deliberate
@@ -17,11 +18,13 @@ set -u
 
 BUDGET_PM=25000
 BUDGET_WORKER=10000
+BUDGET_RUNBOOK=6000
 ROOT="."
 while [ $# -gt 0 ]; do
   case "$1" in
     --budget-pm) BUDGET_PM="${2:-}"; shift 2 ;;
     --budget-worker) BUDGET_WORKER="${2:-}"; shift 2 ;;
+    --budget-runbook) BUDGET_RUNBOOK="${2:-}"; shift 2 ;;
     -*) echo "FAIL - args: unknown flag '$1'"; exit 1 ;;
     *) ROOT="$1"; shift ;;
   esac
@@ -118,6 +121,9 @@ for WRAPPER in $(live_wrappers); do
   # shellcheck disable=SC2086
   measure_set "Worker read set ($WRAPPER + $ROLE_FILE)" "$BUDGET_WORKER" "$WRAPPER" "$ROLE_FILE" $SHARED_SET
 done
+
+echo
+measure_set "Router/Worker runbook" "$BUDGET_RUNBOOK" docs/design/router-worker/batch.md
 
 if [ "$MISSING" -gt 0 ]; then
   echo "RESULT: CONTEXT-MEASUREMENT-INCOMPLETE ($MISSING required file(s) not found; totals above are partial)"

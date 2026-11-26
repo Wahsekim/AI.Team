@@ -61,7 +61,7 @@ Implemented:
 - `src/router-worker/preflight.mjs` and `scripts/preflight-router-worker.mjs`:
   separately anchored approval-file checks, local source-reference consistency,
   declared-read-graph measurement and refusal on drift/overflow. See the
-  [offline preflight contract](preflight-contract.md). The 24 preflight tests use
+  [offline preflight contract](../preflight-contract.md). The 24 preflight tests use
   synthetic sources and include the pinned check method end-to-end.
 
 - `config/router-worker/coverage.json` and `src/router-worker/coverage.mjs`:
@@ -71,27 +71,27 @@ Implemented:
 - `src/router-worker/draft.mjs` and `scripts/team-mode.mjs`: preview, exclusive
   inert JSON draft publication, and consistency checks. Reuse the unchanged
   bootstrap's mechanical portion in disposable scratch space; do not install
-  wrappers or pretend runtime gates ran. See [draft contract](coverage-and-drafts.md).
+  wrappers or pretend runtime gates ran. See [draft contract](../coverage-and-drafts.md).
 - `src/router-worker/candidate.mjs`: reuse the existing Git snapshot reader to
   bind actual candidate changes and report identities/command coverage. Reject
   scope/security violations and stale candidates; no check execution or acceptance.
-  See [candidate binding contract](candidate-binding.md).
+  See [candidate binding contract](../candidate-binding.md).
 - `src/router-worker/retries.mjs`: source-bound, immutable offline retry journal
   with serial prepare/start/close, idempotent events, original-duty session
   continuity, local empty-loop checks and sticky stops. See
-  [retry accounting contract](retry-accounting.md). It does not persist events,
+  [retry accounting contract](../retry-accounting.md). It does not persist events,
   resume a real model session or authorize a dispatch.
 - `src/router-worker/retry-store.mjs`: separate Node 24+ SQLite persistence,
   atomic event/head updates, version checks and lost-response replay. The
   read-only `scripts/inspect-router-worker-retries.mjs` never initializes a file.
-  See [persistence contract](retry-persistence.md). This is journal concurrency,
+  See [persistence contract](../retry-persistence.md). This is journal concurrency,
   not a product lock or authorization to invoke a model.
 - `src/router-worker/retry-registry.mjs`: one stable repo/ticket store under a
   separately retained anchor, permanent allocation claims, database identity
   binding and retained prefix checkpoints. Partial rollback and replacement
   detection do not imply whole-registry rollback protection or product ownership.
   `scripts/inspect-router-worker-registry.mjs` checks this layer read-only; the
-  original raw-store inspector remains unchanged. See [registry contract](retry-registry.md).
+  original raw-store inspector remains unchanged. See [registry contract](../retry-registry.md).
 - `bindCheckEvidence` in `candidate.mjs`: validates host gate-record consistency
   against the frozen stack recipe and current candidate. Origin remains unverified.
   Three offline integration tests use a real local checker, failed candidate and

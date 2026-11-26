@@ -50,7 +50,7 @@ failure of the existing specialist mode.
 
 - Category: correctness / recovery usability.
 - Priority: P2, moderate. Status: fixed with regression.
-- Location: create/open entries in [retry-registry.mjs](../../../src/router-worker/retry-registry.mjs).
+- Location: create/open entries in [retry-registry.mjs](../../../../src/router-worker/retry-registry.mjs).
 - Before fix: an isolated process simulating Node 22 created a registry, then
   attempted ticket registration. SQLite returned `CAPABILITY_MISSING`, but
   `registry.json`, the ticket claim and ticket directory already existed. Normal

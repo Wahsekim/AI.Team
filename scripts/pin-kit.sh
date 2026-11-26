@@ -12,7 +12,8 @@
 # validate-team.sh fails the deployment until every item is ticked ('- [x]',
 # ported or declined with a note), so a missed port cannot stay silent.
 #
-# Write order: review items, then the engine copy, then kit.lock. kit.lock is
+# Write order: review items, then the engine copy, then the read scope
+# (scope-kit-reads.mjs), then kit.lock. kit.lock is
 # the commit point, so a run that fails part-way leaves the old pin and a retry
 # repeats the remaining steps; items already recorded (open or ticked) are not
 # appended again.
@@ -50,7 +51,22 @@ DIRTY=$(git -C "$KIT" status --porcelain | cut -c4- | head -5 | tr '\n' ' ')
 [ -z "$DIRTY" ] || failpin "kit: kit/ has local changes; the kit is read-only for deployments: $DIRTY"
 [ -f "$KIT/$ENGINE" ] || failpin "kit: kit/$ENGINE missing — broken kit checkout"
 
+# Kit tests, CI and development history stay out of the team's searches and reads. An instance
+# deployed before that gets them here, also when its pin is unchanged.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+scope_reads() {
+  if [ "$DRY" = 1 ]; then
+    node "$SCRIPT_DIR/scope-kit-reads.mjs" --check "$ROOT" >/dev/null 2>&1 \
+      || echo "PLAN - .ignore, .claude/settings.json: would keep kit tests and development history out of searches and reads"
+    return 0
+  fi
+  SOUT=$(node "$SCRIPT_DIR/scope-kit-reads.mjs" "$ROOT" 2>&1) \
+    || { printf '%s\n' "$SOUT"; failpin "scope: kit development material could not be kept out of reads; the pin is unchanged"; }
+  printf '%s\n' "$SOUT"
+}
+
 if [ "$OLD" = "$NEW" ] && cmp -s "$ROOT/$ENGINE" "$KIT/$ENGINE"; then
+  scope_reads
   echo "RESULT: KIT-PIN-UNCHANGED — kit.lock already records $NEW"
   exit 0
 fi
@@ -86,6 +102,7 @@ else
 fi
 
 if [ "$DRY" = 1 ]; then
+  scope_reads
   echo "RESULT: DRY-RUN — would pin $OLD -> $NEW and re-copy $ENGINE; nothing written."
   exit 0
 fi
@@ -114,6 +131,7 @@ fi
 mkdir -p "$ROOT/.claude/workflows" || failpin "mkdir: .claude/workflows failed"
 TMP="$ROOT/$ENGINE.pin-tmp.$$"
 if ! { cp "$KIT/$ENGINE" "$TMP" && mv "$TMP" "$ROOT/$ENGINE"; }; then rm -f "$TMP"; failpin "copy: $ENGINE failed; the pin is unchanged"; fi
+scope_reads
 TMP="$ROOT/kit.lock.pin-tmp.$$"
 if ! { printf 'instance_schema=1\nkit_commit=%s\n' "$NEW" > "$TMP" && mv "$TMP" "$ROOT/kit.lock"; }; then
   rm -f "$TMP"; failpin "write: kit.lock failed"

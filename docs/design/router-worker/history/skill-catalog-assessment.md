@@ -4,7 +4,7 @@ Assessment date: 2026-11-06. English translation: 2026-11-10.
 Historical status: candidate selection, not installation, renderer/lock changes
 or individual adoption approval. Later implementation status is recorded separately.
 
-Companion: [implementation design](README.md). This assessment does not change
+Companion: [implementation design](../README.md). This assessment does not change
 the serial first release, PM-only commits, independent verification or permissions.
 
 ## 1. Inspection scope and evidence limits

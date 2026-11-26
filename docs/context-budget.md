@@ -19,7 +19,7 @@ root. Each file is read from the instance if it exists there, otherwise from
 instance `CLAUDE.md` and `kit/CLAUDE.md`. A required file found in neither root
 ends the run with `CONTEXT-MEASUREMENT-INCOMPLETE` (exit 1). The default budgets
 are the kit's own; an instance with larger role files or profiles passes its
-recorded budgets with `--budget-pm` and `--budget-worker`.
+recorded budgets with `--budget-pm`, `--budget-worker` and `--budget-runbook`.
 
 ## Measured baseline (2026-07-16, fresh kit)
 
@@ -27,6 +27,13 @@ recorded budgets with `--budget-pm` and `--budget-worker`.
 |---|---|---|---|
 | PM wake set | CLAUDE.md, profiles x2, charter, agents/pm.md, meta-rules, workflow-catalog, lessons index | ~17,900 | 25,000 |
 | Worker read set (backend) | wrapper, role file, profiles x2, templates.md, meta-rules, verify-discipline, lessons index | ~8,300 | 10,000 |
+| Router/Worker runbook (2026-11-26) | `docs/design/router-worker/batch.md` | ~4,000 | 6,000 |
+
+The runbook is what the PM of a Router/Worker team reads for every batch
+(`CLAUDE.md` PM Start Protocol step 7). It holds the steps and the commands;
+the detail it links to is in `docs/design/router-worker/batch-reference.md`,
+which is read only when a step needs it and is not measured. When the runbook
+nears its budget, move detail to the reference instead of raising the budget.
 
 Notes on conservatism: ledgers (`lifecycle`, `pm-decisions`, `memory/pm.md`)
 are partial reads by protocol (last N entries/lines) and are excluded;

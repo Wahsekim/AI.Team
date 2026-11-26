@@ -321,7 +321,7 @@ function dieAt(n, roots, action) {
 test('a switch that dies at any write is undone by recover: the tree is as before, the lock is free, the next switch is possible', t => {
   const f = fixture(t), roots = [f.root + '/', f.product + '/'], keep = join(f.base, 'snapshot');
   // The team has settings of its own, so every rollback has a file to put back.
-  writeFileSync(join(f.root, '.claude/settings.json'), JSON.stringify({ env: { KEEP: '1' } }, null, 4) + '\n');
+  writeFileSync(join(f.root, '.claude/settings.json'), JSON.stringify({ env: { KEEP: '1' }, permissions: { deny: ['Read(./kit/tests/**)'] } }, null, 4) + '\n');
   const entries = dir => readdirSync(dir).filter(name => name !== 'kit');
   const save = () => { rmSync(keep, { recursive: true, force: true }); mkdirSync(keep); for (const name of entries(f.root)) cpSync(join(f.root, name), join(keep, name), { recursive: true }); };
   const unlock = () => { for (const name of readdirSync(join(f.product, '.git'))) if (name.startsWith('rw-ownership-lease')) rmSync(join(f.product, '.git', name)); };
@@ -376,7 +376,7 @@ test('a switch that dies at any write is undone by recover: the tree is as befor
 
 test('the switch installs the write-limit hook: between batches no worker may write, a governance role is not judged; switching back removes it', t => {
   const f = fixture(t), settings = join(f.root, '.claude/settings.json'), other = { matcher: 'Bash', hooks: [{ type: 'command', command: 'echo watchdog' }] };
-  writeFileSync(settings, JSON.stringify({ env: { KEEP: '1' }, hooks: { PreToolUse: [other], Stop: [other] } }));
+  writeFileSync(settings, JSON.stringify({ env: { KEEP: '1' }, permissions: { deny: ['Read(./kit/tests/**)'] }, hooks: { PreToolUse: [other], Stop: [other] } }));
   const before = readFileSync(settings, 'utf8');
   assert.equal(f.apply().errors, undefined);
   const boundary = readBoundary(f.root), wrappers = Object.fromEntries(['exec', 'check', 'guard'].map(duty => [duty, `tag-list-fixture-worker-${duty}`]));
@@ -409,11 +409,11 @@ test('the switch installs the write-limit hook: between batches no worker may wr
   assert.equal(readFileSync(settings, 'utf8'), afterRoundTrip, 'byte for byte'); assert.deepEqual(readdirSync(join(f.root, 'holiday')), ['router-worker']);
   // A hook of the team's that shares an entry with ours is kept, in and out.
   const shared = fixture(t), ours = { type: 'command', command: 'node "/old/kit/scripts/hooks/rw-write-boundary.mjs"' }, audit = { type: 'command', command: 'echo USER-AUDIT' };
-  writeFileSync(join(shared.root, '.claude/settings.json'), JSON.stringify({ hooks: { PreToolUse: [{ matcher: 'Write|Edit|NotebookEdit|MultiEdit|Bash', hooks: [ours, audit] }] } }));
+  writeFileSync(join(shared.root, '.claude/settings.json'), JSON.stringify({ permissions: { deny: ['Read(./kit/tests/**)'] }, hooks: { PreToolUse: [{ matcher: 'Write|Edit|NotebookEdit|MultiEdit|Bash', hooks: [ours, audit] }] } }));
   assert.equal(shared.apply().errors, undefined);
   const kept = JSON.parse(shared.read('.claude/settings.json')).hooks.PreToolUse;
   assert.deepEqual(kept[0].hooks, [audit]); assert.equal(kept.length, 2, 'the old registration is replaced, not doubled');
-  writeFileSync(join(shared.root, '.claude/settings.json'), JSON.stringify({ hooks: { PreToolUse: [{ matcher: 'X', hooks: [] }, ...kept] } }));
+  writeFileSync(join(shared.root, '.claude/settings.json'), JSON.stringify({ permissions: { deny: ['Read(./kit/tests/**)'] }, hooks: { PreToolUse: [{ matcher: 'X', hooks: [] }, ...kept] } }));
   assert.equal(shared.apply('specialist', {}).errors, undefined); assert.deepEqual(JSON.parse(shared.read('.claude/settings.json')).hooks.PreToolUse, [{ matcher: 'X', hooks: [] }, { ...kept[0] }], 'an entry of the team\'s that was already empty is kept');
   // A worker is named as the roster names it, not by a convention.
   const renamed = fixture(t); assert.equal(renamed.apply().errors, undefined);
@@ -438,11 +438,12 @@ test('the switch installs the write-limit hook: between batches no worker may wr
   // Disabled hooks stop a team from entering Router/Worker mode, never from leaving it.
   const leaving = fixture(t); assert.equal(leaving.apply().errors, undefined); writeFileSync(join(leaving.root, '.claude/settings.local.json'), '{"disableAllHooks":true}');
   assert.equal(leaving.apply('specialist', {}).errors, undefined);
-  const linked = fixture(t); writeFileSync(join(linked.base, 'elsewhere.json'), '{}'); symlinkSync(join(linked.base, 'elsewhere.json'), join(linked.root, '.claude/settings.json'));
+  const linked = fixture(t); writeFileSync(join(linked.base, 'elsewhere.json'), '{}'); rmSync(join(linked.root, '.claude/settings.json')); symlinkSync(join(linked.base, 'elsewhere.json'), join(linked.root, '.claude/settings.json'));
   assert.match(refusal(linked.propose()).reason, /not a regular file/);
-  // A team with no settings file gets one, and loses it again.
-  const bare = fixture(t); assert.equal(bare.apply().errors, undefined); assert.ok(existsSync(join(bare.root, '.claude/settings.json')));
-  assert.equal(bare.apply('specialist', {}).errors, undefined); assert.equal(existsSync(join(bare.root, '.claude/settings.json')), false);
+  // A team whose settings hold only bootstrap's read rule gets the hook, and is left with the read rule alone.
+  const bare = fixture(t), bootstrapped = JSON.parse(bare.read('.claude/settings.json'));
+  assert.equal(bare.apply().errors, undefined); assert.equal(JSON.parse(bare.read('.claude/settings.json')).hooks.PreToolUse.length, 1);
+  assert.equal(bare.apply('specialist', {}).errors, undefined); assert.deepEqual(JSON.parse(bare.read('.claude/settings.json')), bootstrapped);
 });
 
 test('a product root a quoted shell command cannot hold is refused at the switch, before anything else is checked', t => {

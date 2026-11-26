@@ -46,11 +46,11 @@ Review in this order; each layer has focused tests and a contract:
 | Layer | Implementation / tests | Contract |
 |---|---|---|
 | Input and methods | `compile.mjs`, `methods.mjs`, `adapters/blast-radius.mjs`; compile/method tests | [Implementation status](implementation-status.md) |
-| Source preflight | `preflight.mjs`; preflight tests | [Preflight](preflight-contract.md) |
-| Draft topology | `coverage.mjs`, `draft.mjs`; draft tests | [Coverage/drafts](coverage-and-drafts.md) |
-| Candidate and records | `candidate.mjs`; candidate/offline-flow tests | [Candidate binding](candidate-binding.md) |
-| Retry transitions | `retries.mjs`; retry tests | [Retry accounting](retry-accounting.md) |
-| Durable storage | `retry-store.mjs`, `retry-registry.mjs`; store/registry tests | [Persistence](retry-persistence.md), [registry](retry-registry.md) |
+| Source preflight | `preflight.mjs`; preflight tests | [Preflight](../preflight-contract.md) |
+| Draft topology | `coverage.mjs`, `draft.mjs`; draft tests | [Coverage/drafts](../coverage-and-drafts.md) |
+| Candidate and records | `candidate.mjs`; candidate/offline-flow tests | [Candidate binding](../candidate-binding.md) |
+| Retry transitions | `retries.mjs`; retry tests | [Retry accounting](../retry-accounting.md) |
+| Durable storage | `retry-store.mjs`, `retry-registry.mjs`; store/registry tests | [Persistence](../retry-persistence.md), [registry](../retry-registry.md) |
 
 Implementation names above are relative to `src/router-worker/`; tests are
 `tests/router-worker-*.test.mjs`. The CLI entry points live under `scripts/`.

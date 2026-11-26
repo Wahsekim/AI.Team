@@ -95,6 +95,11 @@ Single-source values (never restate — `agents/_shared/README.md`): models and
 reasoning live ONLY in the roster; tier bands ONLY in `agents/pm.md` Rules;
 budget/halt axes ONLY in the charter table.
 
+A deployed session works from the operating documents above. The ADRs in
+`decisions/` record why a rule exists: open one only when an operating
+document sends you to a specific decision. Dated development records
+(`docs/design/**/history/`) and `tests/` are the kit's own, not the team's.
+
 ## PM Start Protocol
 
 When the owner says `start {{PROJECT_NAME | localized at bootstrap}}` or

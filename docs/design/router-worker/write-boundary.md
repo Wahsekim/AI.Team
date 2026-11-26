@@ -38,7 +38,7 @@ inside subagents and names the subagent in `agent_type`.
 
 | Call | Decision |
 |---|---|
-| a write tool on the team's `profiles/team-mode.json`, from any session, the main session included | denied: only the owner changes the limits, with `team-mode.mjs limits` ([batch.md](batch.md#what-decides-the-limits)) |
+| a write tool on the team's `profiles/team-mode.json`, from any session, the main session included | denied: only the owner changes the limits, with `team-mode.mjs limits` ([batch-reference.md](batch-reference.md#what-decides-the-limits)) |
 | neither a write tool nor Bash, or no `agent_type` (the main session) | allowed |
 | a subagent, and the boundary file is missing, unreadable or does not match its digest | denied, for a write and for a shell command |
 | a subagent that is not a wrapper of the run (governance roles outside a review) | allowed |
@@ -65,7 +65,7 @@ reports to the owner. The exec worker's approved call carries none, since its
 moves and deletions name product paths. In a disposable copy Bash is matched only so that
 its calls are logged, and is not judged while the boundary file is intact. In a standing team the workers'
 shell is judged against the commands of the open batch
-([details](batch.md#the-workers-shell)): the decision logged is then `approve`
+([details](batch-reference.md#the-workers-shell)): the decision logged is then `approve`
 or `deny`. A log that cannot be written does not change the decision of the
 call, but `after` then finds no call of the batch's workers and holds every
 commit of the batch (`HOOK_SAW_NO_WORKER`), as it does when the hook did not run.

@@ -14,6 +14,7 @@ test('kit is within the recorded context budgets', async () => {
   const { stdout } = await exec('bash', [SCRIPT, ROOT])
   assert.match(stdout, /PASS - PM wake set within budget/)
   assert.match(stdout, /PASS - Worker read set/)
+  assert.match(stdout, /PASS - Router\/Worker runbook within budget/)
   assert.match(stdout, /CONTEXT-BUDGETS-OK/)
 })
 
@@ -24,6 +25,17 @@ test('exceeding a budget exits 1 (ratchet)', async () => {
   } catch (e) {
     assert.equal(e.code, 1)
     assert.match(String(e.stdout), /CONTEXT-BUDGET-EXCEEDED/)
+  }
+})
+
+test('a runbook over its budget exits 1 (ratchet)', async () => {
+  try {
+    await exec('bash', [SCRIPT, '--budget-runbook', '100', ROOT])
+    assert.fail('expected nonzero exit when the runbook budget is exceeded')
+  } catch (e) {
+    assert.equal(e.code, 1)
+    assert.match(String(e.stdout), /FAIL - Router\/Worker runbook exceeds its context budget/)
+    assert.match(String(e.stdout), /CONTEXT-BUDGET-EXCEEDED \(1 set\(s\)\)/)
   }
 })
 
@@ -47,7 +59,7 @@ function instance(t) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'measure-two-root-'))), kit = join(root, 'kit')
   t.after(() => rmSync(root, { recursive: true, force: true }))
   for (const path of execFileSync('git', ['-C', ROOT, 'ls-files', '-co', '--exclude-standard'], { encoding: 'utf8' }).split('\n')
-    .filter(path => path && !/^(tests|src|docs\/design|\.github)\//.test(path))) {
+    .filter(path => path && (path === 'docs/design/router-worker/batch.md' || !/^(tests|src|docs\/design|\.github)\//.test(path)))) {
     mkdirSync(dirname(join(kit, path)), { recursive: true }); cpSync(join(ROOT, path), join(kit, path))
   }
   const boot = spawnSync('bash', [join(kit, 'scripts/bootstrap-team.sh'), '--project-name', 'Meter Fixture', root], { encoding: 'utf8' })
@@ -61,7 +73,7 @@ test('two-root: required reads that live in kit/ are counted, and both primers a
   const f = instance(t), run = f.measure('--budget-pm', '60000', '--budget-worker', '60000')
   assert.equal(run.status, 0, run.stdout)
   assert.doesNotMatch(run.stdout, /\(missing\)/)
-  for (const path of ['kit/agents/pm.md', 'kit/agents/_shared/meta-rules.md', 'kit/docs/workflow-catalog.md', 'kit/CLAUDE.md', 'kit/agents/templates.md', 'kit/agents/backend.md'])
+  for (const path of ['kit/agents/pm.md', 'kit/agents/_shared/meta-rules.md', 'kit/docs/workflow-catalog.md', 'kit/CLAUDE.md', 'kit/agents/templates.md', 'kit/agents/backend.md', 'kit/docs/design/router-worker/batch.md'])
     assert.match(run.stdout, new RegExp(`~ *\\d+ tok  ${path.replace(/[.]/g, '\\.')}\\n`), `${path} is counted`)
   for (const path of ['CLAUDE.md', 'charter.md', 'profiles/project.md', 'agents/lessons.md', '.claude/agents/meter-fixture-backend.md'])
     assert.match(run.stdout, new RegExp(`tok  ${path.replace(/[.]/g, '\\.')}\\n`), `${path} is read from the instance`)

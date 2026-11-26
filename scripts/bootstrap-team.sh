@@ -84,6 +84,7 @@ fi
 # substituted. The kit ships ledgers as seeds only, so both layouts create them.
 # Two-root adds the engine copy (the runtime loads workflows from the session
 # directory) and the project's review trigger list (ADR 0011), and makes every seed mandatory; single-root skips absent seeds.
+# Two-root also writes .ignore and a read rule in .claude/settings.json (scripts/scope-kit-reads.mjs).
 LEDGER_PAIRS="
 agents/lifecycle.template.md:agents/lifecycle.md
 agents/lessons.template.md:agents/lessons.md
@@ -252,6 +253,19 @@ for pair in $COPY_PAIRS; do
   fi
 done
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Kit tests, CI and development history stay out of the team's searches and reads.
+if [ -n "$SEED_LABEL" ]; then
+  if [ "$DRY" = 1 ]; then
+    node "$SCRIPT_DIR/scope-kit-reads.mjs" --check "$ROOT" >/dev/null 2>&1 \
+      || echo "PLAN - .ignore, .claude/settings.json: would keep kit tests and development history out of searches and reads"
+  else
+    SOUT=$(node "$SCRIPT_DIR/scope-kit-reads.mjs" "$ROOT" 2>&1) \
+      || { printf '%s\n' "$SOUT"; failboot "scope: kit development material could not be kept out of reads"; }
+    printf '%s\n' "$SOUT"
+  fi
+fi
+
 # The kit pin is written once; an upgrade changes it deliberately.
 if [ -n "$SEED_LABEL" ]; then
   if [ -f "$ROOT/kit.lock" ]; then
@@ -306,7 +320,6 @@ done
 #   validator FAIL   -> PENDING-STAFFING (structure incomplete)
 #   placeholders     -> INSTANTIATED-PENDING-INTERVIEW
 #   all clean        -> BOOTSTRAPPED
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # Fail-closed (R5-08), like the validator gate below: the gate is clean only
 # when the checker RAN and passed. Explicit interpreter — a copy/unzip that
 # drops the exec bit must not silently skip the gate.
