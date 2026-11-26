@@ -5,7 +5,7 @@ import { digest, bytesDigest } from '../loop/contracts.mjs';
 import { git, gitRun, acquireLease, releaseLease, readLease } from './lease.mjs';
 import { readBoundary, closeBoundary, stateOf } from './write-boundary.mjs';
 import { runCommands, confirmedOf } from './run-commands.mjs';
-import { AFTER_FILE, RESOLUTION_FILE, TICKET_ID, changedPaths, contentOf, hooksOf, plain, HOOKS_MOVED } from './batch.mjs';
+import { AFTER_FILE, RESOLUTION_FILE, RUN_ID, TICKET_ID, changedPaths, contentOf, hooksOf, plain, HOOKS_MOVED } from './batch.mjs';
 import { openBatch, intact, Refusal, IN_PROGRESS, ABANDON, HELD_REASONS } from './batch-close.mjs';
 import { reviewGate, verdictsOf, briefsOf, finalOf } from './review-judge.mjs';
 
@@ -48,43 +48,64 @@ function removeFrom(product, head, paths) {
   need(!still.length, `${still.slice(0, 5).map(plain).join(', ')} still show as changed after the held ticket was removed`);
 }
 const savePatch = (instance, patch, bytes) => { const file = join(instance, patch); mkdirSync(dirname(file), { recursive: true }); writeFileSync(`${file}.tmp`, bytes); renameSync(`${file}.tmp`, file); };
+export const heldAt = (runId, ticket) => typeof runId === 'string' && RUN_ID.test(runId) ? `${HELD}/${runId}/${ticket}.patch` : null;
+// What a ticket whose removal failed part-way still has in the tree is also in the patch saved before the removal.
+export const savedWhole = patch => `its saved patch ${patch} is the complete one: discard what is left of that ticket in the work tree, and do not save it again`;
+export const productState = (productRoot, taken) => {
+  const head = git(productRoot, 'rev-parse', 'HEAD')?.trim(), gitDir = git(productRoot, 'rev-parse', '--absolute-git-dir')?.trim(), busy = IN_PROGRESS.filter(name => gitDir && exists(join(gitDir, name)));
+  let changed = null; try { changed = changedPaths(productRoot); } catch { /* named below */ }
+  const problem = taken.errors ? `The lock on the product repository could not be taken: ${taken.errors[0].reason}` : !head || !gitDir ? 'The product repository cannot be read'
+    : busy.length ? `A Git operation is in progress in the product repository (${busy.join(', ')})` : changed ? null : 'The state of the product repository cannot be read';
+  return { head, changed, problem };
+};
+
+// One ticket's work in the work tree (`changed` less what is not `recorded` as its own) saved at `patch` against `head`, then
+// taken out. Nothing is removed before its patch is on disk, and a patch already there is never written over: one with the
+// same bytes is the work of a run that died after saving it. Out of the tree, the ticket is named by the first of `found` on disk.
+export function setAside({ instance, productRoot, head, changed, problem, recorded, patch, found }) {
+  const paths = changed ? changed.filter(path => recorded.includes(path)) : recorded;
+  if (changed && !paths.length) { const at = found.find(path => path && exists(join(instance, path))); return at ? { state: 'patch', patch: at } : { state: 'not-in-tree' }; }
+  let saved = false;
+  try {
+    need(!problem, problem);
+    const bytes = patchOf(productRoot, head, paths), file = join(instance, patch);
+    if (exists(file)) need(readFileSync(file).equals(bytes), `${patch} already holds another patch, which is not written over`); else savePatch(instance, patch, bytes);
+    saved = true;
+    removeFrom(productRoot, head, paths);
+    return { state: 'patch', patch };
+  } catch (error) { return { state: 'in-tree', paths, problem: plain(error?.message ?? error).slice(0, 300), ...(saved ? { patch } : {}) }; }
+}
 
 // ADR 0011, amendment of 2026-11-26: abort holds each ticket after flagged that no review passed, and each one resolve held.
 // Against the product's HEAD, where a resume applies; a saved patch is never written over, so a second abort finds the first one's work done.
 export function holdUnpassed({ instance, productRoot, runId }) {
   const after = readJSON(join(instance, AFTER_FILE));
-  if (after?.stage !== 'batch-closed' || !Array.isArray(after.tickets)) return [];
+  if (!Array.isArray(after?.tickets)) return [];
+  const tickets = after.tickets.filter(ticket => typeof ticket?.id === 'string' && TICKET_ID.test(ticket.id) && Array.isArray(ticket.changedPaths) && ticket.changedPaths.every(path => typeof path === 'string'));
+  // A record changed since after wrote it cannot say which ticket a review needed: nothing is taken out on its word.
+  if (!intact(after, 'batch-closed')) return tickets.filter(ticket => ticket.changedPaths.length)
+    .map(ticket => ({ ticket: ticket.id, reason: 'not-reviewed', state: 'in-tree', paths: ticket.changedPaths, problem: `${AFTER_FILE} is not the record after wrote: it was changed since after wrote it, so nothing is taken out` }));
   let verdicts = [];
   try { verdicts = verdictsOf(instance, after.runId); } catch { /* verdicts that cannot be read pass no ticket */ }
-  const removed = readJSON(join(instance, RESOLUTION_FILE))?.removed, byResolve = new Map((Array.isArray(removed) ? removed : []).map(entry => [entry?.ticket, entry]));
+  const resolution = readJSON(join(instance, RESOLUTION_FILE)), byResolve = new Map((Array.isArray(resolution?.removed) ? resolution.removed : []).map(entry => [entry?.ticket, entry]));
   // Why no review passed it, weighed as reviewGate weighs it; a reviewer with no final verdict never reviewed it.
   const outcome = (id, reviewer) => { const final = finalOf(verdicts, reviewer), verdict = final?.tickets?.find?.(item => item?.id === id)?.verdict;
     return !final ? 'not-reviewed' : verdict === 'passed' ? null : verdict === 'rejected' ? 'rejected' : 'review-not-obtained'; };
   const reasonOf = ticket => { const resolved = byResolve.get(ticket.id)?.reason; if (HELD_REASONS.includes(resolved)) return resolved;
     const outcomes = (Array.isArray(ticket.review?.required) ? ticket.review.required : []).map(reviewer => outcome(ticket.id, reviewer));
     return outcomes.find(reason => reason === 'rejected') ?? outcomes.find(Boolean) ?? null; };
-  const held = after.tickets.filter(ticket => typeof ticket?.id === 'string' && TICKET_ID.test(ticket.id) && Array.isArray(ticket.changedPaths))
-    .map(ticket => ({ ticket: ticket.id, reason: reasonOf(ticket), recorded: ticket.changedPaths })).filter(entry => entry.reason);
+  const held = tickets.map(ticket => ({ ticket: ticket.id, reason: reasonOf(ticket), recorded: ticket.changedPaths })).filter(entry => entry.reason);
   if (!held.length) return [];
-  const taken = acquireLease({ teamRoot: instance, productRoot }), head = git(productRoot, 'rev-parse', 'HEAD')?.trim(), gitDir = git(productRoot, 'rev-parse', '--absolute-git-dir')?.trim();
+  // abort releases this team's lock, which a resolve still running holds: its removals are not raced.
+  if (resolution?.stage === 'batch-resolving' && alive(resolution.pid))
+    return held.map(({ ticket, reason, recorded }) => ({ ticket, reason, state: 'in-tree', paths: recorded, problem: `A resolve of this batch is still running (process ${resolution.pid}); nothing is taken out while it runs` }));
+  const taken = acquireLease({ teamRoot: instance, productRoot });
   try {
-    const busy = IN_PROGRESS.filter(name => gitDir && exists(join(gitDir, name)));
-    let changed = null; try { changed = changedPaths(productRoot); } catch { /* named below */ }
-    const problem = taken.errors ? `The lock on the product repository could not be taken: ${taken.errors[0].reason}` : !head || !gitDir ? 'The product repository cannot be read'
-      : busy.length ? `A Git operation is in progress in the product repository (${busy.join(', ')})` : changed ? null : 'The state of the product repository cannot be read';
+    const { head, changed, problem } = productState(productRoot, taken);
     return held.map(({ ticket, reason, recorded }) => {
-      const patch = `${HELD}/${runId}/${ticket}.patch`, file = join(instance, patch), by = byResolve.get(ticket)?.patch === patch ? 'resolve' : 'abort';
-      const paths = changed ? changed.filter(path => recorded.includes(path)) : recorded;
-      let saved = false;
-      try {
-        if (changed && !paths.length) return exists(file) ? { ticket, reason, state: 'patch', patch, by } : { ticket, reason, state: 'not-in-tree' };
-        need(!problem, problem);
-        const bytes = patchOf(productRoot, head, paths);
-        if (exists(file)) need(readFileSync(file).equals(bytes), `${patch} already holds another patch, which is not written over`); else savePatch(instance, patch, bytes);
-        saved = true;
-        removeFrom(productRoot, head, paths);
-        return { ticket, reason, state: 'patch', patch, by };
-      } catch (error) { return { ticket, reason, state: 'in-tree', paths, problem: plain(error?.message ?? error).slice(0, 300), ...(saved ? { patch } : {}) }; }
+      // An abort that archives under another name than the batch's run id finds what resolve or an earlier abort saved under that id.
+      const out = setAside({ instance, productRoot, head, changed, problem, recorded, patch: heldAt(runId, ticket), found: [heldAt(after.runId, ticket), heldAt(runId, ticket)] });
+      return out.state === 'patch' ? { ticket, reason, state: 'patch', patch: out.patch, by: out.patch === byResolve.get(ticket)?.patch ? 'resolve' : 'abort' } : { ticket, reason, ...out };
     });
   } finally { if (!taken.errors) releaseLease({ productRoot, lease: taken.lease.digest }); }
 }

@@ -20,7 +20,8 @@ export const IN_PROGRESS = ['index.lock', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REV
 export const HOLD_ALL = ['BOUNDARY_CHANGED', 'PRODUCT_HEAD_MOVED', 'PRODUCT_BRANCH_CHANGED', 'GUARDIAN_NOT_CLEAN', 'HOOKS_CHANGED', 'HOOKS_WRITTEN', 'HOOK_SAW_NO_WORKER', 'CHECK_RUNS_MISSING'];
 // An after that was claimed this recently is taken to be running; an older claim is one that died.
 const CLAIM_MS = 60000;
-export const ABANDON = 'If the batch cannot be committed by the kit, archive it with: rw-batch.mjs abort --instance <instance-root>, which saves each ticket flagged for review that no review passed as a patch under reviews/held/<run id>/ and takes it out of the work tree; then commit or discard the rest of its changes by hand';
+export const LEFT_COMMAND = 'rw-batch.mjs left --instance <instance-root>';
+export const ABANDON = `If the batch cannot be committed by the kit, archive it with: rw-batch.mjs abort --instance <instance-root>, which saves each ticket flagged for review that no review passed as a patch under reviews/held/<run id>/ and takes it out of the work tree; then save the work each other ticket left as a patch, out of the work tree, with: ${LEFT_COMMAND}, and commit or discard the rest by hand`;
 
 export class Refusal extends Error {}
 const need = (condition, reason) => { if (!condition) throw new Refusal(reason); };
@@ -193,7 +194,7 @@ export function afterBatch({ teamRoot, instanceRoot, result }) {
     if (findings.some(finding => finding.code === 'HOOK_SAW_NO_WORKER')) next.push('The hook logged no call of this batch\'s workers: either the session that ran the batch did not load the write-boundary hook of the team root (.claude/settings.json), so the write limits were not enforced, or the hook ran and could not append to its log (.claude/rw-write-boundary.log.jsonl), so what it decided is not known. Inspect every changed path before any commit by hand, and run the next batch from a session that loads the hook, with that log writable');
     const missing = findings.find(finding => finding.code === 'CHECK_RUNS_MISSING')?.commands ?? [];
     if (missing.length) next.push(`The checker ran ${missing.map(entry => `${plain(entry.command)} (${entry.seen} of ${entry.needed})`).join(', ')} fewer times than the tickets that passed verify with it: a ticket passed without its checker running its verification commands, and the log cannot say which. Run the verification commands yourself before any commit by hand`);
-    if (!holdAll && left.length) next.push('Paths are left uncommitted in the product; the next batch refuses until they are committed or discarded by hand, or it is started as is');
+    if (!holdAll && left.length) next.push(`Paths are left uncommitted in the product; the next batch refuses until they are dealt with, or it is started as is. Once the batch is committed or archived, save the work each ticket left as a patch, out of the work tree, with: ${LEFT_COMMAND}; commit or discard by hand only what belongs to no ticket`);
     const reviewers = Object.keys(reviews);
     if (reviewers.length) next.push(`The batch is in review: brief each reviewer with ${reviewers.map(reviewer => `rw-batch.mjs review-brief --reviewer ${reviewer} --instance <instance-root>`).join(', and ')}; no batch, switch or change of limits starts until the review is over`);
     const status = () => findings.length || account.blockers.length || reviewers.length ? 'review' : 'clean';

@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync, appendFileSync, rmSync, lstatSync, mkdirSy
 import { join, resolve, relative, isAbsolute, sep, dirname } from 'node:path';
 import { digest, bytesDigest } from '../loop/contracts.mjs';
 import { instanceOf } from './roots.mjs';
-import { git, isRepositoryRoot, acquireLease, releaseLease, readLease } from './lease.mjs';
+import { git, gitRun, isRepositoryRoot, acquireLease, releaseLease, readLease } from './lease.mjs';
 import { freezeRun } from './run-args.mjs';
 import { openBoundary, closeBoundary, readBoundary, quotable, stateOf, UNQUOTABLE } from './write-boundary.mjs';
 import { observeIsolation } from './isolation.mjs';
@@ -11,7 +11,9 @@ import { loadReview, isReviewListError, triggerChanges, recordFrozen } from './r
 import { blockedTickets } from './escalations.mjs';
 import { periodicDue, periodicDueReason } from './review-periodic.mjs';
 import { resumePathProblem, resumePlan, applyResume, revertResume } from './batch-resume.mjs';
-import { holdUnpassed } from './review-resolve.mjs';
+import { holdUnpassed, savedWhole } from './review-resolve.mjs';
+import { earlierRuns } from './earlier-runs.mjs';
+import { LEFT_COMMAND } from './batch-close.mjs';
 
 // ADR 0010, decisions 8 to 12: the one command a PM runs before a batch in a standing Router/Worker team.
 // It builds the engine's inputs from the PM's tickets, checks the product repository, computes the ceiling,
@@ -279,18 +281,32 @@ function liveTeam(teamRoot, instanceRoot) {
 }
 
 // ADR 0011, amendment of 2026-11-26: the commits on the branch since the end of the newest batch archived on it (its last
-// kit commit, or its start when the kit committed nothing) were made outside the kit. `commits` is null, with a reason,
-// when there is nothing to compare with or that end is not an ancestor of HEAD.
-function outsideCommits(instance, archives, productRoot, branch) {
-  const last = archives.filter(id => !id.startsWith('.')).map(id => ({ id, record: readJSON(join(instance, ARCHIVE, id, 'batch.json')) }))
-    .filter(({ record }) => record?.branch === branch && typeof record.openedAt === 'string' && SHA.test(record.productHead ?? ''))
-    .sort((a, b) => a.record.openedAt.localeCompare(b.record.openedAt)).at(-1);
+// kit commit, or its start when the kit committed nothing) were made outside the kit: the first OUTSIDE_KEPT ids, oldest
+// first, and their `count`. `commits` is null, with a reason, when there is nothing to compare with or they cannot be told.
+// `archived`: [{ id, record }], each archive's batch record as read, null when it cannot be read.
+const OUTSIDE_KEPT = 100;
+const failedRun = run => plain(run.error ? (run.error.code === 'ETIMEDOUT' ? 'timed out' : run.error.code ?? run.error.message) : `exit ${run.status}: ${String(run.stderr ?? '').trim().split('\n')[0]}`).slice(0, 200);
+function outsideCommits(instance, archived, productRoot, branch) {
+  const placed = archived.map(({ id, record }) => {
+    if (typeof record?.openedAt === 'string' && typeof record.branch === 'string' && SHA.test(record.productHead ?? '')) return { id, record, time: record.openedAt, branch: record.branch };
+    // A batch record that cannot be read is placed by the other records of its archive: with no time it counts as the newest,
+    // with no branch as one on this branch, since its own commits would otherwise be counted against an older batch.
+    const at = name => readJSON(join(instance, ARCHIVE, id, name));
+    return { id, record: null, time: [at('after.json')?.closedAt, at('abandoned.json')?.archivedAt, at('commit.json')?.committedAt].find(value => typeof value === 'string') ?? '\uffff',
+      branch: [record?.branch, at('commit.json')?.branch].find(value => typeof value === 'string') ?? branch };
+  }).filter(entry => entry.branch === branch).sort((a, b) => a.time.localeCompare(b.time) || a.id.localeCompare(b.id));
+  const last = placed.at(-1);
   if (!last) return { since: null, commits: null, reason: 'No batch was archived on this branch' };
+  if (!last.record) return { since: { runId: last.id, commit: null }, commits: null, reason: `The batch record of ${plain(last.id)}, the newest batch archived on this branch, cannot be read: where that batch ended is not known` };
   const made = [readJSON(join(instance, ARCHIVE, last.id, 'commit.json'))?.commits, readJSON(join(instance, ARCHIVE, last.id, 'commits.json'))?.commits].find(Array.isArray)?.at(-1)?.sha;
-  const since = { runId: last.id, commit: SHA.test(made ?? '') ? made : last.record.productHead };
-  const listed = git(productRoot, 'merge-base', '--is-ancestor', since.commit, 'HEAD') === null ? null : git(productRoot, 'rev-list', '--reverse', `${since.commit}..HEAD`);
-  return listed === null ? { since, commits: null, reason: `The end of batch ${plain(last.id)} (${since.commit.slice(0, 8)}) is not an ancestor of HEAD: the branch was rebuilt since, or the repository does not hold that commit` }
-    : { since, commits: listed.split('\n').filter(Boolean) };
+  const since = { runId: last.id, commit: SHA.test(made ?? '') ? made : last.record.productHead }, end = `batch ${plain(last.id)} (${since.commit.slice(0, 8)})`;
+  const ancestor = gitRun(productRoot, ['merge-base', '--is-ancestor', since.commit, 'HEAD'], { timeout: 60000 });
+  if (ancestor.status === 1 && !ancestor.error) return { since, commits: null, reason: `The end of ${end} is not an ancestor of HEAD: the branch was rebuilt since` };
+  if (ancestor.status !== 0 || ancestor.error) return { since, commits: null, reason: `Git could not tell whether the end of ${end} is an ancestor of HEAD (${failedRun(ancestor)})` };
+  const listed = gitRun(productRoot, ['rev-list', '--reverse', `${since.commit}..HEAD`], { timeout: 60000 });
+  if (listed.status !== 0 || listed.error) return { since, commits: null, reason: `Git could not list the commits since the end of ${end} (${failedRun(listed)})` };
+  const ids = listed.stdout.split('\n').filter(Boolean);
+  return { since, commits: ids.slice(0, OUTSIDE_KEPT), count: ids.length };
 }
 
 // In a batch a worker's shell runs the commands the owner confirmed for the team, and no other.
@@ -313,8 +329,9 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     let archives; try { archives = readdirSync(join(instance, ARCHIVE), { withFileTypes: true }).filter(entry => entry.isDirectory()).map(entry => entry.name); } catch { archives = []; }
     const unsettled = archives.filter(id => !id.startsWith('.') && exists(join(instance, ARCHIVE, id, 'after.json')) && !settles(readJSON(join(instance, ARCHIVE, id, 'settlement.json')), id)).sort();
     need(!unsettled.length, `The usage of ${unsettled.length === 1 ? 'batch' : 'batches'} ${unsettled.slice(0, 5).map(plain).join(', ')} was not settled. Settle it first: rw-batch.mjs settle METER.json --instance <instance-root> --run ${plain(unsettled[0])}; if it cannot be measured: rw-batch.mjs settle --not-metered "<reason>" --instance <instance-root> --run ${plain(unsettled[0])}`);
-    const archivedRecords = archives.filter(id => !id.startsWith('.')).map(id => readJSON(join(instance, ARCHIVE, id, 'batch.json'))).filter(record => record && typeof record === 'object');
-    const archived = archivedRecords.flatMap(record => Array.isArray(record.tickets) ? record.tickets : []).filter(entry => typeof entry?.id === 'string');
+    // Each archive's batch record is read once here; one that cannot be read is kept, as null, for the commits made outside the kit.
+    const archivedAll = archives.filter(id => !id.startsWith('.')).map(id => ({ id, record: readJSON(join(instance, ARCHIVE, id, 'batch.json')) })), archivedRecords = archivedAll.filter(({ record }) => record && typeof record === 'object');
+    const archived = archivedRecords.flatMap(({ record }) => Array.isArray(record.tickets) ? record.tickets : []).filter(entry => typeof entry?.id === 'string');
     checkBatch(batch, new Set(archived.map(entry => entry.id.toLowerCase())));
     // Read again under the lock below; checked now as well, since it needs nothing from the product.
     confirmedOnly(batch, early);
@@ -322,7 +339,7 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     const blocked = blockedTickets({ instance, tickets: batch.tickets, archived });
     need(!blocked.length, `These tickets are blocked by an escalation the owner has not acknowledged: ${blocked.slice(0, 10).map(entry => `${plain(entry.ticket)} (${plain(entry.escalation)})`).join(', ')}. A ticket is blocked when it is the escalated ticket, its paths overlap that ticket's paths, or it depends on a blocked ticket. Report the escalation to the owner and replan: a batch without these tickets opens. The owner lifts an escalation at an interactive terminal with: team-mode.mjs acknowledge <escalation id> --instance <instance-root>`, 'TICKET_ESCALATED');
     // Removals are judged against the archive, which a commit's record points to; a batch aborted before after is not archived.
-    const lastFrozen = archivedRecords.filter(record => typeof record.openedAt === 'string').sort((a, b) => a.openedAt.localeCompare(b.openedAt)).at(-1)?.review;
+    const lastFrozen = archivedRecords.map(({ record }) => record).filter(record => typeof record.openedAt === 'string').sort((a, b) => a.openedAt.localeCompare(b.openedAt)).at(-1)?.review;
     // ADR 0011, decision 10: the trigger list is frozen into the batch; a change since the last batch is logged once it opens.
     let review;
     try { review = loadReview({ instance }); } catch (error) { if (isReviewListError(error)) need(false, `${error.message}. Nothing was started`); throw error; }
@@ -363,7 +380,7 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     const hooks = hooksOf(productRoot), hooked = batch.tickets.flatMap(ticket => ticket.paths.filter(path => hooks.guarded.some(guard => overlap(path, guard) || overlap(path, `${guard}/**`))));
     need(!hooked.length, `The repository's commit hooks live in ${hooks.guarded.join(', ')}; no ticket writes there (${hooked.slice(0, 5).join(', ')}): a hook runs as the PM at the next commit`);
     const wrappers = Object.fromEntries(Object.entries(closed.wrappers).map(([name, entry]) => [entry.duty, name]));
-    const outside = outsideCommits(instance, archives, productRoot, product.branch);
+    const outside = outsideCommits(instance, archivedAll, productRoot, product.branch), runsOf = earlierRuns(instance, archivedRecords);
 
     // The default id is new at every "before": the same tickets prepared again are another run, and a run is told by its id.
     const runId = batch.runId ?? `rw-${product.head.slice(0, 8)}-L${batch.nextLifecycleNumber}-${Date.now().toString(36)}`;
@@ -396,7 +413,7 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     const body = { schemaVersion: 1, stage: 'batch-open', runId: frozen.args.runId, openedAt: at, productRoot, productHead: product.head, branch: product.branch,
       startedAsIs: startAsIs === true, preexisting: product.preexisting, preexistingContent: contentOf(productRoot, product.preexisting), hooks, lease, boundaryDigest: boundary.digest, hookLogsCommands: true, isolationDigest: isolation.digest,
       limits, ceiling: { outputTokens: ceiling, stopLine: Math.floor(ceiling * 4 / 5) },
-      tickets: batch.tickets.map((ticket, i) => ({ id: ticket.id, title: ticket.title, goal: ticket.goal, acceptance: ticket.acceptance, commitMessage: ticket.commitMessage ?? `${ticket.id}: ${ticket.title}`, paths: ticket.paths, expectedPaths: inputs[i].proposal.expectedPaths, dependsOn: ticket.dependsOn ?? [], moves: ticket.moves ?? [], deletes: ticket.deletes ?? [], declared: declaredOf(ticket, batch.sensitivePaths), ...(ticket.verificationCommands ? { verificationCommands: ticket.verificationCommands } : {}), ...(plans[i] ? { resume: { patch: plans[i].patch, digest: plans[i].digest, paths: plans[i].paths, content: contentOf(productRoot, plans[i].paths) } } : {}) })),
+      tickets: batch.tickets.map((ticket, i) => ({ id: ticket.id, title: ticket.title, goal: ticket.goal, acceptance: ticket.acceptance, commitMessage: ticket.commitMessage ?? `${ticket.id}: ${ticket.title}`, paths: ticket.paths, expectedPaths: inputs[i].proposal.expectedPaths, dependsOn: ticket.dependsOn ?? [], moves: ticket.moves ?? [], deletes: ticket.deletes ?? [], declared: declaredOf(ticket, batch.sensitivePaths), earlierRuns: runsOf(ticket), ...(ticket.verificationCommands ? { verificationCommands: ticket.verificationCommands } : {}), ...(plans[i] ? { resume: { patch: plans[i].patch, digest: plans[i].digest, paths: plans[i].paths, content: contentOf(productRoot, plans[i].paths) } } : {}) })),
       sensitivePaths: batch.sensitivePaths, verificationCommands: batch.verificationCommands, review, reviewWrappers, triggerChanges: triggerChanges(lastFrozen, review), outsideCommits: outside,
       launchManifest: manifest ? 'chained' : 'absent', runRecord: frozen.record, args: frozen.args };
     const record = { ...body, digest: digest(body) };
@@ -410,8 +427,11 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     }
     // The resumed work enters the batch as the ticket's: the ledger names the patch it came from.
     const resumed = record.tickets.filter(entry => entry.resume).map(entry => `${at.slice(0, 10)} BATCH ${record.runId} RESUMES ${entry.id} from ${plain(entry.resume.patch)} (${entry.resume.digest.slice(0, 19)}…, ${entry.resume.paths.length} path(s)), applied to the work tree by before.\n`).join('');
-    const hand = outside.commits ?? [], made = hand.length ? `${at.slice(0, 10)} BATCH ${record.runId} COMMITS MADE OUTSIDE THE KIT (owner spot review): ${hand.length} commit(s) on ${plain(product.branch)} since batch ${plain(outside.since.runId)} ended at ${outside.since.commit.slice(0, 8)} (${hand.slice(0, 10).map(sha => sha.slice(0, 8)).join(', ')}${hand.length > 10 ? ', ...' : ''}).\n` : '';
-    if (made || resumed) try { appendFileSync(join(instance, LEDGER), made + resumed); } catch (error) { rmSync(join(instance, BATCH_FILE), { force: true }); throw error; }
+    const hand = outside.commits ?? [], made = hand.length ? `${at.slice(0, 10)} BATCH ${record.runId} COMMITS MADE OUTSIDE THE KIT (owner spot review): ${outside.count} commit(s) on ${plain(product.branch)} since batch ${plain(outside.since.runId)} ended at ${outside.since.commit.slice(0, 8)} (${hand.slice(0, 10).map(sha => sha.slice(0, 8)).join(', ')}${outside.count > 10 ? ', ...' : ''}).\n`
+      : outside.commits === null && outside.since ? `${at.slice(0, 10)} BATCH ${record.runId} COMMITS MADE OUTSIDE THE KIT CANNOT BE TOLD (owner spot review): on ${plain(product.branch)} since batch ${plain(outside.since.runId)}: ${outside.reason}.\n` : '';
+    // ADR 0010, amendment of 2026-11-26: a ticket whose work ran before and was not committed is named for the owner; nothing is refused.
+    const again = record.tickets.filter(entry => entry.earlierRuns.length).map(({ id, earlierRuns: runs }) => `${at.slice(0, 10)} BATCH ${record.runId} RUNS ${id} AGAIN (owner spot review): ${runs.length} earlier run(s) by the engine that the kit did not commit: ${runs.slice(0, 10).map(run => `${plain(run.runId)} as ${plain(run.ticket)} (${run.status})`).join(', ')}${runs.length > 10 ? ', ...' : ''}.\n`).join('');
+    if (made || again || resumed) try { appendFileSync(join(instance, LEDGER), made + again + resumed); } catch (error) { rmSync(join(instance, BATCH_FILE), { force: true }); throw error; }
     try { recordFrozen({ instance, review, changes: record.triggerChanges, runId: record.runId, at }); }
     catch (error) { rmSync(join(instance, BATCH_FILE), { force: true }); throw error; }
     lease = null; opened = false; applied.length = 0;
@@ -453,10 +473,10 @@ export function abortBatch({ teamRoot, instanceRoot }) {
       const holds = holdUnpassed({ instance, productRoot, runId: id }), [out, stuck, gone] = ['patch', 'in-tree', 'not-in-tree'].map(state => holds.filter(entry => entry.state === state));
       const work = (made.length ? `${made.length} commit(s) were already made by the kit and stay on the branch (${made.join(', ')}); the rest of what the batch changed is still in the product work tree` : 'Nothing was committed by the kit; what the batch changed is still in the product work tree') + (out.length ? ', less the tickets held as patches' : '');
       const named = [out.length ? `Held as patches, out of the work tree: ${out.map(entry => `${entry.ticket} (${entry.reason}${entry.by === 'resolve' ? ', by resolve' : ''}) ${entry.patch}`).join(', ')}` : '',
-        stuck.length ? `LEFT IN THE WORK TREE with no review passed, since abort could not take them out: ${stuck.map(entry => `${entry.ticket} (${entry.reason}; ${entry.problem}${entry.patch ? `; its patch ${entry.patch}` : ''})`).join(', ')}` : '',
+        stuck.length ? `LEFT IN THE WORK TREE with no review passed, since abort could not take them out: ${stuck.map(entry => `${entry.ticket} (${entry.reason}; ${entry.problem}${entry.patch ? `; ${savedWhole(entry.patch)}` : ''})`).join(', ')}` : '',
         gone.length ? `Flagged for review, not passed, and no longer in the work tree: ${gone.map(entry => `${entry.ticket} (${entry.reason})`).join(', ')}` : ''].filter(Boolean).map(text => ` ${text}.`).join('');
       const stamp = new Date().toISOString(), note = { schemaVersion: 1, stage: 'batch-archived-without-commit', runId: id, archivedAt: stamp, commitsMade: made, held: holds, boundary: boundary ? 'closed' : 'not-restored', lockReleased,
-        next: `${hooksMoved}${work}: commit it by hand on the working branch, or discard it${stuck.length ? '; a ticket left in the work tree that no review passed is never committed by hand: save it as a patch, discard it, and name the patch as the resume of a ticket' : ''}.${named}${out.length || stuck.length ? ' A held patch comes back as the resume of a ticket of a later batch, where it is checked and reviewed as that ticket\'s work.' : ''}${boundary ? '' : ' The write-boundary file is missing or was changed: a mode switch to specialist and back rebuilds it.'}` };
+        next: `${hooksMoved}${work}: save the work each ticket left as a patch, out of the work tree, with: ${LEFT_COMMAND}, then commit by hand on the working branch, or discard, only what belongs to no ticket${stuck.length ? '; a ticket left in the work tree that no review passed is never committed by hand: once the cause named below is gone, left saves it, unless abort already saved its patch' : ''}.${named}${out.length || stuck.length ? ' A held patch comes back as the resume of a ticket of a later batch, where it is checked and reviewed as that ticket\'s work.' : ''}${boundary ? '' : ' The write-boundary file is missing or was changed: a mode switch to specialist and back rebuilds it.'}` };
       appendFileSync(join(instance, LEDGER), `${stamp.slice(0, 10)} BATCH ${id} ARCHIVED WITHOUT COMMIT by rw-batch.mjs abort: the batch was not finished by the kit. ${work}.${named}\n`);
       archiveBatch(instance, id, { 'abandoned.json': { ...note, digest: digest(note) } }, RECORDS);
       return { ...note, digest: digest(note) };

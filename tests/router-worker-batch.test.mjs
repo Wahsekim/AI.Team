@@ -43,7 +43,7 @@ test('before freezes N tickets, computes the ceiling, takes the lock and opens t
   const boundary = readBoundary(f.root), write = (agent, path) => decideCall({ boundary, input: { tool_name: 'Edit', agent_type: agent, cwd: f.product, tool_input: { file_path: path } } }).decision;
   assert.equal(write('tag-list-fixture-worker-exec', 'src/list/view.js'), 'allow'); assert.equal(write('tag-list-fixture-worker-exec', 'src/api/tags.js'), 'allow');
   assert.equal(write('tag-list-fixture-worker-exec', 'src/other.js'), 'deny'); assert.equal(write('tag-list-fixture-worker-check', 'src/app.js'), 'deny');
-  assert.deepEqual(record.sensitivePaths, ['src/auth/**']); assert.deepEqual(record.tickets[1], { id: 'US-02', title: 'Ticket US-02', goal: 'Do US-02', acceptance: ['US-02 works'], commitMessage: 'US-02: Ticket US-02', paths: ['src/api/tags.js'], expectedPaths: ['src/api/tags.js'], dependsOn: [], moves: [], deletes: [], declared: [] });
+  assert.deepEqual(record.sensitivePaths, ['src/auth/**']); assert.deepEqual(record.tickets[1], { id: 'US-02', title: 'Ticket US-02', goal: 'Do US-02', acceptance: ['US-02 works'], commitMessage: 'US-02: Ticket US-02', paths: ['src/api/tags.js'], expectedPaths: ['src/api/tags.js'], dependsOn: [], moves: [], deletes: [], declared: [], earlierRuns: [] });
   assert.match(refusal(await f.before(batchOf(ticket('US-03', ['src/x.js'])))).reason, /already open/);
   assert.equal(readLease({ productRoot: f.product }).lease.digest, record.lease, 'the open batch keeps its lock'); assert.equal(write('tag-list-fixture-worker-exec', 'src/list/view.js'), 'allow');
 });
@@ -805,20 +805,42 @@ test('before names the commits made on the branch outside the kit since the newe
   assert.equal(f.after().errors, undefined); const done = f.commit(); assert.equal(done.errors, undefined); f.unmetered();
   const tip = done.commits.at(-1).sha, clean = await f.before(one);
   assert.equal(clean.errors, undefined, JSON.stringify(clean.errors));
-  assert.deepEqual(clean.outsideCommits, { since: { runId: f.open.runId, commit: tip }, commits: [] }); assert.deepEqual(lines(), [], 'no line when the kit made every commit');
+  assert.deepEqual(clean.outsideCommits, { since: { runId: f.open.runId, commit: tip }, commits: [], count: 0 }); assert.deepEqual(lines(), [], 'no line when the kit made every commit');
   abort();
   for (let i = 1; i <= 11; i++) git(f.product, 'commit', '-q', '--allow-empty', '-m', `by hand ${i}`);
   const hand = git(f.product, 'rev-list', '--reverse', `${tip}..HEAD`).trim().split('\n'), named = await f.before(one);
   assert.equal(named.errors, undefined, JSON.stringify(named.errors)); assert.equal(hand.length, 11);
-  assert.deepEqual(named.outsideCommits, { since: { runId: f.open.runId, commit: tip }, commits: hand });
+  assert.deepEqual(named.outsideCommits, { since: { runId: f.open.runId, commit: tip }, commits: hand, count: 11 });
   assert.deepEqual(lines(), [`${named.openedAt.slice(0, 10)} BATCH ${named.runId} COMMITS MADE OUTSIDE THE KIT (owner spot review): 11 commit(s) on work since batch ${f.open.runId} ended at ${tip.slice(0, 8)} (${hand.slice(0, 10).map(sha => sha.slice(0, 8)).join(', ')}, ...).`]);
   abort();
-  // The branch rebuilt under the batch's last commit: nothing can be compared, nothing is refused.
+  // The branch rebuilt under the batch's last commit: nothing can be compared, nothing is refused, and the owner is told why.
   git(f.product, 'reset', '-q', '--hard', f.open.productHead); git(f.product, 'commit', '-q', '--allow-empty', '-m', 'rebuilt');
   const rebuilt = await f.before(one);
   assert.equal(rebuilt.errors, undefined, JSON.stringify(rebuilt.errors)); assert.equal(rebuilt.outsideCommits.commits, null);
-  assert.deepEqual(rebuilt.outsideCommits.since, { runId: f.open.runId, commit: tip }); assert.match(rebuilt.outsideCommits.reason, /not an ancestor of HEAD/);
-  assert.equal(lines().length, 1);
+  assert.deepEqual(rebuilt.outsideCommits.since, { runId: f.open.runId, commit: tip }); assert.match(rebuilt.outsideCommits.reason, /is not an ancestor of HEAD: the branch was rebuilt since/);
+  assert.deepEqual(lines().slice(1), [`${rebuilt.openedAt.slice(0, 10)} BATCH ${rebuilt.runId} COMMITS MADE OUTSIDE THE KIT CANNOT BE TOLD (owner spot review): on work since batch ${f.open.runId}: ${rebuilt.outsideCommits.reason}.`]);
+  abort();
+  // An end commit the repository does not hold makes Git fail: that is not said to be a rebuilt branch.
+  const record = join(f.root, 'batches', f.open.runId, 'commit.json'), kept = readFileSync(record, 'utf8'), forged = JSON.parse(kept);
+  writeFileSync(record, JSON.stringify({ ...forged, commits: [...forged.commits.slice(0, -1), { ...forged.commits.at(-1), sha: 'e'.repeat(40) }] }));
+  const unknown = await f.before(one); writeFileSync(record, kept);
+  assert.equal(unknown.errors, undefined, JSON.stringify(unknown.errors)); assert.equal(unknown.outsideCommits.commits, null);
+  assert.match(unknown.outsideCommits.reason, /Git could not tell whether .*eeeeeeee/); assert.doesNotMatch(unknown.outsideCommits.reason, /not an ancestor/);
+  assert.equal(lines().length, 3);
+  abort();
+  // A merge can bring thousands of commits: the record keeps the oldest hundred and the count.
+  git(f.product, 'reset', '-q', '--hard', tip);
+  for (let i = 1; i <= 101; i++) git(f.product, 'commit', '-q', '--allow-empty', '-m', `merged ${i}`);
+  const many = await f.before(one), all = git(f.product, 'rev-list', '--reverse', `${tip}..HEAD`).trim().split('\n');
+  assert.equal(many.errors, undefined, JSON.stringify(many.errors));
+  assert.deepEqual(many.outsideCommits, { since: { runId: f.open.runId, commit: tip }, commits: all.slice(0, 100), count: 101 }); assert.match(lines().at(-1), /: 101 commit\(s\) on work since/);
+  abort();
+  // The newest archive on the branch cannot be read: its own commits would be counted as made outside the kit.
+  writeFileSync(join(f.root, 'batches', f.open.runId, 'batch.json'), 'not json');
+  const unread = await f.before(one);
+  assert.equal(unread.errors, undefined, JSON.stringify(unread.errors));
+  assert.deepEqual([unread.outsideCommits.since, unread.outsideCommits.commits], [{ runId: f.open.runId, commit: null }, null]); assert.match(unread.outsideCommits.reason, /batch record of .* cannot be read/);
+  assert.match(lines().at(-1), new RegExp(`BATCH ${unread.runId} COMMITS MADE OUTSIDE THE KIT CANNOT BE TOLD \\(owner spot review\\): on work since batch ${f.open.runId}: `));
 });
 
 test('settle sets each ticket\'s measured usage against its authorization, before or after the commit, and reports a ticket over it', async t => {
