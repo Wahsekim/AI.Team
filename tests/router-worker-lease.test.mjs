@@ -123,6 +123,59 @@ test('concurrent hosts: exactly one acquires', async t => {
   assert.equal(readLease({ productRoot: f.product }).status, 'held');
 });
 
+// A real process that takes the lease, for a command (commandPid) or across commands, then ends, or stays alive until the test ends.
+const LEASE = new URL('../src/router-worker/lease.mjs', import.meta.url).href;
+const takerScript = (options, stay) => `import { acquireLease } from ${JSON.stringify(LEASE)};
+process.stdout.write(JSON.stringify(acquireLease(${JSON.stringify(options)})) + '\\n');${stay ? ' setInterval(() => {}, 1000);' : ''}`;
+const ended = options => { const run = spawnSync(process.execPath, ['--input-type=module', '-e', takerScript(options, false)], { encoding: 'utf8' }); return { pid: run.pid, taken: JSON.parse(run.stdout) }; };
+function living(t, options) {
+  const child = spawn(process.execPath, ['--input-type=module', '-e', takerScript(options, true)], { stdio: ['ignore', 'pipe', 'inherit'] });
+  t.after(() => child.kill('SIGKILL'));
+  return new Promise(done => { let out = ''; child.stdout.on('data', data => { out += data; if (out.endsWith('\n')) done({ child, taken: JSON.parse(out) }); }); });
+}
+const gone = child => new Promise(done => { child.once('exit', done); child.kill('SIGKILL'); });
+
+test('a command\'s lease names its process; one whose process ended is taken over by the same team, and a live one, a batch\'s and another team\'s are refused, saying which', async t => {
+  const f = fixture(t), mine = { teamRoot: f.team, productRoot: f.product, command: true };
+  const dead = ended(mine);
+  assert.equal(dead.taken.lease.commandPid, dead.pid, 'a command\'s lease records the process that holds it');
+  const taken = acquireLease(mine);
+  assert.equal(taken.errors, undefined, JSON.stringify(taken.errors)); assert.equal(taken.lease.commandPid, process.pid); assert.notEqual(taken.lease.digest, dead.taken.lease.digest);
+  assert.deepEqual(readLease({ productRoot: f.product }), taken);
+  assert.equal(releaseLease({ productRoot: f.product, lease: taken.lease.digest }).status, 'free');
+
+  const { child, taken: held } = await living(t, mine);
+  const refused = acquireLease(mine);
+  assert.equal(refused.errors?.[0].code, 'LEASE_HELD'); assert.match(refused.errors[0].reason, new RegExp(`command of this team that is still running \\(process ${child.pid}\\)`));
+  assert.deepEqual(readLease({ productRoot: f.product }), held, 'a live command keeps its lease');
+  await gone(child);
+  const after = acquireLease({ teamRoot: f.team, productRoot: f.product });
+  assert.equal(after.errors, undefined, JSON.stringify(after.errors)); assert.equal(after.lease.commandPid, undefined, 'a lease held across commands, as a batch\'s, records no process');
+  assert.equal(releaseLease({ productRoot: f.product, lease: after.lease.digest }).status, 'free');
+
+  const batch = ended({ teamRoot: f.team, productRoot: f.product });
+  const kept = acquireLease(mine);
+  assert.equal(kept.errors?.[0].code, 'LEASE_HELD'); assert.match(kept.errors[0].reason, /held across commands by this team/);
+  assert.deepEqual(readLease({ productRoot: f.product }), batch.taken, 'a batch\'s lease is never taken over');
+  assert.equal(releaseLease({ productRoot: f.product, lease: batch.taken.lease.digest }).status, 'free');
+
+  const foreign = ended({ ...mine, teamRoot: f.other });
+  const theirs = acquireLease(mine);
+  assert.equal(theirs.errors?.[0].code, 'LEASE_HELD'); assert.match(theirs.errors[0].reason, /another team root/);
+  assert.deepEqual(readLease({ productRoot: f.product }), foreign.taken, 'another team\'s lease is never taken over');
+  assert.deepEqual(readdirSync(join(f.product, '.git')).filter(name => name.includes('rw-ownership')), ['rw-ownership-lease.json'], 'no temporary or lock file is left behind');
+});
+
+test('two commands that find one dead command\'s lease: exactly one takes it over', async t => {
+  const f = fixture(t), mine = { teamRoot: f.team, productRoot: f.product, command: true }, dead = ended(mine);
+  const takers = await Promise.all(Array.from({ length: 8 }, () => living(t, mine)));
+  const won = takers.filter(({ taken }) => taken.status === 'held');
+  assert.equal(won.length, 1, JSON.stringify(takers.map(({ taken }) => taken.errors?.[0] ?? taken.status)));
+  assert.equal(readLease({ productRoot: f.product }).lease.commandPid, won[0].child.pid);
+  assert.notEqual(readLease({ productRoot: f.product }).lease.digest, dead.taken.lease.digest);
+  for (const { taken } of takers.filter(entry => entry !== won[0])) assert.match(taken.errors[0].reason, /still running|taking over or releasing/);
+});
+
 test('CLI: acquire, status and release with exit 0 held/free-as-asked, 2 refused, 1 usage', t => {
   const f = fixture(t), run = (...args) => spawnSync(process.execPath, [CLI, ...args], { encoding: 'utf8' });
   const free = run('status', '--product-root', f.product);

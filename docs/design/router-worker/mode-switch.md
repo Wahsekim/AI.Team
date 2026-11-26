@@ -129,7 +129,11 @@ prints the limits before and after, and is confirmed like a switch: a code typed
 at an interactive terminal. `changeLimits` called directly refuses the same way. It is refused when the team is not in Router/Worker
 mode, when nothing would change, when the authorization per ticket would fall
 below the output allowance, when a switch was interrupted, or while a batch
-holds the lock; it takes the lock for the write. One line is appended to `pm-decisions.md`; it ends with
+holds the lock; it takes the lock for the write. A change that died after its ledger line and before the
+profile's rename leaves `profiles/team-mode.json.tmp`: the next change of limits, once its code is typed at the
+terminal, finishes the rename when the last ledger line binds the limits it holds (the owner confirmed them), and
+otherwise removes it and applies nothing of it. The proposal names it (`leftover`) and changes nothing; `{}` is
+accepted while one is left, to settle it alone. The hook refuses a file-tool write of it as of the limits file. One line is appended to `pm-decisions.md`; it ends with
 `limits <digest>`, as the `MODE SWITCH` line into Router/Worker mode does, and the last such line binds the limits
 in force: `rw-batch.mjs before` refuses limits it does not bind. Limits no line binds (edited by hand, or a team
 that went live before lines carried a digest) are re-confirmed as they stand with `{}`; a request that changes

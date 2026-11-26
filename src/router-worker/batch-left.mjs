@@ -81,7 +81,7 @@ export function saveLeftWork({ teamRoot, instanceRoot, runId }) {
     // abort releases the lock of a resolve still running and archives its batch: its removals are not raced.
     const resolution = at('resolution.json');
     need(!resolving(resolution), `A resolve of batch ${plain(id)} is still running (process ${resolution?.pid}): abort archived the batch while it ran. Run left again once that process has ended`);
-    const taken = acquireLease({ teamRoot: instance, productRoot });
+    const taken = acquireLease({ teamRoot: instance, productRoot, command: true });
     need(!taken.errors, `The lock on the product repository could not be taken: ${taken.errors?.[0]?.reason}`);
     lease = taken.lease.digest;
     need(git(productRoot, 'symbolic-ref', '--short', '-q', 'HEAD')?.trim() === batch.branch, `The product repository is not on the batch's branch (${plain(batch.branch)})`);

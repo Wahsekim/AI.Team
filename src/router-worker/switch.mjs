@@ -359,7 +359,7 @@ export function switchMode({ confirm, validate, atTerminal, ...options }) {
   try { mkdirSync(join(instance, HOLIDAY), { recursive: true }); writeFileSync(journalPath, JSON.stringify(started, null, 2) + '\n', { flag: 'wx' }); }
   catch (error) { prune(join(instance, HOLIDAY)); return refusal(new Refusal('SWITCH_REFUSED', `The switch could not be started: ${error?.code ?? error?.message}`)); }
   // The product is locked for the length of the switch, so no batch can start half-way through it.
-  const lock = acquireLease({ teamRoot: instance, productRoot });
+  const lock = acquireLease({ teamRoot: instance, productRoot, command: true });
   if (lock.errors) {
     rmSync(journalPath, { force: true }); prune(join(instance, HOLIDAY));
     return refusal(new Refusal('SWITCH_REFUSED', 'The lock on the product repository could not be taken; a batch may have started'));
@@ -421,9 +421,25 @@ export function switchMode({ confirm, validate, atTerminal, ...options }) {
 }
 
 // The limits of a live Router/Worker team are set at the switch; this changes them afterwards, by the same confirmation.
+// A change of limits that died before its rename leaves the new profile beside the live one. When the last ledger line binds
+// its limits, the owner confirmed it and the rename is finished; any other leftover was never confirmed and is removed. Only a
+// change confirmed at a terminal does either: a session can write the leftover and the ledger, and a proposal changes nothing.
+const LEFTOVER = `${MODE_FILE}.tmp`;
+const confirmedLeftover = (instance, profile, left) => Boolean(left?.limits) && boundLimits(instance) === digest(left.limits) && digest({ ...profile, limits: left.limits }) === digest(left);
+function settleLeftover(instance) {
+  const path = join(instance, LEFTOVER);
+  if (!exists(path)) return null;
+  if (confirmedLeftover(instance, currentMode(instance).profile, readJSON(path))) {
+    renameSync(path, join(instance, MODE_FILE));
+    return `${LEFTOVER} held the change of limits the last LIMITS CHANGED line of ${LEDGER} confirmed; its rename was finished`;
+  }
+  rmSync(path, { force: true });
+  return `${LEFTOVER}, left by a change of limits that did not finish and that no line of ${LEDGER} confirmed, was removed; nothing of it was applied`;
+}
 const limitsRefusal = error => ({ errors: [{ code: error instanceof Refusal ? error.code : 'LIMITS_REFUSED', field: 'limits', reason: error instanceof Refusal ? error.message : 'The limits could not be changed' }] });
 function planLimits({ teamRoot, instanceRoot, limits }) {
-  const no = reason => { throw new Refusal('LIMITS_REFUSED', reason); }, checked = (value, reason) => { try { return limitsOf({ limits: value }); } catch (error) { return no(`${reason}: ${error.message}`); } };
+  let leftover = null;
+  const no = reason => { throw new Refusal('LIMITS_REFUSED', leftover ? `${reason}. ${leftover}` : reason); }, checked = (value, reason) => { try { return limitsOf({ limits: value }); } catch (error) { return no(`${reason}: ${error.message}`); } };
   let instance;
   try { instance = instanceOf(resolve(teamRoot), instanceRoot); } catch (error) { no(`The two-root layout is required (${error.message})`); }
   if (!instance) no('An instance root is required');
@@ -431,7 +447,11 @@ function planLimits({ teamRoot, instanceRoot, limits }) {
   const live = currentMode(instance);
   if (live.name !== 'router-worker') no('The team is not in Router/Worker mode; limits are set with the switch');
   if (inReview(instance)) no(IN_REVIEW);
-  const stored = live.profile.limits;
+  // The plan is made from the limits in force once a leftover is settled, as the change will settle it.
+  const left = exists(join(instance, LEFTOVER)) ? readJSON(join(instance, LEFTOVER)) : undefined, finishing = left !== undefined && confirmedLeftover(instance, live.profile, left);
+  if (left !== undefined) leftover = finishing ? `${LEFTOVER} holds the change of limits the last LIMITS CHANGED line of ${LEDGER} confirmed: its limits are shown under "from", and its rename is finished when this change is confirmed at a terminal`
+    : `${LEFTOVER}, left by a change of limits that did not finish and that no line of ${LEDGER} confirmed, is removed when this change is confirmed at a terminal; nothing of it is applied`;
+  const profile = finishing ? left : live.profile, stored = profile.limits;
   if (!stored || typeof stored !== 'object' || COUNT_LIMITS.some(key => !LATER_LIMITS.includes(key) && !Object.hasOwn(stored, key))) no('profiles/team-mode.json does not hold the limits of this team');
   // What is stored, so that a limit it lacks is shown, and confirmed, as a change.
   checked(stored, 'The limits in profiles/team-mode.json are not valid');
@@ -441,15 +461,15 @@ function planLimits({ teamRoot, instanceRoot, limits }) {
   const to = checked({ ...from, ...limits }, 'The limits would not be coherent'), changed = Object.keys(to).filter(key => JSON.stringify(to[key]) !== JSON.stringify(from[key]));
   // Limits no ledger line binds (edited by hand, or live before lines carried a digest) are re-confirmed as they stand.
   const bound = boundLimits(instance) === digest(stored);
-  if (!changed.length && bound) no('These are the limits the team already has');
+  if (!changed.length && bound && left === undefined) no('These are the limits the team already has');
   const productRoot = live.profile.spec?.project?.productRoot;
   if (typeof productRoot !== 'string' || readLease({ productRoot }).status !== 'free') no('A batch holds the lock on the product repository, or its state cannot be read; close the batch first');
-  return { instance, profile: live.profile, productRoot, changed, body: { schemaVersion: 1, stage: 'limits-proposed', from, to,
+  return { instance, profile, productRoot, changed, leftover, body: { schemaVersion: 1, stage: 'limits-proposed', from, to,
     ...(bound ? {} : { unbound: 'No line of pm-decisions.md binds the limits in profiles/team-mode.json: they were edited by hand, or the team went live before limits were bound. Confirming binds the limits shown under "to".' }) } };
 }
 
 export function proposeLimits(options) {
-  try { const { body } = planLimits(options); return { ...body, digest: digest(body) }; } catch (error) { return limitsRefusal(error); }
+  try { const { body, leftover } = planLimits(options); return { ...body, digest: digest(body), ...(leftover ? { leftover } : {}) }; } catch (error) { return limitsRefusal(error); }
 }
 
 export function changeLimits({ confirm, atTerminal, ...options }) {
@@ -459,8 +479,9 @@ export function changeLimits({ confirm, atTerminal, ...options }) {
     if (confirm !== digest(body)) throw new Refusal('LIMITS_NOT_CONFIRMED', 'A change of limits is confirmed by the digest of its proposal; this digest is not the current proposal');
     if (!byPerson(atTerminal)) throw new Refusal('LIMITS_NOT_CONFIRMED', `A change of limits ${NOT_BY_PERSON} limits`);
     // No batch and no switch can start while the profile is written.
-    lock = acquireLease({ teamRoot: instance, productRoot });
+    lock = acquireLease({ teamRoot: instance, productRoot, command: true });
     if (lock.errors) { lock = null; throw new Refusal('LIMITS_REFUSED', 'The lock on the product repository could not be taken; a batch may have started'); }
+    const leftover = settleLeftover(instance);
     // A team that went live before the command list existed has a boundary without one, which does not judge its workers' shell.
     // It is closed before the limits are written: a closed boundary is right under the old limits too, so a failure here leaves both files consistent.
     const boundary = readBoundary(instance);
@@ -473,6 +494,6 @@ export function changeLimits({ confirm, atTerminal, ...options }) {
       renameSync(`${path}.tmp`, path);
     } catch (error) { rmSync(`${path}.tmp`, { force: true }); throw error; }
     const record = { schemaVersion: 1, stage: 'limits-changed', limits: body.to, changed, changedAt: at };
-    return { ...record, digest: digest(record) };
+    return { ...record, digest: digest(record), ...(leftover ? { leftover } : {}) };
   } catch (error) { return limitsRefusal(error); } finally { if (lock) releaseLease({ productRoot, lease: lock.lease.digest }); }
 }

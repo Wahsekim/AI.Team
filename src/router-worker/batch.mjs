@@ -2,19 +2,19 @@ import { readFileSync, writeFileSync, appendFileSync, rmSync, lstatSync, mkdirSy
 import { join, resolve, relative, isAbsolute, sep, dirname } from 'node:path';
 import { digest, bytesDigest } from '../loop/contracts.mjs';
 import { instanceOf } from './roots.mjs';
-import { git, gitRun, isRepositoryRoot, acquireLease, releaseLease, readLease } from './lease.mjs';
+import { git, gitRun, isRepositoryRoot, acquireLease, releaseLease, readLease, alive, commandRunning } from './lease.mjs';
 import { freezeRun } from './run-args.mjs';
-import { openBoundary, closeBoundary, readBoundary, quotable, stateOf, UNQUOTABLE } from './write-boundary.mjs';
+import { openBoundary, closeBoundary, readBoundary, quotable, stateOf, within, UNQUOTABLE } from './write-boundary.mjs';
 import { observeIsolation } from './isolation.mjs';
 import { limitsOf, COUNT_LIMITS, LATER_LIMITS, boundLimits, rosterWrapper, GATE_PATH_OFF } from './switch.mjs';
 import { loadReview, isReviewListError, triggerChanges, recordFrozen } from './review-triggers.mjs';
 import { blockedTickets } from './escalations.mjs';
 import { periodicDue, periodicDueReason } from './review-periodic.mjs';
 import { resumePathProblem, resumePlan, applyResume, revertResume } from './batch-resume.mjs';
-import { holdUnpassed, savedWhole, attributable, BY_HAND } from './review-resolve.mjs';
+import { holdUnpassed, savedWhole, attributable, BY_HAND, HELD } from './review-resolve.mjs';
 import { earlierRuns } from './earlier-runs.mjs';
 import { LEFT_COMMAND } from './batch-close.mjs';
-import { leftAt } from './batch-left.mjs';
+import { leftAt, LEFT } from './batch-left.mjs';
 
 // ADR 0010, decisions 8 to 12: the one command a PM runs before a batch in a standing Router/Worker team.
 // It builds the engine's inputs from the PM's tickets, checks the product repository, computes the ceiling,
@@ -53,7 +53,8 @@ const readJSON = path => { try { return JSON.parse(readFileSync(path, 'utf8')); 
 const ref = (id, value) => ({ id, digest: digest(value) });
 // A settlement, or a mark of not metered, of that run, sealed as settle writes it.
 const settles = (record, id) => ['batch-settled', 'batch-not-metered'].includes(record?.stage) && record.runId === id && (({ digest: sealed, ...body }) => sealed === digest(body))(record);
-// Compared without case: on a case-insensitive file system src/A.js and src/a.js are one file.
+// Compared without case: on a case-insensitive file system src/A.js and src/a.js are one file. Only for whether two claims meet;
+// whether a path lies inside a ticket's grant is `within`, exact, as after and the hook judge it.
 export const covers = (grant, other) => { const [g, o] = [grant.toLowerCase(), other.toLowerCase()]; return g.endsWith('/**') ? o === g || o.startsWith(g.slice(0, -2)) : o === g; };
 export const overlap = (a, b) => covers(a, b) || covers(b, a);
 // A sensitive entry written as a bare folder guards everything under it.
@@ -196,16 +197,56 @@ function checkFiles(ticket) {
   need(!odd.length, `Ticket ${ticket.id}: ${JSON.stringify(plain(String(odd[0])))} is not one plain file path a quoted shell command can hold (no folder grant, no "." or "..", none of " $ \` \\ ! * ? [ ] { } :, no control, bidirectional or zero-width character, written in composed Unicode (NFC))`);
   const kept = files.filter(reserved);
   need(!kept.length, `Ticket ${ticket.id} moves or deletes ${kept[0]}; no ticket writes under ${RESERVED.join(' or ')}`);
-  const outside = files.filter(path => !ticket.paths.some(grant => covers(grant, path)));
-  need(!outside.length, `Ticket ${ticket.id} moves or deletes ${outside[0]}, outside its paths; add it to the ticket's paths`);
+  const outside = files.filter(path => !within(path, ticket.paths)), grant = ticket.paths.find(entry => outside.length && covers(entry, outside[0]));
+  need(!outside.length, grant ? `Ticket ${ticket.id} moves or deletes ${outside[0]}, which its paths grant only in another case (${grant}): write it as ${grant.endsWith('/**') ? grant.slice(0, -2) + outside[0].slice(grant.length - 2) : grant}`
+    : `Ticket ${ticket.id} moves or deletes ${outside[0]}, outside its paths; add it to the ticket's paths`);
   const twice = files.find((path, i) => files.findIndex(other => fold(other) === fold(path)) !== i);
   need(twice === undefined, `Ticket ${ticket.id} names ${twice} twice in its moves and deletes`);
 }
-// A move lands where nothing is, in a real folder of the product: a link would carry the file out of it.
+// A move lands where nothing is, in a real folder of the product: a link would carry the file out of it. The native
+// real path gives the case the file system stores, and the Unicode form, which may not be the ticket's composed one.
 function landsInside(productRoot, path) {
   let folder = dirname(join(productRoot, path));
   while (!exists(folder)) folder = dirname(folder);
-  return lstatSync(folder).isDirectory() && realpathSync(folder) === folder;
+  return lstatSync(folder).isDirectory() && realpathSync.native(folder).normalize('NFC') === folder.normalize('NFC');
+}
+// Each path and folder Git tracks, by its folded form, with the spellings Git has for it.
+export function trackedSpellings(entries) {
+  const spellings = new Map();
+  for (const entry of entries) entry.split('/').forEach((_, i, parts) => { const prefix = parts.slice(0, i + 1).join('/'), key = fold(prefix); spellings.set(key, (spellings.get(key) ?? new Set()).add(prefix)); });
+  return spellings;
+}
+// Whether the file system folds case is read from what it does: .GIT reaching the repository's .git.
+function productListings(productRoot) {
+  const listed = git(productRoot, 'ls-files', '-z');
+  need(listed !== null, 'The index of the product repository cannot be read');
+  const [lower, upper] = ['.git', '.GIT'].map(name => lstatSync(join(productRoot, name), { throwIfNoEntry: false }));
+  return { tracked: trackedSpellings(listed.split('\0').filter(Boolean)), names: folder => { try { return readdirSync(join(productRoot, folder)); } catch { return null; } },
+    foldsCase: Boolean(lower && upper && lower.dev === upper.dev && lower.ino === upper.ino) };
+}
+// How the product spells `path` (a file, or a folder grant's folder), and which listing gave it; null when it is spelled so.
+// Git reports a path, and after judges it, as Git spells it: Git decides each part it tracks, the disk only a part Git does not
+// know. An exact name wins; a name in another case is the same file only where the file system folds case.
+export function spelledIn(path, { tracked, names, foldsCase }) {
+  if (!foldsCase) return null;
+  const parts = path.split('/'), real = [], by = new Set();
+  for (const part of parts) {
+    const folder = real.join('/'), under = folder ? `${folder}/` : '';
+    const known = [...(tracked.get(fold(under + part)) ?? [])].filter(entry => entry.startsWith(under)).map(entry => entry.slice(under.length));
+    const listing = known.length ? known : names(folder) ?? [], exact = known.length ? other => other === part : other => other.normalize('NFC') === part.normalize('NFC');
+    const name = listing.some(exact) ? part : listing.find(other => fold(other) === fold(part));
+    if (name === undefined) break;
+    if (name !== part) by.add(known.length ? 'Git' : 'the file system');
+    real.push(name);
+  }
+  const spelled = [...real, ...parts.slice(real.length)].join('/');
+  return spelled === path ? null : { spelled, by: [...by].join(' and ') };
+}
+function checkSpelling(product, ticket) {
+  for (const named of [...ticket.paths, ...(ticket.expectedPaths ?? []), ...(ticket.moves ?? []).flatMap(move => [move.from, move.to]), ...(ticket.deletes ?? [])]) {
+    const path = named.endsWith('/**') ? named.slice(0, -3) : named, spelling = spelledIn(path, product);
+    need(spelling === null, `Ticket ${ticket.id} names ${plain(named)}, which the product spells ${plain(spelling?.spelled + named.slice(path.length))} (as ${spelling?.by} ${spelling?.by.includes(' and ') ? 'have' : 'has'} it): write it so, or after would find the work outside the ticket`);
+  }
 }
 // The mode HEAD records at each of these paths; a path it does not hold as a file or a link is not in the map.
 function headModes(productRoot, paths) {
@@ -355,7 +396,8 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     need(!periodic.due.length, periodicDueReason(periodic), 'PERIODIC_REVIEW_DUE');
     checkProduct(productRoot, startAsIs === true);
     const held = readLease({ productRoot });
-    need(!(held.status === 'held' && held.lease.teamRoot === instance), 'This team holds the lock on the product repository but has no open batch: another "before" or a change of limits is running, or an earlier one died half-way. If nothing is running, clear it with: rw-batch.mjs abort --instance <instance-root>');
+    // A command's lock is judged by acquireLease, which takes it over once its process is gone.
+    need(!(held.status === 'held' && held.lease.teamRoot === instance && held.lease.commandPid === undefined), 'This team holds the lock on the product repository but has no open batch: another "before" is running, or an earlier one died half-way. If nothing is running, clear it with: rw-batch.mjs abort --instance <instance-root>');
 
     const taken = acquireLease({ teamRoot: instance, productRoot });
     need(!taken.errors, `The lock on the product repository could not be taken: ${taken.errors?.[0]?.reason}`);
@@ -368,7 +410,8 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     // Decision 11: paths already changed are kept out of the tickets' commits, so none may lie where a ticket writes.
     const mixed = product.preexisting.filter(path => batch.tickets.some(ticket => ticket.paths.some(grant => covers(grant, path))));
     need(!mixed.length, `These paths are already changed and lie where a ticket of this batch writes (${mixed.slice(0, 5).map(plain).join(', ')}); they could not be kept out of its commit. Commit or discard them first`);
-    for (const ticket of batch.tickets) checkFilesInProduct(productRoot, ticket);
+    const listings = productListings(productRoot);
+    for (const ticket of batch.tickets) { checkSpelling(listings, ticket); checkFilesInProduct(productRoot, ticket); }
     const resumes = batch.tickets.map(ticket => ticket.resume === undefined ? null : resumePlan({ instance, productRoot, ticket }));
     for (const resume of resumes) need(!resume?.problem, resume?.problem);
     const plans = resumes.map(resume => resume?.plan ?? null), resumedPaths = plans.flatMap(plan => plan?.paths ?? []);
@@ -418,23 +461,22 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
       sensitivePaths: batch.sensitivePaths, verificationCommands: batch.verificationCommands, review, reviewWrappers, triggerChanges: triggerChanges(lastFrozen, review), outsideCommits: outside,
       launchManifest: manifest ? 'chained' : 'absent', runRecord: frozen.record, args: frozen.args };
     const record = { ...body, digest: digest(body) };
-    // No batch is open: a record of an earlier one still in the root must not be read or archived as this one's.
-    for (const file of [PROGRESS_FILE, RETURN_FILE, SETTLE_FILE, VERDICTS_FILE, ...review.reviewers.map(REVIEW_FILE)]) rmSync(join(instance, file), { force: true });
-    writeFileSync(join(instance, BATCH_FILE), JSON.stringify(record, null, 2) + '\n', { flag: 'wx' });
+    // The ledger lines come before the record: a before that dies between leaves lines of a batch that never opened, which
+    // the next before writes again, and never an open batch the ledger does not name.
     // Decision 11: starting on a repository that is not clean is the PM's explicit choice, and it is logged.
-    if (record.startedAsIs && product.preexisting.length) {
-      try { appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} BATCH ${record.runId} STARTED AS IS: ${product.preexisting.length} path(s) were already changed and are kept out of the tickets' commits (${product.preexisting.slice(0, 10).map(plain).join(', ')}${product.preexisting.length > 10 ? ', ...' : ''}).\n`); }
-      catch (error) { rmSync(join(instance, BATCH_FILE), { force: true }); throw error; }
-    }
+    if (record.startedAsIs && product.preexisting.length)
+      appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} BATCH ${record.runId} STARTED AS IS: ${product.preexisting.length} path(s) were already changed and are kept out of the tickets' commits (${product.preexisting.slice(0, 10).map(plain).join(', ')}${product.preexisting.length > 10 ? ', ...' : ''}).\n`);
     // The resumed work enters the batch as the ticket's: the ledger names the patch it came from.
     const resumed = record.tickets.filter(entry => entry.resume).map(entry => `${at.slice(0, 10)} BATCH ${record.runId} RESUMES ${entry.id} from ${plain(entry.resume.patch)} (${entry.resume.digest.slice(0, 19)}…, ${entry.resume.paths.length} path(s)), applied to the work tree by before.\n`).join('');
     const hand = outside.commits ?? [], made = hand.length ? `${at.slice(0, 10)} BATCH ${record.runId} COMMITS MADE OUTSIDE THE KIT (owner spot review): ${outside.count} commit(s) on ${plain(product.branch)} since batch ${plain(outside.since.runId)} ended at ${outside.since.commit.slice(0, 8)} (${hand.slice(0, 10).map(sha => sha.slice(0, 8)).join(', ')}${outside.count > 10 ? ', ...' : ''}).\n`
       : outside.commits === null && outside.since ? `${at.slice(0, 10)} BATCH ${record.runId} COMMITS MADE OUTSIDE THE KIT CANNOT BE TOLD (owner spot review): on ${plain(product.branch)} since batch ${plain(outside.since.runId)}: ${outside.reason}.\n` : '';
     // ADR 0010, amendment of 2026-11-26: a ticket whose work ran before and was not committed is named for the owner; nothing is refused.
     const again = record.tickets.filter(entry => entry.earlierRuns.count).map(({ id, earlierRuns: { runs, count } }) => `${at.slice(0, 10)} BATCH ${record.runId} RUNS ${id} AGAIN (owner spot review): ${count} earlier run(s) by the engine that the kit did not commit: ${count > 10 ? '..., ' : ''}${runs.slice(-10).map(run => `${plain(run.runId)} as ${plain(run.ticket)} (${run.status})`).join(', ')}.\n`).join('');
-    if (made || again || resumed) try { appendFileSync(join(instance, LEDGER), made + again + resumed); } catch (error) { rmSync(join(instance, BATCH_FILE), { force: true }); throw error; }
-    try { recordFrozen({ instance, review, changes: record.triggerChanges, runId: record.runId, at }); }
-    catch (error) { rmSync(join(instance, BATCH_FILE), { force: true }); throw error; }
+    if (made || again || resumed) appendFileSync(join(instance, LEDGER), made + again + resumed);
+    recordFrozen({ instance, review, changes: record.triggerChanges, runId: record.runId, at });
+    // No batch is open: a record of an earlier one still in the root must not be read or archived as this one's.
+    for (const file of [PROGRESS_FILE, RETURN_FILE, SETTLE_FILE, VERDICTS_FILE, ...review.reviewers.map(REVIEW_FILE)]) rmSync(join(instance, file), { force: true });
+    writeFileSync(join(instance, BATCH_FILE), JSON.stringify(record, null, 2) + '\n', { flag: 'wx' });
     lease = null; opened = false; applied.length = 0;
     return record;
   } catch (error) {
@@ -459,6 +501,10 @@ export function abortBatch({ teamRoot, instanceRoot }) {
     need(!exists(join(instance, JOURNAL)), 'A mode switch was interrupted; roll it back first with: team-mode.mjs switch recover --instance <instance-root>');
     const record = readJSON(join(instance, BATCH_FILE)), held = readLease({ productRoot }), boundary = readBoundary(instance);
     const ours = held.status === 'held' && held.lease.teamRoot === instance, open = boundary ? stateOf(boundary) !== 'closed' : false;
+    // Neither a command of this team nor an after of this batch that still runs loses its lock or its records under it.
+    need(!(ours && commandRunning(held.lease)), `A command of this team holds the lock on the product repository and is still running (process ${held.lease?.commandPid}): wait for it to end, or stop it, then run abort again. If process ${held.lease?.commandPid} is not a command of the kit (its id was given to another program), release the lock with: node kit/scripts/lease-router-worker.mjs release --product-root <product-root> --lease ${held.lease?.digest}`);
+    const closed = readJSON(join(instance, AFTER_FILE));
+    need(!(closed?.stage === 'batch-closing' && alive(closed.pid)), `An after of this batch is still running (process ${plain(closed?.pid)}); it may be running the verification commands: wait for it to end, or stop it, then run abort again. If process ${plain(closed?.pid)} is not an after of this batch (its id was given to another program), remove ${AFTER_FILE}, which then holds only that claim, and run abort again`);
     const hooksMoved = typeof record?.hooks?.digest === 'string' && hooksOf(productRoot).digest !== record.hooks.digest ? `${HOOKS_MOVED}. ` : '';
     // After releases the lock when it closes a batch: a free lock is reported as such, not as a release that failed.
     const lockReleased = ours || (held.status === 'free' ? 'already-free' : false);
@@ -472,7 +518,10 @@ export function abortBatch({ teamRoot, instanceRoot }) {
       const made = (readJSON(join(instance, PROGRESS_FILE))?.commits ?? []).filter(commit => typeof commit?.ticket === 'string' && TICKET_ID.test(commit.ticket) && /^[a-f0-9]{40}$/.test(commit?.sha ?? '')).map(commit => `${commit.ticket} ${commit.sha.slice(0, 8)}`);
       // ADR 0011, amendment of 2026-11-26: no ticket flagged for review that no review passed is left for a commit by hand.
       // left refuses a batch whose records were changed, so its work is saved by hand.
-      const closed = readJSON(join(instance, AFTER_FILE)), traced = attributable(record, closed), unknown = `the batch's records are not the ones before and after wrote, so ${BY_HAND}`;
+      const traced = attributable(record, closed), unknown = `the batch's records are not the ones before and after wrote, so ${BY_HAND}`;
+      // Patches after, resolve or an earlier abort already saved, which records that cannot be traced do not name.
+      const found = traced ? [] : [...new Set([record?.runId, closed?.runId])].filter(name => typeof name === 'string' && RUN_ID.test(name)).flatMap(name => [`${LEFT}/${name}`, `${HELD}/${name}`])
+        .flatMap(folder => { try { return readdirSync(join(instance, folder)).filter(file => file.endsWith('.patch') && TICKET_ID.test(file.slice(0, -6))).sort().map(file => `${folder}/${file}`); } catch { return []; } });
       const holds = holdUnpassed({ instance, productRoot, runId: id }), [out, stuck, gone] = ['patch', 'in-tree', 'not-in-tree'].map(state => holds.filter(entry => entry.state === state));
       // after saved these and took them out of the tree; they stay patches.
       const aside = traced && Array.isArray(closed.setAside) ? closed.setAside.filter(entry => entry?.state === 'patch' && TICKET_ID.test(entry.ticket ?? '') && entry.patch === leftAt(closed.runId, entry.ticket) && exists(join(instance, entry.patch))) : [];
@@ -480,7 +529,8 @@ export function abortBatch({ teamRoot, instanceRoot }) {
       const named = [aside.length ? `Set aside by after as patches, out of the work tree: ${aside.map(entry => `${entry.ticket} ${entry.patch}`).join(', ')}` : '',
         out.length ? `Held as patches, out of the work tree: ${out.map(entry => `${entry.ticket} (${entry.reason}${entry.by === 'resolve' ? ', by resolve' : ''}) ${entry.patch}`).join(', ')}` : '',
         stuck.length ? `LEFT IN THE WORK TREE with no review passed, since abort could not take them out: ${stuck.map(entry => `${entry.ticket} (${entry.reason}; ${entry.problem}${entry.patch ? `; ${savedWhole(entry.patch)}` : ''})`).join(', ')}` : '',
-        gone.length ? `Flagged for review, not passed, and no longer in the work tree: ${gone.map(entry => `${entry.ticket} (${entry.reason})`).join(', ')}` : ''].filter(Boolean).map(text => ` ${text}.`).join('');
+        gone.length ? `Flagged for review, not passed, and no longer in the work tree: ${gone.map(entry => `${entry.ticket} (${entry.reason})`).join(', ')}` : '',
+        found.length ? `Already saved as patches for this batch, and taken out of the work tree or being taken out: ${found.join(', ')}; that work is not saved again by hand` : ''].filter(Boolean).map(text => ` ${text}.`).join('');
       const stamp = new Date().toISOString(), note = { schemaVersion: 1, stage: 'batch-archived-without-commit', runId: id, archivedAt: stamp, commitsMade: made, held: holds, boundary: boundary ? 'closed' : 'not-restored', lockReleased,
         next: `${hooksMoved}${work}: ${traced ? `save the work each ticket left as a patch, out of the work tree, with: ${LEFT_COMMAND}, then commit by hand on the working branch, or discard, only what belongs to no ticket${stuck.length ? '; a ticket left in the work tree that no review passed is never committed by hand: once the cause named below is gone, left saves it, unless abort already saved its patch' : ''}` : unknown}.${named}${out.length || stuck.length || aside.length ? ' A held patch comes back as the resume of a ticket of a later batch, where it is checked and reviewed as that ticket\'s work.' : ''}${boundary ? '' : ' The write-boundary file is missing or was changed: a mode switch to specialist and back rebuilds it.'}` };
       appendFileSync(join(instance, LEDGER), `${stamp.slice(0, 10)} BATCH ${id} ARCHIVED WITHOUT COMMIT by rw-batch.mjs abort: the batch was not finished by the kit. ${work}${traced ? '' : `: ${unknown}`}.${named}\n`);

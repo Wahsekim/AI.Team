@@ -126,6 +126,15 @@ test('no session writes the team\'s limits with a file tool, the PM\'s included:
   assert.equal(decideCall({ input: at(limits), boundary: null, projectDir: f.team }).decision, 'deny');
 });
 
+test('no session writes the limits file\'s .tmp with a file tool: a change of limits renames it into place', t => {
+  const f = fixture(t); arm(f);
+  const at = (path, extra = {}) => ({ ...call(f, undefined, 'Write', path), cwd: f.team, ...extra });
+  for (const [input, why] of [[at(join(f.team, 'profiles/team-mode.json.tmp')), 'the PM\'s session'], [at('profiles/team-mode.json.tmp', { agent_type: 'sample-auditor' }), 'a governance role'],
+    [at('PROFILES/team-mode.JSON.tmp', { agent_type: 'sample-worker-exec' }), 'a worker, in another case'], [{ ...at('profiles/team-mode.json.tmp'), tool_name: 'Edit' }, 'Edit']])
+    assert.equal(runHook(f, input).status, 2, why);
+  assert.equal(runHook(f, at('profiles/team-mode.json.bak')).status, 0, 'another file');
+});
+
 test('every hook call is logged without paths or commands, so a write that got through can be explained', t => {
   const f = fixture(t); arm(f);
   const secret = 'echo TOP-SECRET > /somewhere/else';

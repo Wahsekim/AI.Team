@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync, appendFileSync, renameSync, mkdirSync, mkd
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { digest, bytesDigest } from '../loop/contracts.mjs';
-import { git, gitRun, acquireLease, releaseLease, readLease } from './lease.mjs';
+import { git, gitRun, acquireLease, releaseLease } from './lease.mjs';
 import { readBoundary, closeBoundary, stateOf } from './write-boundary.mjs';
 import { runCommands, confirmedOf } from './run-commands.mjs';
 import { AFTER_FILE, RESOLUTION_FILE, RUN_ID, TICKET_ID, changedPaths, contentOf, hooksOf, plain, HOOKS_MOVED } from './batch.mjs';
@@ -114,7 +114,7 @@ export function holdUnpassed({ instance, productRoot, runId }) {
   // abort releases this team's lock, which a resolve still running holds: its removals are not raced.
   if (resolving(resolution))
     return held.map(({ ticket, reason, recorded }) => ({ ticket, reason, state: 'in-tree', paths: recorded, problem: `A resolve of this batch is still running (process ${resolution.pid}); nothing is taken out while it runs` }));
-  const taken = acquireLease({ teamRoot: instance, productRoot });
+  const taken = acquireLease({ teamRoot: instance, productRoot, command: true });
   try {
     const { head, changed, problem } = productState(productRoot, taken);
     return held.map(({ ticket, reason, recorded }) => {
@@ -157,10 +157,8 @@ export function resolveBatch({ teamRoot, instanceRoot, run = runCommands }) {
     const named = runs => runs.map(run => `${plain(run.command)} (${run.reviewer}'s brief ${run.attempt}: ${run.timedOut ? 'timed out' : `exit ${run.exit}`})`).join(', '), failures = named(failedAtBrief);
     need(!holding.length || batch.preexisting.length || after.left.length || reasons.some(Boolean), `A verification command failed when the review was briefed, on a work tree that held only what would be committed: ${named(holding)}. ${ABANDON}`);
     product = batch.productRoot;
-    // The lock of a resolve that died is taken over; one that still runs is not.
-    const held = readLease({ productRoot: product });
-    if (kept?.lease && held.status === 'held' && held.lease.digest === kept.lease) { need(!alive(kept.pid), 'Another resolve of this batch is running'); lease = kept.lease; }
-    else { const taken = acquireLease({ teamRoot: instance, productRoot: product }); need(!taken.errors, `The lock on the product repository could not be taken: ${taken.errors?.[0]?.reason}`); lease = taken.lease.digest; }
+    const taken = acquireLease({ teamRoot: instance, productRoot: product, command: true });
+    need(!taken.errors, `The lock on the product repository could not be taken: ${taken.errors?.[0]?.reason}`); lease = taken.lease.digest;
     // Another resolve may have finished between the first read and the lock.
     const current = exists(path) ? readJSON(path) : null;
     if (intact(current, 'batch-resolved') && current.afterDigest === after.digest) return current;
@@ -172,7 +170,7 @@ export function resolveBatch({ teamRoot, instanceRoot, run = runCommands }) {
     need(gitDir && !busy.length, `A Git operation is in progress in the product repository (${busy.join(', ')})`);
     need(hooksOf(product).digest === batch.hooks?.digest, `${HOOKS_MOVED}. ${ABANDON}`);
 
-    let journal = { schemaVersion: 1, stage: 'batch-resolving', runId: batch.runId, batchDigest: batch.digest, afterDigest: after.digest, reviewsDigest, lease, pid: process.pid,
+    let journal = { schemaVersion: 1, stage: 'batch-resolving', runId: batch.runId, batchDigest: batch.digest, afterDigest: after.digest, reviewsDigest, pid: process.pid,
       removed: kept?.removed ?? [], verification: kept?.verification ?? null };
     const save = next => { journal = next; replace(path, journal); };
     save(journal);
