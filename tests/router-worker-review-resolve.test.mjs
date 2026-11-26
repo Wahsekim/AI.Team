@@ -14,7 +14,7 @@ import { runWorkflow, makeAgentImpl } from '../scripts/lib/workflow-harness.mjs'
 import { recordNoAnswer } from '../src/router-worker/review-judge.mjs';
 import { reviewBrief } from '../src/router-worker/review-brief.mjs';
 import { readLease } from '../src/router-worker/lease.mjs';
-import { git } from './fixtures/router-worker/standing-team.mjs';
+import { git, checksRan } from './fixtures/router-worker/standing-team.mjs';
 import { refusal, ticket, live, changed, runBatch, reportOf, failing, transcriptOf, batchOf, agentsOf } from './fixtures/router-worker/review.mjs';
 
 // The engine refuses a no-op verification command such as true, so pwd stands for a command that passes.
@@ -238,7 +238,7 @@ test('a batch started as is holds more than what would be committed: a failure w
   assert.equal(open.errors, undefined, JSON.stringify(open.errors));
   const { result } = await runWorkflow({ scriptPath: join(f.root, '.claude/workflows/run-n-rounds.js'), args: open.args, agentImpl: makeAgentImpl(agentsOf(f.commands)) });
   mkdirSync(join(f.product, 'src'), { recursive: true }); writeFileSync(join(f.product, 'src/authz.js'), 'export const x = 2;\n');
-  appendFileSync(join(f.root, '.claude/rw-write-boundary.log.jsonl'), JSON.stringify({ at: new Date().toISOString(), tool: 'Edit', agentType: 'tag-list-fixture-worker-exec', judged: true, decision: 'allow' }) + '\n');
+  checksRan(f.root, open);
   const after = afterBatch({ ...f.common, result });
   assert.equal(after.errors, undefined, JSON.stringify(after.errors)); assert.deepEqual(after.left, [], 'a path changed before the batch is not left by after');
   writeFileSync(join(f.base, 'gate-fails'), '');

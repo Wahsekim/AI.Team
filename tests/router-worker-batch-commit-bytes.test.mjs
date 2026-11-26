@@ -5,7 +5,7 @@ import { writeFileSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { afterBatch } from '../src/router-worker/batch-close.mjs';
 import { runWorkflow, makeAgentImpl } from '../scripts/lib/workflow-harness.mjs';
-import { git } from './fixtures/router-worker/standing-team.mjs';
+import { git, checksRan } from './fixtures/router-worker/standing-team.mjs';
 import { live, ticket, batchOf, refusal } from './fixtures/router-worker/review.mjs';
 
 const write = (root, path, text, mode) => { mkdirSync(dirname(join(root, path)), { recursive: true }); writeFileSync(join(root, path), text, mode ? { mode } : undefined); };
@@ -19,6 +19,7 @@ async function closedWith(t, hook) {
   const worker = () => { writeFileSync(join(f.product, 'src/app.js'), 'x = 2\n'); return { outcome: 'done', progress: true, filesTouched: ['src/app.js'], decisionsCount: 1, selfReportTokens: 100, blocked: false, terminalStop: false, notes: 'set x' }; };
   const verifier = () => ({ pass: true, staticPass: true, e2ePass: true, summary: 'ok', commandsRun: f.commands.map(command => ({ command, exitCode: 0 })), failures: [] });
   const { result } = await runWorkflow({ scriptPath: join(f.root, '.claude/workflows/run-n-rounds.js'), args: open.args, agentImpl: makeAgentImpl({ worker, verifier }) });
+  checksRan(f.root, open);
   const closed = afterBatch({ ...f.common, result });
   assert.equal(closed.errors, undefined, JSON.stringify(closed.errors)); assert.equal(closed.commits.length, 1);
   return f;

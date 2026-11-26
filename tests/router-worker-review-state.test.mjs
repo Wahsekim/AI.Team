@@ -1,7 +1,7 @@
 // ADR 0011, decisions 4, 11 and 12: the review state a flagged batch enters at "after", and the brief a reviewer gets.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, readFileSync, existsSync, mkdirSync, rmSync, appendFileSync } from 'node:fs';
+import { writeFileSync, readFileSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { beforeBatch, abortBatch } from '../src/router-worker/batch.mjs';
@@ -13,7 +13,7 @@ import { readBoundary, decideCall } from '../src/router-worker/write-boundary.mj
 import { proposeLimits, changeLimits } from '../src/router-worker/switch.mjs';
 import { runWorkflow, makeAgentImpl } from '../scripts/lib/workflow-harness.mjs';
 import { readLease } from '../src/router-worker/lease.mjs';
-import { fixture, git } from './fixtures/router-worker/standing-team.mjs';
+import { fixture, git, checksRan } from './fixtures/router-worker/standing-team.mjs';
 
 const refusal = result => result.errors?.[0];
 const ticket = (id, paths, extra = {}) => ({ id, title: `Ticket ${id}`, goal: `Goal of ${id}`, acceptance: [`${id} acceptance holds`], paths, estimate: { execTokens: 12000, checkTokens: 6000, reworkTokens: 6000 }, ...extra });
@@ -36,7 +36,7 @@ async function closed(t, tickets, edits) {
   assert.equal(open.errors, undefined, JSON.stringify(open.errors));
   const { result } = await runWorkflow({ scriptPath: join(f.root, '.claude/workflows/run-n-rounds.js'), args: open.args, agentImpl: makeAgentImpl(agents) });
   for (const [path, text] of Object.entries(edits)) { mkdirSync(join(f.product, path, '..'), { recursive: true }); writeFileSync(join(f.product, path), text); }
-  appendFileSync(join(f.root, '.claude/rw-write-boundary.log.jsonl'), JSON.stringify({ at: new Date().toISOString(), tool: 'Edit', agentType: WORKERS[0], judged: true, decision: 'allow' }) + '\n');
+  checksRan(f.root, open);
   const after = afterBatch({ ...f.common, result });
   assert.equal(after.errors, undefined, JSON.stringify(after.errors));
   return { ...f, open, result, after };

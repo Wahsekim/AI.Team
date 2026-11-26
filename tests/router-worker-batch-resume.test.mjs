@@ -8,7 +8,7 @@ import { afterBatch } from '../src/router-worker/batch-close.mjs';
 import { reviewBrief } from '../src/router-worker/review-brief.mjs';
 import { readLease } from '../src/router-worker/lease.mjs';
 import { runWorkflow, makeAgentImpl } from '../scripts/lib/workflow-harness.mjs';
-import { git } from './fixtures/router-worker/standing-team.mjs';
+import { git, checksRan } from './fixtures/router-worker/standing-team.mjs';
 import { live, ticket, batchOf, refusal } from './fixtures/router-worker/review.mjs';
 
 const taskData = brief => JSON.parse(brief.split('\n').find(line => line.startsWith('{"assignmentId"')));
@@ -54,6 +54,7 @@ test('the resumed work and what the worker adds are committed as the ticket\'s',
   const worker = () => { writeFileSync(join(f.product, 'src/list/a.js'), 'a\nresumed\nfinished\n'); return { outcome: 'done', progress: true, filesTouched: ['src/list/a.js'], decisionsCount: 1, selfReportTokens: 100, blocked: false, terminalStop: false, notes: 'finished' }; };
   const verifier = () => ({ pass: true, staticPass: true, e2ePass: true, summary: 'ok', commandsRun: f.commands.map(command => ({ command, exitCode: 0 })), failures: [] });
   const { result } = await runWorkflow({ scriptPath: join(f.root, '.claude/workflows/run-n-rounds.js'), args: open.args, agentImpl: makeAgentImpl({ worker, verifier }) });
+  checksRan(f.root, open);
   const closed = afterBatch({ ...f.common, result });
   assert.equal(closed.errors, undefined, JSON.stringify(closed.errors));
   assert.deepEqual(closed.tickets[0].changedPaths, ['src/list/a.js', 'src/list/new.js']); assert.deepEqual(closed.left, []);
@@ -140,7 +141,8 @@ test('resumed work left as before applied it raises no unexplained write', async
   const { result } = await runWorkflow({ scriptPath: join(f.root, '.claude/workflows/run-n-rounds.js'), args: open.args, agentImpl: makeAgentImpl({ worker: quiet, verifier }) });
   const closed = afterBatch({ ...f.common, result });
   assert.equal(closed.errors, undefined, JSON.stringify(closed.errors));
-  assert.deepEqual(closed.findings.map(finding => finding.code), []); assert.deepEqual(closed.tickets[0].changedPaths, ['src/list/a.js', 'src/list/new.js']);
+  // No worker call is logged: the resumed paths raise no unexplained write, and the ticket that passed with no checker run is held.
+  assert.deepEqual(closed.findings.map(finding => finding.code), ['CHECK_RUNS_MISSING']); assert.deepEqual(closed.tickets[0].changedPaths, ['src/list/a.js', 'src/list/new.js']);
 });
 
 test('a reviewer of a resumed ticket whose diff is too large for the brief is pointed to the patch', async t => {
@@ -150,6 +152,7 @@ test('a reviewer of a resumed ticket whose diff is too large for the brief is po
   const quiet = () => ({ outcome: 'done', progress: true, filesTouched: [], decisionsCount: 1, selfReportTokens: 100, blocked: false, terminalStop: false, notes: 'nothing to add' });
   const verifier = () => ({ pass: true, staticPass: true, e2ePass: true, summary: 'ok', commandsRun: f.commands.map(command => ({ command, exitCode: 0 })), failures: [] });
   const { result } = await runWorkflow({ scriptPath: join(f.root, '.claude/workflows/run-n-rounds.js'), args: open.args, agentImpl: makeAgentImpl({ worker: quiet, verifier }) });
+  checksRan(f.root, open);
   assert.deepEqual(afterBatch({ ...f.common, result }).reviews.security.tickets, ['T-1']);
   const made = reviewBrief({ ...f.common, reviewer: 'security' });
   assert.equal(made.errors, undefined, JSON.stringify(made.errors));

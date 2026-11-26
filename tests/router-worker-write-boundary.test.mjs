@@ -185,6 +185,17 @@ test('with no boundary every subagent write and shell command is judged, and the
   assert.deepEqual([judged('Write', 'any'), judged('Edit', 'any'), judged('Bash', 'any'), judged('Read', 'any'), judged('Write'), judged('Bash')], [true, true, true, false, false, false]);
 });
 
+test('a worker\'s approved command is logged as the batch\'s own command; a refused one as its redacted text', () => {
+  const boundary = { productRoot: '/p', wrappers: { w: { duty: 'check', writePaths: [], commands: ['npm test', 'npm run lint'] } } };
+  const logged = (command, cwd = '/t') => { const input = { tool_name: 'Bash', agent_type: 'w', cwd, tool_input: { command } }, verdict = decideCall({ input, boundary });
+    const { at: _at, ...line } = logEntry({ input, boundary, decision: verdict.decision, command: verdict.command, at: 'now' }); return line; };
+  const approved = command => ({ tool: 'Bash', agentType: 'w', judged: true, decision: 'approve', command });
+  assert.deepEqual(logged('cd "/p" && npm test'), approved('npm test'));
+  assert.deepEqual(logged(' cd /p && npm run lint\n'), approved('npm run lint'));
+  assert.deepEqual(logged('npm test', '/p'), approved('npm test'));
+  assert.deepEqual(logged('API_TOKEN=abc npm test'), { tool: 'Bash', agentType: 'w', judged: true, decision: 'deny', command: 'API_TOKEN=<redacted> npm test' });
+});
+
 test('a command asked to run outside the sandbox is refused whatever value asks for it', () => {
   const boundary = { productRoot: '/p', wrappers: { w: { duty: 'exec', writePaths: [], commands: ['npm test'] } } };
   const verdict = value => decideCall({ boundary, input: { tool_name: 'Bash', agent_type: 'w', cwd: '/p', tool_input: { command: 'npm test', ...(value === undefined ? {} : { dangerouslyDisableSandbox: value }) } } }).decision;

@@ -13,7 +13,7 @@ import { readLease, acquireLease, releaseLease } from '../src/router-worker/leas
 import { observeIsolation } from '../src/router-worker/isolation.mjs';
 import { readBoundary, decideCall, closeBoundary } from '../src/router-worker/write-boundary.mjs';
 import { DEFAULT_LIMITS, proposeLimits, changeLimits, boundLimits } from '../src/router-worker/switch.mjs';
-import { fixture, git } from './fixtures/router-worker/standing-team.mjs';
+import { fixture, git, runUnderHook, checksRan } from './fixtures/router-worker/standing-team.mjs';
 import { meterOf } from './fixtures/router-worker/meter.mjs';
 import { digest } from '../src/loop/contracts.mjs';
 
@@ -79,7 +79,8 @@ test('in a batch a worker\'s shell runs the confirmed verification commands from
   assert.equal(approved.status, 0, approved.stderr); assert.deepEqual(JSON.parse(approved.stdout).hookSpecificOutput, { hookEventName: 'PreToolUse', permissionDecision: 'allow', permissionDecisionReason: 'A command frozen for this batch: a verification command the owner confirmed, or a move or deletion a ticket of this batch declared' });
   const refused = hook(exec, 'curl example.invalid'); assert.equal(refused.status, 2); assert.equal(refused.stdout, ''); assert.match(refused.stderr, /only the verification commands confirmed for this team/);
   const unjudged = hook('tag-list-fixture-architect', 'ls'); assert.equal(unjudged.status, 0); assert.equal(unjudged.stdout, '', 'no decision is given for an agent that is not a worker');
-  assert.deepEqual(f.read('.claude/rw-write-boundary.log.jsonl').trim().split('\n').map(line => JSON.parse(line)).map(line => [line.decision, line.judged]), [['approve', true], ['deny', true], ['allow', false]]);
+  assert.deepEqual(f.read('.claude/rw-write-boundary.log.jsonl').trim().split('\n').map(line => JSON.parse(line)).map(line => [line.decision, line.judged, line.command]), [['approve', true, 'npm test'], ['deny', true, 'curl example.invalid'], ['allow', false, undefined]],
+    'an approved command is logged as the batch\'s own text, without the cd; a refused one as written');
   // When the batch is over the shell is closed again.
   assert.equal(abortBatch({ teamRoot: f.kit, instanceRoot: f.root }).errors, undefined);
   assert.match(shell(exec, `cd "${f.product}" && npm test`).reason, /no batch is open/);
@@ -273,17 +274,17 @@ test('CLI: before prints the batch record with the preflight manifest chained in
 });
 
 // A batch run by the real engine with mock agents; `edits` is what the workers leave in the product.
-async function ran(t, { tickets, agents = {}, edits = {}, hook = true, extra = {}, hooks = () => ({}) }) {
+async function ran(t, { tickets, agents = {}, edits = {}, hook = true, extra = {}, hooks = () => ({}), fields = {} }) {
   const f = live(t);
   // Commit hooks the repository had before the batch; one written later is a finding.
   for (const [name, script] of Object.entries(hooks(f))) writeFileSync(join(f.product, '.git/hooks', name), script, { mode: 0o755 });
-  const open = await f.before(batchOf(...tickets), extra);
+  const open = await f.before({ ...batchOf(...tickets), ...fields }, extra);
   assert.equal(open.errors, undefined, JSON.stringify(open.errors));
   // The Guardian's brief is kept as the engine wrote it: it names the run, and the settlement reads that.
   let guardianBrief = null; const mock = makeAgentImpl(agents), agentImpl = (prompt, opts, index) => { if (opts?.schema?.required?.includes('runawayDetected')) guardianBrief = prompt; return mock(prompt, opts, index); };
   const { result } = await runWorkflow({ scriptPath: join(f.root, '.claude/workflows/run-n-rounds.js'), args: open.args, agentImpl });
   for (const [path, text] of Object.entries(edits)) { mkdirSync(join(f.product, path, '..'), { recursive: true }); writeFileSync(join(f.product, path), text); }
-  if (hook) appendFileSync(join(f.root, '.claude/rw-write-boundary.log.jsonl'), JSON.stringify({ at: new Date().toISOString(), tool: 'Edit', agentType: 'tag-list-fixture-worker-exec', judged: true, decision: 'allow' }) + '\n');
+  if (hook) checksRan(f.root, open);
   const after = () => afterBatch({ teamRoot: f.kit, instanceRoot: f.root, result }), commit = () => commitBatch({ teamRoot: f.kit, instanceRoot: f.root });
   const log = () => git(f.product, 'log', '--format=%s', `${open.productHead}..HEAD`).trim().split('\n').filter(Boolean).reverse();
   // The next batch opens only after this one is settled; a test that is about something else marks it as not metered.
@@ -408,7 +409,7 @@ test('commit refuses when the product changed after the batch was closed, keeps 
   assert.match(refusal(await dirty.before(batchOf(ticket('US-01', ['notes.txt', 'src/a.js'])), { startAsIs: true })).reason, /already changed and lie where a ticket of this batch writes \(notes\.txt\)/);
   const open = await dirty.before(batchOf(ticket('US-01', ['src/a.js'])), { startAsIs: true });
   const { result } = await runWorkflow({ scriptPath: join(dirty.root, '.claude/workflows/run-n-rounds.js'), args: open.args, agentImpl: makeAgentImpl({}) });
-  writeFileSync(join(dirty.product, 'src/a.js'), 'a\n'); appendFileSync(join(dirty.root, '.claude/rw-write-boundary.log.jsonl'), JSON.stringify({ at: new Date().toISOString(), tool: 'Write', agentType: 'tag-list-fixture-worker-exec', decision: 'allow' }) + '\n');
+  writeFileSync(join(dirty.product, 'src/a.js'), 'a\n'); checksRan(dirty.root, open);
   assert.equal(afterBatch({ teamRoot: dirty.kit, instanceRoot: dirty.root, result }).errors, undefined);
   assert.equal(commitBatch({ teamRoot: dirty.kit, instanceRoot: dirty.root }).errors, undefined);
   assert.deepEqual(git(dirty.product, 'show', '--name-only', '--format=', 'HEAD').trim().split('\n'), ['src/a.js'], 'the staged path from before the batch is not in the commit');
@@ -436,7 +437,7 @@ test('commit handles what a worker did through Git: a staged deletion, a staged 
   const { result } = await runWorkflow({ scriptPath: join(f.root, '.claude/workflows/run-n-rounds.js'), args: open.args, agentImpl: makeAgentImpl({}) });
   git(f.product, 'rm', '-q', 'lib/one.js'); git(f.product, 'mv', 'lib/mv.js', 'lib/moved.js');
   for (let i = 0; i < 300; i++) writeFileSync(join(f.product, 'lib', `gen ${i} é.js`), 'x\n');
-  appendFileSync(join(f.root, '.claude/rw-write-boundary.log.jsonl'), JSON.stringify({ at: new Date().toISOString(), tool: 'Bash', agentType: 'tag-list-fixture-worker-exec', decision: 'allow' }) + '\n');
+  checksRan(f.root, open);
   assert.equal(afterBatch({ teamRoot: f.kit, instanceRoot: f.root, result }).status, 'clean');
   const done = commitBatch({ teamRoot: f.kit, instanceRoot: f.root });
   assert.equal(done.errors, undefined, JSON.stringify(done.errors)); assert.equal(git(f.product, 'status', '--porcelain').trim(), '');
@@ -470,7 +471,7 @@ test('a commit hook written or moved during a batch holds it; a hook that stages
   git(stub.product, 'add', '-A'); git(stub.product, 'commit', '-q', '-m', 'husky'); git(stub.product, 'config', 'core.hooksPath', '.husky/_');
   const opened = await stub.before(batchOf(...two)), ranStub = await runWorkflow({ scriptPath: join(stub.root, '.claude/workflows/run-n-rounds.js'), args: opened.args, agentImpl: makeAgentImpl({}) });
   writeFileSync(join(stub.product, 'src/app.js'), 'x\n'); writeFileSync(join(stub.product, '.husky/pre-commit'), `#!/bin/sh\ntouch "${join(stub.base, 'ran-as-pm')}"\n`, { mode: 0o755 });
-  appendFileSync(join(stub.root, '.claude/rw-write-boundary.log.jsonl'), JSON.stringify({ at: new Date().toISOString(), tool: 'Bash', agentType: 'tag-list-fixture-worker-exec', decision: 'allow' }) + '\n');
+  checksRan(stub.root, opened);
   const stubbed = afterBatch({ teamRoot: stub.kit, instanceRoot: stub.root, result: ranStub.result });
   assert.deepEqual(stubbed.findings.find(finding => finding.code === 'HOOKS_WRITTEN')?.paths, ['.husky/pre-commit']); assert.equal(stubbed.holdAll, true);
   assert.ok(refusal(commitBatch({ teamRoot: stub.kit, instanceRoot: stub.root })) || true); assert.equal(existsSync(join(stub.base, 'ran-as-pm')), false, 'the script never ran');
@@ -494,7 +495,7 @@ test('after reports a repository created inside the product and a path from befo
   const { result } = await runWorkflow({ scriptPath: join(f.root, '.claude/workflows/run-n-rounds.js'), args: open.args, agentImpl: makeAgentImpl({}) });
   mkdirSync(join(f.product, 'lib')); writeFileSync(join(f.product, 'lib/a.js'), 'a\n'); writeFileSync(join(f.product, 'notes.txt'), 'changed by a worker\n');
   mkdirSync(join(f.product, 'lib/sub')); git(join(f.product, 'lib/sub'), 'init', '-q'); git(join(f.product, 'lib/sub'), 'commit', '-q', '--allow-empty', '-m', 'inner');
-  appendFileSync(join(f.root, '.claude/rw-write-boundary.log.jsonl'), JSON.stringify({ at: new Date().toISOString(), tool: 'Write', agentType: 'tag-list-fixture-worker-exec', decision: 'allow' }) + '\n');
+  checksRan(f.root, open);
   const closed = afterBatch({ teamRoot: f.kit, instanceRoot: f.root, result });
   assert.deepEqual(closed.findings.find(finding => finding.code === 'NESTED_REPOSITORY').paths, ['lib/sub/']); assert.deepEqual(closed.findings.find(finding => finding.code === 'PREEXISTING_PATH_CHANGED').paths, ['notes.txt']);
   assert.deepEqual(closed.commits[0].paths, ['lib/a.js'], 'the nested repository is not in the commit'); assert.ok(closed.left.includes('lib/sub/'));
@@ -516,7 +517,7 @@ test('commit resumes by the commits it recorded, and refuses a branch that is no
   const rewound = live(t); git(rewound.product, 'commit', '-q', '--allow-empty', '-m', 'extra');
   const open = await rewound.before(batchOf(ticket('US-01', ['src/new.js'])));
   const { result } = await runWorkflow({ scriptPath: join(rewound.root, '.claude/workflows/run-n-rounds.js'), args: open.args, agentImpl: makeAgentImpl({}) });
-  writeFileSync(join(rewound.product, 'src/new.js'), 'n\n'); appendFileSync(join(rewound.root, '.claude/rw-write-boundary.log.jsonl'), JSON.stringify({ at: new Date().toISOString(), tool: 'Write', agentType: 'tag-list-fixture-worker-exec', decision: 'allow' }) + '\n');
+  writeFileSync(join(rewound.product, 'src/new.js'), 'n\n'); checksRan(rewound.root, open);
   assert.equal(afterBatch({ teamRoot: rewound.kit, instanceRoot: rewound.root, result }).errors, undefined);
   git(rewound.product, 'reset', '-q', '--hard', 'HEAD~1'); writeFileSync(join(rewound.product, 'src/new.js'), 'n\n');
   assert.match(refusal(commitBatch({ teamRoot: rewound.kit, instanceRoot: rewound.root })).reason, /not the batch's start plus the commits/);
@@ -570,7 +571,7 @@ test('a commit that died after archiving is finished by the next call; nothing i
 });
 
 test('each finding that questions the run holds every commit; each check of commit refuses on its own', async t => {
-  assert.deepEqual([...HOLD_ALL].sort(), ['BOUNDARY_CHANGED', 'GUARDIAN_NOT_CLEAN', 'HOOKS_CHANGED', 'HOOKS_WRITTEN', 'PRODUCT_BRANCH_CHANGED', 'PRODUCT_HEAD_MOVED']);
+  assert.deepEqual([...HOLD_ALL].sort(), ['BOUNDARY_CHANGED', 'CHECK_RUNS_MISSING', 'GUARDIAN_NOT_CLEAN', 'HOOKS_CHANGED', 'HOOKS_WRITTEN', 'HOOK_SAW_NO_WORKER', 'PRODUCT_BRANCH_CHANGED', 'PRODUCT_HEAD_MOVED']);
   const edits = { 'src/app.js': 'x\n' }, holds = (closed, code) => { assert.ok(closed.findings.some(finding => finding.code === code), `${code}: ${JSON.stringify(closed.findings)}`); assert.equal(closed.holdAll, true); assert.deepEqual(closed.commits, []); };
   const boundary = await ran(t, { tickets: two, edits }), file = join(boundary.root, '.claude/rw-write-boundary.json'), body = (({ digest: _old, ...rest }) => rest)(JSON.parse(readFileSync(file, 'utf8')));
   const widened = { ...body, wrappers: { ...body.wrappers, 'tag-list-fixture-worker-exec': { duty: 'exec', writePaths: ['**'] } } };
@@ -623,6 +624,41 @@ test('the Guardian of a standing batch is told it has no observer and a ceiling 
   const closed = f.after();
   assert.equal(closed.status, 'clean', JSON.stringify(closed.findings) + JSON.stringify(closed.account.blockers));
   assert.ok(!closed.findings.some(finding => finding.code.startsWith('GUARDIAN_'))); assert.deepEqual(closed.account.blockers, []); assert.equal(closed.holdAll, false);
+});
+
+const EXEC = 'tag-list-fixture-worker-exec', CHECK = 'tag-list-fixture-worker-check', edited = { 'src/app.js': 'x\n', 'src/api/tags.js': 't\n' };
+const held = (closed, code) => { assert.equal(closed.errors, undefined, JSON.stringify(closed.errors)); assert.ok(closed.findings.some(finding => finding.code === code), `${code}: ${JSON.stringify(closed.findings)}`);
+  assert.equal(closed.holdAll, true); assert.deepEqual(closed.commits, []); assert.match(closed.next.join('\n'), /No ticket of this batch is committed by the kit.*rw-batch\.mjs abort/); };
+
+test('a batch that changed files while the hook logged no call of its own workers holds every commit, whatever other agents of the team did', async t => {
+  const f = await ran(t, { tickets: two, edits: edited, hook: false });
+  assert.ok(f.open.args.allowedAgentTypes.includes('tag-list-fixture-architect'), 'a governance wrapper is an allowed agent of the run');
+  assert.deepEqual(runUnderHook(f.root, 'tag-list-fixture-architect', ['ls']), ['allow']);
+  const closed = f.after(); held(closed, 'HOOK_SAW_NO_WORKER');
+  assert.equal(closed.hook.workerCalls, 0); assert.match(closed.next.join('\n'), /did not load the write-boundary hook/);
+});
+
+test('every passed ticket needs a checker run of each of its verification commands in the hook log, or every commit is held', async t => {
+  const short = await ran(t, { tickets: two, edits: edited, hook: false });
+  // One checker run for two tickets; the exec worker's run of the same command does not count.
+  assert.deepEqual([...runUnderHook(short.root, CHECK, ['npm test']), ...runUnderHook(short.root, EXEC, ['npm test'])], ['approve', 'approve']);
+  const closed = short.after(); held(closed, 'CHECK_RUNS_MISSING');
+  assert.deepEqual(closed.findings.find(finding => finding.code === 'CHECK_RUNS_MISSING').commands, [{ command: 'npm test', needed: 2, seen: 1 }]);
+  assert.match(closed.next.join('\n'), /checker ran.*fewer times than the tickets that passed/);
+  const full = await ran(t, { tickets: two, edits: edited, hook: false });
+  assert.deepEqual(runUnderHook(full.root, CHECK, ['npm test', 'npm test']), ['approve', 'approve']);
+  const clean = full.after(); assert.equal(clean.status, 'clean', JSON.stringify(clean.findings)); assert.deepEqual(clean.commits.map(commit => commit.ticket), ['US-01', 'US-02']);
+  // A ticket with its own list needs runs of that list only.
+  const subset = await ran(t, { tickets: [two[0], { ...two[1], verificationCommands: ['npm test'] }], edits: edited, hook: false, fields: { verificationCommands: ['npm test', 'npm run lint'] } });
+  assert.deepEqual(runUnderHook(subset.root, CHECK, ['npm test', 'npm run lint', 'npm test']), ['approve', 'approve', 'approve']);
+  const kept = subset.after(); assert.equal(kept.status, 'clean', JSON.stringify(kept.findings)); assert.deepEqual(kept.commits.map(commit => commit.ticket), ['US-01', 'US-02']);
+});
+
+test('a batch opened by the earlier kit, whose hook did not log approved commands, closes without counting the checker\'s runs', async t => {
+  const f = await ran(t, { tickets: two, edits: edited, hook: false });
+  const { hookLogsCommands: _marker, ...earlier } = f.open; writeFileSync(join(f.root, BATCH_FILE), JSON.stringify(sealAgain(earlier)));
+  assert.deepEqual(runUnderHook(f.root, EXEC, ['npm test']), ['approve']);
+  const closed = f.after(); assert.equal(closed.status, 'clean', JSON.stringify(closed.findings)); assert.deepEqual(closed.commits.map(commit => commit.ticket), ['US-01', 'US-02']);
 });
 
 test('abort after a claimed or closed batch always frees the team; a forged archive never stands in for a commit', async t => {

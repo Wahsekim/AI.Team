@@ -407,3 +407,21 @@ blockers name the Guardian exactly when the batch's commits are held for it,
 and a batch frozen before this amendment keeps the blockers it was closed
 with, so it still settles.
 
+### 2026-11-26: after counts the checker's runs and holds a batch the hook did not see
+
+Status: Accepted.
+
+A batch whose session never loaded the write-boundary hook was still committed:
+`HOOK_SAW_NO_WORKER` held nothing, and one call by a governance role hid it.
+A ticket also passed on the checker's own report. The owner decided in session
+on 2026-11-26, accepting the recommendation of that day's review of the kit.
+
+`HOOK_SAW_NO_WORKER` counts only the calls of the batch's three workers and
+holds every commit. The hook logs, for each approved shell call of a worker,
+the command of the batch it matched. `after` holds every commit
+(`CHECK_RUNS_MISSING`) when, for a verification command, the checker's
+approved runs since the batch opened are fewer than the passed tickets that
+verify with it. The count does not tell tickets apart, so a checker that runs a
+command twice for one ticket covers for another that ran it not at all, and
+whether a run passed stays the checker's word; a batch opened before this
+amendment, whose record lacks `hookLogsCommands`, is not counted.

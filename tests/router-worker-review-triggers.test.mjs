@@ -1,7 +1,7 @@
 // ADR 0011, decisions 1, 3 and 8 to 10: the kit flags, per ticket, which reviewer a batch's changes require.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, readFileSync, existsSync, mkdirSync, rmSync, appendFileSync } from 'node:fs';
+import { writeFileSync, readFileSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { beforeBatch, abortBatch, BATCH_FILE } from '../src/router-worker/batch.mjs';
 import { afterBatch } from '../src/router-worker/batch-close.mjs';
@@ -10,7 +10,7 @@ import { runWorkflow, makeAgentImpl } from '../scripts/lib/workflow-harness.mjs'
 import { readLease } from '../src/router-worker/lease.mjs';
 import { loadReview, flagPaths, triggerChanges } from '../src/router-worker/review-triggers.mjs';
 import { digest } from '../src/loop/contracts.mjs';
-import { fixture, git } from './fixtures/router-worker/standing-team.mjs';
+import { fixture, git, checksRan } from './fixtures/router-worker/standing-team.mjs';
 
 const refusal = result => result.errors?.[0];
 const ticket = (id, paths, extra = {}) => ({ id, title: `Ticket ${id}`, goal: `Do ${id}`, acceptance: [`${id} works`], paths, estimate: { execTokens: 12000, checkTokens: 6000, reworkTokens: 6000 }, ...extra });
@@ -28,7 +28,7 @@ async function close(f, open, edits = {}) {
   assert.equal(open.errors, undefined, JSON.stringify(open.errors));
   const { result } = await runWorkflow({ scriptPath: join(f.root, '.claude/workflows/run-n-rounds.js'), args: open.args, agentImpl: makeAgentImpl({}) });
   for (const [path, text] of Object.entries(edits)) { mkdirSync(join(f.product, path, '..'), { recursive: true }); writeFileSync(join(f.product, path), text); }
-  appendFileSync(join(f.root, '.claude/rw-write-boundary.log.jsonl'), JSON.stringify({ at: new Date().toISOString(), tool: 'Edit', agentType: 'tag-list-fixture-worker-exec', judged: true, decision: 'allow' }) + '\n');
+  checksRan(f.root, open);
   const after = afterBatch({ teamRoot: f.kit, instanceRoot: f.root, result });
   assert.equal(after.errors, undefined, JSON.stringify(after.errors));
   return after;

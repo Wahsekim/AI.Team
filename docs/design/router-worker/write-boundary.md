@@ -57,9 +57,10 @@ names the wrapper and the product-relative path, never a host path.
 The hook appends one line per call to `.claude/rw-write-boundary.log.jsonl` in
 the activated copy: time, tool name, the agent name the runtime passed (or
 `null`), whether the call was judged against the boundary, and the decision. It
-holds no path, and no command except the text of a worker's shell command that
-was refused in a batch (at most 300 characters), which `after` reports to the
-owner. In a disposable copy Bash is matched only so that
+holds no path. In a batch it holds a worker's shell command: for an approved
+call, the batch's command it matched, as the batch froze it, which `after`
+counts for the checker; for a refused call, its own text, redacted and at most
+300 characters, which `after` reports to the owner. In a disposable copy Bash is matched only so that
 its calls are logged, and is not judged while the boundary file is intact. In a standing team the workers'
 shell is judged against the commands of the open batch
 ([details](batch.md#the-workers-shell)): the decision logged is then `approve`

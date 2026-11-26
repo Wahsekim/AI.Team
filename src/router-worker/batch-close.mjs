@@ -17,7 +17,7 @@ import { BATCH_FILE, AFTER_FILE, PROGRESS_FILE, RETURN_FILE, RESOLUTION_FILE, RE
 const LEDGER = 'pm-decisions.md';
 export const IN_PROGRESS = ['index.lock', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'BISECT_LOG', 'rebase-merge', 'rebase-apply'];
 // Findings after which no ticket of the batch is committed by the kit: what ran is not what was frozen.
-export const HOLD_ALL = ['BOUNDARY_CHANGED', 'PRODUCT_HEAD_MOVED', 'PRODUCT_BRANCH_CHANGED', 'GUARDIAN_NOT_CLEAN', 'HOOKS_CHANGED', 'HOOKS_WRITTEN'];
+export const HOLD_ALL = ['BOUNDARY_CHANGED', 'PRODUCT_HEAD_MOVED', 'PRODUCT_BRANCH_CHANGED', 'GUARDIAN_NOT_CLEAN', 'HOOKS_CHANGED', 'HOOKS_WRITTEN', 'HOOK_SAW_NO_WORKER', 'CHECK_RUNS_MISSING'];
 // An after that was claimed this recently is taken to be running; an older claim is one that died.
 const CLAIM_MS = 60000;
 export const ABANDON = 'If the batch cannot be committed by the kit, archive it with: rw-batch.mjs abort --instance <instance-root>, then commit or discard its changes by hand';
@@ -48,13 +48,15 @@ export function openBatch(teamRoot, instanceRoot) {
 
 // What the write-boundary hook logged since the batch opened. No worker call after a batch that changed
 // files means the session never loaded the hook, so the write limits were not enforced while it ran.
-function hookSeen(instance, wrappers, since) {
+// `checkRuns`: the batch's commands the hook approved for the checker, one entry per run.
+function hookSeen(instance, wrappers, checker, since) {
   let text = '';
   try { text = readFileSync(join(instance, LOG_FILE), 'utf8'); } catch { /* the hook never ran */ }
   const calls = text.split('\n').filter(Boolean).map(line => { try { return JSON.parse(line); } catch { return null; } }).filter(call => call && typeof call.at === 'string' && call.at >= since);
   const workers = calls.filter(call => wrappers.includes(call.agentType));
   const refused = [...new Set(workers.filter(call => call.tool === 'Bash' && call.decision === 'deny' && typeof call.command === 'string' && call.command).map(call => call.command))].slice(0, 20);
-  return { calls: calls.length, workerCalls: workers.length, denied: workers.filter(call => call.decision === 'deny').length, refused };
+  const checkRuns = workers.filter(call => call.agentType === checker && call.tool === 'Bash' && call.decision === 'approve' && typeof call.command === 'string').map(call => call.command);
+  return { calls: calls.length, workerCalls: workers.length, denied: workers.filter(call => call.decision === 'deny').length, refused, checkRuns };
 }
 
 // The output ceiling is the tickets' allowances plus the Guardian's share: the proposal is for the share used most against its limit.
@@ -155,10 +157,17 @@ export function afterBatch({ teamRoot, instanceRoot, result }) {
     const reviews = Object.fromEntries(batch.review.reviewers.map(name => [name, { tickets: tickets.filter(ticket => ticket.review?.required.includes(name)).map(ticket => ticket.id) }]).filter(([, entry]) => entry.tickets.length));
     const outside = files.filter(path => !batch.tickets.some(ticket => within(path, ticket.paths)));
     if (outside.length) findings.push({ code: 'WRITE_OUTSIDE_PATHS', paths: outside });
-    const { refused, ...hook } = hookSeen(instance, batch.args.allowedAgentTypes, batch.openedAt);
+    const { refused, checkRuns, ...hook } = hookSeen(instance, workers, batch.args.plan[0].verifierAgentType, batch.openedAt);
     // A resumed path that still holds what "before" applied was written by the PM, not by a worker.
     const applied = Object.assign({}, ...batch.tickets.map(ticket => ticket.resume?.content ?? {})), now = contentOf(product, Object.keys(applied));
     if (changed.some(path => !Object.hasOwn(applied, path) || applied[path] !== now[path]) && hook.workerCalls === 0) findings.push({ code: 'HOOK_SAW_NO_WORKER' });
+    // The log does not say which ticket a run was for, so the runs are counted against every passed ticket. An earlier kit's hook logged no approved command.
+    if (batch.hookLogsCommands === true) {
+      const short = batch.verificationCommands.map(command => ({ command,
+        needed: tickets.filter((ticket, i) => ticket.status === 'passed' && (batch.tickets[i].verificationCommands ?? batch.verificationCommands).includes(command)).length,
+        seen: checkRuns.filter(run => run === command).length })).filter(entry => entry.seen < entry.needed);
+      if (short.length) findings.push({ code: 'CHECK_RUNS_MISSING', commands: short });
+    }
 
     // ADR 0011, decision 4: a batch whose changes need a review leaves the workers closed and the reviewers judged.
     // A batch whose commits are all held is not reviewed: no verdict could release them.
@@ -181,6 +190,9 @@ export function afterBatch({ teamRoot, instanceRoot, result }) {
     if (!boundaryClosed) next.push('The write-boundary file is missing or was changed: every subagent write and shell command is refused until a mode switch to specialist and back rebuilds it');
     const hooksTouched = findings.some(finding => ['HOOKS_CHANGED', 'HOOKS_WRITTEN'].includes(finding.code));
     if (holdAll) next.push(`No ticket of this batch is committed by the kit. ${hooksTouched ? `${HOOKS_FIRST}. ` : ''}${ABANDON}`);
+    if (findings.some(finding => finding.code === 'HOOK_SAW_NO_WORKER')) next.push('The hook logged no call of this batch\'s workers: the session that ran the batch did not load the write-boundary hook of the team root (.claude/settings.json), so the write limits were not enforced. Inspect every changed path before any commit by hand, and run the next batch from a session that loads the hook');
+    const missing = findings.find(finding => finding.code === 'CHECK_RUNS_MISSING')?.commands ?? [];
+    if (missing.length) next.push(`The checker ran ${missing.map(entry => `${plain(entry.command)} (${entry.seen} of ${entry.needed})`).join(', ')} fewer times than the tickets that passed verify with it: a ticket passed without its checker running its verification commands, and the log cannot say which. Run the verification commands yourself before any commit by hand`);
     if (!holdAll && left.length) next.push('Paths are left uncommitted in the product; the next batch refuses until they are committed or discarded by hand, or it is started as is');
     const reviewers = Object.keys(reviews);
     if (reviewers.length) next.push(`The batch is in review: brief each reviewer with ${reviewers.map(reviewer => `rw-batch.mjs review-brief --reviewer ${reviewer} --instance <instance-root>`).join(', and ')}; no batch, switch or change of limits starts until the review is over`);
