@@ -9,6 +9,9 @@
 //   Clears a batch that will not be run, or what a "before" that died left behind. Also ends a review. A batch that
 //   "after" closed is archived; each ticket flagged for review that no review passed is saved as a patch under
 //   reviews/held/<run id>/ and taken out of the work tree.
+// left --instance <instance-root> [--run <run id>]
+//   For an archived batch (the newest by default): saves the work each ticket left in the product work tree as a patch
+//   under left/<run id>/, takes it out of the tree and prints the resume of each. Exit 2 when refused or a ticket is left.
 // after RESULT.json --instance <instance-root>
 //   RESULT.json is the engine's return. Matches it against the frozen batch, compares the product with the
 //   tickets' paths, closes the write boundary, releases the lock and plans the commits. Exit 2 when in review.
@@ -54,16 +57,25 @@ import { loadRetryRules } from '../src/router-worker/retries.mjs';
 import { reviewBrief } from '../src/router-worker/review-brief.mjs';
 import { judgeReview, recordNoAnswer } from '../src/router-worker/review-judge.mjs';
 import { resolveBatch } from '../src/router-worker/review-resolve.mjs';
+import { saveLeftWork } from '../src/router-worker/batch-left.mjs';
 import { periodicBrief, judgePeriodic, recordPeriodicNoAnswer } from '../src/router-worker/review-periodic.mjs';
 
 const print = result => { if (result.errors) { console.error(JSON.stringify(result)); process.exitCode = 2; } else process.stdout.write(JSON.stringify(result, null, 2) + '\n'); };
-const USAGE = 'usage: node scripts/rw-batch.mjs before BATCH.json --instance <instance-root> [--start-as-is]\n       node scripts/rw-batch.mjs after RESULT.json --instance <instance-root>\n       node scripts/rw-batch.mjs settle METER.json --instance <instance-root> [--run <run id>]\n       node scripts/rw-batch.mjs settle --not-metered "<reason>" --instance <instance-root> [--run <run id>]\n       node scripts/rw-batch.mjs review-brief --reviewer <security|architect> --instance <instance-root> [--ticket <id> ...]\n       node scripts/rw-batch.mjs review --reviewer <security|architect> --transcript <agent-*.jsonl> --instance <instance-root> [REPORT.json]\n       node scripts/rw-batch.mjs review --no-answer "<reason>" --reviewer <security|architect> --instance <instance-root>\n       node scripts/rw-batch.mjs resolve --instance <instance-root>\n       node scripts/rw-batch.mjs commit --instance <instance-root>\n       node scripts/rw-batch.mjs periodic-brief --reviewer <security|architect> --instance <instance-root>\n       node scripts/rw-batch.mjs periodic --reviewer <security|architect> --transcript <agent-*.jsonl> --instance <instance-root> [--meter METER.json] [REPORT.json]\n       node scripts/rw-batch.mjs periodic --no-answer "<reason>" --reviewer <security|architect> --instance <instance-root>\n       node scripts/rw-batch.mjs abort --instance <instance-root>';
+const USAGE = 'usage: node scripts/rw-batch.mjs before BATCH.json --instance <instance-root> [--start-as-is]\n       node scripts/rw-batch.mjs after RESULT.json --instance <instance-root>\n       node scripts/rw-batch.mjs settle METER.json --instance <instance-root> [--run <run id>]\n       node scripts/rw-batch.mjs settle --not-metered "<reason>" --instance <instance-root> [--run <run id>]\n       node scripts/rw-batch.mjs review-brief --reviewer <security|architect> --instance <instance-root> [--ticket <id> ...]\n       node scripts/rw-batch.mjs review --reviewer <security|architect> --transcript <agent-*.jsonl> --instance <instance-root> [REPORT.json]\n       node scripts/rw-batch.mjs review --no-answer "<reason>" --reviewer <security|architect> --instance <instance-root>\n       node scripts/rw-batch.mjs resolve --instance <instance-root>\n       node scripts/rw-batch.mjs commit --instance <instance-root>\n       node scripts/rw-batch.mjs periodic-brief --reviewer <security|architect> --instance <instance-root>\n       node scripts/rw-batch.mjs periodic --reviewer <security|architect> --transcript <agent-*.jsonl> --instance <instance-root> [--meter METER.json] [REPORT.json]\n       node scripts/rw-batch.mjs periodic --no-answer "<reason>" --reviewer <security|architect> --instance <instance-root>\n       node scripts/rw-batch.mjs abort --instance <instance-root>\n       node scripts/rw-batch.mjs left --instance <instance-root> [--run <run id>]';
 if (['abort', 'commit', 'resolve'].includes(process.argv[2])) {
   const [flag, root, ...extra] = process.argv.slice(3);
   if (flag !== '--instance' || !root || extra.length) { console.error(USAGE); process.exit(1); }
   const done = { abort: abortBatch, commit: commitBatch, resolve: resolveBatch }[process.argv[2]]({ teamRoot: join(resolve(root), 'kit'), instanceRoot: resolve(root) });
   print(done);
   if (!done.errors && done.removed?.length) process.exitCode = 2;
+  process.exit();
+}
+if (process.argv[2] === 'left') {
+  const [flag, root, runFlag, runId, ...extra] = process.argv.slice(3);
+  if (flag !== '--instance' || !root || (runFlag !== undefined && (runFlag !== '--run' || !runId)) || extra.length) { console.error(USAGE); process.exit(1); }
+  const saved = saveLeftWork({ teamRoot: join(resolve(root), 'kit'), instanceRoot: resolve(root), ...(runId ? { runId } : {}) });
+  print(saved);
+  if (!saved.errors && saved.tickets.some(entry => entry.state === 'in-tree')) process.exitCode = 2;
   process.exit();
 }
 if (process.argv[2] === 'review-brief') {

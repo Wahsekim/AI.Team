@@ -3,9 +3,10 @@
 // when a later ticket is still to be committed, and commit takes its plan from the resolution.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, readFileSync, existsSync, rmSync, mkdirSync, appendFileSync } from 'node:fs';
+import { writeFileSync, readFileSync, existsSync, rmSync, mkdirSync, appendFileSync, chmodSync, mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { spawnSync, execFileSync } from 'node:child_process';
 import { bytesDigest, digest } from '../src/loop/contracts.mjs';
 import { abortBatch, beforeBatch } from '../src/router-worker/batch.mjs';
 import { afterBatch } from '../src/router-worker/batch-close.mjs';
@@ -147,6 +148,89 @@ test('abort of a batch in review takes out each flagged ticket no review passed,
   assert.deepEqual(changed(f), ['src/list/a.js', 'src/session.js'], 'the ticket the review passed and the unflagged one stay');
   for (const id of ['US-01', 'US-02']) git(f.product, 'apply', '--check', join(f.root, at(id)));
   assert.match(f.ledger(), new RegExp(`BATCH ${open.runId} ARCHIVED WITHOUT COMMIT .*US-01 \\(rejected\\) ${at('US-01')}, US-02 \\(not-reviewed\\) ${at('US-02')}`));
+});
+
+test('abort that archives under another name still names the patch resolve saved under the batch\'s own run id', async t => {
+  const { f, open } = await rejected(t, { commands: ['pwd'] });
+  const resolved = f.resolve(), patch = `reviews/held/${open.runId}/US-02.patch`;
+  assert.deepEqual(resolved.removed.map(entry => entry.patch), [patch]);
+  // An earlier abort died inside the archive: the batch's own name is taken, so this one archives under an unreadable- name.
+  mkdirSync(join(f.root, 'batches', open.runId), { recursive: true });
+  const aborted = abortBatch(f.common);
+  assert.equal(aborted.errors, undefined, JSON.stringify(aborted.errors)); assert.match(aborted.runId, /^unreadable-/);
+  assert.deepEqual(aborted.held, [{ ticket: 'US-02', reason: 'rejected', state: 'patch', patch, by: 'resolve' }]);
+});
+
+// US-01 is declared sensitive (src/auth/**) and flagged for Security; US-04 is not flagged. The batch is in review.
+async function flaggedBatch(t) {
+  const f = live(t, { commands: ['pwd'] });
+  const { open } = await runBatch(f, [ticket('US-01', ['src/auth/x.js', 'src/auth/y.js']), ticket('US-04', ['src/list/a.js'])], { 'src/auth/x.js': '// x\n', 'src/auth/y.js': '// y\n', 'src/list/a.js': '// a\n' });
+  assert.equal(f.state(), 'review');
+  return { f, open };
+}
+// The bytes resolve and abort write for these paths: their change against HEAD, made through an index of its own.
+function patchBytes(product, paths) {
+  const dir = mkdtempSync(join(tmpdir(), 'rw-test-patch-')), env = { ...process.env, GIT_INDEX_FILE: join(dir, 'index') }, run = (...args) => execFileSync('git', ['-C', product, ...args], { env });
+  try { run('read-tree', 'HEAD'); run('--literal-pathspecs', 'add', '-A', '--', ...paths); return run('diff', '--cached', '--binary', '--full-index', '--no-color', '--no-ext-diff', '--no-textconv', '--no-renames', 'HEAD'); }
+  finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
+test('a second abort reuses the patch an abort that died saved with the same bytes, and takes the ticket out', async t => {
+  const { f, open } = await flaggedBatch(t), patch = `reviews/held/${open.runId}/US-01.patch`, bytes = patchBytes(f.product, ['src/auth/x.js', 'src/auth/y.js']);
+  mkdirSync(join(f.root, patch, '..'), { recursive: true }); writeFileSync(join(f.root, patch), bytes);
+  const aborted = abortBatch(f.common);
+  assert.equal(aborted.errors, undefined, JSON.stringify(aborted.errors));
+  assert.deepEqual(aborted.held, [{ ticket: 'US-01', reason: 'not-reviewed', state: 'patch', patch, by: 'abort' }]);
+  assert.deepEqual(changed(f), ['src/list/a.js']); assert.ok(readFileSync(join(f.root, patch)).equals(bytes), 'the patch is used as it is');
+});
+
+test('a ticket abort saved and could not take out is named with its patch, the complete one: what is left of it is discarded, not saved again', async t => {
+  const { f, open } = await flaggedBatch(t), patch = `reviews/held/${open.runId}/US-01.patch`;
+  chmodSync(join(f.product, 'src/auth'), 0o555);
+  let aborted; try { aborted = abortBatch(f.common); } finally { chmodSync(join(f.product, 'src/auth'), 0o755); }
+  assert.deepEqual(aborted.held.map(entry => [entry.ticket, entry.state, entry.patch]), [['US-01', 'in-tree', patch]]);
+  assert.match(aborted.next, new RegExp(`US-01 .*its saved patch ${patch} is the complete one: discard what is left of that ticket in the work tree, and do not save it again`));
+  assert.doesNotMatch(aborted.next, /save it as a patch/);
+  rmSync(join(f.product, 'src/auth'), { recursive: true }); git(f.product, 'apply', join(f.root, patch));
+  assert.deepEqual(['src/auth/x.js', 'src/auth/y.js'].map(path => readFileSync(join(f.product, path), 'utf8')), ['// x\n', '// y\n']);
+});
+
+test('abort takes nothing out while a resolve of the batch is still running, and names each flagged ticket as left with that reason', async t => {
+  const { f, open } = await flaggedBatch(t);
+  writeFileSync(join(f.root, RESOLUTION), JSON.stringify({ schemaVersion: 1, stage: 'batch-resolving', runId: open.runId, pid: process.ppid, removed: [] }));
+  const aborted = abortBatch(f.common);
+  assert.equal(aborted.errors, undefined, JSON.stringify(aborted.errors));
+  assert.deepEqual(aborted.held.map(entry => [entry.ticket, entry.state, entry.paths]), [['US-01', 'in-tree', ['src/auth/x.js', 'src/auth/y.js']]]);
+  assert.match(aborted.held[0].problem, new RegExp(`resolve of this batch is still running \\(process ${process.ppid}\\)`));
+  assert.deepEqual(changed(f), ['src/auth/x.js', 'src/auth/y.js', 'src/list/a.js']); assert.equal(existsSync(join(f.root, `reviews/held/${open.runId}`)), false);
+});
+
+test('abort trusts no flag of an after record changed since after wrote it: it takes nothing out and names each ticket\'s changed paths as not reviewed', async t => {
+  const { f } = await flaggedBatch(t), path = join(f.root, 'rw-batch-after.json'), after = JSON.parse(readFileSync(path, 'utf8'));
+  writeFileSync(path, JSON.stringify({ ...after, tickets: after.tickets.map(entry => ({ ...entry, review: { ...entry.review, required: [] } })) }));
+  const aborted = abortBatch(f.common);
+  assert.equal(aborted.errors, undefined, JSON.stringify(aborted.errors));
+  assert.deepEqual(aborted.held.map(entry => [entry.ticket, entry.reason, entry.state, entry.paths]), [['US-01', 'not-reviewed', 'in-tree', ['src/auth/x.js', 'src/auth/y.js']], ['US-04', 'not-reviewed', 'in-tree', ['src/list/a.js']]]);
+  assert.match(aborted.held[0].problem, /changed since after wrote it/);
+  assert.deepEqual(changed(f), ['src/auth/x.js', 'src/auth/y.js', 'src/list/a.js']);
+});
+
+test('abort of a batch whose after record was changed says no command of the kit can tell the tickets\' work apart, and how to save it by hand before the tree is cleaned', async t => {
+  const { f, open } = await flaggedBatch(t), path = join(f.root, 'rw-batch-after.json');
+  writeFileSync(path, JSON.stringify({ ...JSON.parse(readFileSync(path, 'utf8')), note: 'changed by hand' }));
+  const aborted = abortBatch(f.common), byHand = /no command of the kit can tell which ticket.*save it by hand before the work tree is cleaned.*git add -A.*git diff --cached --binary HEAD/;
+  assert.equal(aborted.errors, undefined, JSON.stringify(aborted.errors));
+  assert.match(aborted.next, byHand); assert.doesNotMatch(aborted.next, /rw-batch\.mjs left|left saves it/);
+  assert.match(f.ledger().split('\n').find(line => line.includes(`BATCH ${open.runId} ARCHIVED WITHOUT COMMIT`)), byHand);
+});
+
+test('abort takes a flagged ticket out when the resolve its record names is a process that has ended', async t => {
+  const { f, open } = await flaggedBatch(t), ended = spawnSync(process.execPath, ['-e', '']).pid;
+  writeFileSync(join(f.root, RESOLUTION), JSON.stringify({ schemaVersion: 1, stage: 'batch-resolving', runId: open.runId, pid: ended, removed: [] }));
+  const aborted = abortBatch(f.common);
+  assert.equal(aborted.errors, undefined, JSON.stringify(aborted.errors));
+  assert.deepEqual(aborted.held, [{ ticket: 'US-01', reason: 'not-reviewed', state: 'patch', patch: `reviews/held/${open.runId}/US-01.patch`, by: 'abort' }]);
+  assert.deepEqual(changed(f), ['src/list/a.js']);
 });
 
 // The kit's own run of the commands when a reviewer is briefed; the command fails only once the marker exists.

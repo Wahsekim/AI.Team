@@ -231,7 +231,8 @@ frozen, finds what was written outside the tickets' paths and closes the batch, 
 holds every commit when the hook logged no call of the batch's workers or fewer checker runs than the passed tickets need;
 `commit` makes one commit per ticket that passed; `abort` clears a batch that
 will not run, and for a closed batch saves each ticket that was flagged and passed no review as a patch and takes it out of the work tree;
-`before` names in the ledger the commits made outside the kit since the last batch; a ticket's `resume` names a patch of work an earlier batch left, which `before` applies so the
+`before` names in the ledger the commits made outside the kit since the last batch and each ticket whose work ran before without a commit;
+`left` saves what a batch left in the work tree as one patch per ticket and takes it out, ready for a `resume`; a rejection counts toward the owner's escalation by the ticket's paths as well as its id; a ticket's `resume` names a patch of work an earlier batch left, which `before` applies so the
 checker, the review and `commit` treat it as the ticket's own; a ticket may name the subset of the batch's
 `verificationCommands` its workers run; `commit` stops when a commit hook rewrites a ticket's bytes; only a problem
 the Guardian finds in the run (runaway, a dropped failure) or the engine's trace of its budget-gate decisions shows holds a batch, and the engine tells the Guardian

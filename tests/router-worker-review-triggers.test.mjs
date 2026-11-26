@@ -76,7 +76,9 @@ test('before freezes the merged trigger list and logs each trigger or rule added
   const narrowed = await f.before(one);
   assert.deepEqual(narrowed.triggerChanges.removed, ['trigger billing security glob:src/billing/**']); assert.deepEqual(narrowed.triggerChanges.added, ['rule layers architect']);
   assert.match(ledger(), /REVIEW TRIGGERS REMOVED OR NARROWED \(owner spot review\): trigger billing security glob:src\/billing\/\*\*\./);
-  assert.match(ledger(), /REVIEW TRIGGERS ADDED: rule layers architect\./); assert.equal(ledger().split('\n').length, lines + 2);
+  assert.match(ledger(), /REVIEW TRIGGERS ADDED: rule layers architect\./);
+  // US-01 ran in both archived batches and the kit committed it in neither: before names those runs too.
+  assert.match(ledger(), new RegExp(`BATCH ${narrowed.runId} RUNS US-01 AGAIN \\(owner spot review\\): 2 earlier run\\(s\\)`)); assert.equal(ledger().split('\n').length, lines + 3);
   await archive(f, narrowed); f.project({ ...project, triggers: [{ ...project.triggers[0], match: { glob: ['src/billing/**', 'src/pay/**'] } }] });
   const widened = await f.before(one);
   assert.deepEqual(widened.triggerChanges.added, ['trigger billing security glob:src/billing/**', 'trigger billing security glob:src/pay/**']);

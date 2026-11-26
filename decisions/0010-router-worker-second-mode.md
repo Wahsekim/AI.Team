@@ -453,3 +453,29 @@ frozen without `standingBatch` keeps the earlier rule and still settles. A batch
 frozen with `standingBatch` and closed before this amendment has no trace, so it
 is held and its account no longer matches at settlement; no such batch exists
 outside the kit's tests. Specialist mode does not change.
+
+### 2026-11-26: the kit saves left work and counts its runs
+
+Status: Accepted.
+
+In three real batches in a row a ticket's work was left in the product work
+tree, and the PM saved it as patches by hand, cleaned the tree and named the
+patches as `resume` before the next batch could take the work up. The same two
+tickets ran in those three batches with one attempt each, and nothing in the
+kit counted runs across batches. The owner decided in session on 2026-11-26,
+accepting the recommendation of that day's review of the kit.
+
+- `rw-batch.mjs left` saves the work each ticket of an archived batch left in
+  the work tree as one patch per ticket in the team folder, under the run id,
+  and takes it out of the tree, by the rule `abort` follows: nothing is removed
+  before its patch is saved, and a saved patch is never written over. It names
+  the patches `resolve` and `abort` already saved, the `resume` value of each
+  patch, and every changed path that is no ticket's work, which it leaves. It
+  refuses while a batch is open or in review, and takes the lock for its
+  length.
+- `before` freezes, for each ticket, the archived batches in which the engine
+  ran a ticket of the same id, or one whose paths overlap its paths, and the
+  kit did not commit it, and writes one line per such ticket for the owner's
+  spot review. It refuses nothing on that account: whether a count should stop
+  a batch is the owner's to decide, and ADR 0008 sets the attempts within one
+  run.

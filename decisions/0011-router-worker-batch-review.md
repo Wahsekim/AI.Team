@@ -275,3 +275,23 @@ counts; a transcript deleted, or in a session under another configuration
 folder, is not seen; a periodic review aborted and briefed again leaves its
 earlier dispatch unjudged.
 
+## Amendment of 2026-11-26: a rejection counts by its paths too
+
+Status: Accepted. The owner decided in session on 2026-11-26, accepting the
+recommendation of that day's review of the kit.
+
+Decision 16 sends a ticket rejected a second time to the owner, and the kit
+counted rejections by ticket id only. A rejected ticket filed again under a new
+id, on the same paths and with its held patch as `resume`, started its count
+again each time. Each adverse outcome the kit records now carries the paths
+the ticket changed. A ticket's adverse outcomes are those under its id and
+those under any id whose recorded paths overlap the paths it changed, compared
+as two tickets claiming one file are; an outcome recorded before outcomes
+carried paths counts by its id only. A second time is still a second batch,
+and how verdicts are judged does not change. Escalations already written keep
+blocking, and are lifted, as before.
+
+The comparison is by path alone. Two unrelated tickets rejected in two
+batches on one shared file count as the same work, so the second one is
+escalated, and that open escalation blocks every ticket whose paths overlap
+that file until the owner acknowledges it.

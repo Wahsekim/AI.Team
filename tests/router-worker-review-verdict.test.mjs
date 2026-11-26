@@ -399,6 +399,7 @@ test('a ticket rejected in a second batch is escalated: only a batch with it or 
   assert.deepEqual(one.verdict.escalated, [], 'a first rejection goes back to the backlog');
   const two = await rejectOnce(), [escalation] = two.verdict.escalated;
   assert.equal(escalation.kind, 'second-rejection'); assert.equal(escalation.ticket, 'US-02');
+  assert.deepEqual(f.lines('reviews/tickets.jsonl').map(line => [line.ticket, line.paths]), [['US-02', ['src/authz.js']], ['US-02', ['src/authz.js']]], 'each row carries the paths the ticket changed');
   assert.deepEqual(escalation.runIds, [one.open.runId, two.open.runId]); assert.deepEqual(escalation.paths, ['src/authz.js']);
   assert.deepEqual(f.lines('reviews/escalations.jsonl').map(line => line.id), [escalation.id]);
   assert.deepEqual(two.committed.escalations.map(item => item.id), [escalation.id], 'the commit record reports it for the human');
@@ -431,7 +432,7 @@ process.stdout.write(JSON.stringify(acknowledgeEscalation(${JSON.stringify({ ...
 });
 
 const escalationsIn = () => { const instance = mkdtempSync(join(tmpdir(), 'rw-escalations-')); return { instance, at: new Date().toISOString(),
-  outcome: (runId, ticket, outcome) => recordOutcomes({ instance, runId, reviewer: 'security', outcomes: [{ ticket, outcome, finding: 'x' }], tickets: [{ id: ticket, paths: ['src/a.js'] }], at: new Date().toISOString() }) }; };
+  outcome: (runId, ticket, outcome, paths = ['src/a.js']) => recordOutcomes({ instance, runId, reviewer: 'security', outcomes: [{ ticket, outcome, finding: 'x' }], tickets: [{ id: ticket, paths }], at: new Date().toISOString() }) }; };
 
 test('only an acknowledgement typed at a terminal, for the escalation as it stands, lifts its block', t => {
   const { instance, outcome } = escalationsIn(); t.after(() => rmSync(instance, { recursive: true, force: true }));
@@ -456,6 +457,22 @@ test('two adverse outcomes of one ticket in two batches escalate, mixed or not',
   assert.deepEqual(outcome('r1', 'T-2', 'rejected'), []);
   const [mixed] = outcome('r2', 'T-2', 'not-obtained');
   assert.equal(mixed?.kind, 'repeated-adverse'); assert.deepEqual(mixed.runIds, ['r1', 'r2']);
-  outcome('r1', 'T-3', 'not-obtained'); assert.equal(outcome('r3', 'T-3', 'not-obtained')[0]?.kind, 'review-not-obtained-again');
+  outcome('r1', 'T-3', 'not-obtained', ['src/b.js']); assert.equal(outcome('r3', 'T-3', 'not-obtained', ['src/b.js'])[0]?.kind, 'review-not-obtained-again');
   assert.match(readFileSync(join(instance, 'pm-decisions.md'), 'utf8'), /ESCALATED ESC-T-2-r2: ticket T-2 was rejected or could not be reviewed in batches r1 and r2/);
+});
+
+test('a ticket filed again under another id on the same paths is escalated at its second rejection; another id on other paths is not; a row with no paths counts by id', t => {
+  const { instance, outcome } = escalationsIn(); t.after(() => rmSync(instance, { recursive: true, force: true }));
+  const rows = () => readFileSync(join(instance, 'reviews/tickets.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  assert.deepEqual(outcome('r1', 'T-1', 'rejected', ['src/a.js']), []);
+  assert.deepEqual(outcome('r2', 'T-9', 'rejected', ['src/b.js']), [], 'another id on other paths is other work');
+  const [again] = outcome('r3', 'T-5', 'rejected', ['src/A.js', 'src/c.js']);
+  assert.equal(again?.kind, 'second-rejection'); assert.equal(again.ticket, 'T-5'); assert.deepEqual(again.runIds, ['r1', 'r3']);
+  assert.deepEqual(again.findings.map(item => [item.ticket, item.runId]), [['T-1', 'r1'], ['T-5', 'r3']]);
+  assert.deepEqual(rows().map(row => [row.ticket, row.paths]), [['T-1', ['src/a.js']], ['T-9', ['src/b.js']], ['T-5', ['src/A.js', 'src/c.js']]], 'each row carries the paths its ticket changed');
+  assert.match(readFileSync(join(instance, 'pm-decisions.md'), 'utf8'), /ESCALATED ESC-T-5-r3: ticket T-5 \(on the paths of T-1\) was rejected in batches r1 and r3/);
+  // A row written before rows carried paths is matched by its id alone.
+  appendFileSync(join(instance, 'reviews/tickets.jsonl'), JSON.stringify({ ticket: 'T-7', runId: 'r0', reviewer: 'security', outcome: 'rejected', finding: 'x', at: '2026-11-20T00:00:00.000Z' }) + '\n');
+  assert.deepEqual(outcome('r4', 'T-6', 'rejected', ['src/old.js']), [], 'a row with no paths overlaps nothing');
+  assert.deepEqual(outcome('r5', 't-7', 'rejected', ['src/new.js'])[0]?.runIds, ['r0', 'r5']);
 });

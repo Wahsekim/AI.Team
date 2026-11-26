@@ -16,26 +16,30 @@ const same = (a, b) => String(a).toLowerCase() === String(b).toLowerCase();
 const linesOf = path => { let text; try { text = readFileSync(path, 'utf8'); } catch { return []; } return text.split('\n').filter(Boolean).map(line => { try { return JSON.parse(line); } catch { return null; } }).filter(Boolean); };
 const append = (path, rows) => { if (rows.length) appendFileSync(path, rows.map(row => JSON.stringify(row) + '\n').join('')); };
 
-// Appends a reviewer's final outcome for each ticket of a run and returns the escalations it raised. A line already
-// there is not written again, so a judgment that died half-way is judged again without counting twice.
+// Appends a reviewer's final outcome for each ticket of a run, with the paths the ticket changed, and returns the escalations
+// it raised. A line already there is not written again, so a judgment that died half-way is judged again without counting twice.
 // `outcomes`: [{ ticket, outcome: 'rejected'|'not-obtained', finding }]; `tickets`: [{ id, paths }], the paths each changed.
 export function recordOutcomes({ instance, runId, reviewer, outcomes, tickets, at }) {
   mkdirSync(join(instance, 'reviews'), { recursive: true });
-  const seen = linesOf(join(instance, TICKETS));
+  const seen = linesOf(join(instance, TICKETS)), pathsOf = ticket => tickets.find(entry => same(entry.id, ticket))?.paths ?? [];
   const fresh = outcomes.filter(entry => !seen.some(line => same(line.ticket, entry.ticket) && line.runId === runId && line.reviewer === reviewer))
-    .map(({ ticket, outcome, finding }) => ({ ticket, runId, reviewer, outcome, finding, at }));
+    .map(({ ticket, outcome, finding }) => ({ ticket, runId, reviewer, outcome, finding, paths: pathsOf(ticket), at }));
   append(join(instance, TICKETS), fresh);
   const all = [...seen, ...fresh], known = linesOf(join(instance, ESCALATIONS)), raised = [];
   for (const { ticket } of outcomes) {
+    // The same work filed again under a new id is the same ticket: a line counts when its id is this one or its paths
+    // overlap this ticket's. A line written before lines carried paths counts by its id.
+    const mine = pathsOf(ticket), related = line => same(line.ticket, ticket) || (Array.isArray(line.paths) && line.paths.some(path => typeof path === 'string' && mine.some(other => overlap(path, other))));
     // A second time is a second batch: two reviewers rejecting the same ticket in one batch is one rejection.
-    const adverse = all.filter(line => same(line.ticket, ticket)), runIds = [...new Set(adverse.map(line => line.runId))], kinds = new Set(adverse.map(line => line.outcome));
+    const adverse = all.filter(related), runIds = [...new Set(adverse.map(line => line.runId))], kinds = new Set(adverse.map(line => line.outcome));
     const id = `ESC-${ticket}-${runId}`;
     if (runIds.length < 2 || [...known, ...raised].some(entry => same(entry.id, id))) continue;
-    raised.push({ id, kind: kinds.size > 1 ? MIXED : KIND[[...kinds][0]], ticket, reviewer, runIds, paths: tickets.find(entry => same(entry.id, ticket))?.paths ?? [],
-      findings: all.filter(line => same(line.ticket, ticket)).map(line => ({ runId: line.runId, reviewer: line.reviewer, outcome: line.outcome, finding: line.finding })), at });
+    raised.push({ id, kind: kinds.size > 1 ? MIXED : KIND[[...kinds][0]], ticket, reviewer, runIds, paths: mine,
+      findings: adverse.map(line => ({ ticket: line.ticket, runId: line.runId, reviewer: line.reviewer, outcome: line.outcome, finding: line.finding })), at });
   }
   append(join(instance, ESCALATIONS), raised);
-  if (raised.length) appendFileSync(join(instance, LEDGER), raised.map(entry => `${at.slice(0, 10)} ESCALATED ${entry.id}: ticket ${entry.ticket} ${SAID[entry.kind]} in batches ${entry.runIds.join(' and ')}; it and every ticket related to it are blocked until the owner reviews it and runs: team-mode.mjs acknowledge ${entry.id} --instance <instance-root>. Unrelated tickets are replanned and go on.\n`).join(''));
+  const before = entry => [...new Set(entry.findings.map(item => item.ticket).filter(other => !same(other, entry.ticket)).map(other => plain(String(other))))];
+  if (raised.length) appendFileSync(join(instance, LEDGER), raised.map(entry => `${at.slice(0, 10)} ESCALATED ${entry.id}: ticket ${entry.ticket}${before(entry).length ? ` (on the paths of ${before(entry).join(', ')})` : ''} ${SAID[entry.kind]} in batches ${entry.runIds.join(' and ')}; it and every ticket related to it are blocked until the owner reviews it and runs: team-mode.mjs acknowledge ${entry.id} --instance <instance-root>. Unrelated tickets are replanned and go on.\n`).join(''));
   return raised;
 }
 
