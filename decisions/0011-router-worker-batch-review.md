@@ -309,7 +309,7 @@ rejected on one shared file escalated each other.
 A ticket whose batch froze a held patch as its `resume` continues the work of
 the ticket the patch was held for. The kit tells a held patch by its place,
 `reviews/held/<run id>/<ticket>.patch`, or, for a copy placed elsewhere in the
-team folder, by bytes equal to a file under `reviews/held/`. Each adverse
+team folder, by bytes equal to a held patch under `reviews/held/`. Each adverse
 outcome the kit records names the held work its ticket resumed. A ticket's
 adverse outcomes are those under its id and those of every ticket whose work
 it continues, followed from link to link; paths count for nothing. An outcome
@@ -319,4 +319,7 @@ a second batch, and what an escalation blocks does not change.
 The kit does not see a ticket filed under a new id and done again from
 nothing, nor one that resumes a copy of a held patch edited outside
 `reviews/held/`: each is new work, and its count starts at its own first
-rejection.
+rejection. Nor does it follow a link through a ticket whose review
+passed: such a ticket leaves no outcome, so when it is held for another reason
+and resumed again, the chain ends at it and the earlier rejection is not
+counted.
