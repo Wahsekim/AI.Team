@@ -146,6 +146,10 @@ one died, run `after` again: it takes over and runs the commands again. Detail:
 `status` is `clean` when nothing was found and no ticket is flagged for a
 reviewer: go on to `commit`. Otherwise it is `review`, and the record lists
 findings, the tickets flagged for a reviewer, and `next`.
+`status` is also `review` when `account.blockers` is not empty: a ticket that
+did not pass gives `not-safe-to-continue`. Nothing is held for that alone, so
+go on to `commit`; the patch `next` names for that ticket is its `resume` in
+a later batch.
 
 | Finding | Commits |
 |---|---|
@@ -157,8 +161,9 @@ findings, the tickets flagged for a reviewer, and `next`.
 | `HOOK_SAW_NO_WORKER`, `VERIFICATION_FAILED`, `CHECK_RUNS_MISSING`, `HOOKS_CHANGED`, `HOOKS_WRITTEN`, `BOUNDARY_CHANGED`, `PRODUCT_HEAD_MOVED`, `PRODUCT_BRANCH_CHANGED`, `GUARDIAN_NOT_CLEAN` | all held |
 
 **All held**: the kit commits nothing of the batch, and the batch is not put
-in review. Run `abort`, then `left`. Only what belongs to no ticket may then
-be committed by hand. After `HOOKS_CHANGED` or `HOOKS_WRITTEN`, inspect the
+in review. Run `abort`, then `left`, then `settle METER.json --run <run id>`:
+the next `before` waits for that settlement. Only what belongs to no ticket
+may then be committed by hand. After `HOOKS_CHANGED` or `HOOKS_WRITTEN`, inspect the
 folder Git runs hooks from and remove every hook the batch added or changed
 before any commit by hand.
 

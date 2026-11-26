@@ -19,7 +19,7 @@ const plain = value => value !== null && typeof value === 'object' && !Array.isA
 function readText(root, file) {
   const stat = lstatSync(join(root, file), { throwIfNoEntry: false })
   if (!stat) return null
-  if (!stat.isFile()) throw new Error(`${file} is not a regular file (a symbolic link is not followed)`)
+  if (!stat.isFile()) throw new Error(`${file} is not a regular file (a symbolic link is not followed): replace the link with the file it points to, then run this again`)
   return readFileSync(join(root, file), 'utf8')
 }
 
