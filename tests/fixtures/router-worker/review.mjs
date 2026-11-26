@@ -1,7 +1,7 @@
 // A live Router/Worker team with a batch run by the real engine on mock agents, and reviewer transcripts as Claude Code
 // writes them, for the tests of the batch review (ADR 0011).
 import assert from 'node:assert/strict';
-import { writeFileSync, existsSync, mkdirSync, appendFileSync } from 'node:fs';
+import { writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { beforeBatch } from '../../../src/router-worker/batch.mjs';
 import { afterBatch, commitBatch } from '../../../src/router-worker/batch-close.mjs';
@@ -10,13 +10,12 @@ import { judgeReview } from '../../../src/router-worker/review-judge.mjs';
 import { resolveBatch } from '../../../src/router-worker/review-resolve.mjs';
 import { readBoundary } from '../../../src/router-worker/write-boundary.mjs';
 import { runWorkflow, makeAgentImpl } from '../../../scripts/lib/workflow-harness.mjs';
-import { fixture, git } from './standing-team.mjs';
+import { fixture, git, checksRan } from './standing-team.mjs';
 
 export const refusal = result => result.errors?.[0];
 export const ticket = (id, paths, extra = {}) => ({ id, title: `Ticket ${id}`, goal: `Goal of ${id}`, acceptance: [`${id} acceptance holds`], paths, estimate: { execTokens: 12000, checkTokens: 6000, reworkTokens: 6000 }, ...extra });
 export const COMMANDS = ['echo verified-by-kit', 'pwd'];
 export const batchOf = (...tickets) => ({ tickets, verificationCommands: COMMANDS, sensitivePaths: ['src/auth/**'], nextLifecycleNumber: 1 });
-const WORKER = 'tag-list-fixture-worker-exec';
 export const agentsOf = commands => ({ worker: () => ({ outcome: 'done', progress: true, filesTouched: [], decisionsCount: 1, selfReportTokens: 100, blocked: false, terminalStop: false, notes: 'done' }),
   verifier: () => ({ pass: true, staticPass: true, e2ePass: true, summary: 'ok', commandsRun: commands.map(command => ({ command, exitCode: 0 })), failures: [] }) });
 
@@ -43,7 +42,7 @@ export async function runBatch(f, tickets, edits, fields = {}) {
   let guardianBrief = null; const mock = makeAgentImpl(agentsOf(f.commands)), agentImpl = (prompt, opts, index) => { if (opts?.schema?.required?.includes('runawayDetected')) guardianBrief = prompt; return mock(prompt, opts, index); };
   const { result } = await runWorkflow({ scriptPath: join(f.root, '.claude/workflows/run-n-rounds.js'), args: open.args, agentImpl });
   for (const [path, text] of Object.entries(edits)) { mkdirSync(join(f.product, path, '..'), { recursive: true }); writeFileSync(join(f.product, path), text); }
-  appendFileSync(join(f.root, '.claude/rw-write-boundary.log.jsonl'), JSON.stringify({ at: new Date().toISOString(), tool: 'Edit', agentType: WORKER, judged: true, decision: 'allow' }) + '\n');
+  checksRan(f.root, open);
   const after = afterBatch({ ...f.common, result });
   assert.equal(after.errors, undefined, JSON.stringify(after.errors));
   return { open, after, guardianBrief };

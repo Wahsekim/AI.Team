@@ -56,20 +56,25 @@ names the wrapper and the product-relative path, never a host path.
 
 The hook appends one line per call to `.claude/rw-write-boundary.log.jsonl` in
 the activated copy: time, tool name, the agent name the runtime passed (or
-`null`), whether the call was judged against the boundary, and the decision. It
-holds no path, and no command except the text of a worker's shell command that
-was refused in a batch (at most 300 characters), which `after` reports to the
-owner. In a disposable copy Bash is matched only so that
+`null`), whether the call was judged against the boundary, and the decision. A
+write tool's line holds no path. In a batch a worker's shell line holds a
+command only in two cases: the checker's approved call carries the verification
+command it matched, as the batch froze it, which `after` counts; a refused call
+carries its own text, redacted and at most 300 characters, which `after`
+reports to the owner. The exec worker's approved call carries none, since its
+moves and deletions name product paths. In a disposable copy Bash is matched only so that
 its calls are logged, and is not judged while the boundary file is intact. In a standing team the workers'
 shell is judged against the commands of the open batch
 ([details](batch.md#the-workers-shell)): the decision logged is then `approve`
-or `deny`. A log that cannot be written does not change the decision.
+or `deny`. A log that cannot be written does not change the decision of the
+call, but `after` then finds no call of the batch's workers and holds every
+commit of the batch (`HOOK_SAW_NO_WORKER`), as it does when the hook did not run.
 
 The log tells apart three ways a forbidden write can get through:
 
 | Log after the run | Reading |
 |---|---|
-| no lines at all | the hook did not load in that session |
+| no lines at all | the hook did not load in that session, or it could not append to the log |
 | lines for the write tools, all with agent name `null` | the hook ran but the runtime did not name the agent, so every call was treated as the main session |
 | a Bash line for the wrapper and no refused write | the write went through the shell, which the hook does not bound |
 

@@ -43,3 +43,15 @@ export function fixture(t, { roles = 'backend', blank = false } = {}) {
   const tree = () => execFileSync('bash', ['-c', 'cd "$1" && find . -path ./kit -prune -o -type f -exec shasum -a 256 {} + | sort', 'sh', root], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   return { base, root, kit, product, spec, common, propose, apply, read, digests, tree, wrappers: () => readdirSync(join(root, '.claude/agents')).sort() };
 }
+
+// Each command run by this agent from the product root, as the runtime runs the team's hook: judged and logged. Returns the decisions.
+export function runUnderHook(root, agentType, commands) {
+  const hook = JSON.parse(readFileSync(join(root, '.claude/settings.json'), 'utf8')).hooks.PreToolUse.at(-1).hooks[0].command;
+  const cwd = JSON.parse(readFileSync(join(root, '.claude/rw-write-boundary.json'), 'utf8')).productRoot;
+  return commands.map(command => {
+    const ran = spawnSync('sh', ['-c', hook], { encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: root }, input: JSON.stringify({ tool_name: 'Bash', agent_type: agentType, cwd, tool_input: { command } }) });
+    return ran.status === 2 ? 'deny' : ran.stdout ? 'approve' : 'allow';
+  });
+}
+// What the hook logs in a real run of an open batch: its checker runs each ticket's verification commands once.
+export const checksRan = (root, record) => runUnderHook(root, record.args.plan[0].verifierAgentType, record.tickets.flatMap(entry => entry.verificationCommands ?? record.verificationCommands));

@@ -10,7 +10,7 @@ import { afterBatch } from '../src/router-worker/batch-close.mjs';
 import { readLease } from '../src/router-worker/lease.mjs';
 import { readBoundary, decideCall } from '../src/router-worker/write-boundary.mjs';
 import { runWorkflow, makeAgentImpl } from '../scripts/lib/workflow-harness.mjs';
-import { git } from './fixtures/router-worker/standing-team.mjs';
+import { git, checksRan } from './fixtures/router-worker/standing-team.mjs';
 import { live, ticket, batchOf, refusal } from './fixtures/router-worker/review.mjs';
 
 const [EXEC, CHECK, GUARD] = ['exec', 'check', 'guard'].map(duty => `tag-list-fixture-worker-${duty}`);
@@ -110,6 +110,7 @@ test('a ticket moves a file into a folder an earlier ticket emptied with git rm:
   };
   const verifier = () => ({ pass: true, staticPass: true, e2ePass: true, summary: 'ok', commandsRun: f.commands.map(command => ({ command, exitCode: 0 })), failures: [] });
   const { result } = await runWorkflow({ scriptPath: join(f.root, '.claude/workflows/run-n-rounds.js'), args: open.args, agentImpl: makeAgentImpl({ worker, verifier }) });
+  checksRan(f.root, open);
   const closed = afterBatch({ ...f.common, result });
   assert.equal(closed.status, 'clean', JSON.stringify(closed.findings ?? closed.errors));
   assert.deepEqual(closed.tickets.map(entry => [entry.id, entry.status, entry.changedPaths]), [['T-1', 'passed', ['src/a/d/only.js']], ['T-2', 'passed', ['src/a/d/x.js', 'src/b.js']]]);
@@ -165,6 +166,7 @@ test('a ticket that moves and deletes: the stand-in exec runs its commands throu
   };
   const verifier = () => ({ pass: true, staticPass: true, e2ePass: true, summary: 'ok', commandsRun: f.commands.map(command => ({ command, exitCode: 0 })), failures: [] });
   const { result } = await runWorkflow({ scriptPath: join(f.root, '.claude/workflows/run-n-rounds.js'), args: open.args, agentImpl: makeAgentImpl({ worker, verifier }) });
+  checksRan(f.root, open);
   const closed = afterBatch({ ...f.common, result });
   assert.equal(closed.errors, undefined, JSON.stringify(closed.errors)); assert.equal(closed.status, 'clean', JSON.stringify(closed.findings));
   assert.deepEqual(closed.tickets[0].changedPaths, ['lib/list/a.js', 'src/list/a.js', 'src/list/old.js'], 'both sides of the rename, and the deletion');

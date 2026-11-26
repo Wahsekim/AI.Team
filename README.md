@@ -227,7 +227,8 @@ before that list existed gets it, and the closed shell, from `team-mode.mjs limi
 procedure by step 7 of the PM Start Protocol in `CLAUDE.md`. `scripts/rw-batch.mjs` runs a batch in such a team: `before` checks the
 tickets and the product repository, computes the ceiling, takes the lock and
 opens the write limits; `after` matches the engine's return against what was
-frozen, finds what was written outside the tickets' paths and closes the batch;
+frozen, finds what was written outside the tickets' paths and closes the batch, and
+holds every commit when the hook logged no call of the batch's workers or fewer checker runs than the passed tickets need;
 `commit` makes one commit per ticket that passed; `abort` clears a batch that
 will not run; a ticket's `resume` names a patch of work an earlier batch left, which `before` applies so the
 checker, the review and `commit` treat it as the ticket's own; a ticket may name the subset of the batch's

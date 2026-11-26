@@ -205,13 +205,16 @@ export const redacted = command => command
   .replace(/:\/\/[^\s/@:]+:[^\s/@]+@/g, '://<redacted>@')
   .replace(/[A-Za-z0-9+_=-]{32,}/g, '<redacted>');
 
-// One log line per hook call: who called which tool and what was decided. No path. A worker's shell command that was
-// refused is kept as text, so that "after" can report it to the owner.
-export function logEntry({ input, boundary, decision, at }) {
+// One log line per hook call: who called which tool and what was decided. A worker's shell command is kept: the checker's
+// approved one as the verification command it matched (`command`), which "after" counts, and not the exec worker's, whose
+// moves and deletions name product paths; a refused one as its text, so that "after" can report it to the owner.
+export function logEntry({ input, boundary, decision, command: matched, at }) {
   const tool = typeof input?.tool_name === 'string' ? input.tool_name : null, agentType = typeof input?.agent_type === 'string' ? input.agent_type : null;
   const entry = boundary && agentType !== null && Object.hasOwn(boundary.wrappers, agentType) ? boundary.wrappers[agentType] : null;
   const judged = agentType !== null && (WRITE_TOOLS.includes(tool) ? !boundary || entry !== null : tool === 'Bash' && (!boundary || Array.isArray(entry?.commands)));
-  const command = tool === 'Bash' && decision === 'deny' && Array.isArray(entry?.commands) && typeof input.tool_input?.command === 'string' ? redacted(input.tool_input.command.trim()).slice(0, 300) : null;
+  const shell = tool === 'Bash' && Array.isArray(entry?.commands);
+  const command = shell && decision === 'approve' && entry.duty === 'check' && entry.commands.includes(matched) ? matched
+    : shell && decision === 'deny' && typeof input.tool_input?.command === 'string' ? redacted(input.tool_input.command.trim()).slice(0, 300) : null;
   return { at, tool, agentType, judged, decision, ...(command ? { command } : {}) };
 }
 
@@ -277,7 +280,8 @@ function decideCommand({ input, boundary, allow, deny }) {
   const root = boundary.productRoot, text = typeof input.tool_input?.command === 'string' ? input.tool_input.command.replace(/^[ \t\n]+|[ \t\n]+$/g, '') : '';
   const forms = command => [...(input.cwd === root ? [command] : []), ...(quotable(root) ? [`cd "${root}" && ${command}`] : []), ...(bare(root) ? [`cd ${root} && ${command}`] : [])];
   const unsandboxed = input.tool_input?.dangerouslyDisableSandbox;
-  if ((unsandboxed === undefined || unsandboxed === false) && entry.commands.some(command => forms(command).includes(text))) return { decision: 'approve' };
+  const matched = unsandboxed === undefined || unsandboxed === false ? entry.commands.find(command => forms(command).includes(text)) : undefined;
+  if (matched !== undefined) return { decision: 'approve', command: matched };
   return deny(entry.commands.length
     ? `${input.agent_type}: in a batch the shell runs only the verification commands confirmed for this team, from the product root, each exactly as written and inside the sandbox if there is one: ${entry.commands.map(command => `cd "${root}" && ${command}`).join('  |  ')}; append nothing to a command: the Bash tool reports the exit code`
     : `${input.agent_type}: no batch is open, or this worker runs no command in it; the shell is closed`);
