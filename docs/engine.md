@@ -226,8 +226,9 @@ in lifecycle headers).
   true only for a halt signal in the run data the loop did not honour; the
   ceiling comes from the owner's limits, so `budgetGateCorrect` judges only
   whether the gate tripped when the spend crossed 80% of it. What `clean`
-  requires and the engine's return do not change. Without it the Guardian's
-  brief is unchanged.
+  requires does not change. The return adds `budgetStatus.gateTrace` (below),
+  from which the kit judges the gate (ADR 0010, amendment of 2026-11-26 on the
+  gate trace). Without it the Guardian's brief and the return are unchanged.
 - `launchManifestDigest` (optional, `sha256:<64 hex>`) — the frozen-bundle
   digest from `scripts/preflight-run.mjs` (above); echoed, never verified
   in-loop (no IO).
@@ -336,9 +337,15 @@ in lifecycle headers).
 - `runIncomplete` (halted before finishing the planned iters) is distinct
   from `planShortfall`/`needsGrooming` (the plan was shorter than N) —
   early halts can never masquerade as a fully-run board.
-- `budgetStatus` reports `{ceiling, loopSpent, overshootTokens}` — the Q5
+- `budgetStatus` reports `{ceiling, loopSpent, overshootTokens, tripped}` — the Q5
   gate checks before worker AND verifier dispatches, but one oversized spawn
-  can still overshoot; overshoot is visible, never silent. All engine
+  can still overshoot; overshoot is visible, never silent. With
+  `standingBatch` it also carries `gateTrace`: one entry
+  `{spawn: 'worker'|'verifier', iter, attempt, loopSpent, dispatched}` per
+  gate decision, in order, written where the gate is consulted (before each
+  worker, retry and verifier dispatch, and the halt after an iteration, which
+  declines the next ticket's worker). A dispatch that did not consult the gate
+  leaves no entry. All engine
   outputs (haltReason, ledger lines, guardian data) pass through a
   sanitizer that strips newlines/header tokens and redacts common secret
   shapes.

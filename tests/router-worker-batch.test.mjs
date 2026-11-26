@@ -4,11 +4,11 @@ import assert from 'node:assert/strict';
 import { writeFileSync, readFileSync, existsSync, mkdirSync, rmSync, appendFileSync, readdirSync, chmodSync, symlinkSync, cpSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { beforeBatch, abortBatch, BATCH_FILE, AFTER_FILE, RECORDS } from '../src/router-worker/batch.mjs';
+import { beforeBatch, abortBatch, BATCH_FILE, AFTER_FILE, RETURN_FILE, RECORDS } from '../src/router-worker/batch.mjs';
 import { afterBatch, commitBatch, HOLD_ALL } from '../src/router-worker/batch-close.mjs';
 import { settleBatch, markNotMetered } from '../src/router-worker/batch-settle.mjs';
 import { loadRetryRules } from '../src/router-worker/retries.mjs';
-import { runWorkflow, makeAgentImpl } from '../scripts/lib/workflow-harness.mjs';
+import { runWorkflow, makeAgentImpl, makeBudget } from '../scripts/lib/workflow-harness.mjs';
 import { readLease, acquireLease, releaseLease } from '../src/router-worker/lease.mjs';
 import { observeIsolation } from '../src/router-worker/isolation.mjs';
 import { readBoundary, decideCall, closeBoundary } from '../src/router-worker/write-boundary.mjs';
@@ -274,16 +274,16 @@ test('CLI: before prints the batch record with the preflight manifest chained in
   assert.equal(cleared.status, 0, cleared.stderr); assert.equal(JSON.parse(cleared.stdout).stage, 'batch-aborted'); assert.equal(readLease({ productRoot: f.product }).status, 'free'); assert.equal(run('abort', '--instance', f.root).status, 2);
 });
 
-// A batch run by the real engine with mock agents; `edits` is what the workers leave in the product.
-async function ran(t, { tickets, agents = {}, edits = {}, hook = true, extra = {}, hooks = () => ({}), fields = {} }) {
+// A batch run by the real engine with mock agents; `edits` is what the workers leave in the product, `spend` the output tokens of each agent call.
+async function ran(t, { tickets, agents = {}, edits = {}, hook = true, extra = {}, hooks = () => ({}), fields = {}, spend = 0 }) {
   const f = live(t);
   // Commit hooks the repository had before the batch; one written later is a finding.
   for (const [name, script] of Object.entries(hooks(f))) writeFileSync(join(f.product, '.git/hooks', name), script, { mode: 0o755 });
   const open = await f.before({ ...batchOf(...tickets), ...fields }, extra);
   assert.equal(open.errors, undefined, JSON.stringify(open.errors));
   // The Guardian's brief is kept as the engine wrote it: it names the run, and the settlement reads that.
-  let guardianBrief = null; const mock = makeAgentImpl(agents), agentImpl = (prompt, opts, index) => { if (opts?.schema?.required?.includes('runawayDetected')) guardianBrief = prompt; return mock(prompt, opts, index); };
-  const { result } = await runWorkflow({ scriptPath: join(f.root, '.claude/workflows/run-n-rounds.js'), args: open.args, agentImpl });
+  let guardianBrief = null; const mock = makeAgentImpl(agents), budget = makeBudget(), agentImpl = (prompt, opts, index) => { if (opts?.schema?.required?.includes('runawayDetected')) guardianBrief = prompt; budget.bump(spend); return mock(prompt, opts, index); };
+  const { result } = await runWorkflow({ scriptPath: join(f.root, '.claude/workflows/run-n-rounds.js'), args: open.args, agentImpl, budgetImpl: budget });
   for (const [path, text] of Object.entries(edits)) { mkdirSync(join(f.product, path, '..'), { recursive: true }); writeFileSync(join(f.product, path), text); }
   if (hook) checksRan(f.root, open);
   const after = () => afterBatch({ teamRoot: f.kit, instanceRoot: f.root, result }), commit = () => commitBatch({ teamRoot: f.kit, instanceRoot: f.root });
@@ -631,6 +631,44 @@ const EXEC = 'tag-list-fixture-worker-exec', CHECK = 'tag-list-fixture-worker-ch
 const held = (closed, code) => { assert.equal(closed.errors, undefined, JSON.stringify(closed.errors)); assert.ok(closed.findings.some(finding => finding.code === code), `${code}: ${JSON.stringify(closed.findings)}`);
   assert.equal(closed.holdAll, true); assert.deepEqual(closed.commits, []); assert.match(closed.next.join('\n'), /No ticket of this batch is committed by the kit.*rw-batch\.mjs abort/); };
 
+test('the budget gate of a standing batch is judged from the engine\'s trace of its gate decisions: a call past the stop line, or one the trace does not show, holds every commit', async t => {
+  const f = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n' } }), status = f.result.budgetStatus, trace = status.gateTrace, stopLine = f.open.ceiling.stopLine;
+  assert.deepEqual(trace?.map(entry => [entry.spawn, entry.iter, entry.attempt, entry.dispatched]), [['worker', 1, 1, true], ['verifier', 1, 1, true], ['worker', 2, 1, true], ['verifier', 2, 1, true]]);
+  const close = budgetStatus => { writeFileSync(join(f.root, AFTER_FILE), JSON.stringify({ stage: 'batch-closing', runId: f.open.runId, claimedAt: '2000-01-01T00:00:00.000Z' }));
+    return afterBatch({ teamRoot: f.kit, instanceRoot: f.root, result: { ...f.result, budgetStatus } }); };
+  const { gateTrace: _trace, ...untraced } = status;
+  for (const [why, budgetStatus] of [
+    ['a call dispatched at the stop line', { ...status, gateTrace: trace.map((entry, i) => i === 2 ? { ...entry, loopSpent: stopLine } : entry) }],
+    ['no trace', untraced],
+    ['fewer dispatched entries than calls', { ...status, gateTrace: trace.slice(0, -1) }],
+    ['a call declined below the stop line', { ...status, gateTrace: [...trace, { spawn: 'worker', iter: 3, attempt: 1, loopSpent: 0, dispatched: false }] }],
+    ['an entry that is not a gate decision', { ...status, gateTrace: trace.map((entry, i) => i === 0 ? { ...entry, spawn: 'checker' } : entry) }]]) {
+    const closed = close(budgetStatus);
+    held(closed, 'GUARDIAN_NOT_CLEAN'); assert.equal(closed.findings.find(finding => finding.code === 'GUARDIAN_NOT_CLEAN').budgetGate, 'inconsistent', why);
+    assert.ok(closed.account.blockers.includes('guardian-not-clean'), `${why}: ${JSON.stringify(closed.account.blockers)}`);
+  }
+});
+
+test('a standing batch whose gate stopped the run at the stop line holds nothing more than the tripped gate', async t => {
+  const f = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n' }, spend: 15000 });
+  assert.equal(f.open.ceiling.stopLine, 28800);
+  assert.deepEqual(f.result.budgetStatus.gateTrace, [{ spawn: 'worker', iter: 1, attempt: 1, loopSpent: 0, dispatched: true }, { spawn: 'verifier', iter: 1, attempt: 1, loopSpent: 15000, dispatched: true },
+    { spawn: 'worker', iter: 2, attempt: 1, loopSpent: 30000, dispatched: false }]);
+  const closed = f.after();
+  assert.equal(closed.errors, undefined, JSON.stringify(closed.errors)); assert.equal(closed.holdAll, false);
+  assert.ok(!closed.findings.some(finding => finding.code.startsWith('GUARDIAN_')), JSON.stringify(closed.findings));
+  assert.deepEqual(closed.account.blockers, ['budget-gate', 'run-incomplete', 'halt-requires-acknowledgement']);
+  assert.deepEqual(closed.commits.map(commit => commit.ticket), ['US-01']);
+});
+
+test('a standing batch with a genuine gate trace closes clean and settles against the account it was closed with', async t => {
+  const f = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n', 'src/api/tags.js': 't\n' } });
+  assert.equal(f.result.budgetStatus.gateTrace?.length, 4);
+  const closed = f.after(); assert.equal(closed.status, 'clean', JSON.stringify(closed.findings)); assert.deepEqual(closed.account.blockers, []);
+  const settled = settleBatch({ teamRoot: f.kit, instanceRoot: f.root, meter: meterOf(f, [12000, 6000, 12000, 6000, 5000]), rules: loadRetryRules({ teamRoot: f.kit, instanceRoot: f.root }) });
+  assert.equal(settled.errors, undefined, JSON.stringify(settled.errors)); assert.equal(settled.stage, 'batch-settled');
+});
+
 test('a batch that changed files while the hook logged no call of its own workers holds every commit, whatever other agents of the team did', async t => {
   const f = await ran(t, { tickets: two, edits: edited, hook: false });
   assert.ok(f.open.args.allowedAgentTypes.includes('tag-list-fixture-architect'), 'a governance wrapper is an allowed agent of the run');
@@ -823,11 +861,13 @@ test('a batch closed by the kit before the standing-batch argument settles after
   const unwatched = () => ({ runawayDetected: false, missedHaltRisk: true, budgetGateCorrect: true, droppedFixRetest: false, verdict: 'main-session-action-required', findings: ['no observer'], newPatternCandidates: [] });
   const f = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n', 'src/api/tags.js': 't\n' }, agents: { guardian: unwatched } });
   assert.equal(f.after().errors, undefined);
-  // The records as that kit wrote them: arguments without standingBatch, and an account naming every verdict but clean as a blocker.
+  // The records as that kit wrote them: arguments without standingBatch, a return without a gate trace, and an account naming every verdict but clean as a blocker.
   const batchPath = join(f.root, BATCH_FILE), afterPath = join(f.root, AFTER_FILE), opened = JSON.parse(readFileSync(batchPath, 'utf8')), closed = JSON.parse(readFileSync(afterPath, 'utf8'));
   const { standingBatch: _flag, ...args } = opened.args, old = sealAgain({ ...opened, args, runRecord: sealAgain({ ...opened.runRecord, argsDigest: digest(args) }) });
   writeFileSync(batchPath, JSON.stringify(old));
-  writeFileSync(afterPath, JSON.stringify(sealAgain({ ...closed, batchDigest: old.digest, status: 'review', account: { ...closed.account, blockers: ['guardian-not-clean'] } })));
+  const returnPath = join(f.root, RETURN_FILE), { budgetStatus: { gateTrace: _trace, ...budgetStatus }, ...kept } = JSON.parse(readFileSync(returnPath, 'utf8')), earlier = { ...kept, budgetStatus };
+  writeFileSync(returnPath, JSON.stringify(earlier));
+  writeFileSync(afterPath, JSON.stringify(sealAgain({ ...closed, batchDigest: old.digest, returnDigest: digest(earlier), status: 'review', account: { ...closed.account, blockers: ['guardian-not-clean'] } })));
   const settled = settleBatch({ teamRoot: f.kit, instanceRoot: f.root, meter: meterOf(f, [12000, 6000, 12000, 6000, 5000]), rules: loadRetryRules({ teamRoot: f.kit, instanceRoot: f.root }) });
   assert.equal(settled.errors, undefined, JSON.stringify(settled.errors)); assert.equal(settled.stage, 'batch-settled');
 });

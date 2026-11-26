@@ -6,6 +6,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { fileURLToPath } from 'node:url'
 import { runWorkflow, makeAgentImpl, makeBudget } from '../scripts/lib/workflow-harness.mjs'
+import { guardianHold } from '../src/router-worker/run-args.mjs'
 
 const SCRIPT = fileURLToPath(new URL('../.claude/workflows/run-n-rounds.js', import.meta.url))
 
@@ -483,6 +484,44 @@ test('N-10: budgetStatus reports loop spend and overshoot', async () => {
   assert.equal(result.budgetStatus.ceiling, 100_000)
   assert.ok(result.budgetStatus.loopSpent > 0)
   assert.ok(result.budgetStatus.overshootTokens > 0, 'a single oversized spawn overshoot must be visible')
+})
+
+// Every agent call, the Guardian's included, spends `per` tokens.
+const spending = (args, per, agents = {}) => {
+  const budget = makeBudget({ total: 100_000_000 }), impl = makeAgentImpl(agents)
+  return runWorkflow({ scriptPath: SCRIPT, args, agentImpl: (p, o, i) => { budget.bump(per); return impl(p, o, i) }, budgetImpl: budget })
+}
+const entry = (spawn, iter, attempt, loopSpent, dispatched = true) => ({ spawn, iter, attempt, loopSpent, dispatched })
+
+test('standing batch: the return traces each gate decision, one dispatched entry per worker and verifier call, in order', async () => {
+  const { result } = await spending(mkArgs({ standingBatch: true, rounds: 2, plan: mkPlan(2, { isCodeShipping: true }) }), 1000)
+  assert.deepEqual(result.budgetStatus.gateTrace, [entry('worker', 1, 1, 0), entry('verifier', 1, 1, 1000), entry('worker', 2, 1, 2000), entry('verifier', 2, 1, 3000)])
+  let checks = 0
+  const failOnce = () => ++checks === 1
+    ? { pass: false, staticPass: false, e2ePass: true, summary: 'one test fails', commandsRun: [{ command: 'npm test', exitCode: 1 }], failures: ['x'] }
+    : { pass: true, staticPass: true, e2ePass: true, summary: 'green', commandsRun: [{ command: 'npm test', exitCode: 0 }], failures: [] }
+  const retried = await spending(mkArgs({ standingBatch: true, maxAttemptsPerTicket: 2, plan: mkPlan(1, { isCodeShipping: true }) }), 1000, { verifier: failOnce })
+  assert.equal(retried.result.results[0].attempts, 2)
+  assert.deepEqual(retried.result.budgetStatus.gateTrace, [entry('worker', 1, 1, 0), entry('verifier', 1, 1, 1000), entry('worker', 1, 2, 2000), entry('verifier', 1, 2, 3000)])
+  assert.equal(guardianHold(retried.result, true), null, 'the kit counts a retried ticket\'s calls as the trace lists them')
+})
+
+test('standing batch: a gate that stops the loop is traced as a declined entry at the spend that crossed the stop line', async () => {
+  const workers = await spending(mkArgs({ standingBatch: true, rounds: 5, plan: mkPlan(5), budgetCeilingTokens: 100_000 }), 45_000)
+  assert.match(workers.result.haltReason, /token-burnout/)
+  assert.deepEqual(workers.result.budgetStatus.gateTrace, [entry('worker', 1, 1, 0), entry('worker', 2, 1, 45_000), entry('worker', 3, 1, 90_000, false)])
+  const verifier = await spending(mkArgs({ standingBatch: true, rounds: 2, plan: mkPlan(2, { isCodeShipping: true }), budgetCeilingTokens: 100_000 }), 90_000)
+  assert.deepEqual(verifier.result.budgetStatus.gateTrace, [entry('worker', 1, 1, 0), entry('verifier', 1, 1, 90_000, false), entry('worker', 2, 1, 90_000, false)])
+  assert.equal(verifier.calls.length, 2, 'one worker and the Guardian')
+  const last = await spending(mkArgs({ standingBatch: true, plan: mkPlan(1, { isCodeShipping: true }), budgetCeilingTokens: 100_000 }), 90_000)
+  assert.deepEqual(last.result.budgetStatus.gateTrace, [entry('worker', 1, 1, 0), entry('verifier', 1, 1, 90_000, false)], 'no later ticket, no further entry')
+  assert.match(last.result.haltReason, /token-burnout/)
+})
+
+test('without standingBatch the return carries no gate trace', async () => {
+  const { result } = await spending(mkArgs({ rounds: 2, plan: mkPlan(2, { isCodeShipping: true }), budgetCeilingTokens: 100_000 }), 45_000)
+  assert.match(result.haltReason, /token-burnout/)
+  assert.deepEqual(Object.keys(result.budgetStatus), ['ceiling', 'loopSpent', 'overshootTokens', 'tripped'])
 })
 
 // ---------------------------------------------------------------- grooming / early-halt truth (N-12)

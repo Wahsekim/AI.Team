@@ -105,18 +105,33 @@ export async function freezeRun({ inputs, run, teamRoot, methodBundle, standingB
   }
 }
 
+const SPAWNS = ['worker', 'verifier'];
+
+// The engine's own figures, and for a standing batch its trace of every gate decision. Returns the rule that failed, or null.
+function gateFaultOf(result, standing) {
+  const budget = result.budgetStatus ?? {}, past = spent => spent >= 0.8 * budget.ceiling;
+  if (!(Number.isFinite(budget.ceiling) && Number.isFinite(budget.loopSpent) && budget.tripped === past(budget.loopSpent))) return 'tripped-not-at-stop-line';
+  if (!standing) return null;
+  const trace = budget.gateTrace;
+  if (!Array.isArray(trace) || !trace.every(entry => entry && SPAWNS.includes(entry.spawn) && positive(entry.iter) && positive(entry.attempt)
+    && Number.isFinite(entry.loopSpent) && typeof entry.dispatched === 'boolean')) return 'trace-missing';
+  if (trace.some(entry => entry.dispatched && past(entry.loopSpent))) return 'dispatched-at-stop-line';
+  if (trace.some(entry => !entry.dispatched && !past(entry.loopSpent))) return 'declined-below-stop-line';
+  const calls = callsOf(result.results), traced = spawn => trace.filter(entry => entry.dispatched && entry.spawn === spawn).length;
+  return traced('worker') === calls.exec && traced('verifier') === calls.check ? null : 'calls-not-traced';
+}
+
 // ADR 0010, amendments of 2026-11-25 and 2026-11-26: what holds a standing batch's commits is a problem in the run itself.
 // The budget gate is judged from the engine's own figures, not from the Guardian's view of the ceiling, which is the owner's limits.
-// Returns null when nothing holds them.
-export function guardianHold(result) {
-  const budget = result.budgetStatus ?? {}, gateFault = !(Number.isFinite(budget.ceiling) && Number.isFinite(budget.loopSpent) && budget.tripped === (budget.loopSpent >= 0.8 * budget.ceiling));
-  const guardian = result.guardian ?? {};
+// `standing`: the arguments were frozen with standingBatch. Returns null when nothing holds the commits.
+export function guardianHold(result, standing) {
+  const gateFault = gateFaultOf(result, standing), guardian = result.guardian ?? {};
   return guardian.status !== 'ok' || guardian.verdict === 'halt-and-investigate' || guardian.runawayDetected !== false || guardian.droppedFixRetest !== false || gateFault ? { gateFault } : null;
 }
 
 // Arguments frozen without standingBatch keep the earlier rule: settlement recomputes the account and compares it with the one the batch was closed with.
 function blockersOf(result, standing) {
-  const held = standing ? guardianHold(result) !== null : result.guardian.verdict !== 'clean';
+  const held = standing ? guardianHold(result, true) !== null : result.guardian.verdict !== 'clean';
   const specific = [
     result.guardian.status !== 'ok' ? 'guardian-unavailable' : held ? 'guardian-not-clean' : null,
     result.budgetGateTripped ? 'budget-gate' : null,
@@ -135,6 +150,8 @@ function blockersOf(result, standing) {
 // read `blockers` for that.
 // An engine return from before verifierDispatched carried a verifier estimate for every checker call.
 export const checkerCalled = r => r.verifierDispatched ?? (r.estimates?.verifier != null);
+// A retried ticket made `attempts` exec calls, and every attempt before the last was verified.
+const callsOf = results => ({ exec: sum(results.map(r => r.attempts)), check: sum(results.map(r => r.attempts - 1 + (checkerCalled(r) ? 1 : 0))) });
 
 export function accountRun({ args, record, result }) {
   const findings = [], check = (condition, code) => { if (!condition) findings.push(code); };
@@ -156,8 +173,7 @@ export function accountRun({ args, record, result }) {
       && todo.nextLifecycleNumberAfter === args.nextLifecycleNumber + results.length + 1, 'LIFECYCLE_COUNT_MISMATCH');
     if (findings.length) return { status: 'unaccounted', findings };
     return { status: 'accounted', findings,
-      calls: { tickets: results.length, exec: results.reduce((total, r) => total + r.attempts, 0),
-        check: results.reduce((total, r) => total + r.attempts - 1 + (checkerCalled(r) ? 1 : 0), 0), guard: 1 },
+      calls: { tickets: results.length, ...callsOf(results), guard: 1 },
       attempts: results.map(r => r.attempts),
       nextLifecycleNumberAfter: todo.nextLifecycleNumberAfter,
       blockers: blockersOf(result, args.standingBatch === true) };
