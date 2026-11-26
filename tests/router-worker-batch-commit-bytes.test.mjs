@@ -35,3 +35,15 @@ test('a commit hook that leaves the bytes alone commits as before', async t => {
   assert.equal(done.errors, undefined, JSON.stringify(done.errors));
   assert.equal(git(f.product, 'show', 'HEAD:src/app.js'), 'x = 2\n');
 });
+
+test('a batch whose commits are all held is not put in review: no verdict could release them', async t => {
+  const f = live(t);
+  write(f.product, 'src/authz.js', 'a = 1\n'); git(f.product, 'add', '-A'); git(f.product, 'commit', '-q', '-m', 'seed');
+  const open = await f.before({ ...batchOf(ticket('T-1', ['src/authz.js'])), verificationCommands: f.commands });
+  const worker = () => { writeFileSync(join(f.product, 'src/authz.js'), 'a = 2\n'); return { outcome: 'done', progress: true, filesTouched: ['src/authz.js'], decisionsCount: 1, selfReportTokens: 100, blocked: false, terminalStop: false, notes: 'ok' }; };
+  const verifier = () => ({ pass: true, staticPass: true, e2ePass: true, summary: 'ok', commandsRun: f.commands.map(command => ({ command, exitCode: 0 })), failures: [] });
+  const { result } = await runWorkflow({ scriptPath: join(f.root, '.claude/workflows/run-n-rounds.js'), args: open.args, agentImpl: makeAgentImpl({ worker, verifier }) });
+  git(f.product, 'commit', '-q', '--allow-empty', '-m', 'someone else');
+  const closed = afterBatch({ ...f.common, result });
+  assert.equal(closed.holdAll, true); assert.deepEqual(closed.reviews, {}); assert.equal(f.state(), 'closed', 'the reviewers are not let in');
+});

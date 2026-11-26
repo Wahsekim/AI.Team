@@ -85,7 +85,7 @@ export function triggerChanges(previous, review) {
 // Called once the batch record is written. With no earlier list kept, the whole list goes to the owner's spot review.
 export function recordFrozen({ instance, review, changes, runId, at }) {
   const day = at.slice(0, 10), lines = changes.previous
-    ? [changes.added.length ? `${day} BATCH ${runId} REVIEW TRIGGERS ADDED: ${shown(changes.added)}.` : null, changes.removed.length ? `${day} BATCH ${runId} REVIEW TRIGGERS REMOVED (owner spot review): ${shown(changes.removed)}.` : null].filter(Boolean)
+    ? [changes.added.length ? `${day} BATCH ${runId} REVIEW TRIGGERS ADDED: ${shown(changes.added)}.` : null, changes.removed.length ? `${day} BATCH ${runId} REVIEW TRIGGERS REMOVED OR NARROWED (owner spot review): ${shown(changes.removed)}.` : null].filter(Boolean)
     : [`${day} BATCH ${runId} REVIEW TRIGGERS FROZEN with no earlier list kept in an archived batch (owner spot review): ${review.triggers.length} trigger(s), ${review.rules.length} rule(s), ${review.adrs.length} ADR(s), ${review.digest}.`];
   if (lines.length) appendFileSync(join(instance, LEDGER), lines.map(line => `${line}\n`).join(''));
 }

@@ -1,4 +1,5 @@
 import { canonical, digest, bytesDigest, parseJSON } from '../loop/contracts.mjs';
+import { isAbsolute } from 'node:path';
 import { MethodError, methodCatalog, selectMethods } from './methods.mjs';
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -81,7 +82,8 @@ function validateInput(input, bundle, standingBatch) {
 
   fields(policy, ['schemaVersion', 'mode', 'approvalRef', 'stackRef', 'runtimeRef', 'rosterRef',
     'profiles', 'allowedWritePaths', 'allowedTools', 'sensitivePaths', 'verificationCommands',
-    'maxBriefChars', 'budgetUnit', 'maxTicketBudget', ...(withMethods ? ['methodAllowlist'] : []), ...(Object.hasOwn(policy ?? {}, 'securityReview') ? ['securityReview'] : [])], 'policy');
+    'maxBriefChars', 'budgetUnit', 'maxTicketBudget', ...(withMethods ? ['methodAllowlist'] : []), ...['securityReview', 'productRoot'].filter(key => Object.hasOwn(policy ?? {}, key))], 'policy');
+  requireValue(policy.productRoot === undefined || (standingBatch === true && typeof policy.productRoot === 'string' && isAbsolute(policy.productRoot) && !/["$`\\!\x00-\x1f\x7f]/.test(policy.productRoot)), 'policy.productRoot', 'Only a standing batch names the product root, as a quotable absolute path');
   // ADR 0011, decision 6: set only by a standing batch, whose Security review covers a declared-sensitive ticket.
   const standingReview = Object.hasOwn(policy, 'securityReview');
   requireValue(!standingReview || policy.securityReview === 'standing-batch', 'policy.securityReview', 'The only security review a policy can name is "standing-batch"');
@@ -197,6 +199,8 @@ function render(input, duty, methods, standingBatch) {
     ...(duty === 'exec' ? { writePaths: m.allowedWritePaths } : {}),
     ...(duty === 'exec' && standingBatch ? { gitCommands: m.gitCommands ?? [], shell: SHELL } : {}),
     ...(duty === 'exec' && m.resumedPaths ? { resumedPaths: m.resumedPaths, resumed: RESUMED } : {}),
+    // The exact text the hook accepts, from any folder: the worker's shell does not start at the product root.
+    ...(policy.productRoot ? { runAs: [...(m.verificationCommands ?? policy.verificationCommands), ...(duty === 'exec' ? m.gitCommands ?? [] : [])].map(command => `cd "${policy.productRoot}" && ${command}`) } : {}),
     writeBoundary: duty === 'exec' ? 'Write only inside writePaths; plannedPaths are the files expected to change. The host refuses any other write' : standingBatch ? `No product write; run only the listed verification commands, from the product root. ${EXIT}` : 'No product mutation; use the approved isolated verification runner',
     requestedExecTools: p.requestedTools,
     permissionRef: policy.profiles[duty].permissionRef,
