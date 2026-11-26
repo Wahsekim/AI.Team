@@ -385,3 +385,25 @@ time runs the whole list.
 
 Merging the pull request that adds this amendment ratifies it.
 
+### 2026-11-26: the Guardian of a batch can call it clean
+
+Status: Accepted.
+
+In four of four real batches the Guardian answered
+`main-session-action-required` with `missedHaltRisk`, because the engine asked
+it whether an observer had watched a run that has none by design; one Guardian
+also called the budget gate wrong because the computed ceiling was far above
+the spend. The owner decided in session on 2026-11-26, accepting the
+recommendation of that day's review of the kit.
+
+The engine tells the Guardian of a batch that no observer watches the run by
+design and that the PM attests an owner stop or a hardware halt after the run
+(`reconcile-run.mjs --monitoring`), so `missedHaltRisk` is true only when the
+run data shows a halt signal the loop did not honour. It also tells it that the
+ceiling comes from the owner's limits, so `budgetGateCorrect` judges only
+whether the gate tripped when the spend crossed the stop line. What `clean`
+requires does not change, and specialist mode does not change. The engine's
+blockers name the Guardian exactly when the batch's commits are held for it,
+and a batch frozen before this amendment keeps the blockers it was closed
+with, so it still settles.
+

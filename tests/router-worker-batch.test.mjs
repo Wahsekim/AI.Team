@@ -579,8 +579,10 @@ test('each finding that questions the run holds every commit; each check of comm
   const guard = await ran(t, { tickets: two, edits, agents: { guardian: () => ({ verdict: 'runaway', findings: ['the worker looped'], summary: 'not clean' }) } }); holds(guard.after(), 'GUARDIAN_NOT_CLEAN');
   // A Guardian flag that reports a problem in the run holds every commit.
   const audit = (flags, verdict = 'main-session-action-required') => () => ({ runawayDetected: false, missedHaltRisk: false, budgetGateCorrect: true, droppedFixRetest: false, ...flags, verdict, findings: ['x'], newPatternCandidates: [] });
-  for (const flags of [{ runawayDetected: true }, { droppedFixRetest: true }])
-    holds((await ran(t, { tickets: two, edits, agents: { guardian: audit(flags) } })).after(), 'GUARDIAN_NOT_CLEAN');
+  for (const flags of [{ runawayDetected: true }, { droppedFixRetest: true }]) {
+    const held = (await ran(t, { tickets: two, edits, agents: { guardian: audit(flags) } })).after();
+    holds(held, 'GUARDIAN_NOT_CLEAN'); assert.ok(held.account.blockers.includes('guardian-not-clean'), JSON.stringify(held.account.blockers));
+  }
   // The budget gate is judged from the engine's figures: a Guardian that finds the ceiling generous is attention only.
   const generous = (await ran(t, { tickets: two, edits, agents: { guardian: audit({ budgetGateCorrect: false }) } })).after();
   assert.equal(generous.holdAll, false); assert.equal(generous.findings.find(finding => finding.code === 'GUARDIAN_ATTENTION')?.budgetGateCorrect, false);
@@ -592,6 +594,8 @@ test('each finding that questions the run holds every commit; each check of comm
   assert.equal(unwatched.holdAll, false); assert.ok(!unwatched.findings.some(finding => finding.code === 'GUARDIAN_NOT_CLEAN'));
   assert.deepEqual(unwatched.findings.find(finding => finding.code === 'GUARDIAN_ATTENTION'), { code: 'GUARDIAN_ATTENTION', verdict: 'main-session-action-required', missedHaltRisk: true, budgetGateCorrect: true });
   assert.equal(unwatched.commits.length, 1);
+  // A blocker names the Guardian exactly when the commits are held for it.
+  assert.deepEqual(unwatched.account.blockers, []);
   // A lock another team holds when the batch ends, and hook log lines from before the batch opened.
   const stolen = await ran(t, { tickets: two, edits }); releaseLease({ productRoot: stolen.product, lease: stolen.open.lease }); acquireLease({ teamRoot: fixture(t).root, productRoot: stolen.product });
   assert.ok(stolen.after().findings.some(finding => finding.code === 'LOCK_NOT_HELD_BY_THIS_BATCH'));
@@ -610,6 +614,14 @@ test('each finding that questions the run holds every commit; each check of comm
   const edited = await ran(t, { tickets: two, edits }), closed = edited.after();
   writeFileSync(join(edited.root, AFTER_FILE), JSON.stringify({ ...closed, holdAll: false, status: 'clean' }).replace('"review"', '"clean"').replace(closed.closedAt, '2020-01-01T00:00:00.000Z'));
   assert.match(refusal(edited.commit()).reason, /was changed, or belongs to another batch/);
+});
+
+test('the Guardian of a standing batch is told it has no observer and a ceiling from the owner\'s limits; its clean verdict closes the batch clean', async t => {
+  const f = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n', 'src/api/tags.js': 't\n' } });
+  assert.match(f.guardianBrief, /no observer watches the run, by design/); assert.match(f.guardianBrief, /ceiling is computed from the owner's limits/);
+  const closed = f.after();
+  assert.equal(closed.status, 'clean', JSON.stringify(closed.findings) + JSON.stringify(closed.account.blockers));
+  assert.ok(!closed.findings.some(finding => finding.code.startsWith('GUARDIAN_'))); assert.deepEqual(closed.account.blockers, []); assert.equal(closed.holdAll, false);
 });
 
 test('abort after a claimed or closed batch always frees the team; a forged archive never stands in for a commit', async t => {
@@ -757,6 +769,19 @@ test('settle sets each ticket\'s measured usage against its authorization, befor
   const done = run('settle', meterFile, '--instance', cli.root);
   assert.equal(done.status, 0, done.stdout + done.stderr); assert.equal(JSON.parse(done.stdout).status, 'clear'); assert.deepEqual(JSON.parse(done.stdout).limits, []);
   const again = run('settle', meterFile, '--instance', cli.root); assert.equal(again.status, 2); assert.match(again.stderr, /already settled/);
+});
+
+test('a batch closed by the kit before the standing-batch argument settles after the upgrade, with the blockers it was closed with', async t => {
+  const unwatched = () => ({ runawayDetected: false, missedHaltRisk: true, budgetGateCorrect: true, droppedFixRetest: false, verdict: 'main-session-action-required', findings: ['no observer'], newPatternCandidates: [] });
+  const f = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n', 'src/api/tags.js': 't\n' }, agents: { guardian: unwatched } });
+  assert.equal(f.after().errors, undefined);
+  // The records as that kit wrote them: arguments without standingBatch, and an account naming every verdict but clean as a blocker.
+  const batchPath = join(f.root, BATCH_FILE), afterPath = join(f.root, AFTER_FILE), opened = JSON.parse(readFileSync(batchPath, 'utf8')), closed = JSON.parse(readFileSync(afterPath, 'utf8'));
+  const { standingBatch: _flag, ...args } = opened.args, old = sealAgain({ ...opened, args, runRecord: sealAgain({ ...opened.runRecord, argsDigest: digest(args) }) });
+  writeFileSync(batchPath, JSON.stringify(old));
+  writeFileSync(afterPath, JSON.stringify(sealAgain({ ...closed, batchDigest: old.digest, status: 'review', account: { ...closed.account, blockers: ['guardian-not-clean'] } })));
+  const settled = settleBatch({ teamRoot: f.kit, instanceRoot: f.root, meter: meterOf(f, [12000, 6000, 12000, 6000, 5000]), rules: loadRetryRules({ teamRoot: f.kit, instanceRoot: f.root }) });
+  assert.equal(settled.errors, undefined, JSON.stringify(settled.errors)); assert.equal(settled.stage, 'batch-settled');
 });
 
 test('settle after a run that halted: only the ticket that ran is settled, by the id of the archived batch, and exit 2 says it is in review', async t => {

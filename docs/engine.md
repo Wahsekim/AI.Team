@@ -81,7 +81,9 @@ as strong evidence, not proof; M4 distrust still applies.
    rule" below.
 4. **Q3 (hardware) + Q4 (owner input) halt observation** — a workflow body has
    no IO or clock; the main session watches around the run, and the guardian
-   flags `missedHaltRisk` unless that watch is attested.
+   flags `missedHaltRisk` unless that watch is attested. A standing
+   Router/Worker batch (`standingBatch`) has no watcher by design and is
+   attested after the run instead.
 
 ## Fix-retest drain rule
 
@@ -106,7 +108,8 @@ the last attempt is drained by the main session under this rule.
 
 ```js
 { rounds, plan, date, nextLifecycleNumber, executionMode, budgetCeilingTokens,
-  failurePolicy?, maxAttemptsPerTicket?, runId?, launchManifestDigest? }
+  failurePolicy?, maxAttemptsPerTicket?, runId?, launchManifestDigest?,
+  standingBatch? }
 ```
 
 **Preflight first (review 2026-09-25, F-02 / Slice B).** Before invoking the
@@ -215,6 +218,16 @@ in lifecycle headers).
   - **Estimates (F-07):** `estimatedTokens` / `verifierEstimatedTokens` are the
     PM's pre-dispatch estimates in ENGINE units; the engine turns them into
     typed variance observations (below).
+- `standingBatch` (optional, `true` only) — set by
+  `src/router-worker/run-args.mjs` for a standing Router/Worker batch
+  (ADR 0010, amendment of 2026-11-26). It changes only what the Guardian is
+  asked: no observer watches the run by design and the main session attests
+  Q3/Q4 after it (`reconcile-run.mjs --monitoring`), so `missedHaltRisk` is
+  true only for a halt signal in the run data the loop did not honour; the
+  ceiling comes from the owner's limits, so `budgetGateCorrect` judges only
+  whether the gate tripped when the spend crossed 80% of it. What `clean`
+  requires and the engine's return do not change. Without it the Guardian's
+  brief is unchanged.
 - `launchManifestDigest` (optional, `sha256:<64 hex>`) — the frozen-bundle
   digest from `scripts/preflight-run.mjs` (above); echoed, never verified
   in-loop (no IO).
