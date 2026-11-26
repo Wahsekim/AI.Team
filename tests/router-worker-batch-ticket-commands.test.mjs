@@ -12,6 +12,9 @@ test('a ticket that names a subset of the batch\'s commands gets only those in i
   const [docs, code] = open.args.plan;
   for (const brief of [docs.brief, docs.verifierBrief]) assert.deepEqual(taskData(brief).verificationCommands, ['pwd']);
   for (const brief of [code.brief, code.verifierBrief]) assert.deepEqual(taskData(brief).verificationCommands, COMMANDS);
+  // Each brief gives the exact text the hook accepts, whatever folder the worker's shell is in.
+  assert.deepEqual(taskData(docs.verifierBrief).runAs, [`cd "${f.product}" && pwd`]);
+  assert.deepEqual(taskData(code.brief).runAs, COMMANDS.map(command => `cd "${f.product}" && ${command}`));
   assert.deepEqual(open.tickets[0].verificationCommands, ['pwd']); assert.equal(open.tickets[1].verificationCommands, undefined);
   assert.deepEqual(open.verificationCommands, COMMANDS, 'the batch list, which the hook allows, is unchanged');
 });

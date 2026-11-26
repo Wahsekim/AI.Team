@@ -234,14 +234,14 @@ const gitCommandsOf = ticket => [
   ...(ticket.deletes ?? []).map(path => `git --literal-pathspecs rm -q -- "${path}"`)];
 
 // The compiler input of one ticket, built from what the PM wrote and what the team's mode profile holds.
-function inputOf(ticket, { batch, profile, wrappers, product, limits, allPaths, gitCommands, resumedPaths }) {
+function inputOf(ticket, { batch, profile, wrappers, product, productRoot, limits, allPaths, gitCommands, resumedPaths }) {
   const staffing = profile.staffing, tools = staffing.exec.tools, repoId = profile.spec.project.slug;
   const amounts = Object.fromEntries(ESTIMATE.map(key => [key, ticket.estimate[key]]));
   const policy = { schemaVersion: 1, mode: 'router-worker', approvalRef: ref('mode-switch', profile.confirmedProposal ?? profile.specDigest), stackRef: ref('team-spec', profile.spec),
     runtimeRef: ref('count-engine', 'run-n-rounds'), rosterRef: ref('worker-wrappers', wrappers),
     profiles: Object.fromEntries(['exec', 'check', 'guard'].map(duty => [duty, { wrapper: wrappers[duty], permissionRef: ref(`${duty}-staffing`, staffing[duty]) }])),
     allowedWritePaths: allPaths, allowedTools: tools, sensitivePaths: batch.sensitivePaths, verificationCommands: batch.verificationCommands,
-    maxBriefChars: 20000, budgetUnit: 'input+cache_creation', maxTicketBudget: limits.authorizationPerTicket, securityReview: 'standing-batch' };
+    maxBriefChars: 20000, budgetUnit: 'input+cache_creation', maxTicketBudget: limits.authorizationPerTicket, securityReview: 'standing-batch', productRoot };
   return { schemaVersion: 1,
     ticket: { id: ticket.id, title: ticket.title, goal: ticket.goal, acceptance: ticket.acceptance, acceptanceRef: ref('acceptance', ticket.acceptance), isCodeShipping: true, deliveryRequired: false, riskFlags: ticket.riskFlags ?? [] },
     mandate: { ticketId: ticket.id, repoId, approvalRef: ref('batch-ticket', ticket), policyDigest: digest(policy), allowedWritePaths: ticket.paths, allowedTools: tools,
@@ -354,7 +354,7 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     const ceiling = count * limits.outputAllowancePerTicket + limits.guardianOutputShare, allPaths = [...new Set(batch.tickets.flatMap(ticket => ticket.paths))].sort();
     const run = { rounds: count, date: batch.date ?? new Date().toISOString().slice(0, 10), nextLifecycleNumber: batch.nextLifecycleNumber, runId,
       budgetCeilingTokens: ceiling, estimatedOutputTokens: Math.floor(ceiling / 2), guardianEstimateTokens: limits.authorizationPerTicket, maxAttemptsPerTicket: limits.attemptsPerTicket };
-    const inputs = batch.tickets.map((ticket, i) => inputOf(ticket, { batch, profile, wrappers, product, limits, allPaths, gitCommands: gitCommands[i], resumedPaths: plans[i]?.paths }));
+    const inputs = batch.tickets.map((ticket, i) => inputOf(ticket, { batch, profile, wrappers, product, productRoot, limits, allPaths, gitCommands: gitCommands[i], resumedPaths: plans[i]?.paths }));
     let frozen = await freezeRun({ inputs, run, teamRoot: instance, standingBatch: true });
     need(!frozen.errors, `The batch cannot be frozen: ${frozen.errors?.[0]?.field}: ${frozen.errors?.[0]?.reason}`);
     if (manifest) {

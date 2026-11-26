@@ -8,8 +8,8 @@ escalation to the owner are built ("Review triggers", "Review state and brief",
 "Review verdict, commit gate and escalation"), and so are "Resolve" (held
 tickets saved as patches, the rest verified again), sensitive tickets and the
 cost of each reviewer call, set at "settle", and the periodic review
-("Periodic review"). Used on a real team since 2026-11-24; the review path has
-not yet run there.
+("Periodic review"). Used on a real team since 2026-11-24, the review path included
+(2026-11-25).
 [ADR 0010](../../../decisions/0010-router-worker-second-mode.md), decisions 8 to 12.
 
 ```sh
@@ -48,8 +48,9 @@ Workflow tool, the team's hook and its wrappers. It must not end its turn while
 the engine runs (it waits for the workflow's completion notice), and it must
 not leave a background shell running when it finishes: `claude -p` does not
 exit while one is alive, and one run on 2026-11-25 stayed up 45 minutes after
-its report. Start it with `caffeinate -i` on a Mac, or the machine can sleep
-mid-run. Its user settings apply too (see `docs/claude-integration.md`, "Your
+its report. It stops only processes it started: a `pkill` by name also ends the
+owner's own (one run's `pkill -x caffeinate` let the machine sleep). Start it
+with `caffeinate -i` on a Mac, or the machine can sleep mid-run. Its user settings apply too (see `docs/claude-integration.md`, "Your
 Own Claude Code Settings").
 
 After the last step the PM writes its next-wake notes in `memory/pm.md`, as in
@@ -184,8 +185,8 @@ opened. A patch already applied in step 8 is taken back out of the work tree.
    | `HOOKS_WRITTEN` | a path was changed where the hooks live or beside husky's stub folder, for instance through a worker's shell | all held |
    | `BOUNDARY_CHANGED` | the write-boundary file is not the one the batch opened | all held |
    | `PRODUCT_HEAD_MOVED`, `PRODUCT_BRANCH_CHANGED` | someone committed or changed branch during the batch | all held |
-   | `GUARDIAN_NOT_CLEAN` | the Guardian did not answer, asked to halt and investigate, or found a problem in the run: a runaway, a budget gate that misbehaved, or a failed check at risk of being dropped | all held |
-   | `GUARDIAN_ATTENTION` | the Guardian found no such problem but did not call the run clean, for instance because no observer watched it for an owner stop or a hardware halt (`missedHaltRisk`), which is true of every headless batch. Its findings are in the engine's return for the PM to read | not held |
+   | `GUARDIAN_NOT_CLEAN` | the Guardian did not answer, asked to halt and investigate, or found a runaway or a failed check at risk of being dropped; or the engine's own figures show a budget gate that did not trip exactly when the spend crossed 80% of the ceiling (`budgetGate: inconsistent`) | all held |
+   | `GUARDIAN_ATTENTION` | the Guardian found no such problem but did not call the run clean, for instance because no observer watched it for an owner stop or a hardware halt (`missedHaltRisk`), which is true of every headless batch, or because it judged the ceiling too generous (`budgetGateCorrect: false` with consistent engine figures; the ceiling comes from the owner's limits). Its findings are in the engine's return for the PM to read. A batch held by another finding is not put in review | not held |
    | `BOUNDARY_NOT_RESTORED`, `LOCK_RELEASE_FAILED`, `LOCK_NOT_HELD_BY_THIS_BATCH` | the batch could not be closed completely | not held |
 
 4. **The write boundary closes and the lock is released**, whatever the
@@ -499,7 +500,7 @@ a narrower pattern would miss `oauth/` or `authz.js`.
   in the batch record (`review`). `triggerChanges` in the record names each
   pattern, rule and ADR added or removed since the list frozen by the newest
   archived batch (by `openedAt`), and the ledger gets
-  `REVIEW TRIGGERS ADDED: ...` and `REVIEW TRIGGERS REMOVED (owner spot review): ...`.
+  `REVIEW TRIGGERS ADDED: ...` and `REVIEW TRIGGERS REMOVED OR NARROWED (owner spot review): ...`.
   A narrowed trigger shows as the patterns it lost; a rule whose text changed
   is both removed and added. With no archived list, or one of the wrong
   shape or digest, the whole list is logged as `FROZEN ... (owner spot

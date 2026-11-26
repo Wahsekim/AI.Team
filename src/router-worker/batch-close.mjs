@@ -130,10 +130,13 @@ export function afterBatch({ teamRoot, instanceRoot, result }) {
     if (hooksOf(product).digest !== batch.hooks?.digest) findings.push({ code: 'HOOKS_CHANGED' });
     // ADR 0010, amendment of 2026-11-25: only a problem the Guardian found in the run holds the commits. No observer
     // watching for an owner stop or a hardware halt (missedHaltRisk) is true of every headless batch, so it is recorded.
+    // The budget gate is judged from the engine's own figures: whether it tripped exactly when the spend crossed 80% of the
+    // ceiling. A Guardian that finds the ceiling too generous says so as attention; the ceiling is the owner's limits.
+    const budget = result.budgetStatus ?? {}, gateFault = !(Number.isFinite(budget.ceiling) && Number.isFinite(budget.loopSpent) && budget.tripped === (budget.loopSpent >= 0.8 * budget.ceiling));
     const guardian = result.guardian ?? {}, problem = guardian.status !== 'ok' || guardian.verdict === 'halt-and-investigate'
-      || guardian.runawayDetected !== false || guardian.budgetGateCorrect !== true || guardian.droppedFixRetest !== false;
-    if (problem) findings.push({ code: 'GUARDIAN_NOT_CLEAN', status: plain(guardian.status ?? 'none'), verdict: plain(guardian.verdict ?? 'none') });
-    else if (guardian.verdict !== 'clean') findings.push({ code: 'GUARDIAN_ATTENTION', verdict: plain(guardian.verdict ?? 'none'), missedHaltRisk: guardian.missedHaltRisk === true });
+      || guardian.runawayDetected !== false || guardian.droppedFixRetest !== false || gateFault;
+    if (problem) findings.push({ code: 'GUARDIAN_NOT_CLEAN', status: plain(guardian.status ?? 'none'), verdict: plain(guardian.verdict ?? 'none'), ...(gateFault ? { budgetGate: 'inconsistent' } : {}) });
+    else if (guardian.verdict !== 'clean') findings.push({ code: 'GUARDIAN_ATTENTION', verdict: plain(guardian.verdict ?? 'none'), missedHaltRisk: guardian.missedHaltRisk === true, budgetGateCorrect: guardian.budgetGateCorrect === true });
 
     // What the batch changed: everything the work tree holds now that was not already there when it opened.
     const changed = changedPaths(product).filter(path => !batch.preexisting.includes(path));
@@ -163,6 +166,8 @@ export function afterBatch({ teamRoot, instanceRoot, result }) {
     if (changed.some(path => !Object.hasOwn(applied, path) || applied[path] !== now[path]) && hook.workerCalls === 0) findings.push({ code: 'HOOK_SAW_NO_WORKER' });
 
     // ADR 0011, decision 4: a batch whose changes need a review leaves the workers closed and the reviewers judged.
+    // A batch whose commits are all held is not reviewed: no verdict could release them.
+    if (findings.some(finding => HOLD_ALL.includes(finding.code))) for (const name of Object.keys(reviews)) delete reviews[name];
     let boundaryClosed = false;
     try {
       if (Object.keys(reviews).length) reviewBoundary({ teamRoot: instance, runId: batch.runId, reviewers: batch.reviewWrappers }); else closeBoundary({ teamRoot: instance });
