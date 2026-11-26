@@ -223,7 +223,8 @@ workers may write nothing and run no command; in a batch their shell runs only
 the verification commands the owner confirmed with the limits, plus, for the exec
 worker, the exact `git mv` and `git rm` commands derived from the batch's declared `moves` and `deletes`; a team switched
 before that list existed gets it, and the closed shell, from `team-mode.mjs limits`)
-([details](docs/design/router-worker/mode-switch.md)). `scripts/rw-batch.mjs` runs a batch in such a team: `before` checks the
+([details](docs/design/router-worker/mode-switch.md)). A PM session that starts cold in such a team is sent to the batch
+procedure by step 7 of the PM Start Protocol in `CLAUDE.md`. `scripts/rw-batch.mjs` runs a batch in such a team: `before` checks the
 tickets and the product repository, computes the ceiling, takes the lock and
 opens the write limits; `after` matches the engine's return against what was
 frozen, finds what was written outside the tickets' paths and closes the batch;
