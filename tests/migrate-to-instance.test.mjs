@@ -86,6 +86,8 @@ test('migration copies project state, leaves kit-file edits for manual porting, 
     assert.match(review, /^- \[ \] docs\/process-index\.md <- /m)
     assert.match(out, /PORT - CLAUDE\.md/); assert.match(out, /RESULT: MIGRATED/)
     assert.equal(await readFile(join(next, 'kit.lock'), 'utf8').then(t => t.split('\n')[0]), 'instance_schema=1')
+    assert.match(await readFile(join(next, '.ignore'), 'utf8'), /^kit\/tests\/$/m, 'the migrated instance keeps kit tests out of its searches')
+    assert.deepEqual(JSON.parse(await readFile(join(next, '.claude/settings.json'), 'utf8')).permissions.deny, ['Read(./kit/tests/**)'])
   })
 })
 

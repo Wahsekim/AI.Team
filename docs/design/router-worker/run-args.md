@@ -110,7 +110,7 @@ calls per duty and `blockers` (`guardian-unavailable`, `guardian-not-clean`,
 `halt-requires-acknowledgement`). `accounted` is about bookkeeping, not quality.
 For arguments with `standingBatch`, `guardian-not-clean` appears only when the
 Guardian's answer or the engine's budget figures hold the batch's commits
-(`GUARDIAN_NOT_CLEAN` in [after](batch.md#after)), and a verdict that holds
+(`GUARDIAN_NOT_CLEAN` in [after](batch-reference.md#after)), and a verdict that holds
 nothing adds no blocker. One rule, `guardianHold(result, standing)`, decides
 both; only for these arguments does it read the engine's gate trace.
 Arguments frozen without it keep the earlier rule, every verdict but `clean`,

@@ -412,12 +412,53 @@ test('ADR 0009: --dry-run in two-root mode writes nothing', async () => {
   })
 })
 
+const IGNORED = ['kit/tests/', 'kit/.github/', 'kit/docs/design/router-worker/history/']
+const DENIED = 'Read(./kit/tests/**)'
+
+test('two-root bootstrap keeps kit tests and development history out of searches and reads, and keeps every other setting', async () => {
+  await withInstance(async root => {
+    const hooks = { PreToolUse: [{ matcher: 'Write', hooks: [{ type: 'command', command: 'node "/x/hook.mjs"' }] }] }
+    await mkdir(join(root, '.claude'), { recursive: true })
+    await writeFile(join(root, '.claude/settings.json'), JSON.stringify({ model: 'opus', hooks, permissions: { allow: ['Read'], deny: ['Read(./secret)'] } }))
+    await writeFile(join(root, '.ignore'), 'node_modules/')
+    const out = await run(root)
+    assert.match(out, /DONE - \.ignore: added kit\/tests\//)
+    const ignore = (await readFile(join(root, '.ignore'), 'utf8')).split('\n')
+    assert.equal(ignore[0], 'node_modules/', 'the team\'s own line is kept')
+    for (const path of IGNORED) assert.ok(ignore.includes(path), `${path} is ignored`)
+    assert.deepEqual(JSON.parse(await readFile(join(root, '.claude/settings.json'), 'utf8')),
+      { model: 'opus', hooks, permissions: { allow: ['Read'], deny: ['Read(./secret)', DENIED] } })
+    const before = await snapshot(root)
+    assert.match(await run(root), /SKIP - \.ignore, \.claude\/settings\.json: kit development material already kept out of reads/)
+    assert.equal(await snapshot(root), before, 'a second run changes nothing')
+  })
+})
+
+test('two-root bootstrap creates .ignore and the settings file when absent, and fails on a settings file it cannot extend', async () => {
+  await withInstance(async root => {
+    await run(root)
+    const ignore = await readFile(join(root, '.ignore'), 'utf8')
+    for (const path of IGNORED) assert.match(ignore, new RegExp(`^${path.replace(/[.]/g, '\\.')}$`, 'm'))
+    assert.deepEqual(JSON.parse(await readFile(join(root, '.claude/settings.json'), 'utf8')), { permissions: { deny: [DENIED] } })
+  })
+  await withInstance(async root => {
+    await mkdir(join(root, '.claude'), { recursive: true })
+    await writeFile(join(root, '.claude/settings.json'), '{"permissions": {"deny": "Read(./x)"}}')
+    await assert.rejects(exec('bash', [SCRIPT, root]), e => {
+      assert.equal(e.code, 1); assert.match(e.stdout, /settings\.json is not a JSON object whose permissions\.deny is a list/)
+      assert.match(e.stdout, /RESULT: BOOTSTRAP-FAILED/); return true
+    })
+    assert.equal(await readFile(join(root, '.claude/settings.json'), 'utf8'), '{"permissions": {"deny": "Read(./x)"}}', 'the settings are left as they were')
+  })
+})
+
 test('ADR 0009: single-root bootstrap still works and is reported as legacy', async () => {
   await withKit(async root => {
     const out = await run(root, '--project-name', 'StockUp')
     assert.match(out, /WARN - layout: legacy single-root/)
     assert.match(out, /RESULT: INSTANTIATED-PENDING-INTERVIEW/)
     assert.ok(!(await exists(join(root, 'kit.lock'))))
+    assert.ok(!(await exists(join(root, '.ignore'))), 'a single-root checkout is the kit: its tests are not hidden')
   })
 })
 

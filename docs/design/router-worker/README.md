@@ -12,57 +12,19 @@ reviewers taking over this branch. Project-maintained documentation is in Englis
 
 ## Current status
 
-**Implemented in part; not activated.** Baseline:
-`main@8331e0921b8d8546c1ca3691a3dfa5e709b75971`. The offline compiler, one check
-method, local preflight, rule inventory, inert deployment drafts, candidate/report
-binding and retry persistence are implemented. See
-[implementation status](implementation-status.md) and [PR handoff](pr-handoff.md).
-A complete catalog, publishable deployment, activation, real sessions and
-settlement remain unfinished. Existing harness, count-engine and PM-only-commit
-rules remain authoritative. This does not depend on DeepSeek Harness or activate
-a Loop/Graph live provider.
+Router/Worker is the kit's second team mode
+([ADR 0010](../../../decisions/0010-router-worker-second-mode.md)). A team
+switches into it with `team-mode.mjs` and, live, runs each cycle as one batch
+through the count engine, with the review of
+[ADR 0011](../../../decisions/0011-router-worker-batch-review.md) before any
+commit. It has run on a real team since 2026-11-24.
 
-The retry registry binds a stable repo/ticket to a database using a separate
-anchor and retained checkpoints. Database substitution and rollback with newer
-checkpoints retained are refused; **rollback of the entire trusted state is not
-protected**. Real local command fixtures include a failing candidate and passing
-control, with records bound to the candidate and frozen recipe. Sessions and
-admission are simulated, not real Claude E2E evidence. The Nov 9 regression had
-740 tests: 738 passed, two skipped, none failed. See the
-[registry contract](retry-registry.md) and [author self-review](self-review-2026-11-09.md).
-
-`scripts/preflight-router-worker.mjs` checks separately anchored local approval
-records, referenced files and the declared read graph plus brief using a bytes/4
-estimate. It does not establish approver identity, semantic read-closure
-completeness or real host isolation. Its output remains `launchable: false`;
-this is not completion of all RW-02 or T0/T1 requirements.
-
-`scripts/team-mode.mjs` supports `preview SPEC.json`,
-`draft SPEC.json NEW.rw-draft.json` and `verify SPEC.json DRAFT.json`. It only
-creates/checks inert JSON, never a runtime registry. See the
-[draft contract](coverage-and-drafts.md). Candidate binding checks actual Git
-changes, sensitive paths, report identities and required-command coverage;
-optional gate-record validation checks consistency, not authentic execution or
-independent acceptance. See [candidate binding](candidate-binding.md).
-
-The offline retry journal models prepare, start, close, proven-never-started
-cancellation, unknown execution and stop events. Replay does not double-count;
-unknown work cannot be redispatched; late close does not resume stopped work.
-SQLite adds transactional append, version checks, restart persistence and read-only
-inspection; the registry adds stable ticket/store binding. Real sessions remain
-unconnected, and the compiler still refuses second and later attempts. See
-[retry accounting](retry-accounting.md) and [persistence](retry-persistence.md).
-
-| Status | Conclusion |
-|---|---|
-| Implemented facts | First-attempt exec/check previews for non-sensitive code; v1 has no methods, v2 can explicitly select pinned `pstack-blast-radius` for check. Successful artifacts are non-launchable. Existing engine, bootstrap, roster, roles, legacy skill routing and team entry points are unchanged. The offline implementation was committed and pushed as PR #5; earlier uncommitted status notes are historical. |
-| Owner decisions | Add an optional team, not a replacement. Exec/check/guard cover implementation, independent acceptance and Guardian; Architect/Coach/Auditor/Security triggers remain. Stable ticket+duty allows an initial call plus two retries, with no reset by model/skill/instance and earlier stops taking precedence. Only the PM commits. No extra deployment or paid-call permission follows. |
-| Implementation direction | Explicit mode selection at bootstrap; specialist remains default. PM performs routing; workers are derived by verifiable outcome. First release is attended, serial and named-wrapper based, compiled toward the existing engine. Controlled migration comes later; no hot switching. Budgets, actual accounting, Coach and Auditor remain. General mapping approval is not proof of concrete deployment readiness. |
-| Missing evidence | No real Router/Worker team deployment or model trial, and no paired quality/cost/latency comparison. No superiority claim is supported. |
-
-[ADR 0008](../../../decisions/0008-router-worker-topology.md) records the owner's
-2026-11-09 approvals. Real deployment, paid use and publication remain separately
-gated. A successful local preview must not be passed directly to a live engine.
+A deployed session works from the operating documents: [batch.md](batch.md)
+(the PM's runbook, with [batch-reference.md](batch-reference.md) for the
+detail), [mode-switch.md](mode-switch.md), [write-boundary.md](write-boundary.md)
+and [proof-1.md](proof-1.md). The rest of this file is the original design;
+the dated reviews, hand-off and implementation status of the build are in
+[history/](history/).
 
 ## 1. Decision: change task allocation, retain the control plane
 
@@ -470,7 +432,7 @@ the isolated serial pilot, but cannot be advertised as implemented.
 
 The original recommended first delivery was RW-01 plus a separate RW-02 dry-run
 PR. PR #5 instead packages multiple offline slices as separate commits; review
-them in the [handoff order](pr-handoff.md). Do not start with listeners, worker
+them in the [handoff order](history/pr-handoff.md). Do not start with listeners, worker
 pools, cross-round memory or a general agent platform. Both modes may coexist;
 expansion depends on paired evidence and owner decisions.
 

@@ -30,7 +30,13 @@ repository pinned by `kit.lock`. Run everything from the instance root.
    and prints one `REVIEW` line per changed seed whose instantiated file exists
    in the instance. It appends the same items to `kit-upgrade-review.md` as
    open `- [ ]` entries.
-   It writes the review entries first, then the engine copy, then `kit.lock`.
+   It also adds what is missing of the read scope (`scripts/scope-kit-reads.mjs`):
+   `.ignore` lines that keep `kit/tests/`, `kit/.github/` and the kit's
+   development history out of the session's searches, and a
+   `Read(./kit/tests/**)` deny rule in `.claude/settings.json`, keeping every
+   other setting. It does this even when the pin is unchanged.
+   It writes the review entries first, then the engine copy, then the read
+   scope, then `kit.lock`.
    If it fails part-way (`RESULT: PIN-FAILED`), `kit.lock` still names the old
    commit: fix the cause and run it again. Entries already recorded, open or
    ticked, are not added twice. A `.pin-lock` directory serializes runs; remove
@@ -54,6 +60,7 @@ repository pinned by `kit.lock`. Run everything from the instance root.
 |---|---|
 | Kit scripts, docs, shared rules, methodologies, `agents/pm.md`, skill packs | Updated with `kit/` |
 | Loop engine copy | Re-copied by `pin-kit.sh`; a locally edited copy is refused |
+| `.ignore`, the read rule in `.claude/settings.json` | Missing lines and the rule added by `pin-kit.sh`; nothing else in either file changes |
 | `charter.md`, profiles, roster, role files, ledgers, `CLAUDE.md` | Unchanged; ported by hand from the `REVIEW` list |
 
 ## Legacy single-root deployments
