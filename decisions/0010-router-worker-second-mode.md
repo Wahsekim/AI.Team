@@ -417,11 +417,16 @@ A ticket also passed on the checker's own report. The owner decided in session
 on 2026-11-26, accepting the recommendation of that day's review of the kit.
 
 `HOOK_SAW_NO_WORKER` counts only the calls of the batch's three workers and
-holds every commit. The hook logs, for each approved shell call of a worker,
-the command of the batch it matched. `after` holds every commit
-(`CHECK_RUNS_MISSING`) when, for a verification command, the checker's
+holds every commit; a hook that ran but could not append to its log leaves the
+same empty log and is held the same. The hook logs, for each approved shell
+call of the checker, the verification command it matched. `after` holds every
+commit (`CHECK_RUNS_MISSING`) when, for a verification command, the checker's
 approved runs since the batch opened are fewer than the passed tickets that
-verify with it. The count does not tell tickets apart, so a checker that runs a
+verify with it, so the checker's brief of a standing batch tells it to run every
+command it lists and omit none. The count does not tell tickets apart, so a checker that runs a
 command twice for one ticket covers for another that ran it not at all, and
 whether a run passed stays the checker's word; a batch opened before this
-amendment, whose record lacks `hookLogsCommands`, is not counted.
+amendment, whose record lacks `hookLogsCommands`, is not counted. The log is a
+file in the team folder, and a confirmed command that runs a file the exec
+worker may write (a test file) can append lines that read as the checker's runs
+or as worker calls: `after` cannot tell them from the hook's.

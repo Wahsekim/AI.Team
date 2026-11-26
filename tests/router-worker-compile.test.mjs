@@ -133,6 +133,16 @@ test('a standing batch brief states the ticket\'s grant and the exact git comman
   }
 });
 
+// after counts the checker's runs of each command against the passed tickets, so a command it leaves out holds the batch.
+test('a standing batch\'s checker is told to run every listed command and omit none; an offline preview\'s check brief is unchanged', () => {
+  const { check } = compile(inputFixture(), { standingBatch: true }).renderedBriefs;
+  assert.match(check, /Run every one of the verificationCommands, each exactly as given, and omit none\. A command this ticket does not need is not listed: the PM leaves it out through the ticket's own verificationCommands\./);
+  assert.doesNotMatch(check, /omitted checks/);
+  const offline = compile(inputFixture()).renderedBriefs.check;
+  assert.ok(offline.split('\n').includes('Independently verify the host-bound candidate, not author claims. Execute the configured checks; report real exits and omitted checks. No host-bound candidate means stop.'));
+  assert.doesNotMatch(offline, /omit none/);
+});
+
 for (const [name, mutate, code] of failures) test(`rejects ${name} with no partial artifacts`, () => {
   const input = inputFixture(); mutate(input);
   const output = compile(input);

@@ -205,15 +205,15 @@ export const redacted = command => command
   .replace(/:\/\/[^\s/@:]+:[^\s/@]+@/g, '://<redacted>@')
   .replace(/[A-Za-z0-9+_=-]{32,}/g, '<redacted>');
 
-// One log line per hook call: who called which tool and what was decided. No path. A worker's shell command is kept:
-// an approved one as the batch's command it matched (`command`), which "after" counts; a refused one as its text, so
-// that "after" can report it to the owner.
+// One log line per hook call: who called which tool and what was decided. A worker's shell command is kept: the checker's
+// approved one as the verification command it matched (`command`), which "after" counts, and not the exec worker's, whose
+// moves and deletions name product paths; a refused one as its text, so that "after" can report it to the owner.
 export function logEntry({ input, boundary, decision, command: matched, at }) {
   const tool = typeof input?.tool_name === 'string' ? input.tool_name : null, agentType = typeof input?.agent_type === 'string' ? input.agent_type : null;
   const entry = boundary && agentType !== null && Object.hasOwn(boundary.wrappers, agentType) ? boundary.wrappers[agentType] : null;
   const judged = agentType !== null && (WRITE_TOOLS.includes(tool) ? !boundary || entry !== null : tool === 'Bash' && (!boundary || Array.isArray(entry?.commands)));
   const shell = tool === 'Bash' && Array.isArray(entry?.commands);
-  const command = shell && decision === 'approve' && entry.commands.includes(matched) ? matched
+  const command = shell && decision === 'approve' && entry.duty === 'check' && entry.commands.includes(matched) ? matched
     : shell && decision === 'deny' && typeof input.tool_input?.command === 'string' ? redacted(input.tool_input.command.trim()).slice(0, 300) : null;
   return { at, tool, agentType, judged, decision, ...(command ? { command } : {}) };
 }

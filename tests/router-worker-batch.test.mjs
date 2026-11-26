@@ -79,8 +79,9 @@ test('in a batch a worker\'s shell runs the confirmed verification commands from
   assert.equal(approved.status, 0, approved.stderr); assert.deepEqual(JSON.parse(approved.stdout).hookSpecificOutput, { hookEventName: 'PreToolUse', permissionDecision: 'allow', permissionDecisionReason: 'A command frozen for this batch: a verification command the owner confirmed, or a move or deletion a ticket of this batch declared' });
   const refused = hook(exec, 'curl example.invalid'); assert.equal(refused.status, 2); assert.equal(refused.stdout, ''); assert.match(refused.stderr, /only the verification commands confirmed for this team/);
   const unjudged = hook('tag-list-fixture-architect', 'ls'); assert.equal(unjudged.status, 0); assert.equal(unjudged.stdout, '', 'no decision is given for an agent that is not a worker');
-  assert.deepEqual(f.read('.claude/rw-write-boundary.log.jsonl').trim().split('\n').map(line => JSON.parse(line)).map(line => [line.decision, line.judged, line.command]), [['approve', true, 'npm test'], ['deny', true, 'curl example.invalid'], ['allow', false, undefined]],
-    'an approved command is logged as the batch\'s own text, without the cd; a refused one as written');
+  assert.equal(hook('tag-list-fixture-worker-check', `cd "${f.product}" && npm test`).status, 0);
+  assert.deepEqual(f.read('.claude/rw-write-boundary.log.jsonl').trim().split('\n').map(line => JSON.parse(line)).map(line => [line.decision, line.judged, line.command]), [['approve', true, undefined], ['deny', true, 'curl example.invalid'], ['allow', false, undefined], ['approve', true, 'npm test']],
+    'the checker\'s approved command is logged as the batch\'s own text, without the cd, the exec worker\'s with none; a refused one as written');
   // When the batch is over the shell is closed again.
   assert.equal(abortBatch({ teamRoot: f.kit, instanceRoot: f.root }).errors, undefined);
   assert.match(shell(exec, `cd "${f.product}" && npm test`).reason, /no batch is open/);
@@ -635,7 +636,7 @@ test('a batch that changed files while the hook logged no call of its own worker
   assert.ok(f.open.args.allowedAgentTypes.includes('tag-list-fixture-architect'), 'a governance wrapper is an allowed agent of the run');
   assert.deepEqual(runUnderHook(f.root, 'tag-list-fixture-architect', ['ls']), ['allow']);
   const closed = f.after(); held(closed, 'HOOK_SAW_NO_WORKER');
-  assert.equal(closed.hook.workerCalls, 0); assert.match(closed.next.join('\n'), /did not load the write-boundary hook/);
+  assert.equal(closed.hook.workerCalls, 0); assert.match(closed.next.join('\n'), /did not load the write-boundary hook.*or the hook ran and could not append to its log/);
 });
 
 test('every passed ticket needs a checker run of each of its verification commands in the hook log, or every commit is held', async t => {
@@ -652,6 +653,8 @@ test('every passed ticket needs a checker run of each of its verification comman
   const subset = await ran(t, { tickets: [two[0], { ...two[1], verificationCommands: ['npm test'] }], edits: edited, hook: false, fields: { verificationCommands: ['npm test', 'npm run lint'] } });
   assert.deepEqual(runUnderHook(subset.root, CHECK, ['npm test', 'npm run lint', 'npm test']), ['approve', 'approve', 'approve']);
   const kept = subset.after(); assert.equal(kept.status, 'clean', JSON.stringify(kept.findings)); assert.deepEqual(kept.commits.map(commit => commit.ticket), ['US-01', 'US-02']);
+  // The count runs over the batch's list, so a command listed twice would be counted twice: before refuses such a list.
+  assert.match(refusal(await live(t).before({ ...batchOf(...two), verificationCommands: ['npm test', 'npm test'] })).reason, /verificationCommands: Duplicate entries/);
 });
 
 test('a batch opened by the earlier kit, whose hook did not log approved commands, closes without counting the checker\'s runs', async t => {
@@ -659,6 +662,14 @@ test('a batch opened by the earlier kit, whose hook did not log approved command
   const { hookLogsCommands: _marker, ...earlier } = f.open; writeFileSync(join(f.root, BATCH_FILE), JSON.stringify(sealAgain(earlier)));
   assert.deepEqual(runUnderHook(f.root, EXEC, ['npm test']), ['approve']);
   const closed = f.after(); assert.equal(closed.status, 'clean', JSON.stringify(closed.findings)); assert.deepEqual(closed.commits.map(commit => commit.ticket), ['US-01', 'US-02']);
+});
+
+test('a batch the earlier kit opened is still held when the hook logged no call of its workers, though its checker\'s runs are not counted', async t => {
+  const f = await ran(t, { tickets: two, edits: edited, hook: false });
+  const { hookLogsCommands: _marker, ...earlier } = f.open; writeFileSync(join(f.root, BATCH_FILE), JSON.stringify(sealAgain(earlier)));
+  assert.deepEqual(runUnderHook(f.root, 'tag-list-fixture-architect', ['ls']), ['allow']);
+  const closed = f.after(); held(closed, 'HOOK_SAW_NO_WORKER');
+  assert.deepEqual(closed.findings.filter(finding => finding.code === 'CHECK_RUNS_MISSING'), [], 'only HOOK_SAW_NO_WORKER holds this batch');
 });
 
 test('abort after a claimed or closed batch always frees the team; a forged archive never stands in for a commit', async t => {

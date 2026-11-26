@@ -46,8 +46,8 @@ export function openBatch(teamRoot, instanceRoot) {
   return { instance, batch };
 }
 
-// What the write-boundary hook logged since the batch opened. No worker call after a batch that changed
-// files means the session never loaded the hook, so the write limits were not enforced while it ran.
+// What the write-boundary hook logged since the batch opened. No worker call after a batch that changed files means
+// the session never loaded the hook, so the write limits were not enforced, or the hook could not append to its log.
 // `checkRuns`: the batch's commands the hook approved for the checker, one entry per run.
 function hookSeen(instance, wrappers, checker, since) {
   let text = '';
@@ -190,7 +190,7 @@ export function afterBatch({ teamRoot, instanceRoot, result }) {
     if (!boundaryClosed) next.push('The write-boundary file is missing or was changed: every subagent write and shell command is refused until a mode switch to specialist and back rebuilds it');
     const hooksTouched = findings.some(finding => ['HOOKS_CHANGED', 'HOOKS_WRITTEN'].includes(finding.code));
     if (holdAll) next.push(`No ticket of this batch is committed by the kit. ${hooksTouched ? `${HOOKS_FIRST}. ` : ''}${ABANDON}`);
-    if (findings.some(finding => finding.code === 'HOOK_SAW_NO_WORKER')) next.push('The hook logged no call of this batch\'s workers: the session that ran the batch did not load the write-boundary hook of the team root (.claude/settings.json), so the write limits were not enforced. Inspect every changed path before any commit by hand, and run the next batch from a session that loads the hook');
+    if (findings.some(finding => finding.code === 'HOOK_SAW_NO_WORKER')) next.push('The hook logged no call of this batch\'s workers: either the session that ran the batch did not load the write-boundary hook of the team root (.claude/settings.json), so the write limits were not enforced, or the hook ran and could not append to its log (.claude/rw-write-boundary.log.jsonl), so what it decided is not known. Inspect every changed path before any commit by hand, and run the next batch from a session that loads the hook, with that log writable');
     const missing = findings.find(finding => finding.code === 'CHECK_RUNS_MISSING')?.commands ?? [];
     if (missing.length) next.push(`The checker ran ${missing.map(entry => `${plain(entry.command)} (${entry.seen} of ${entry.needed})`).join(', ')} fewer times than the tickets that passed verify with it: a ticket passed without its checker running its verification commands, and the log cannot say which. Run the verification commands yourself before any commit by hand`);
     if (!holdAll && left.length) next.push('Paths are left uncommitted in the product; the next batch refuses until they are committed or discarded by hand, or it is started as is');

@@ -137,12 +137,12 @@ test('resumed work left as before applied it raises no unexplained write', async
   const f = withPatch(t, leftWork);
   const open = await f.before({ ...batchOf(ticket('T-1', ['src/list/**'], { expectedPaths: ['src/list/a.js'], resume: 'handoff/T-1/left.patch' })), verificationCommands: f.commands });
   const quiet = () => ({ outcome: 'done', progress: true, filesTouched: [], decisionsCount: 1, selfReportTokens: 100, blocked: false, terminalStop: false, notes: 'nothing to add' });
-  const verifier = () => ({ pass: true, staticPass: true, e2ePass: true, summary: 'ok', commandsRun: f.commands.map(command => ({ command, exitCode: 0 })), failures: [] });
+  // A checker call would count as a worker call and hide the unexplained write; this one stops before running anything, so the log stays empty.
+  const verifier = () => ({ pass: false, staticPass: false, e2ePass: false, summary: 'no host-bound candidate', commandsRun: [], failures: ['stopped before any check'] });
   const { result } = await runWorkflow({ scriptPath: join(f.root, '.claude/workflows/run-n-rounds.js'), args: open.args, agentImpl: makeAgentImpl({ worker: quiet, verifier }) });
   const closed = afterBatch({ ...f.common, result });
-  assert.equal(closed.errors, undefined, JSON.stringify(closed.errors));
-  // No worker call is logged: the resumed paths raise no unexplained write, and the ticket that passed with no checker run is held.
-  assert.deepEqual(closed.findings.map(finding => finding.code), ['CHECK_RUNS_MISSING']); assert.deepEqual(closed.tickets[0].changedPaths, ['src/list/a.js', 'src/list/new.js']);
+  assert.equal(closed.errors, undefined, JSON.stringify(closed.errors)); assert.equal(closed.hook.workerCalls, 0);
+  assert.deepEqual(closed.findings.map(finding => finding.code), []); assert.deepEqual(closed.tickets[0].changedPaths, ['src/list/a.js', 'src/list/new.js']);
 });
 
 test('a reviewer of a resumed ticket whose diff is too large for the brief is pointed to the patch', async t => {

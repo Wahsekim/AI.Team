@@ -177,7 +177,7 @@ opened. A patch already applied in step 8 is taken back out of the work tree.
    | Finding | Meaning | Commits |
    |---|---|---|
    | `WRITE_OUTSIDE_PATHS` | paths changed that no ticket covers, for instance through a worker's shell | the paths are left uncommitted; the tickets are still committed |
-   | `HOOK_SAW_NO_WORKER` | files changed and the hook logged no call of the batch's three workers since the batch opened (a call of another agent of the team does not count): the session did not load it, so the write limits were not enforced during the run. A resumed path that still holds what `before` applied is not such a change | all held |
+   | `HOOK_SAW_NO_WORKER` | files changed and the hook logged no call of the batch's three workers since the batch opened (a call of another agent of the team does not count): the session did not load it, so the write limits were not enforced during the run, or the hook ran and could not append to its log. A resumed path that still holds what `before` applied is not such a change | all held |
    | `CHECK_RUNS_MISSING` | for a verification command of the batch, the hook logged fewer approved runs of it by the checker since the batch opened than there are passed tickets that verify with it (a ticket without its own `verificationCommands` verifies with the batch's whole list). Lists each such command with `needed` and `seen`. A run by the exec worker does not count. The log does not say which ticket's checker skipped its run, so no ticket is told apart. Not checked for a batch an earlier kit opened, whose hook did not log approved commands | all held |
    | `NESTED_REPOSITORY` | a worker created a Git repository inside the product; Git would commit a link to it, not its files | the folder is left uncommitted |
    | `PREEXISTING_PATH_CHANGED` | a path that was already changed when the batch started as is was changed again | not held; the path is never committed |
@@ -256,12 +256,17 @@ ticket's paths are relative to the product root. A command a ticket needs and th
 the owner's to add, before the batch.
 
 The hook logs every call in `.claude/rw-write-boundary.log.jsonl` of the team
-folder. A worker's approved call carries the command of the batch it matched,
-as the batch froze it (without the `cd`); a refused one carries its own text,
-redacted (see "Not covered"). `after` counts the checker's approved runs of
-each command (`CHECK_RUNS_MISSING`). `before` marks the batch record
-(`hookLogsCommands`) so that `after` counts them only for a batch whose hook
-logs them.
+folder. The checker's approved call carries the verification command it
+matched, as the batch froze it (without the `cd`); the exec worker's approved
+call carries none, since its moves and deletions name product paths; a refused
+call carries its own text, redacted (see "Not covered"). `after` counts the
+checker's approved runs of each command (`CHECK_RUNS_MISSING`). `before` marks
+the batch record (`hookLogsCommands`) so that `after` counts them only for a
+batch whose hook logs them. The checker's brief of a standing batch therefore
+tells it to run every verification command it lists, each exactly as given, and
+to omit none: a command a ticket does not need is left out by the PM, through
+the ticket's own `verificationCommands`, not by the checker. The exec worker is
+not told to run them all, and its runs are not counted.
 
 ### Moves and deletions
 
@@ -894,7 +899,10 @@ command, the hook must have approved at least as many runs of it by the checker
 as there are passed tickets that verify with it. The count does not tell the
 tickets apart, so a checker that runs a command twice for one ticket covers for
 another that ran it not at all. Nor does the hook see the command's exit code:
-that a run passed is the checker's word. The batch records carry digests that detect an
+that a run passed is the checker's word. The log is a file in the team folder,
+and a confirmed command runs files the exec worker may write (a test file), so
+such a command can append lines that read as the checker's runs or as worker
+calls; neither count can tell them from the hook's. The batch records carry digests that detect an
 accidental edit, not a deliberate one: a PM session can rewrite a record and
 its digest. What reaches a path, the ledger or a commit message is therefore
 checked again when it is read, and the commit plan is derived again from the
