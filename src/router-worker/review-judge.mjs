@@ -23,6 +23,7 @@ export const said = (text, max = 300) => typeof text === 'string' ? plain(text.t
 const refuse = error => ({ errors: [{ code: 'REVIEW_REFUSED', field: 'review', reason: error instanceof Refusal ? error.message : `The review could not be judged: ${error?.code ?? error?.message}` }] });
 export const projectsOf = () => join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'projects');
 const CLAIM_MS = 60000;
+export const AS_NEW = 'as a new agent, never by resuming or messaging the earlier one: a resumed reviewer\'s transcript begins with its first brief, so its report is refused REVIEW_BRIEF_NOT_FOUND';
 const sleep = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
 // One judgment at a time in a team, from reading the verdicts to writing them back: two at once would each write back the
@@ -66,6 +67,8 @@ export function changedSince(product, brief) {
   const now = contentOf(product, Object.keys(content)), targets = linksOf(product, Object.keys(links));
   return [...new Set([...Object.keys(content).filter(path => now[path] !== content[path]), ...Object.keys(links).filter(path => targets[path] !== links[path])])];
 }
+// A brief the earlier kit made, which recorded no links and told the reviewer to read each file in one Read.
+export const madeBefore = brief => brief.tickets.some(item => !Object.hasOwn(item, 'links'));
 
 // The batch in review and this reviewer's latest brief, which no verdict has judged yet.
 function inReview({ teamRoot, instanceRoot, reviewer }) {
@@ -118,18 +121,17 @@ const CLOCK_MS = 2000;
 
 // ADR 0011, decisions 3 and 4: a dispatch with the latest brief is judged before another transcript, and instead of no answer.
 // Refuses while a subagent transcript of `wrapper`, in any session under `projectsRoot`, carries the brief `heading` and was
-// dispatched before the transcript `file` (when that carries it too), or at all when there is no transcript. Only the files
-// written since the brief was made can carry it, so only those are opened. `command`: review or periodic.
+// dispatched before the transcript `file` (when that carries it too), or at all when there is no transcript or `file` does not
+// carry it. Only the files written since the brief was made can carry it, so only those are opened. `command`: review or periodic.
 export function judgeFirst({ projectsRoot, wrapper, heading, since, file, reviewer, command }) {
-  const own = file ? dispatchOf(file, heading) : null, from = Date.parse(since) - CLOCK_MS;
+  const given = file ? dispatchOf(file, heading) : null, own = given?.carries ? given : null, from = Date.parse(since) - CLOCK_MS;
   let root; try { root = realpathSync(projectsRoot); } catch { return; }
-  if (own && !own.carries) return;
   const waiting = foldersOf(root).flatMap(foldersOf).flatMap(session => {
     const folder = join(session, 'subagents');
     let names; try { names = readdirSync(folder).filter(name => SUBAGENT.test(name)); } catch { return []; }
     return names.map(name => join(folder, name)).flatMap(path => { try { return statSync(path).mtimeMs >= from && agentTypeOf(path) === wrapper ? [dispatchOf(path, heading)] : []; } catch { return []; } });
   }).filter(other => other.carries && (!own || (other.file !== own.file && earlier(other, own)))).sort((a, b) => earlier(a, b) ? -1 : 1);
-  need(!waiting.length, `${waiting.map(item => plain(item.file)).join(', ')} ${waiting.length > 1 ? 'carry' : 'carries'} ${reviewer}'s latest brief${own ? ' and began before this transcript' : ''}, and no record judged ${waiting.length > 1 ? 'them' : 'it'}. Judge ${waiting.length > 1 ? 'the first' : 'it'} with: rw-batch.mjs ${command} --reviewer ${reviewer} --transcript <that file> --instance <instance-root>; that uses the attempt, and a reviewer that stopped without a report is judged REVIEW_NO_REPORT. --no-answer is for a dispatch that left no transcript. Nothing was recorded`);
+  need(!waiting.length, `${waiting.map(item => plain(item.file)).join(', ')} ${waiting.length > 1 ? 'carry' : 'carries'} ${reviewer}'s latest brief${own ? ' and began before this transcript' : given ? ', which the transcript given does not carry' : ''}, and no record judged ${waiting.length > 1 ? 'them' : 'it'}. Judge ${waiting.length > 1 ? 'the first' : 'it'} with: rw-batch.mjs ${command} --reviewer ${reviewer} --transcript <that file> --instance <instance-root>; that uses the attempt, and a reviewer that stopped without a report is judged REVIEW_NO_REPORT. --no-answer is for a dispatch that left no transcript. Nothing was recorded`);
 }
 
 // What the transcript shows, and the report it ends with. Each gap is a refusal of the report.
@@ -220,7 +222,7 @@ function record({ instance, batch, after, brief, verdicts, mine }, reviewer, jud
   appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} REVIEW ${batch.runId} ${reviewer} ${words} (attempt ${entry.attempt})${outcome === 'accepted'
     ? `: passed ${passed.join(', ') || 'none'}; rejected ${rejected.map(item => `${item.id} (${item.fails.join(', ')})`).join(', ') || 'none'}${unchecked.length ? `; not checked: ${unchecked.join(', ')}` : ''}`
     : `: ${judged.refusals.map(item => item.code).join(', ')}${outcome === 'not-obtained' ? `; held: ${tickets.map(item => item.id).join(', ')}` : ''}`}.\n`);
-  const next = outcome === 'refused' ? `The report was refused (${reason}). Brief ${reviewer} again with: rw-batch.mjs review-brief --reviewer ${reviewer} --instance <instance-root>, and dispatch it once more with that brief`
+  const next = outcome === 'refused' ? `The report was refused (${reason}). Brief ${reviewer} again with: rw-batch.mjs review-brief --reviewer ${reviewer} --instance <instance-root>, and dispatch it once more with that brief ${AS_NEW}`
     : outcome === 'not-obtained' ? `The review by ${reviewer} was not obtained; its tickets are not committed. Once every reviewer is judged, run: rw-batch.mjs resolve --instance <instance-root>, then rw-batch.mjs commit --instance <instance-root>`
     : 'The verdict is recorded; once every reviewer is judged, run: rw-batch.mjs resolve --instance <instance-root>, then rw-batch.mjs commit --instance <instance-root>';
   return { ...entry, escalated, next };

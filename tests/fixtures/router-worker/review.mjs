@@ -35,15 +35,15 @@ export function live(t, { commands = COMMANDS, blank = false } = {}) {
     lines: file => existsSync(join(f.root, file)) ? f.read(file).split('\n').filter(Boolean).map(line => JSON.parse(line)) : [] };
 }
 export const changed = f => git(f.product, 'status', '--porcelain', '--untracked-files=all').split('\n').filter(Boolean).map(line => line.slice(3)).sort();
-// A batch run by the real engine with mock agents; `edits` is what the workers leave in the product (a text, or { link } for a
-// symbolic link), `fields` other batch fields.
+// A batch run by the real engine with mock agents; `edits` is what the workers leave in the product (a text, a Buffer of bytes,
+// or { link } for a symbolic link), `fields` other batch fields.
 export async function runBatch(f, tickets, edits, fields = {}) {
   const open = await f.before({ ...batchOf(...tickets), verificationCommands: f.commands, ...fields });
   assert.equal(open.errors, undefined, JSON.stringify(open.errors));
   // The Guardian's brief names the run; settle reads it from the Guardian's transcript.
   let guardianBrief = null; const mock = makeAgentImpl(agentsOf(f.commands)), agentImpl = (prompt, opts, index) => { if (opts?.schema?.required?.includes('runawayDetected')) guardianBrief = prompt; return mock(prompt, opts, index); };
   const { result } = await runWorkflow({ scriptPath: join(f.root, '.claude/workflows/run-n-rounds.js'), args: open.args, agentImpl });
-  for (const [path, text] of Object.entries(edits)) { mkdirSync(join(f.product, path, '..'), { recursive: true }); if (typeof text === 'string') writeFileSync(join(f.product, path), text); else symlinkSync(text.link, join(f.product, path)); }
+  for (const [path, text] of Object.entries(edits)) { mkdirSync(join(f.product, path, '..'), { recursive: true }); if (typeof text === 'string' || Buffer.isBuffer(text)) writeFileSync(join(f.product, path), text); else symlinkSync(text.link, join(f.product, path)); }
   checksRan(f.root, open);
   const after = afterBatch({ ...f.common, result });
   assert.equal(after.errors, undefined, JSON.stringify(after.errors));

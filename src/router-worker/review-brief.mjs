@@ -9,7 +9,7 @@ import { readBoundary, stateOf } from './write-boundary.mjs';
 import { runCommands, confirmedOf } from './run-commands.mjs';
 import { AFTER_FILE, REVIEW_FILE, contentOf, plain } from './batch.mjs';
 import { openBatch, intact, Refusal } from './batch-close.mjs';
-import { briefsOf, verdictsOf, finalOf, headingOf, changedSince } from './review-judge.mjs';
+import { briefsOf, verdictsOf, finalOf, headingOf, changedSince, madeBefore } from './review-judge.mjs';
 import { READ_RULE, readingOf, linksOf } from './read-coverage.mjs';
 export { REVIEW_FILE };
 
@@ -27,13 +27,15 @@ const sealed = body => ({ ...body, digest: digest(body) });
 export const lines = value => (Array.isArray(value) ? value : [value]).map(item => `- ${item}`).join('\n');
 
 // How a reviewer reads a flagged file, in a batch brief and a periodic one alike; the judging applies the same rule.
-export const OPEN_RULE = `${READ_RULE}. A file marked below with ranges is read with the limit it gives, at each offset it gives, so that no Read is cut. A binary file and a symbolic link are not read. A line not covered refuses the report`;
+export const OPEN_RULE = `${READ_RULE}. A file marked below with ranges is read with the limit it gives, at each offset it gives, so that no Read is cut. A file marked as not opened is not read. A line not covered refuses the report`;
 // Each flagged path as the reviewer is told to open it, by its kind. `gone`: what a path that is no file any more became.
 export const toOpen = (product, item, gone) => lines(item.flaggedFiles.map(path => {
   const file = readingOf(product, item, path), { absolute, kind, limit } = file;
   if (kind === 'link') return `${absolute} (a symbolic link to ${JSON.stringify(plain(file.target))}: not opened; that target is its content)`;
   if (kind === 'deleted') return `${absolute} (${gone}: nothing to open)`;
   if (kind === 'binary') return `${absolute} (a binary file: not opened; the Read tool does not show it)`;
+  if (kind === 'misnamed') return `${absolute} (named as an image, a PDF or a notebook, but its bytes are not one: not opened; the Read tool cannot show it)`;
+  if (kind === 'large') return `${absolute} (${Math.ceil(file.size / 1024)} KB, too large to read whole: not opened; judge it from its diff where this brief shows one, and report a rule you cannot judge from it as not-checked, naming this file in its note)`;
   if (kind === 'media') return `${absolute} (an image, a PDF or a notebook: one Read of it)`;
   if (!limit) return absolute;
   const count = Math.ceil(file.lines / limit), at = i => 1 + i * limit;
@@ -65,18 +67,22 @@ function blocksOf({ path, diff }) {
     `${path}: not shown, ${added} lines added and ${removed} removed.${added ? ' Open it with your Read tool for its added lines.' : ''} Its removed lines are not in this brief: report a rule that rests on them as not-checked for this ticket, and do not guess`];
 }
 // Over the cap, each changed path in ticket order, shown as fully as the room left allows; once not even its line fits, one line
-// for the rest. Every character of the section counts against the cap.
+// names the rest while it fits and counts the others. Every character of the section counts against the cap.
 function overCap({ whole, files }, resumed) {
   const intro = `The diff is ${whole.length} characters, over the cap of ${DIFF_CAP}. Each changed path follows in ticket order: its whole diff while this section fits in the cap, otherwise its removed lines, otherwise a line naming it.`;
-  const rest = count => `${count} more changed path(s) of the tickets above are not shown here: open each with your Read tool for its change. Their removed lines are not in this brief: report a rule that rests on them as not-checked, and do not guess.`;
-  let room = DIFF_CAP - [intro, rest(files.length), ...resumed].join('\n\n').length;
+  const rest = (paths, named = 0) => `${paths.length} more changed path(s) of the tickets above are not shown here${named ? `: ${paths.slice(0, named).join(', ')}${named < paths.length ? `, and ${paths.length - named} more` : ''}` : ''}. Open each with your Read tool for its change. Their removed lines are not in this brief: report a rule that rests on them as not-checked, and do not guess.`;
+  const reserved = rest(files.map(file => file.path)).length;
+  let room = DIFF_CAP - [intro, ...resumed].join('\n\n').length - reserved - 2;
   const shown = [];
   for (const file of files) {
     const block = blocksOf(file).find(text => text.length + 2 <= room);
     if (block === undefined) break;
     shown.push(block); room -= block.length + 2;
   }
-  return [intro, ...shown, ...(shown.length < files.length ? [rest(files.length - shown.length)] : []), ...resumed].join('\n\n');
+  const left = files.slice(shown.length).map(file => file.path);
+  let named = 0;
+  while (named < left.length && rest(left, named + 1).length <= reserved + room) named++;
+  return [intro, ...shown, ...(left.length ? [rest(left, named)] : []), ...resumed].join('\n\n');
 }
 
 export const REPORT = (reviewer, briefDigest) => ({ schemaVersion: 1, reviewer, briefDigest,
@@ -126,9 +132,9 @@ export function reviewBrief({ teamRoot, instanceRoot, reviewer, tickets: named =
     const entries = briefsOf(instance, reviewer, batch.runId), verdicts = verdictsOf(instance, batch.runId), final = finalOf(verdicts, reviewer), product = batch.productRoot;
     need(!final, `${reviewer}'s review of this batch is over (${final?.outcome}); no further brief is made`);
     // ADR 0011, decision 4: a brief may have been dispatched until a verdict judges it. One whose commands failed, or whose pinned
-    // files changed, may be made again first: its dispatch could not be judged.
+    // files changed, or one the earlier kit made, may be made again first: its dispatch could not be judged.
     const mine = verdicts.filter(entry => entry.reviewer === reviewer), latest = entries.at(-1);
-    need(!latest || mine.some(entry => entry.briefAttempt === latest.attempt) || latest.verification.some(run => run.exit !== 0 || run.timedOut) || changedSince(product, latest).length,
+    need(!latest || mine.some(entry => entry.briefAttempt === latest.attempt) || latest.verification.some(run => run.exit !== 0 || run.timedOut) || changedSince(product, latest).length || madeBefore(latest),
       `${reviewer}'s brief ${latest?.attempt} has no judged transcript and no recorded no-answer; judge it first with: rw-batch.mjs review --reviewer ${reviewer} --transcript <agent-*.jsonl> --instance <instance-root>, or review --no-answer "<reason>" --reviewer ${reviewer} --instance <instance-root> if the dispatch left no transcript`);
     // ADR 0011, decision 17: a reviewer dispatched again after a refused report is told why.
     const refused = mine.at(-1), retryReason = refused ? refused.refusals.map(item => `${item.code}: ${item.detail}`).join('; ') : null;

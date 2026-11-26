@@ -11,6 +11,7 @@ import { reviewBrief, REVIEW_FILE } from '../src/router-worker/review-brief.mjs'
 import { recordNoAnswer } from '../src/router-worker/review-judge.mjs';
 import { live as reviewed, runBatch, transcriptOf } from './fixtures/router-worker/review.mjs';
 import { runCommands } from '../src/router-worker/run-commands.mjs';
+import { digest } from '../src/loop/contracts.mjs';
 import { readBoundary, decideCall } from '../src/router-worker/write-boundary.mjs';
 import { proposeLimits, changeLimits } from '../src/router-worker/switch.mjs';
 import { runWorkflow, makeAgentImpl } from '../scripts/lib/workflow-harness.mjs';
@@ -165,7 +166,8 @@ test('over the diff cap the brief shows each changed path in ticket order: whole
   assert.ok(!made.brief.includes('-  "pkg-0": "1.0.0",'), 'its removed lines do not fit and are not shown');
   assert.ok(made.brief.includes('-// old row 9') && !made.brief.includes('+// generated row 0'), 'a file whose whole diff does not fit shows its removed lines alone');
   assert.match(made.brief, /src\/authz-table\.js: its removed lines only, under their hunk headers; its 4000 added lines are not shown/);
-  assert.ok(made.brief.includes(`${join(f.product, 'package-lock.json')} (3002 lines, `) && made.brief.includes('read it in ranges, each Read with limit 2000, at offsets 1, 2001)'), 'the long flagged file is marked for ranged Reads');
+  const limit = Math.floor(3002 * 40 * 1024 / Buffer.byteLength(lock('2.0'))), offsets = Array.from({ length: Math.ceil(3002 / limit) }, (_, i) => 1 + i * limit).join(', ');
+  assert.ok(made.brief.includes(`${join(f.product, 'package-lock.json')} (3002 lines, `) && made.brief.includes(`read it in ranges, each Read with limit ${limit}, at offsets ${offsets})`), 'the long flagged file is marked for ranged Reads');
 });
 
 test('over the cap every character of the diff section counts: it stays within 60,000 characters, names a binary file, and sends the reviewer to each path whose added lines it leaves out', async t => {
@@ -182,6 +184,33 @@ test('over the cap every character of the diff section counts: it stays within 6
   assert.match(section, /\nsrc\/auth\/table\.txt: its removed lines only, under their hunk headers; its 995 added lines are not shown: open it with your Read tool for them\n/);
   assert.match(section, /\nsrc\/auth\/blob\.bin: a binary file/);
   assert.ok(section.includes('-  if (!user.isAdmin) return false;'), 'the small edit is still shown');
+});
+
+test('over the cap the closing line names the paths it leaves out, as many as fit, then counts the rest', async t => {
+  const f = reviewed(t), paths = Array.from({ length: 60 }, (_, i) => `src/auth/gen-${String(i).padStart(2, '0')}.txt`);
+  const rows = i => Array.from({ length: 25 }, (_, j) => `row ${i}-${j} ${'y'.repeat(50)}\n`).join('');
+  await runBatch(f, [ticket('US-01', paths)], Object.fromEntries(paths.map((path, i) => [path, rows(i)])));
+  const made = f.brief('security'), section = /\n## Diff from \S+\n\n([\s\S]*?)\n\n## Rules to check/.exec(made.brief)?.[1] ?? '';
+  assert.ok(section.length <= 60000, `the diff section is ${section.length} characters`);
+  const left = paths.filter(path => !section.includes(`\n\n${path}: `));
+  const closing = /\n\n(\d+) more changed path\(s\) of the tickets above are not shown here: (.+?)(?:, and (\d+) more)?\. Open each with your Read tool/.exec(section);
+  assert.ok(left.length && closing, section.slice(-800));
+  const named = closing[2].split(', ');
+  assert.equal(Number(closing[1]), left.length);
+  assert.deepEqual(named, left.slice(0, named.length), 'the paths left out are named in ticket order');
+  assert.equal(named.length + Number(closing[3] ?? 0), left.length, 'the paths not named are counted');
+});
+
+test('a brief made by the earlier kit, which told the reviewer to read each file in one Read, may be made again before its verdict', async t => {
+  const f = await flagged(t), path = join(f.root, REVIEW_FILE('security'));
+  assert.equal(f.brief('security').errors, undefined);
+  // The earlier kit recorded no links on a brief's tickets.
+  const kept = JSON.parse(readFileSync(path, 'utf8')), { digest: sealedAs, ...body } = kept.entries[0];
+  const earlier = { ...body, tickets: body.tickets.map(({ links, ...item }) => item) };
+  writeFileSync(path, JSON.stringify({ ...kept, entries: [{ ...earlier, digest: digest(earlier) }] }));
+  const again = f.brief('security');
+  assert.equal(again.errors, undefined, JSON.stringify(again.errors)); assert.equal(again.record.attempt, 2);
+  assert.match(refusal(f.brief('security')).reason, /security's brief 2 has no judged transcript/, 'a brief of this kit waits for its verdict');
 });
 
 test('a flagged symbolic link is shown with its target made plain, not as a deleted file, and is not read; a target changed since the brief refuses the judgment', async t => {

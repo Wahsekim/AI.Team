@@ -2,7 +2,7 @@
 // on the verdicts, and escalates a ticket that keeps failing review to the owner without stopping unrelated work.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, readFileSync, mkdtempSync, rmSync, appendFileSync, existsSync, utimesSync, realpathSync } from 'node:fs';
+import { writeFileSync, readFileSync, mkdtempSync, rmSync, appendFileSync, existsSync, utimesSync, realpathSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { digest } from '../src/loop/contracts.mjs';
@@ -119,7 +119,8 @@ test('the successful Reads of a flagged file evidence it when together they cove
   };
   const covered = judged([...ranged([1, 2000], [2001, 2000], [4001, 2000]), short]);
   assert.equal(covered.verdict.outcome, 'accepted', `three consecutive ranges, and one plain Read of a short file: ${JSON.stringify(covered.verdict.refusals)}`);
-  assert.match(covered.made.brief, new RegExp(`${escaped(long)} \\(4500 lines, \\d+ KB: read it in ranges, each Read with limit 2000, at offsets 1, 2001, 4001\\)`), 'the brief marks the file that takes ranged Reads with its ranges');
+  const limit = Math.floor(4500 * 40 * 1024 / Buffer.byteLength(numbered(4500))), offsets = Array.from({ length: Math.ceil(4500 / limit) }, (_, i) => 1 + i * limit);
+  assert.match(covered.made.brief, new RegExp(`${escaped(long)} \\(4500 lines, \\d+ KB: read it in ranges, each Read with limit ${limit}, at offsets ${offsets.join(', ')}\\)`), 'the brief marks the file that takes ranged Reads with its ranges');
   assert.ok(!covered.made.brief.includes(`${short} (`), 'a short file is not marked');
   uncovered('one plain Read of a 4,500-line file', [long, short], long, 2001);
   uncovered('ranges with a gap', [...ranged([1, 2000], [2002, 3000]), short], long, 2001);
@@ -129,17 +130,17 @@ test('the successful Reads of a flagged file evidence it when together they cove
 
 test('the brief says how each flagged file is read and the judging asks for that: text in ranges sized by its bytes, an image or a PDF once, a binary file not at all', async t => {
   const f = live(t), names = ['wide.js', 'logo.png', 'spec.pdf', 'blob.bin'];
-  // 1,000 lines of about 300 bytes; an image of half a megabyte with more newlines than one Read returns lines; a PDF; bytes with NULs.
-  const wide = Array.from({ length: 1000 }, (_, i) => `// ${String(i).padStart(4, '0')} ${'x'.repeat(290)}\n`).join('');
-  const image = `\u0089PNG\r\n\u001a\n${'\u0000ÿ\n'.repeat(130000)}`, pdf = `%PDF-1.4\n${'stream\n'.repeat(3000)}`, blob = `\u0000\u0001${'x'.repeat(100)}\n`.repeat(20);
+  // 800 lines of about 300 bytes; an image of half a megabyte with more newlines than one Read returns lines; a PDF; bytes with NULs.
+  const wide = Array.from({ length: 800 }, (_, i) => `// ${String(i).padStart(4, '0')} ${'x'.repeat(290)}\n`).join('');
+  const image = Buffer.from(`\u0089PNG\r\n\u001a\n${'\u0000ÿ\n'.repeat(130000)}`, 'latin1'), pdf = `%PDF-1.4\n${'stream\n'.repeat(3000)}`, blob = `\u0000\u0001${'x'.repeat(100)}\n`.repeat(20);
   await runBatch(f, [ticket('US-01', names.map(name => `src/auth/${name}`))], Object.fromEntries(names.map((name, i) => [`src/auth/${name}`, [wide, image, pdf, blob][i]])));
   const [text, png, spec, bin] = names.map(name => join(f.product, 'src/auth', name));
-  const lines = 1000, limit = Math.floor(lines * 60 * 1024 / Buffer.byteLength(wide)), offsets = Array.from({ length: Math.ceil(lines / limit) }, (_, i) => 1 + i * limit);
+  const lines = 800, limit = Math.floor(lines * 40 * 1024 / Buffer.byteLength(wide)), offsets = Array.from({ length: Math.ceil(lines / limit) }, (_, i) => 1 + i * limit);
   assert.ok(limit < lines, `a range of ${limit} lines`);
   const ranged = offsets.map(offset => ({ path: text, input: { offset, limit } })), pages = { path: spec, input: { pages: '1-5' } };
   const first = f.brief('security');
   assert.deepEqual(first.record.tickets[0].flaggedFiles, names.map(name => `src/auth/${name}`).sort());
-  assert.match(first.brief, new RegExp(`${escaped(text)} \\(1000 lines, \\d+ KB: read it in ranges, each Read with limit ${limit}, at offsets ${offsets.join(', ')}\\)`));
+  assert.match(first.brief, new RegExp(`${escaped(text)} \\(800 lines, \\d+ KB: read it in ranges, each Read with limit ${limit}, at offsets ${offsets.join(', ')}\\)`));
   assert.ok(first.brief.includes(`${bin} (a binary file`), 'the binary file is named, not to be read');
   const unread = f.judge('security', transcriptOf(f, first, { reads: [...ranged, pages] }));
   assert.equal(unread.outcome, 'refused');
@@ -178,7 +179,8 @@ test('of two dispatches with one brief the earlier is judged first; one with an 
   const { open } = await runBatch(f, [ticket('US-01', ['src/authz.js'])], edits(['src/authz.js']));
   const made = f.brief('security');
   transcriptOf(f, made, { prompt: made.brief.replace(`run ${open.runId}`, 'run rw-another-run'), session: 'session-0' });
-  const first = transcriptOf(f, made, { reads: [] }), second = transcriptOf(f, made, { session: 'session-2' });
+  // The later dispatch lies on the smaller path: the order is the dispatch time, not the path.
+  const first = transcriptOf(f, made, { reads: [], session: 'session-9' }), second = transcriptOf(f, made, { session: 'session-2' });
   const refused = refusal(f.judge('security', second));
   assert.equal(refused?.code, 'REVIEW_REFUSED'); assert.ok(refused.reason.includes(realpathSync(first)), refused.reason);
   assert.ok(!refused.reason.includes('session-0'), 'a dispatch with another batch\'s brief is not one of this review');
@@ -191,6 +193,106 @@ test('of two dispatches with one brief the earlier is judged first; one with an 
   const last = f.judge('security', transcriptOf(f, again, { session: 'session-3' }));
   assert.deepEqual([last.outcome, last.attempt], ['accepted', 2], `neither the second dispatch nor the grown first one carries the latest brief, so neither is waited for: ${JSON.stringify(last)}`);
   assert.deepEqual(JSON.parse(f.read(VERDICTS_FILE)).entries.map(entry => [entry.attempt, entry.outcome]), [[1, 'refused'], [2, 'accepted']]);
+});
+
+test('the scan for an unjudged dispatch reads only transcripts of the reviewer\'s wrapper modified since the brief was made, two seconds of clock allowed', async t => {
+  const f = live(t);
+  await runBatch(f, [ticket('US-01', ['src/authz.js'])], edits(['src/authz.js']));
+  const made = f.brief('security'), at = Date.parse(made.record.madeAt) / 1000, touched = (path, seconds) => { utimesSync(path, seconds, seconds); return path; };
+  const architect = transcriptOf(f, made, { agentType: 'tag-list-fixture-architect', session: 'session-a' });
+  const stale = touched(transcriptOf(f, made, { session: 'session-b' }), at - 60), near = touched(transcriptOf(f, made, { session: 'session-c' }), at - 1);
+  const refused = refusal(f.noAnswer('security', 'the dispatch left no transcript'));
+  assert.ok(refused?.reason.includes(realpathSync(near)), `a transcript modified a second before the brief is within the clock allowance: ${refused?.reason}`);
+  assert.ok(!refused.reason.includes(realpathSync(architect)), 'another wrapper\'s transcript with the same heading is not this reviewer\'s dispatch');
+  assert.ok(!refused.reason.includes(realpathSync(stale)), 'a transcript last modified a minute before the brief cannot carry it');
+});
+
+test('no answer to the first brief uses the first attempt, and the healthy dispatch with the second brief is accepted', async t => {
+  const f = live(t);
+  await runBatch(f, [ticket('US-01', ['src/authz.js'])], edits(['src/authz.js']));
+  f.brief('security');
+  const lost = f.noAnswer('security', 'the dispatch left no transcript');
+  assert.deepEqual([lost.outcome, lost.attempt], ['refused', 1], JSON.stringify(lost));
+  const second = f.brief('security');
+  assert.equal(second.record.attempt, 2); assert.match(second.brief, /earlier attempt was refused by the kit: REVIEW_NO_ANSWER/);
+  const healthy = f.judge('security', transcriptOf(f, second));
+  assert.deepEqual([healthy.outcome, healthy.attempt], ['accepted', 2], JSON.stringify(healthy));
+});
+
+test('a file that does not carry the latest brief is not judged while a transcript carries it, and uses no attempt; the rejecting report is judged', async t => {
+  const f = live(t);
+  await runBatch(f, [ticket('US-01', ['src/authz.js'])], edits(['src/authz.js']));
+  const made = f.brief('security'), rejecting = transcriptOf(f, made, { report: failing(reportOf(made), 'US-01', 'kit.sec.secret-in-code') });
+  const decoy = join(f.base, 'decoy.jsonl');
+  writeFileSync(decoy, JSON.stringify({ type: 'user', message: { role: 'user', content: 'hello' } }) + '\n');
+  for (const file of [decoy, transcriptOf(f, made, { prompt: 'Review something else.', session: 'session-2' })]) {
+    const refused = refusal(f.judge('security', file));
+    assert.equal(refused?.code, 'REVIEW_REFUSED', file);
+    assert.ok(refused.reason.includes(realpathSync(rejecting)) && /the transcript given does not carry/.test(refused.reason), refused.reason);
+  }
+  assert.equal(existsSync(join(f.root, VERDICTS_FILE)), false, 'no attempt is used');
+  assert.match(refusal(f.brief('security')).reason, /brief 1 has no judged transcript/, 'no new brief either');
+  const judged = f.judge('security', rejecting);
+  assert.deepEqual([judged.outcome, judged.attempt, judged.tickets.map(item => [item.id, item.verdict])], ['accepted', 1, [['US-01', 'rejected']]]);
+});
+
+test('after a refused report the reviewer is dispatched as a new agent: a resumed one still carries its first brief, waits for a new agent with the latest, and alone is refused REVIEW_BRIEF_NOT_FOUND', async t => {
+  const f = live(t);
+  await runBatch(f, [ticket('US-01', ['src/authz.js'])], edits(['src/authz.js']));
+  // The first dispatch is refused, the PM briefs again and resumes that reviewer with the new brief instead of dispatching a new one.
+  const resumed = () => {
+    fresh(f);
+    const first = f.brief('security'), dispatched = transcriptOf(f, first, { reads: [] }), refused = f.judge('security', dispatched);
+    assert.equal(refused.outcome, 'refused');
+    assert.match(refused.next, /review-brief --reviewer security.*as a new agent, never by resuming or messaging the earlier one/);
+    const again = f.brief('security');
+    appendFileSync(dispatched, [{ type: 'user', message: { role: 'user', content: again.brief } },
+      { type: 'assistant', message: { id: 'msg_again', role: 'assistant', content: [{ type: 'text', text: `\`\`\`json\n${JSON.stringify(reportOf(again))}\n\`\`\`` }] } }].map(row => JSON.stringify(row)).join('\n') + '\n');
+    return { again, dispatched };
+  };
+  let { again, dispatched } = resumed();
+  const added = transcriptOf(f, again, { session: 'session-2' });
+  const waiting = refusal(f.judge('security', dispatched));
+  assert.ok(waiting?.reason.includes(realpathSync(added)), waiting?.reason);
+  assert.deepEqual([f.judge('security', added).outcome], ['accepted']);
+  ({ again, dispatched } = resumed());
+  const alone = f.judge('security', dispatched);
+  assert.deepEqual([alone.outcome, alone.attempt], ['not-obtained', 2], JSON.stringify(alone));
+  assert.ok(alone.refusals.some(item => item.code === 'REVIEW_BRIEF_NOT_FOUND'), JSON.stringify(alone.refusals));
+});
+
+test('a flagged link whose target changed lets its brief be made again, and the dispatch with the new brief is judged', async t => {
+  const f = live(t);
+  await runBatch(f, [ticket('US-01', ['src/auth-link.js'])], { 'src/auth-link.js': { link: 'authz.js' } });
+  const first = f.brief('security'), link = join(f.product, 'src/auth-link.js');
+  transcriptOf(f, first, { reads: [] });
+  rmSync(link); symlinkSync('session.js', link);
+  const again = f.brief('security');
+  assert.equal(again.errors, undefined, JSON.stringify(again.errors)); assert.equal(again.record.attempt, 2);
+  assert.ok(again.brief.includes(`${link} (a symbolic link to "session.js"`));
+  const judged = f.judge('security', transcriptOf(f, again, { reads: [] }));
+  assert.deepEqual([judged.outcome, judged.attempt], ['accepted', 1], JSON.stringify(judged));
+});
+
+test('a text file over 256 KB is judged from its diff and not read, a 100 KB one is read in its ranges, and a .png that holds no PNG is not opened', async t => {
+  const f = live(t), names = ['deps.lock', 'mid.js', 'logo.png'];
+  const lock = Array.from({ length: 6000 }, (_, i) => `"pkg-${String(i).padStart(5, '0')}": "${'1'.repeat(34)}",\n`).join('');
+  const mid = Array.from({ length: 2500 }, (_, i) => `// ${String(i).padStart(4, '0')} ${'x'.repeat(32)}\n`).join('');
+  const pointer = `version https://git-lfs.github.com/spec/v1\noid sha256:${'a'.repeat(64)}\nsize 123456\n`;
+  assert.ok(Buffer.byteLength(lock) > 256 * 1024 && Buffer.byteLength(mid) > 100000 && Buffer.byteLength(mid) < 256 * 1024);
+  await runBatch(f, [ticket('US-01', names.map(name => `src/auth/${name}`))], Object.fromEntries(names.map((name, i) => [`src/auth/${name}`, [lock, mid, pointer][i]])));
+  const [big, text, png] = names.map(name => join(f.product, 'src/auth', name));
+  const limit = Math.floor(2500 * 40 * 1024 / Buffer.byteLength(mid)), offsets = Array.from({ length: Math.ceil(2500 / limit) }, (_, i) => 1 + i * limit);
+  const first = f.brief('security');
+  assert.match(first.brief, new RegExp(`${escaped(big)} \\(\\d+ KB, too large to read whole: not opened; judge it from its diff`));
+  assert.match(first.brief, new RegExp(`${escaped(png)} \\(named as an image, a PDF or a notebook, but its bytes are not one: not opened`));
+  assert.match(first.brief, new RegExp(`${escaped(text)} \\(2500 lines, \\d+ KB: read it in ranges, each Read with limit ${limit}, at offsets ${offsets.join(', ')}\\)`));
+  const plain = f.judge('security', transcriptOf(f, first, { reads: [text] })), gap = plain.refusals?.find(item => item.code === 'REVIEW_TRANSCRIPT_NO_OPEN');
+  assert.equal(plain.outcome, 'refused');
+  assert.ok(gap?.detail.includes(`${text} from line 2001 of 2500`) && !gap.detail.includes(big) && !gap.detail.includes(png), JSON.stringify(plain.refusals));
+  const second = f.brief('security');
+  const healthy = f.judge('security', transcriptOf(f, second, { reads: offsets.map(offset => ({ path: text, input: { offset, limit } })) }));
+  assert.deepEqual([healthy.outcome, healthy.attempt], ['accepted', 2], `neither the large file nor the misnamed image is read: ${JSON.stringify(healthy.refusals)}`);
 });
 
 test('a report refused twice, or no answer, means review not obtained: the flagged ticket is held, the others commit', async t => {

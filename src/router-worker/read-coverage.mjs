@@ -5,11 +5,16 @@ import { join } from 'node:path';
 // kind, which says how the Read tool takes it, is decided here for the brief, the Read requirement and the coverage check alike.
 // Claude Code's Read tool returns at most READ_LINES lines when given no limit.
 export const READ_LINES = 2000;
-// One ranged Read is sized to about this many bytes: well under the tool's output cap of about 25,000 tokens.
-export const RANGE_BYTES = 60 * 1024;
+// One ranged Read is sized to about this many bytes: with the line numbers the tool adds, 60 KB of dense text reaches its output
+// cap of about 25,000 tokens.
+export const RANGE_BYTES = 40 * 1024;
+// The tool reads a file over this many bytes only in ranges; a text file that large is judged from its diff, not read.
+export const WHOLE_BYTES = 256 * 1024;
 export const READ_RULE = `Your Reads of a file must together cover every line of it: a Read covers ${READ_LINES} lines from its offset (from line 1 when it has none), or as many as its limit says, and a Read whose result is an error covers nothing; one Read covers an image, a PDF (pages given or not) or a notebook`;
-// The tool reads these by their extension, whatever their bytes hold.
-const MEDIA = /\.(png|jpe?g|gif|webp|pdf|ipynb)$/i;
+const json = bytes => { try { JSON.parse(bytes.toString('utf8')); return true; } catch { return false; } };
+// The tool reads these by their extension and fails on bytes of another format, so a file is media only when its bytes match.
+const MEDIA = [[/\.png$/i, head => head.startsWith('\x89PNG\r\n\x1a\n')], [/\.jpe?g$/i, head => head.startsWith('\xff\xd8\xff')], [/\.gif$/i, head => /^GIF8[79]a/.test(head)],
+  [/\.webp$/i, head => head.startsWith('RIFF') && head.slice(8, 12) === 'WEBP'], [/\.pdf$/i, head => head.startsWith('%PDF')], [/\.ipynb$/i, (head, bytes) => json(bytes)]];
 // A NUL in the first bytes marks a file that is not text, as Git judges it.
 const PROBE = 8000;
 
@@ -23,15 +28,16 @@ export const uncovered = (ranges, total) => { let next = 1; for (const [first, l
 export const linksOf = (product, paths) => Object.fromEntries(paths.filter(path => lstatSync(join(product, path), { throwIfNoEntry: false })?.isSymbolicLink()).map(path => [path, readlinkSync(join(product, path))]));
 
 // A flagged path of a brief (its `content` digests and `links`) as the Read tool takes it: a link or a deleted path is not
-// opened, a binary file cannot be, media is read once, and each line of text is read, in ranges of `limit` lines when one Read
-// would be too long.
+// opened, a binary file or one misnamed as media cannot be, a text file too large is judged from its diff, media is read once,
+// and each line of text is read, in ranges of `limit` lines when one Read would be too long.
 export function readingOf(product, { content, links = {} }, path) {
   const absolute = join(product, path);
   if (Object.hasOwn(links, path)) return { path, absolute, kind: 'link', target: links[path] };
   if (content[path] === null) return { path, absolute, kind: 'deleted' };
-  if (MEDIA.test(path)) return { path, absolute, kind: 'media' };
-  const bytes = readFileSync(absolute);
+  const bytes = readFileSync(absolute), media = MEDIA.find(([name]) => name.test(path));
+  if (media) return { path, absolute, kind: media[1](bytes.subarray(0, 12).toString('latin1'), bytes) ? 'media' : 'misnamed' };
   if (bytes.subarray(0, PROBE).includes(0)) return { path, absolute, kind: 'binary' };
+  if (bytes.length > WHOLE_BYTES) return { path, absolute, kind: 'large', size: bytes.length };
   const lines = linesOf(bytes), long = lines > READ_LINES || bytes.length > RANGE_BYTES;
   return { path, absolute, kind: 'text', lines, size: bytes.length, limit: long ? Math.max(1, Math.min(READ_LINES, Math.floor(lines * RANGE_BYTES / bytes.length))) : null };
 }

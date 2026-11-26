@@ -149,7 +149,7 @@ test('a periodic review not obtained twice is recorded, reported to the human an
   const { f } = await due(t);
   const made = f.periodicBrief('security'), bad = transcriptOf(f, made, { reads: [] });
   const first = f.periodic('security', bad);
-  assert.equal(first.outcome, 'refused'); assert.match(first.next, /periodic-brief --reviewer security/);
+  assert.equal(first.outcome, 'refused'); assert.match(first.next, /periodic-brief --reviewer security.*as a new agent, never by resuming or messaging the earlier one/);
   assert.match(refusal(f.periodic('security', transcriptOf(f, made))).reason, /already judged; brief again/);
   assert.equal(f.periodicBrief('security').record.attempt, 2);
   const cli = spawnSync(process.execPath, [join(f.kit, 'scripts/rw-batch.mjs'), 'periodic', '--no-answer', 'the dispatch left no transcript', '--reviewer', 'security', '--instance', f.root], { encoding: 'utf8', env: { ...process.env, CLAUDE_CONFIG_DIR: f.base } });
@@ -170,6 +170,8 @@ test('a periodic reviewer that stopped without a report is judged, not recorded 
   const stopped = transcriptOf(f, made, { report: null });
   const silenced = refusal(f.silent('security', 'the reviewer stopped without a report'));
   assert.equal(silenced?.code, 'REVIEW_REFUSED'); assert.ok(silenced.reason.includes(realpathSync(stopped)) && /periodic --reviewer security --transcript/.test(silenced.reason), silenced.reason);
+  const other = refusal(f.periodic('security', transcriptOf(f, made, { prompt: 'Review something else.', session: 'session-2' })));
+  assert.ok(other?.reason.includes(realpathSync(stopped)) && /the transcript given does not carry/.test(other.reason), other?.reason);
   assert.deepEqual(f.periodicLines(), [], 'nothing is recorded');
   const judged = f.periodic('security', stopped);
   assert.deepEqual([judged.outcome, judged.attempt, judged.refusals.map(item => item.code)], ['refused', 1, ['REVIEW_NO_REPORT']]);

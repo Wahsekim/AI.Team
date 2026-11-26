@@ -9,7 +9,7 @@ import { BATCH_FILE, AFTER_FILE, ARCHIVE, contentOf, plain } from './batch.mjs';
 import { intact, Refusal } from './batch-close.mjs';
 import { loadReview } from './review-triggers.mjs';
 import { rosterWrapper } from './switch.mjs';
-import { finalOf, evidenceOf, derive, said, projectsOf, judgeFirst, changedSince } from './review-judge.mjs';
+import { finalOf, evidenceOf, derive, said, projectsOf, judgeFirst, changedSince, madeBefore, AS_NEW } from './review-judge.mjs';
 import { fenced, lines, REPORT, protocolOf, OPEN_RULE, toOpen } from './review-brief.mjs';
 import { linksOf } from './read-coverage.mjs';
 
@@ -167,8 +167,9 @@ export function periodicBrief({ teamRoot, instanceRoot, reviewer }) {
     if (!period.id) reviewBoundary({ teamRoot: instance, runId: id, reviewers: period.wrappers, periodic: true });
     const refused = triedOf(kept, reviewer, counted).at(-1), retryReason = refused ? refused.refusals.map(item => `${item.code}: ${item.detail}`).join('; ') : null;
     const briefs = briefsOf(instance, reviewer, period.id), latest = briefs.at(-1), attempt = briefs.length + 1, rules = review.rules.filter(rule => rule.reviewer === reviewer);
-    // ADR 0011, decision 4, as in a batch review: a brief whose pinned files changed may be made again, since its dispatch could not be judged.
-    need(!latest || period.mine.some(line => line.briefAttempt === latest.attempt) || changedSince(product, latest).length,
+    // ADR 0011, decision 4, as in a batch review: a brief whose pinned files changed, or one the earlier kit made, may be made again,
+    // since its dispatch could not be judged.
+    need(!latest || period.mine.some(line => line.briefAttempt === latest.attempt) || changedSince(product, latest).length || madeBefore(latest),
       `${reviewer}'s periodic brief ${latest?.attempt} has no judged transcript and no recorded no-answer; judge it first with: rw-batch.mjs periodic --reviewer ${reviewer} --transcript <agent-*.jsonl> --instance <instance-root>, or periodic --no-answer "<reason>" --reviewer ${reviewer} --instance <instance-root> if the dispatch left no transcript`);
     const body = render({ reviewer, id, attempt, interval, tickets, product, rules, adrs: review.adrs.map(path => join(instance, path)), protocol: protocolOf(instance), retryReason }), briefDigest = digest(body);
     const record = sealed({ schemaVersion: 1, stage: 'periodic-brief', id, reviewer, wrapper: period.wrappers[reviewer], attempt, briefDigest, madeAt: at, interval, intervalSource, counted,
@@ -208,7 +209,7 @@ function record({ instance, review, id, kept, brief }, reviewer, judged, meter) 
     refused: `REFUSED (attempt ${line.attempt}): ${codes}${cost}`,
     'not-obtained': `NOT OBTAINED (attempt ${line.attempt}): ${codes}${cost}; reported to the owner; the next batch is not stopped` }[outcome]);
   const reason = judged.refusals.map(item => `${item.code}: ${item.detail}`).join('; ');
-  if (outcome === 'refused') return { ...line, next: `The report was refused (${reason}). Brief ${reviewer} again with: rw-batch.mjs periodic-brief --reviewer ${reviewer} --instance <instance-root>, and dispatch it once more with that brief` };
+  if (outcome === 'refused') return { ...line, next: `The report was refused (${reason}). Brief ${reviewer} again with: rw-batch.mjs periodic-brief --reviewer ${reviewer} --instance <instance-root>, and dispatch it once more with that brief ${AS_NEW}` };
   const due = closeIfOver(instance, review.reviewers);
   return { ...line, next: `${outcome === 'not-obtained' ? `The periodic review by ${reviewer} was not obtained: report it to the owner. ` : findings.length ? 'File each finding as a ticket. ' : ''}${afterwards(due)}` };
 }
