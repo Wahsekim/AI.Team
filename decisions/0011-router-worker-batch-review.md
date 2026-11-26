@@ -227,3 +227,51 @@ on the branch since the end of the newest batch archived on it, and freezes
 their ids in the batch record. It refuses nothing on that account, and the
 periodic review of decision 7 still counts only the commits the kit made.
 
+## Amendment of 2026-11-26: what counts as the reviewer's evidence
+
+Status: Accepted. The owner decided in session on 2026-11-26, accepting the
+recommendation of that day's review of the kit.
+
+Three rules make decisions 3, 4 and 13 hold in practice.
+
+A flagged file is read as its kind allows, and the brief and the judging
+decide that kind in one place. Text is read when the reviewer's successful
+Reads of it, taken together, cover every line of it: a file longer than one
+Read returns is read in the ranges the brief gives, each with a limit sized
+to about 40 KB of the file, and one Read of its first part no longer counts
+for the whole. A text file over 256 KB, such as a large lock file, is more
+than the Read tool takes whole: it is not read, and the reviewer judges it
+from its diff as the brief shows it, reporting a rule the diff does not let it
+judge as not checked for that file (decision 13 allows a single not-checked
+rule and records it). This gives up the reading of such a file's unchanged
+part, which ranged Reads would cost some 300,000 tokens for a megabyte. An
+image, a PDF or a notebook is read by one Read when its leading bytes are that
+format's. A binary file, a symbolic link and a file named as media whose bytes
+are another format (a Git LFS pointer) are not read; the brief names them, a
+link with its target.
+
+Every dispatch with the reviewer's latest brief is judged, so the PM cannot
+choose which report counts, and a healthy review is not refused for it. No new
+brief is made while the latest one has no verdict, unless a verification
+command of it failed, a file it pinned changed, or the earlier kit made it.
+Of two dispatches with the latest brief, the earlier is judged first, which
+uses the attempt; a file given that does not carry the latest brief is not
+judged while a transcript carries it. "No answer" is refused while a
+transcript carries the latest brief: a reviewer that stopped without a report
+is judged from its transcript. Dispatches with an earlier brief are not waited
+for. A reviewer is dispatched again as a new agent, never resumed: a resumed
+reviewer's transcript begins with its first brief and cannot carry the next.
+
+A brief whose diff is over its cap still shows, per changed path in ticket
+order, the whole diff or else the removed lines while the section fits, every
+label and sentence counted, and otherwise names the path with its counts of
+added and removed lines; the paths left once not even that fits are named
+while the cap allows and the rest counted. A path whose added lines are not shown is to be
+opened with the Read tool, and a rule resting on removed lines not shown is
+reported as not checked rather than guessed.
+
+Left open: a Read is credited from its input, so a range the tool cut still
+counts; a transcript deleted, or in a session under another configuration
+folder, is not seen; a periodic review aborted and briefed again leaves its
+earlier dispatch unjudged.
+

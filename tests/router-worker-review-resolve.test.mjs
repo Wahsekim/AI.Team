@@ -11,7 +11,6 @@ import { abortBatch, beforeBatch } from '../src/router-worker/batch.mjs';
 import { afterBatch } from '../src/router-worker/batch-close.mjs';
 import { AT_TERMINAL } from '../src/router-worker/switch.mjs';
 import { runWorkflow, makeAgentImpl } from '../scripts/lib/workflow-harness.mjs';
-import { recordNoAnswer } from '../src/router-worker/review-judge.mjs';
 import { reviewBrief } from '../src/router-worker/review-brief.mjs';
 import { readLease } from '../src/router-worker/lease.mjs';
 import { git, checksRan } from './fixtures/router-worker/standing-team.mjs';
@@ -92,7 +91,7 @@ test('a command that changes a file still to be committed holds the rest; what e
 test('a ticket held because its review was not obtained runs the same re-verification', async t => {
   const f = live(t, { commands: ['false'] });
   await runBatch(f, TICKETS, EDITS);
-  for (const attempt of [1, 2]) { assert.equal(f.brief('security').errors, undefined); recordNoAnswer({ ...f.common, reviewer: 'security', reason: `no answer ${attempt}` }); }
+  for (const attempt of [1, 2]) { assert.equal(f.brief('security').errors, undefined); f.noAnswer('security', `no answer ${attempt}`); }
   const resolved = f.resolve();
   assert.equal(resolved.errors, undefined, JSON.stringify(resolved.errors));
   assert.deepEqual(removedOf(resolved), [['US-02', 'review-not-obtained'], ['US-03', 'verification-failed-after-removal']]);

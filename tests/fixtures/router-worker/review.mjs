@@ -1,12 +1,12 @@
 // A live Router/Worker team with a batch run by the real engine on mock agents, and reviewer transcripts as Claude Code
 // writes them, for the tests of the batch review (ADR 0011).
 import assert from 'node:assert/strict';
-import { writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { writeFileSync, existsSync, mkdirSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { beforeBatch } from '../../../src/router-worker/batch.mjs';
 import { afterBatch, commitBatch } from '../../../src/router-worker/batch-close.mjs';
 import { reviewBrief } from '../../../src/router-worker/review-brief.mjs';
-import { judgeReview } from '../../../src/router-worker/review-judge.mjs';
+import { judgeReview, recordNoAnswer } from '../../../src/router-worker/review-judge.mjs';
 import { resolveBatch } from '../../../src/router-worker/review-resolve.mjs';
 import { readBoundary } from '../../../src/router-worker/write-boundary.mjs';
 import { runWorkflow, makeAgentImpl } from '../../../scripts/lib/workflow-harness.mjs';
@@ -29,19 +29,21 @@ export function live(t, { commands = COMMANDS, blank = false } = {}) {
     before: batch => beforeBatch({ ...common, batch }),
     brief: (reviewer, tickets) => reviewBrief({ ...common, reviewer, ...(tickets ? { tickets } : {}) }),
     judge: (reviewer, transcript, report) => judgeReview({ ...common, reviewer, transcript, projectsRoot, ...(report ? { report } : {}) }),
+    noAnswer: (reviewer, reason) => recordNoAnswer({ ...common, reviewer, reason, projectsRoot }),
     resolve: () => resolveBatch(common),
     commit: () => commitBatch(common), state: () => readBoundary(f.root)?.state, ledger: () => f.read('pm-decisions.md'),
     lines: file => existsSync(join(f.root, file)) ? f.read(file).split('\n').filter(Boolean).map(line => JSON.parse(line)) : [] };
 }
 export const changed = f => git(f.product, 'status', '--porcelain', '--untracked-files=all').split('\n').filter(Boolean).map(line => line.slice(3)).sort();
-// A batch run by the real engine with mock agents; `edits` is what the workers leave in the product, `fields` other batch fields.
+// A batch run by the real engine with mock agents; `edits` is what the workers leave in the product (a text, a Buffer of bytes,
+// or { link } for a symbolic link), `fields` other batch fields.
 export async function runBatch(f, tickets, edits, fields = {}) {
   const open = await f.before({ ...batchOf(...tickets), verificationCommands: f.commands, ...fields });
   assert.equal(open.errors, undefined, JSON.stringify(open.errors));
   // The Guardian's brief names the run; settle reads it from the Guardian's transcript.
   let guardianBrief = null; const mock = makeAgentImpl(agentsOf(f.commands)), agentImpl = (prompt, opts, index) => { if (opts?.schema?.required?.includes('runawayDetected')) guardianBrief = prompt; return mock(prompt, opts, index); };
   const { result } = await runWorkflow({ scriptPath: join(f.root, '.claude/workflows/run-n-rounds.js'), args: open.args, agentImpl });
-  for (const [path, text] of Object.entries(edits)) { mkdirSync(join(f.product, path, '..'), { recursive: true }); writeFileSync(join(f.product, path), text); }
+  for (const [path, text] of Object.entries(edits)) { mkdirSync(join(f.product, path, '..'), { recursive: true }); if (typeof text === 'string' || Buffer.isBuffer(text)) writeFileSync(join(f.product, path), text); else symlinkSync(text.link, join(f.product, path)); }
   checksRan(f.root, open);
   const after = afterBatch({ ...f.common, result });
   assert.equal(after.errors, undefined, JSON.stringify(after.errors));
@@ -65,16 +67,17 @@ export const failing = (report, id, rule, item = {}) => ({ ...report,
 let agentSeq = 0;
 // A reviewer's transcript as Claude Code writes it for an Agent-tool subagent: the brief as the prompt, one Read per
 // flagged file and its result, the report as the last fenced json block of the final message, and the meta file naming
-// the wrapper. A read is a path, or { path, input, error } for a partial or failed Read.
-export function transcriptOf(f, made, { report = reportOf(made), reads, agentType = made.record.wrapper, workflow = false, prompt = `Review this batch.\n\n${made.brief}` } = {}) {
-  const folder = join(f.projectsRoot, '-fixture-team', 'session-1', 'subagents', ...(workflow ? ['workflows', 'wf_1'] : [])), id = `agent-a${++agentSeq}`;
+// the wrapper. A read is a path, or { path, input, error } for a partial or failed Read; `report: null` is a reviewer that
+// stopped without one. Each transcript is dispatched after the one made before it.
+export function transcriptOf(f, made, { report = reportOf(made), reads, agentType = made.record.wrapper, workflow = false, prompt = `Review this batch.\n\n${made.brief}`, session = 'session-1' } = {}) {
+  const folder = join(f.projectsRoot, '-fixture-team', session, 'subagents', ...(workflow ? ['workflows', 'wf_1'] : [])), id = `agent-a${++agentSeq}`;
   const opened = reads ?? made.record.tickets.flatMap(item => item.flaggedFiles.filter(path => item.content[path] !== null).map(path => join(f.product, path)));
-  const rows = [{ type: 'user', isSidechain: true, message: { role: 'user', content: prompt } },
+  const rows = [{ type: 'user', isSidechain: true, timestamp: new Date(Date.now() + agentSeq).toISOString(), message: { role: 'user', content: prompt } },
     { type: 'attachment', attachment: {} },
     ...opened.map(read => typeof read === 'string' ? { path: read } : read).flatMap(({ path, input = {}, error = false }, i) => [
       { type: 'assistant', message: { id: 'msg_reads', role: 'assistant', content: [{ type: 'tool_use', id: `toolu_${i}`, name: 'Read', input: { file_path: path, ...input } }] } },
       { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `toolu_${i}`, content: error ? 'File does not exist.' : '1\tcode', ...(error ? { is_error: true } : {}) }] } }]),
-    { type: 'assistant', message: { id: 'msg_report', role: 'assistant', content: [{ type: 'text', text: `Review done.\n\n\`\`\`json\n${JSON.stringify(report, null, 2)}\n\`\`\`\n` }] } }];
+    { type: 'assistant', message: { id: 'msg_report', role: 'assistant', content: [{ type: 'text', text: report === null ? 'Out of turns before the report.' : `Review done.\n\n\`\`\`json\n${JSON.stringify(report, null, 2)}\n\`\`\`\n` }] } }];
   mkdirSync(folder, { recursive: true });
   writeFileSync(join(folder, `${id}.jsonl`), rows.map(row => JSON.stringify(row)).join('\n') + '\n');
   writeFileSync(join(folder, `${id}.meta.json`), JSON.stringify({ agentType, description: 'review' }));

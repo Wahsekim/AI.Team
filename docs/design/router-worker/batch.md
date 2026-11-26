@@ -573,7 +573,8 @@ a narrower pattern would miss `oauth/` or `authz.js`.
   attempt: run, reviewer, wrapper, attempt, `seq` (one more than the highest
   `seq` among the briefs of this batch, every reviewer's), `briefDigest`,
   `madeAt`, the tickets with
-  their goal, acceptance, changed and flagged paths and content digests, the
+  their goal, acceptance, changed and flagged paths, content digests and the
+  flagged paths that are symbolic links with their targets (`links`), the
   rule ids, the ADRs, each verification command's exit and output digest).
   When a command failed or timed out, it also says so on standard error (the
   result's `notice`) and tells the PM to brief again before dispatching the
@@ -583,11 +584,49 @@ a narrower pattern would miss `oauth/` or `authz.js`.
   same reviewer can lose one. The
   brief holds, for each ticket R must review: the goal and acceptance, the
   reason it was flagged, and the flagged files as absolute paths to open with
-  the Read tool, each to be read whole (the judging counts only a Read with no
-  offset and no limit, and its refusal says so); the diff of those tickets from
-  the batch's start, untracked files included (inline up to 60,000 characters,
-  otherwise the reviewer opens each changed path, and for a ticket that resumed
-  earlier work the brief names its patch in the team's folder); R's rules as `id: text`; the ADRs as absolute paths; the
+  the Read tool, with the rule the judging applies (next section). Each flagged
+  file has one kind, decided by `readingOf` in
+  `src/router-worker/read-coverage.mjs` for the brief and the judging alike: a
+  symbolic link (shown with its target, made plain as paths are in records,
+  and not opened); a deleted path (marked, nothing to open); media, an image,
+  PDF or notebook named by its extension (`.png`, `.jpg`, `.jpeg`, `.gif`,
+  `.webp`, `.pdf`, `.ipynb`) whose leading bytes are that format's (the PNG,
+  JPEG, GIF or WebP signature, `%PDF`; a notebook is JSON text), which the Read
+  tool reads by its extension (marked to be read once); misnamed, a file with
+  one of those extensions and other bytes, such as a Git LFS pointer, on which
+  every Read fails (marked, not to be opened); binary, any other file with a
+  NUL byte in its first 8,000 bytes (marked, not to be opened: the tool does not
+  show it); large, a text file over 256 KB, more than the tool reads whole
+  (`WHOLE_BYTES`; marked with its size, not to be opened: the reviewer judges
+  it from its diff as the brief shows it and reports a rule the diff does not
+  let it judge as not-checked, naming the file); and text, all the rest. A
+  text file over 2,000 lines or 40 KB is marked with
+  its line count, its size and the ranges to read it in: one `limit` for the
+  file, `lines × 40 KB / bytes` rounded down, at least 1 and at most 2,000, and
+  the offsets 1, 1 + limit, and so on (the first three and the last when there
+  are more than six), so that each range holds about 40 KB: with the line
+  numbers the tool adds, 60 KB of dense text reaches its output cap of about
+  25,000 tokens (`RANGE_BYTES`). A large file gives up the reading of its
+  unchanged part: a lock file of a megabyte would take some twenty ranged
+  Reads near that cap, about 300,000 tokens, for a review that is about its
+  diff. Then the diff of
+  those tickets from the batch's start, untracked files included: whole while
+  it, fenced, fits in 60,000 characters. Over that, the section holds every
+  changed path in ticket order, and every character it adds counts against the
+  60,000: the opening sentence, each path's label and fence, each sentence
+  standing for a diff not shown, and the resumed patches. Each path gets its
+  whole diff if the room left holds it, otherwise its removed lines under
+  their hunk headers, otherwise one line with its counts of added and removed
+  lines that tells the reviewer to report a rule resting on its removed lines
+  as not-checked. A path whose added lines are not shown is named with the
+  instruction to open it with the Read tool for them. A binary file is named
+  as a binary file. Once not even a path's line fits, one closing line says
+  how many paths are left, names them in ticket order as far as the cap
+  allows, counts the ones it does not name, and tells the reviewer to open
+  each. That per-path
+  diff does not follow renames, so a path's removed lines stay with it. For a
+  ticket that resumed earlier work the brief names its patch in the team's
+  folder. Then R's rules as `id: text`; the ADRs as absolute paths; the
   output tail of each verification command; the batch-review protocol
   (`agents/router-worker-review.md`); and the report schema, to be returned as
   the last fenced json block. It never holds a worker's report, the checker's
@@ -609,7 +648,15 @@ a narrower pattern would miss `oauth/` or `authz.js`.
   character (named with the ticket: the reviewer cannot be told to open it); a
   changed path of a briefed ticket whose content differs from what "after"
   recorded, before or after the verification commands ran; a brief record that
-  was edited.
+  was edited; a new brief while R's latest brief has no verdict (a judged
+  transcript or a recorded no-answer), since it may have been dispatched (rule
+  B1, next section). Three exceptions let the latest brief be made again: a
+  verification command of it failed or timed out, as its notice says; a
+  path it pinned no longer holds what it pinned (a file's content, a link's
+  target), since its dispatch could not then be judged; or the earlier kit
+  made it (its tickets carry no `links`, which every brief of this kit
+  records), since that brief told the reviewer to read each file in one
+  `Read`, which the judging no longer accepts for a long file.
   `validate-team.sh` checks both parts with the same code.
 
 ## Review verdict, commit gate and escalation
@@ -627,13 +674,59 @@ offline on transcript fixtures.
   `.meta.json` names R's wrapper as `agentType`; its first user entry is not
   relayed by the workflow harness and carries R's latest brief unchanged (the
   body between the brief's heading and its `briefDigest:` line has that
-  digest); and it holds a `Read` tool call of the absolute path of every
-  flagged file that exists. A `Read` counts only when the `tool_result` with
-  its `tool_use_id` is in the transcript and is not an error, and it has no
-  `limit` and no `offset` past 1; a partial `Read` is ignored, so it counts
-  only next to a full `Read` of the same path. The Read tool's own default
-  cut of a long file is not detected. The report is the last fenced `json` block of the
+  digest); and its `Read` tool calls of the absolute path of each flagged file
+  that is text or media evidence it. A `Read` counts only when the
+  `tool_result` with its `tool_use_id` is in the transcript and is not an
+  error. One such `Read` evidences a media file, a PDF read with `pages`
+  included. The `Read`s of a text file, taken together, must cover every line
+  of it: a `Read` covers the lines from its `offset` (1 when absent; 0 is read
+  as 1) through `offset + limit - 1`, and 2,000 lines when it has no `limit`,
+  since the Read tool returns at most 2,000 lines without one (`READ_LINES`).
+  The lines are counted from the file's bytes at judging, one per newline and
+  one more for text after the last; an empty file has one. So one plain
+  `Read` evidences a file of up to 2,000 lines, consecutive ranged `Read`s a
+  longer one, and a single plain `Read` of a longer one does not. A link, a
+  deleted path, a binary, misnamed or large file need no `Read`, and the
+  report need not list them as read. The refusal names each file with the
+  first line no `Read`
+  covered, or as not opened. The report is the last fenced `json` block of the
   last assistant message; a `REPORT.json` given must be equal to it.
+- **Every dispatch is judged** (decisions 3 and 4). Three rules, all about R's
+  latest brief, so that the PM cannot choose which report counts and a healthy
+  review is never refused for it:
+  - **B1.** `review-brief` makes no new brief while the latest one has no
+    verdict, with the two exceptions above (previous section).
+  - **B2.** Before a transcript T that carries the latest brief is judged,
+    every other subagent transcript of R's wrapper that carries the same brief
+    (the same heading, so the same run and attempt) and began before T must be
+    judged; otherwise the judgment is refused, naming them, and nothing is
+    recorded. Judging the earliest uses the attempt, as any judgment does, and
+    T then carries an earlier attempt's brief. A file given that does not
+    carry the latest brief is judged as if there were no transcript: while
+    any transcript carries the latest brief, the judgment is refused, naming
+    it, and no attempt is used, so a stray file cannot use the attempt of a
+    rejecting report. When none carries it, the file is judged and refused
+    (`REVIEW_BRIEF_NOT_FOUND`, among others), which uses the attempt. A
+    transcript that carries a brief of an earlier attempt or of another run is
+    not waited for: B1 and B3 already closed that attempt.
+  - **B3.** `review --no-answer` is refused while any transcript of R's
+    wrapper carries the latest brief: the PM judges that transcript instead. A
+    reviewer that stopped without a report is judged `REVIEW_NO_REPORT`, which
+    uses the attempt. `--no-answer` is for a dispatch that left no transcript.
+
+  A transcript carries a brief when its first user entry has the brief's
+  heading as a line (`# Batch review brief: R, run <run>, attempt <n>`); it
+  began at that entry's `timestamp` (then by path). The scan for B2 and B3
+  looks in every session of every project folder under `<projects>`
+  (`<projects>/*/*/subagents/agent-*.jsonl`) whose `.meta.json` names R's
+  wrapper, opens only the files modified at or after the brief was made (less
+  two seconds for a coarse file clock), and reads each only as far as its
+  first user entry. The transcript being judged is told from the others by its
+  real path. A transcript that grew after its judgment (a reviewer resumed
+  with a new brief) still begins with the brief it was first given, so it
+  never holds up a later brief; judged again on a later attempt, it is refused
+  `REVIEW_BRIEF_NOT_FOUND`, which uses that attempt, and `settle` counts its
+  usage once.
   Judgments of one team run one at a time: `review` and `review --no-answer`
   hold `rw-batch-reviews.json.lock` from reading the verdicts to writing them
   back, a second one waits, and a lock older than a minute is taken over.
@@ -662,11 +755,16 @@ offline on transcript fixtures.
   rule row with no note saying what was checked, or why it was not),
   `REVIEW_ALL_NOT_CHECKED`, `REVIEW_ITEM_MISSING`, `REVIEW_VERDICT_MISMATCH`,
   `REVIEW_CONTROL_MISSING`, `REVIEW_NO_ANSWER`. A transcript that cannot be
-  read, one already judged, or a flagged file changed since the brief is
-  refused without recording an attempt.
+  read, one already judged, one refused by B2, a no-answer refused by B3, or a
+  flagged path that changed since the brief (a file's content, a link's
+  target) is refused without recording an attempt.
 - **One more attempt.** After a refused report the next `review` needs a new
   brief: `review-brief` makes attempt 2 with the refusal reasons in the brief
-  (`retryReason`). A second refused report, or `review --no-answer` on the
+  (`retryReason`). The refusal's `next` says to dispatch the reviewer with it
+  as a new agent, never by resuming or messaging the earlier one: a resumed
+  reviewer's transcript begins with its first brief, so its judgment is
+  refused `REVIEW_BRIEF_NOT_FOUND` and the review ends not obtained. A second
+  refused report, or `review --no-answer` on the
   second attempt, records `not-obtained` for every ticket of R's brief. A
   reviewer is judged once: after `accepted` or `not-obtained` no brief or
   verdict is made for it in this batch.
@@ -834,9 +932,14 @@ What no trigger flags is read by Security once and Architect once every
   (`batches/<run>/reviews.json`). The other reviewer's pass does not remove a
   ticket. A ticket id committed twice is one entry with both commits. The brief
   names each ticket's goal and acceptance, its commits and every path those
-  commits changed, as an absolute path to open with Read as it stands now (a
-  deleted one is marked). It carries no diff and no verification output; the
-  rules are R's current rules, with the ADRs and the review protocol.
+  commits changed, as an absolute path to open with Read as it stands now,
+  under the reading rule of a batch brief (each file by its kind: a long text
+  file with its ranges, media to read once, a binary, misnamed or large file
+  and a symbolic link not to open, a deleted path marked). This brief holds no
+  diff, so a large file in it is not reviewed at all: a rule resting on it is
+  reported not-checked.
+  It carries no diff and no verification output; the rules are R's current
+  rules, with the ADRs and the review protocol.
 - **Review state.** The first brief arms the review state of the write
   boundary with `periodic: true` and the period id (`periodic-<time>`) as its
   run id; the hook bounds both reviewers as in a batch review. While it is open
@@ -847,12 +950,22 @@ What no trigger flags is read by Security once and Architect once every
   reviews, `periodic-brief` records `nothing-to-review` at once and prints the
   line instead of a brief.
 - **Judging.** `periodic` applies the evidence rules of a batch review
-  (transcript place, wrapper, brief carried unchanged, a whole Read of each
-  file, every rule per ticket, RED only with a failed rule, a fix and a control
-  per failed rule). A refused report is briefed and dispatched once more; the
-  second failure, or `--no-answer` twice, is `not-obtained`. Attempts are
-  counted per reviewer over the same pending commits, so an `abort` between
-  them, which gives the review a new period id, does not reset the count.
+  (transcript place, wrapper, brief carried unchanged, Reads that evidence
+  each text or media file, every rule per ticket, RED only with a failed rule,
+  a fix and a control per failed rule). A refused report is briefed and
+  dispatched once more, to a new agent as in a batch review; the second
+  failure, or `--no-answer` twice, is
+  `not-obtained`. Attempts are counted per reviewer over the same pending
+  commits, so an `abort` between them, which gives the review a new period id,
+  does not reset the count.
+- **Every dispatch is judged** by rules B1 to B3 of a batch review, on R's
+  latest brief of the open period, whose heading is `# Periodic review brief:
+  R, period <id>, attempt <n>`. `periodic-brief` makes no new brief while that
+  brief has no judged transcript and no recorded no-answer, except when a path
+  it pinned no longer holds what it pinned: `periodic` refuses such a
+  judgment and says to brief again, and the new brief is then made with the
+  files as they stand; or when the earlier kit made it (no `links` on its
+  tickets).
 - **Holds nothing.** No commit is touched. Each RED or AMBER ticket of an
   accepted report is a finding, with its commits, failed rules, fix and proposed
   control, for the PM to file as a ticket. Owner answer of 2026-11-20: a review
@@ -875,7 +988,7 @@ too, and the refusal names the recovery: remove that line, and the review it
 was recording becomes due again.
 The brief is kept, sealed per attempt, in `rw-periodic-review-<reviewer>.json`:
 `{id, reviewer, wrapper, attempt, briefDigest, madeAt, interval, intervalSource, counted,
-tickets: [{id, runs, shas, changedPaths, flaggedFiles, content}], ruleIds,
+tickets: [{id, runs, shas, changedPaths, flaggedFiles, content, links}], ruleIds,
 adrs, retryReason?}`. The ledger gets one `PERIODIC REVIEW <id> <reviewer>`
 line per judgment.
 
@@ -1188,6 +1301,37 @@ The limits not being the ones the ledger binds is refused with its own code,
   calls are refused in a batch.
 - **Only the three workers are bounded.** The PM's session and the governance
   roles keep the shell their own permissions give them.
+- **A review's Reads are credited from their input, not from what the tool
+  returned.** A range larger than the brief prescribes, or a plain `Read` of a
+  long file, can be cut by the tool (Claude Code, seen in 2.1.332, returns a
+  `Read` over its output token cap as a first page, without an error) and is
+  still credited with all the lines its input names. A line longer than the
+  Read tool shows is cut without trace, so a file whose single line exceeds
+  what the tool returns counts as read. Lines are counted as newline
+  characters. A media file is credited after one `Read` however much of it the
+  tool showed, a PDF read with `pages` included; the media extensions are the
+  kit's list, not read from the tool, and a file is media when its leading
+  bytes match (a notebook when it parses as JSON), whether or not the rest of
+  it is well formed. A text file with a NUL
+  byte past its first 8,000 bytes is still text. A UTF-16 text file has NUL
+  bytes and is classed binary: its content is never read and its diff says
+  only that binary files differ.
+- **A text file over 256 KB is not read.** It is judged from its diff as the
+  brief shows it, which over the cap may be its removed lines or only its
+  counts; its unchanged part is not read, and a rule resting on it is reported
+  not-checked. A ticket whose only flagged file is such a file, with no diff
+  shown, can get every rule not-checked, which refuses the report.
+- **Dispatches the review does not see**: a transcript deleted or moved before
+  judging; one in a session under another configuration folder; one whose
+  meta file does not name the wrapper; one whose first user entry does not
+  hold the brief's heading as a line; one made after the transcript that
+  brought a verdict, which is never judged nor metered; the dispatch of a
+  brief made again under one of B1's exceptions (a failed command, a pinned
+  path changed); those of a batch aborted before they were judged; and a
+  periodic review aborted and briefed again, whose new period id leaves the
+  earlier dispatch unjudged (a periodic review gates no commit). Transcripts
+  with no `timestamp` are ordered by path. Like the records, this detects a
+  careless PM, not a deliberate one.
 - **The periodic review reads files as they stand, not each commit's diff.** A
   path a later ticket changed again is read in its later state, and a path
   deleted since is not read. Commits made by hand, outside `commit`, are named

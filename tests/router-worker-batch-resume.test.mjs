@@ -156,6 +156,6 @@ test('a reviewer of a resumed ticket whose diff is too large for the brief is po
   assert.deepEqual(afterBatch({ ...f.common, result }).reviews.security.tickets, ['T-1']);
   const made = reviewBrief({ ...f.common, reviewer: 'security' });
   assert.equal(made.errors, undefined, JSON.stringify(made.errors));
-  assert.match(made.brief, /over the cap of 60000, so it is not included/);
+  assert.match(made.brief, /over the cap of 60000\. Each changed path follows in ticket order/);
   assert.ok(made.brief.includes(`T-1 resumed earlier work: its patch is ${join(f.root, 'handoff/T-1/left.patch')}; read it whole`));
 });

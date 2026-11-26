@@ -18,7 +18,7 @@ function team(t, interval = 2) {
   return { ...f,
     periodicBrief: reviewer => periodicBrief({ ...f.common, reviewer }),
     periodic: (reviewer, transcript, extra = {}) => judgePeriodic({ ...f.common, reviewer, transcript, projectsRoot: f.projectsRoot, ...extra }),
-    silent: (reviewer, reason) => recordPeriodicNoAnswer({ ...f.common, reviewer, reason }),
+    silent: (reviewer, reason) => recordPeriodicNoAnswer({ ...f.common, reviewer, reason, projectsRoot: f.projectsRoot }),
     periodicLines: () => f.lines('reviews/periodic.jsonl') };
 }
 const settled = (f, runId) => assert.equal(markNotMetered({ ...f.common, reason: 'fixture', runId }).errors, undefined);
@@ -149,10 +149,10 @@ test('a periodic review not obtained twice is recorded, reported to the human an
   const { f } = await due(t);
   const made = f.periodicBrief('security'), bad = transcriptOf(f, made, { reads: [] });
   const first = f.periodic('security', bad);
-  assert.equal(first.outcome, 'refused'); assert.match(first.next, /periodic-brief --reviewer security/);
+  assert.equal(first.outcome, 'refused'); assert.match(first.next, /periodic-brief --reviewer security.*as a new agent, never by resuming or messaging the earlier one/);
   assert.match(refusal(f.periodic('security', transcriptOf(f, made))).reason, /already judged; brief again/);
   assert.equal(f.periodicBrief('security').record.attempt, 2);
-  const cli = spawnSync(process.execPath, [join(f.kit, 'scripts/rw-batch.mjs'), 'periodic', '--no-answer', 'the reviewer stopped at its turn limit', '--reviewer', 'security', '--instance', f.root], { encoding: 'utf8' });
+  const cli = spawnSync(process.execPath, [join(f.kit, 'scripts/rw-batch.mjs'), 'periodic', '--no-answer', 'the dispatch left no transcript', '--reviewer', 'security', '--instance', f.root], { encoding: 'utf8', env: { ...process.env, CLAUDE_CONFIG_DIR: f.base } });
   assert.equal(cli.status, 2, cli.stderr);
   assert.equal(JSON.parse(cli.stdout).outcome, 'not-obtained');
   assert.match(f.ledger(), /PERIODIC REVIEW periodic-\S+ security NOT OBTAINED \(attempt 2\).*reported to the owner; the next batch is not stopped/);
@@ -160,6 +160,35 @@ test('a periodic review not obtained twice is recorded, reported to the human an
   assert.deepEqual(f.periodicLines().map(line => [line.reviewer, line.outcome]), [['security', 'refused'], ['security', 'not-obtained'], ['architect', 'accepted']]);
   const opened = await next(f);
   assert.equal(opened.errors, undefined, JSON.stringify(opened.errors));
+});
+
+test('a periodic reviewer that stopped without a report is judged, not recorded as no answer; a new brief waits for that judgment; the healthy second dispatch is accepted', async t => {
+  const { f } = await due(t);
+  const made = f.periodicBrief('security');
+  assert.match(made.brief, /Your Reads of a file must together cover every line of it/, 'the periodic brief states the rule it is judged by');
+  assert.match(refusal(f.periodicBrief('security')).reason, /security's periodic brief 1 has no judged transcript and no recorded no-answer/);
+  const stopped = transcriptOf(f, made, { report: null });
+  const silenced = refusal(f.silent('security', 'the reviewer stopped without a report'));
+  assert.equal(silenced?.code, 'REVIEW_REFUSED'); assert.ok(silenced.reason.includes(realpathSync(stopped)) && /periodic --reviewer security --transcript/.test(silenced.reason), silenced.reason);
+  const other = refusal(f.periodic('security', transcriptOf(f, made, { prompt: 'Review something else.', session: 'session-2' })));
+  assert.ok(other?.reason.includes(realpathSync(stopped)) && /the transcript given does not carry/.test(other.reason), other?.reason);
+  assert.deepEqual(f.periodicLines(), [], 'nothing is recorded');
+  const judged = f.periodic('security', stopped);
+  assert.deepEqual([judged.outcome, judged.attempt, judged.refusals.map(item => item.code)], ['refused', 1, ['REVIEW_NO_REPORT']]);
+  const healthy = f.periodic('security', transcriptOf(f, f.periodicBrief('security')));
+  assert.deepEqual([healthy.outcome, healthy.attempt], ['accepted', 2], JSON.stringify(healthy));
+});
+
+test('a file changed after the periodic brief: the judgment says to brief again, and that brief is made and judged', async t => {
+  const { f } = await due(t);
+  const dispatched = transcriptOf(f, f.periodicBrief('security'));
+  writeFileSync(join(f.product, 'src/list/view.js'), '// changed by hand after the brief\n');
+  assert.match(refusal(f.periodic('security', dispatched))?.reason ?? '', /src\/list\/view\.js changed since the brief; brief again with: rw-batch\.mjs periodic-brief --reviewer security/);
+  assert.deepEqual(f.periodicLines(), [], 'nothing is recorded');
+  const again = f.periodicBrief('security');
+  assert.equal(again.errors, undefined, JSON.stringify(again.errors)); assert.equal(again.record.attempt, 2);
+  const judged = f.periodic('security', transcriptOf(f, again));
+  assert.deepEqual([judged.outcome, judged.attempt], ['accepted', 1], JSON.stringify(judged));
 });
 
 test('a failed rule in a periodic review is a finding with its control; no commit is touched', async t => {

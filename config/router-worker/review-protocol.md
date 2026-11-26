@@ -7,7 +7,12 @@ It adds to the reviewer's own role file; it replaces none of its obligations.
    the ADRs and the output of the verification commands the kit ran. It never holds a worker's report or the
    checker's verdict; do not ask for them.
 2. Open every flagged file the brief lists with the Read tool, by the absolute path given. Opening it any other
-   way does not count. Report each file in `filesRead` with `read: true`, or `read: false` and the reason.
+   way does not count. Read all of each file: one Read returns a limited number of lines, so a file the brief
+   marks with ranges is read with the limit and at each offset the brief gives. An image, a PDF or a notebook
+   is read once; a file the brief marks as not opened (binary, a symbolic link, named as media with other
+   bytes, or too large to read whole) is not opened. Judge a file too large to read whole from its diff where
+   the brief shows one, and report a rule you cannot judge from it as `not-checked`, naming the file. Report
+   each file in `filesRead` with `read: true`, or `read: false` and the reason.
 3. Check every rule the brief lists against every ticket. Report each as `pass`, `fail` or `not-checked`,
    with the file and line it rests on. A rule left out of the report, or every rule `not-checked`, means the
    review was not done.
