@@ -25,6 +25,20 @@ const left = (f, ...args) => {
 };
 const settled = (f, runId) => assert.equal(markNotMetered({ ...f.common, reason: 'not measured in this test', runId }).errors, undefined);
 
+test('the work of a ticket that after set aside, applied back by the PM, is that ticket\'s work to left, not the work of no ticket', async t => {
+  const f = live(t);
+  const { open, after } = await runBatch(f, [ticket('US-01', ['src/list/a.js']), ticket('US-02', ['src/app.js'])], { 'src/list/a.js': '// a\n', 'src/app.js': 'export const x = 2;\n' }, {}, checker(2));
+  const at = `left/${open.runId}/US-02.patch`;
+  assert.deepEqual(after.setAside.map(entry => [entry.ticket, entry.patch, entry.paths]), [['US-02', at, ['src/app.js']]]);
+  assert.equal(f.commit().errors, undefined);
+  git(f.product, 'apply', join(f.root, at));
+  const saved = left(f);
+  assert.equal(saved.status, 0, JSON.stringify(saved.refused));
+  assert.deepEqual(saved.out.tickets, [{ ticket: 'US-02', state: 'patch', patch: at, by: 'after', resume: at }]);
+  assert.deepEqual(saved.out.outside, []); assert.doesNotMatch(saved.out.next, /no ticket's work/);
+  assert.deepEqual(changed(f), [], 'left took the ticket\'s work out again');
+});
+
 test('left saves the work each ticket of an archived batch left in the work tree as a patch, takes it out, and prints its resume; a second run changes nothing', async t => {
   const f = live(t);
   // US-01 passes and is not flagged, US-03 passes and is flagged for Security, US-02 does not pass. notes.txt is no ticket's.

@@ -507,9 +507,10 @@ passed ticket left out is one the PM said they do not need. This narrows the
 amendment of 2026-11-25 on per-ticket commands for `after` alone: the review
 brief still runs the batch's whole list. `after` runs the commands before it
 pins content and plans commits, so what is pinned is what they left, and it judges the commit hooks
-again on the tree they leave. A command that fails or times out, or no
-confirmed command left to run, holds every commit (`VERIFICATION_FAILED`): the
-kit cannot tell which ticket broke the tree. When the tree holds anything else
+again on the tree they leave. A command that fails or times out is run once
+more, since `after` cannot be run again once it closed the batch; one that
+fails again, or no confirmed command left to run, holds every commit
+(`VERIFICATION_FAILED`): the kit cannot tell which ticket broke the tree. When the tree holds anything else
 (a path outside every ticket, a path changed before the batch, a ticket that
 could not be set aside), `after` runs nothing, records why
 (`VERIFICATION_NOT_RUN`, which holds nothing), says in `next` that the kit did

@@ -3,7 +3,7 @@
 // every commit. A claim on the close names its process.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, readFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, readFileSync, mkdirSync, rmSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { bytesDigest } from '../src/loop/contracts.mjs';
@@ -24,8 +24,9 @@ test('after runs the batch\'s commands on the product as it stands; a failed or 
   const f = live(t), { open, result } = await engineRun(f, TWO, EDITS), calls = [];
   const closed = afterBatch({ ...f.common, result, run: runner(calls, outcome(1)) });
   assert.equal(closed.errors, undefined, JSON.stringify(closed.errors));
-  assert.deepEqual(calls.map(call => [call.productRoot, call.commands, call.frozen]), [[f.product, COMMANDS, COMMANDS]], 'the frozen commands the owner confirms, once, from the product root');
-  assert.deepEqual(closed.verification, { ran: true, failed: true, commands: COMMANDS.map(command => ({ command, exit: command === 'pwd' ? 1 : 0, timedOut: false, outputDigest: 'sha256:run', tail: 'output' })), dropped: [] });
+  assert.deepEqual(calls.map(call => [call.productRoot, call.commands, call.frozen]), [[f.product, COMMANDS, COMMANDS], [f.product, ['pwd'], COMMANDS]], 'the frozen commands the owner confirms, from the product root, then the failed one once more');
+  const run = { timedOut: false, outputDigest: 'sha256:run', tail: 'output' };
+  assert.deepEqual(closed.verification, { ran: true, failed: true, commands: [{ command: 'echo verified-by-kit', exit: 0, ...run }, { command: 'pwd', exit: 1, ...run, again: { exit: 1, ...run } }], dropped: [] });
   assert.deepEqual(closed.findings.find(finding => finding.code === 'VERIFICATION_FAILED'), { code: 'VERIFICATION_FAILED', commands: [{ command: 'pwd', exit: 1, timedOut: false }], dropped: [] });
   assert.equal(closed.holdAll, true); assert.deepEqual(closed.commits, []); assert.deepEqual(closed.left, ['src/list/a.js', 'src/list/b.js']);
   const next = closed.next.join('\n');
@@ -106,13 +107,13 @@ test('after sets aside the work of a ticket that did not pass as a patch, then r
   const closed = afterBatch({ ...f.common, result }), patch = `left/${open.runId}/US-03.patch`;
   assert.equal(closed.errors, undefined, JSON.stringify(closed.errors));
   assert.deepEqual(closed.tickets.map(entry => [entry.id, entry.status]), [['US-01', 'passed'], ['US-03', 'not-passed']]);
-  assert.deepEqual(closed.setAside, [{ ticket: 'US-03', state: 'patch', patch, resume: patch }]);
+  assert.deepEqual(closed.setAside, [{ ticket: 'US-03', state: 'patch', patch, paths: ['src/app.js'], resume: patch }]);
   assert.equal(inTree(f, 'src/app.js'), git(f.product, 'show', 'HEAD:src/app.js'), 'the ticket\'s path holds what HEAD holds');
   assert.deepEqual(closed.verification.commands.map(run => [run.command, run.exit, run.timedOut]), [[BROKEN, 0, false]]); assert.equal(closed.verification.failed, false);
   assert.ok(!closed.findings.some(finding => ['VERIFICATION_FAILED', 'VERIFICATION_NOT_RUN'].includes(finding.code)), JSON.stringify(closed.findings));
   assert.equal(closed.holdAll, false); assert.deepEqual(closed.commits.map(commit => [commit.ticket, commit.paths]), [['US-01', ['src/list/a.js']]]); assert.deepEqual(closed.left, []);
   assert.match(closed.next.join('\n'), new RegExp(`US-03 \\(${patch}\\).*set aside`)); assert.match(closed.next.join('\n'), new RegExp(`US-03 "resume": "${patch}"`));
-  assert.match(f.ledger(), new RegExp(`BATCH ${open.runId} CLOSED .*1 ticket\\(s\\) set aside as patches`));
+  assert.match(f.ledger(), new RegExp(`BATCH ${open.runId} CLOSED .*set aside as patches: US-03 ${patch}`));
   git(f.product, 'apply', join(f.root, patch));
   assert.equal(inTree(f, 'src/app.js'), LEFT_WORK['src/app.js'], 'the patch gives back the same bytes');
   git(f.product, 'apply', '-R', join(f.root, patch));
@@ -159,7 +160,9 @@ test('a path outside every ticket, or one changed before a batch started as is, 
   const first = afterBatch({ ...f.common, result: outside.result, run: none });
   assert.equal(first.errors, undefined, JSON.stringify(first.errors));
   assert.deepEqual(first.findings.find(finding => finding.code === 'VERIFICATION_NOT_RUN')?.paths, ['notes.txt']); assert.equal(first.verification.ran, false);
+  assert.equal(first.verification.reason, 'the work tree also holds a path no planned commit holds');
   assert.deepEqual(first.commits.map(commit => commit.ticket), ['US-01', 'US-03']); assert.match(first.next.join('\n'), /did not verify the tree it will commit/);
+  assert.match(first.next.join('\n'), /a command writes outside every ticket.*in every batch.*\.gitignore/, 'next names the cause that repeats and its remedy');
   const g = live(t);
   writeFileSync(join(g.product, 'stray.txt'), 'pre-existing\n');
   const asIs = await engineRun({ ...g, before: batch => beforeBatch({ ...g.common, batch, startAsIs: true }) }, TWO, EDITS);
@@ -198,4 +201,53 @@ test('a claim whose process is alive names abort for the case where that process
   const f = live(t), { open, result } = await engineRun(f, TWO, EDITS);
   writeFileSync(join(f.root, AFTER_FILE), JSON.stringify({ stage: 'batch-closing', runId: open.runId, claimedAt: new Date().toISOString(), pid: process.ppid }));
   assert.match(refusal(afterBatch({ ...f.common, result, run: passing })).reason, new RegExp(`process ${process.ppid}.*not an after of this batch.*rw-batch\\.mjs abort`));
+});
+
+test('a command that fails once and passes when run again holds nothing and both runs are recorded; one that fails twice, or whose output passes the buffer limit, holds every commit', async t => {
+  // The command fails until the marker outside the product exists, and makes it.
+  const f = live(t, { commands: base => ['pwd', `test -e "${base}/ran" || { touch "${base}/ran"; exit 3; }`] }), { result } = await engineRun(f, TWO, EDITS);
+  const flaky = afterBatch({ ...f.common, result });
+  assert.equal(flaky.errors, undefined, JSON.stringify(flaky.errors));
+  assert.deepEqual(flaky.verification.commands.map(run => [run.command, run.exit, run.again?.exit]), [['pwd', 0, undefined], [f.commands[1], 3, 0]]);
+  assert.equal(flaky.verification.failed, false); assert.ok(!flaky.findings.some(finding => finding.code === 'VERIFICATION_FAILED'), JSON.stringify(flaky.findings));
+  assert.equal(flaky.holdAll, false); assert.deepEqual(flaky.commits.map(commit => commit.ticket), ['US-01', 'US-03']);
+  const loud = 'yes | head -c 70000000', g = live(t, { commands: ['false', loud] }), second = await engineRun(g, TWO, EDITS);
+  const broken = afterBatch({ ...g.common, result: second.result });
+  assert.equal(broken.errors, undefined, JSON.stringify(broken.errors));
+  assert.deepEqual(broken.verification.commands.map(run => [run.command, run.exit, run.again?.exit]), [['false', 1, 1], [loud, null, null]]);
+  assert.deepEqual(broken.findings.find(finding => finding.code === 'VERIFICATION_FAILED')?.commands, [{ command: 'false', exit: 1, timedOut: false }, { command: loud, exit: null, timedOut: false, overflowed: true }]);
+  assert.equal(broken.holdAll, true); assert.deepEqual(broken.commits, []);
+  assert.match(broken.next.join('\n'), /false \(exit 1\), yes \| head -c 70000000 \(output over the kit's buffer limit\) did not pass, again when run a second time/);
+});
+
+test('an after that takes over from one that died between two set-asides names both tickets with their patches and paths, and takes the second out now', async t => {
+  const tickets = [ticket('US-01', ['src/list/a.js']), ticket('US-02', ['src/app.js']), ticket('US-03', ['src/list/new/**'], { expectedPaths: ['src/list/new/c.js'] })];
+  const work = { 'src/list/a.js': '// a\n', 'src/app.js': 'export const x = 2;\n', 'src/list/new/c.js': '// c\n' };
+  let n = 0; const pass = agentsOf(COMMANDS).verifier, f = live(t);
+  const { open, result } = await engineRun(f, tickets, work, {}, { verifier: () => ++n === 1 ? pass() : failedCheck(COMMANDS) });
+  const at = id => `left/${open.runId}/${id}.patch`, first = join(f.root, at('US-02'));
+  // What the dead after left: its claim, US-02's patch saved and its path restored, US-03 still in the tree.
+  writeFileSync(join(f.root, AFTER_FILE), JSON.stringify({ stage: 'batch-closing', runId: open.runId, claimedAt: new Date().toISOString(), pid: spawnSync(process.execPath, ['-e', '0']).pid }));
+  mkdirSync(dirname(first), { recursive: true }); writeFileSync(first, git(f.product, 'diff', '--binary', '--full-index', 'HEAD', '--', 'src/app.js'));
+  git(f.product, 'checkout', 'HEAD', '--', 'src/app.js');
+  const closed = afterBatch({ ...f.common, result, run: passing });
+  assert.equal(closed.errors, undefined, JSON.stringify(closed.errors));
+  assert.deepEqual(closed.setAside.map(entry => [entry.ticket, entry.state, entry.patch, entry.paths]), [['US-02', 'patch', at('US-02'), ['src/app.js']], ['US-03', 'patch', at('US-03'), ['src/list/new/c.js']]]);
+  assert.deepEqual(changed(f), ['src/list/a.js'], 'the second ticket is out of the tree');
+  assert.match(closed.next.join('\n'), new RegExp(`US-02 \\(${at('US-02')}\\), US-03 \\(${at('US-03')}\\), which did not pass, was set aside`));
+  assert.match(f.ledger(), new RegExp(`BATCH ${open.runId} CLOSED .*set aside as patches: US-02 ${at('US-02')}, US-03 ${at('US-03')}`));
+  assert.deepEqual(closed.commits.map(commit => commit.ticket), ['US-01']);
+});
+
+test('after sets aside a new file, a deleted file and a binary file of a ticket that did not pass; its patch gives back the same bytes', async t => {
+  const blob = Buffer.from([0, 1, 2, 255, 0, 10, 13, 0]), f = live(t);
+  const { open, result } = await engineRun(f, [ticket('US-01', ['src/list/a.js']), ticket('US-03', ['src/app.js', 'src/bin/**'])],
+    { 'src/list/a.js': '// a\n', 'src/bin/new.txt': 'new\n', 'src/bin/blob.bin': blob }, {}, secondFails(COMMANDS));
+  rmSync(join(f.product, 'src/app.js'));
+  const closed = afterBatch({ ...f.common, result, run: passing }), patch = `left/${open.runId}/US-03.patch`;
+  assert.equal(closed.errors, undefined, JSON.stringify(closed.errors));
+  assert.deepEqual(closed.setAside.map(entry => [entry.ticket, entry.state, entry.patch, [...entry.paths].sort()]), [['US-03', 'patch', patch, ['src/app.js', 'src/bin/blob.bin', 'src/bin/new.txt']]]);
+  assert.deepEqual(changed(f), ['src/list/a.js']); assert.ok(existsSync(join(f.product, 'src/app.js')), 'the deleted file is back');
+  git(f.product, 'apply', join(f.root, patch));
+  assert.equal(existsSync(join(f.product, 'src/app.js')), false); assert.equal(inTree(f, 'src/bin/new.txt'), 'new\n'); assert.ok(readFileSync(join(f.product, 'src/bin/blob.bin')).equals(blob));
 });

@@ -90,12 +90,13 @@ export function saveLeftWork({ teamRoot, instanceRoot, runId }) {
 
     const committed = committedIn(instance, id);
     const removed = resolution?.removed, resolved = new Set((Array.isArray(removed) ? removed : []).map(entry => entry?.ticket)), abandoned = at('abandoned.json');
-    const byAfter = new Map((Array.isArray(after.setAside) ? after.setAside : []).filter(entry => entry?.state === 'patch').map(entry => [entry.ticket, entry.patch]));
+    const byAfter = new Map((Array.isArray(after.setAside) ? after.setAside : []).filter(entry => entry?.state === 'patch').map(entry => [entry.ticket, entry]));
     // abort saved these and could not take all of them out: each patch already holds the whole of its ticket's work.
     const partial = new Map((intact(abandoned, 'batch-archived-without-commit') && Array.isArray(abandoned.held) ? abandoned.held : [])
       .filter(entry => entry?.state === 'in-tree' && typeof entry.patch === 'string' && entry.patch === heldAt(entry.patch.split('/')[2], entry.ticket) && exists(join(instance, entry.patch))).map(entry => [entry.ticket, entry.patch]));
     const tickets = batch.tickets.filter(ticket => TICKET_ID.test(ticket?.id ?? '') && !committed.has(ticket.id))
-      .map(ticket => ({ ticket, recorded: after.tickets.find(entry => entry?.id === ticket.id)?.changedPaths ?? [] }));
+      // What after set aside is the ticket's too, should the PM have applied its patch back.
+      .map(ticket => ({ ticket, recorded: [...(after.tickets.find(entry => entry?.id === ticket.id)?.changedPaths ?? []), ...(byAfter.get(ticket.id)?.paths ?? [])] }));
     const outside = changed.filter(path => !tickets.some(({ recorded }) => recorded.includes(path)));
     // A path no ticket of this batch changed may be what a ticket of another archived batch left.
     const claims = outside.length ? claimsOf(instance, all, id) : [], claimOf = path => claims.find(entry => entry.paths.includes(path));
@@ -106,7 +107,7 @@ export function saveLeftWork({ teamRoot, instanceRoot, runId }) {
         : setAside({ instance, productRoot, head, changed, recorded, patch: leftAt(id, ticket.id), found });
       if (out.state === 'not-in-tree') return null;
       if (out.state === 'in-tree') return { entry: { ticket: ticket.id, ...out, ...(whole ? { patch: whole } : {}) }, now: false };
-      const by = out.patch === byAfter.get(ticket.id) ? 'after' : out.patch.startsWith(`${LEFT}/`) ? 'left' : resolved.has(ticket.id) ? 'resolve' : 'abort', also = [...new Set(found)].filter(path => path && path !== out.patch && exists(join(instance, path)));
+      const by = out.patch === byAfter.get(ticket.id)?.patch ? 'after' : out.patch.startsWith(`${LEFT}/`) ? 'left' : resolved.has(ticket.id) ? 'resolve' : 'abort', also = [...new Set(found)].filter(path => path && path !== out.patch && exists(join(instance, path)));
       return { entry: { ticket: ticket.id, state: 'patch', patch: out.patch, by, ...(also.length ? { also } : {}), ...resumeOf({ instance, productRoot, ticket, patch: out.patch }) }, now: inTree };
     }).filter(Boolean);
 

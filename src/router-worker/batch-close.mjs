@@ -36,6 +36,8 @@ const readJSON = path => { try { return JSON.parse(readFileSync(path, 'utf8')); 
 export const intact = (value, stage) => { if (!value || typeof value !== 'object') return false; const { digest: recorded, ...body } = value; return recorded === digest(body) && value.stage === stage; };
 const sealed = body => ({ ...body, digest: digest(body) });
 const failedRuns = runs => runs.filter(run => run.exit !== 0 || run.timedOut);
+const lastRun = entry => entry.again ? { command: entry.command, ...entry.again } : entry;
+const ending = run => run.timedOut ? 'timed out' : run.overflowed ? 'output over the kit\'s buffer limit' : `exit ${run.exit}`;
 const replace = (path, record) => { writeFileSync(`${path}.tmp`, JSON.stringify(record, null, 2) + '\n'); renameSync(`${path}.tmp`, path); };
 
 // The open batch of this team. Its record is a file the PM can write: what reaches a path, the ledger or a
@@ -108,22 +110,32 @@ function outcomeOf(outcome) {
 
 // ADR 0010, amendment of 2026-11-26: the commands the passed tickets verify with, in the batch's order, as far as the owner still
 // confirms them, run by the kit on the product as it stands. No confirmed command left to run proves nothing about the tree.
+// A command that fails is run once more, its second run kept beside the first: after cannot be run again once it closed the batch.
 function verifyTree(instance, batch, passed, run) {
   const needed = batch.verificationCommands.filter(command => passed.some(ticket => (ticket.verificationCommands ?? batch.verificationCommands).includes(command)));
   const { allowed, commands, dropped } = confirmedOf(instance, needed);
-  const runs = run({ productRoot: batch.productRoot, commands, frozen: batch.verificationCommands, allowed });
-  need(!runs.errors, runs.errors?.[0]?.reason);
-  return { ran: true, failed: !runs.length || failedRuns(runs).length > 0, commands: runs.map(({ command, exit, timedOut, outputDigest, tail }) => ({ command, exit, timedOut, outputDigest, tail })), dropped };
+  const runOf = list => {
+    const runs = list.length ? run({ productRoot: batch.productRoot, commands: list, frozen: batch.verificationCommands, allowed }) : [];
+    need(!runs.errors, runs.errors?.[0]?.reason);
+    return runs.map(({ command, exit, timedOut, overflowed, outputDigest, tail }) => ({ command, exit, timedOut, ...(overflowed ? { overflowed } : {}), outputDigest, tail }));
+  };
+  const first = runOf(commands), again = runOf(failedRuns(first).map(entry => entry.command));
+  const runs = first.map(entry => { const { command, ...second } = again.find(other => other.command === entry.command) ?? {}; return command ? { ...entry, again: second } : entry; });
+  return { ran: true, failed: !runs.length || failedRuns(runs.map(lastRun)).length > 0, commands: runs, dropped };
 }
 
 // Each ticket that did not pass and left changes is saved at left/<run id>/<ticket>.patch and taken out of the tree, as left would.
 function setAsideUnpassed(instance, batch, outcomes, worked) {
   const product = batch.productRoot, { head, changed, problem } = productState(product, {});
+  // With -z Git writes each path unquoted after the second tab.
+  const pathsOf = patch => gitRun(product, ['apply', '--numstat', '-z', join(instance, patch)]).stdout.split('\0').filter(Boolean).map(entry => entry.split('\t').slice(2).join('\t'));
   return batch.tickets.flatMap((ticket, i) => {
     const recorded = worked.filter(path => !path.endsWith('/') && within(path, ticket.paths)), patch = leftAt(batch.runId, ticket.id);
-    if (outcomes[i].status === 'passed' || !recorded.length) return [];
+    if (outcomes[i].status === 'passed') return [];
+    // A ticket with nothing left in the tree may be one an after that died already set aside: its saved patch names it.
     const out = setAside({ instance, productRoot: product, head, changed, problem, recorded, patch, found: [patch] });
-    return [out.state === 'patch' ? { ticket: ticket.id, state: 'patch', patch, ...resumeOf({ instance, productRoot: product, ticket, patch }) } : { ticket: ticket.id, ...out }];
+    if (out.state === 'patch') return [{ ticket: ticket.id, state: 'patch', patch, paths: recorded.length ? recorded : pathsOf(patch), ...resumeOf({ instance, productRoot: product, ticket, patch }) }];
+    return recorded.length ? [{ ticket: ticket.id, ...out }] : [];
   });
 }
 
@@ -207,7 +219,7 @@ export function afterBatch({ teamRoot, instanceRoot, result, run = runCommands }
         findings.push({ code: 'VERIFICATION_NOT_RUN', reason: verification.reason, paths: blocking });
       } else {
         verification = verifyTree(instance, batch, passedTickets, run);
-        if (verification.failed) findings.push({ code: 'VERIFICATION_FAILED', commands: failedRuns(verification.commands).map(({ command, exit, timedOut }) => ({ command, exit, timedOut })), dropped: verification.dropped });
+        if (verification.failed) findings.push({ code: 'VERIFICATION_FAILED', commands: failedRuns(verification.commands.map(lastRun)).map(({ command, exit, timedOut, overflowed }) => ({ command, exit, timedOut, ...(overflowed ? { overflowed } : {}) })), dropped: verification.dropped });
         // A command that writes where the hooks live holds every commit, as a worker's write does.
         if (hooksOf(product).digest !== batch.hooks?.digest) findings.push({ code: 'HOOKS_CHANGED' });
         const hookedByRun = hookedIn(changedNow());
@@ -256,12 +268,12 @@ export function afterBatch({ teamRoot, instanceRoot, result, run = runCommands }
     const hooksTouched = findings.some(finding => ['HOOKS_CHANGED', 'HOOKS_WRITTEN'].includes(finding.code));
     if (holdAll) next.push(`No ticket of this batch is committed by the kit. ${hooksTouched ? `${HOOKS_FIRST}. ` : ''}${ABANDON}`);
     const broke = findings.find(finding => finding.code === 'VERIFICATION_FAILED');
-    if (broke) next.push(`The kit ran the passed tickets' verification commands on the product as it stands and ${broke.commands.length ? `${broke.commands.map(entry => `${plain(entry.command)} (${entry.timedOut ? 'timed out' : `exit ${entry.exit}`})`).join(', ')} did not pass` : `no verification command confirmed for the team was left to run (${broke.dropped.map(plain).join(' | ')})`}: the kit cannot tell which ticket broke the tree, so it commits none. Read the output in the record's verification`);
+    if (broke) next.push(`The kit ran the passed tickets' verification commands on the product as it stands and ${broke.commands.length ? `${broke.commands.map(entry => `${plain(entry.command)} (${ending(entry)})`).join(', ')} did not pass, again when run a second time` : `no verification command confirmed for the team was left to run (${broke.dropped.map(plain).join(' | ')})`}: the kit cannot tell which ticket broke the tree, so it commits none. Read the output in the record's verification`);
     const aside = setAsideList.filter(entry => entry.state === 'patch'), stuck = setAsideList.filter(entry => entry.state === 'in-tree'), advice = patchAdvice(setAsideList);
     if (aside.length) next.push(`The work of ${aside.map(entry => `${entry.ticket} (${entry.patch})`).join(', ')}, which did not pass, was set aside as a patch, out of the work tree, so that the kit verifies only what it commits`);
     next.push(...[advice.ready, advice.refused, advice.stuck].filter(Boolean));
     const notRun = findings.find(finding => finding.code === 'VERIFICATION_NOT_RUN');
-    if (notRun) next.push(`The kit did not verify the tree it will commit: ${notRun.reason} (${notRun.paths.slice(0, 10).map(plain).join(', ')}${notRun.paths.length > 10 ? ', ...' : ''}), and a run would have judged that with the planned commits. Run the passed tickets' verification commands yourself on a tree that holds only the planned commits before you build on them`);
+    if (notRun) next.push(`The kit did not verify the tree it will commit: ${notRun.reason} (${notRun.paths.slice(0, 10).map(plain).join(', ')}${notRun.paths.length > 10 ? ', ...' : ''}), and a run would have judged that with the planned commits. Run the passed tickets' verification commands yourself on a tree that holds only the planned commits before you build on them. If a command writes outside every ticket a path Git does not ignore (a cache), this repeats in every batch, since no command of the kit clears that path: ignore such paths in the product's .gitignore to get the verification`);
     if (findings.some(finding => finding.code === 'HOOK_SAW_NO_WORKER')) next.push('The hook logged no call of this batch\'s workers: either the session that ran the batch did not load the write-boundary hook of the team root (.claude/settings.json), so the write limits were not enforced, or the hook ran and could not append to its log (.claude/rw-write-boundary.log.jsonl), so what it decided is not known. Inspect every changed path before any commit by hand, and run the next batch from a session that loads the hook, with that log writable');
     const missing = findings.find(finding => finding.code === 'CHECK_RUNS_MISSING')?.commands ?? [];
     if (missing.length) next.push(`The checker ran ${missing.map(entry => `${plain(entry.command)} (${entry.seen} of ${entry.needed})`).join(', ')} fewer times than the tickets that passed verify with it: a ticket passed without its checker running its verification commands, and the log cannot say which. Run the verification commands yourself before any commit by hand`);
@@ -269,7 +281,7 @@ export function afterBatch({ teamRoot, instanceRoot, result, run = runCommands }
     const reviewers = Object.keys(reviews);
     if (reviewers.length) next.push(`The batch is in review: brief each reviewer with ${reviewers.map(reviewer => `rw-batch.mjs review-brief --reviewer ${reviewer} --instance <instance-root>`).join(', and ')}; no batch, switch or change of limits starts until the review is over`);
     const status = () => findings.length || account.blockers.length || reviewers.length ? 'review' : 'clean';
-    try { appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} BATCH ${batch.runId} CLOSED (${status()}): ${passed} of ${tickets.length} ticket(s) passed; ${commits.length} to commit, ${left.length} changed path(s) left${setAsideList.length ? `; ${aside.length} ticket(s) set aside as patches${stuck.length ? `, ${stuck.length} could not be` : ''}` : ''}${reviewers.length ? `; review required by ${reviewers.join(', ')}` : ''}${findings.length ? `; findings: ${findings.map(finding => finding.code).join(', ')}` : ''}.\n`); }
+    try { appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} BATCH ${batch.runId} CLOSED (${status()}): ${passed} of ${tickets.length} ticket(s) passed; ${commits.length} to commit, ${left.length} changed path(s) left${aside.length ? `; set aside as patches: ${aside.map(entry => `${entry.ticket} ${entry.patch}`).join(', ')}` : ''}${stuck.length ? `; not set aside, left in the work tree: ${stuck.map(entry => entry.ticket).join(', ')}` : ''}${reviewers.length ? `; review required by ${reviewers.join(', ')}` : ''}${findings.length ? `; findings: ${findings.map(finding => finding.code).join(', ')}` : ''}.\n`); }
     catch { findings.push({ code: 'LEDGER_NOT_WRITTEN' }); }
     // The engine's return is kept beside the record, which carries its digest: the settlement of usage needs it, and so does anyone who audits the batch.
     const kept = JSON.parse(JSON.stringify(result));

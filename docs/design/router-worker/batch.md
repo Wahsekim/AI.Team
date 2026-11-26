@@ -245,15 +245,19 @@ the scan stays small however many batches a team archived.
    first failed ticket, so "earlier tickets passed, the last one failed" is the
    usual shape of a batch with a failure, and that ticket's code would
    otherwise fail the commands of the passed ones. The record lists each in
-   `setAside`: `{ticket, state: "patch", patch, resume, resumeProblem?}`, where
-   `resume` is the value a ticket of a later batch names to take the work back,
-   or null with `resumeProblem` when `before` would refuse the patch as it
-   stands; or `{ticket, state: "in-tree", paths, problem, patch?}` for a ticket
+   `setAside`: `{ticket, state: "patch", patch, paths, resume, resumeProblem?}`,
+   where `paths` are the paths taken out, which `left` counts as that ticket's
+   once the PM has applied the patch back, and `resume` is the value a ticket
+   of a later batch names to take the work back, or null with `resumeProblem`
+   when `before` would refuse the patch as it stands; or `{ticket, state: "in-tree", paths, problem, patch?}` for a ticket
    that could not be set aside (a Git operation in progress, a patch with other
    bytes already there, a removal that failed), of which nothing was removed,
    or, after a removal that failed part-way, whose saved patch is the complete
    one. `next` names each patch and its `resume` value, and the ledger line
-   says how many tickets were set aside.
+   names each ticket set aside with its patch. An `after` that takes over from
+   one that died between two set-asides finds the patch the dead one saved for
+   a ticket no longer in the tree and lists that ticket the same way, its
+   `paths` read from the patch.
 4. **The kit verifies the tree it would commit.** Only when every changed path
    in the tree is a path of a passed ticket (no path outside every ticket, no
    path changed before the batch, no ticket left in the tree by a failed
@@ -264,11 +268,16 @@ the scan stays small however many batches a team archived.
    the product as it stands, from the product root, under the lock the batch
    still holds, as `review-brief` runs its commands: only those that are both
    frozen in the batch and still in the team's confirmed `allowedCommands`
-   (`/bin/sh -c`, 15 minutes each, output truncated and digested). The record
-   keeps the run in `verification`: `{ran, failed, commands: [{command, exit,
-   timedOut, outputDigest, tail}], dropped}`. A command that failed or timed
-   out, or no confirmed command left to run, is the finding
-   `VERIFICATION_FAILED`: the kit cannot tell which ticket broke the tree, so
+   (`/bin/sh -c`, 15 minutes each, output truncated and digested). A command
+   that failed or timed out is run once more, after the others: `after` cannot
+   be run again once it closed the batch, so one flaky run must not hold it for
+   good. The record keeps the run in `verification`: `{ran, failed, commands:
+   [{command, exit, timedOut, overflowed?, outputDigest, tail, again?}],
+   dropped}`, where `again` is the second run of that command (`{exit,
+   timedOut, overflowed?, outputDigest, tail}`) and `overflowed` is true when
+   the output passed the runner's buffer limit (64 MiB), which also stops the
+   command. A command whose second run failed too, or no confirmed command
+   left to run, is the finding `VERIFICATION_FAILED`: the kit cannot tell which ticket broke the tree, so
    it commits none. Then the hooks are judged again on the tree as the
    commands left it: a command that writes into the folder Git runs hooks from
    (`HOOKS_CHANGED`) or beside husky's stub folder (`HOOKS_WRITTEN`) holds every
@@ -293,7 +302,7 @@ the scan stays small however many batches a team archived.
    |---|---|---|
    | `WRITE_OUTSIDE_PATHS` | paths changed that no ticket covers, through a worker's shell (judged at step 2) or written by the kit's run of the commands (step 5) | the paths are left uncommitted; the tickets are still committed |
    | `HOOK_SAW_NO_WORKER` | files changed and the hook logged no call of the batch's three workers since the batch opened (a call of another agent of the team does not count): the session did not load it, so the write limits were not enforced during the run, or the hook ran and could not append to its log. A resumed path that still holds what `before` applied is not such a change | all held |
-   | `VERIFICATION_FAILED` | the kit's own run of the passed tickets' verification commands on the tree of the planned commits (step 4) had a command that failed or timed out (`commands`: each with `exit` and `timedOut`), or no confirmed command left to run (`commands` empty, `dropped` the ones the passed tickets need). `next` names the commands, then `abort` and `left` | all held |
+   | `VERIFICATION_FAILED` | the kit's own run of the passed tickets' verification commands on the tree of the planned commits (step 4) had a command that failed or timed out, and again when run a second time (`commands`: each with the second run's `exit`, `timedOut`, and `overflowed` when its output passed the buffer limit), or no confirmed command left to run (`commands` empty, `dropped` the ones the passed tickets need). `next` names the commands, then `abort` and `left` | all held |
    | `VERIFICATION_NOT_RUN` | the kit did not run the commands, since the tree held more than the planned commits after step 3 (`reason`, and `paths`: each path in the way, changed before the batch, outside every planned commit, or of a ticket that could not be set aside). `next` says the kit did not verify the tree it will commit, and why | not held |
    | `CHECK_RUNS_MISSING` | for a verification command of the batch, the hook logged fewer approved runs of it by the checker since the batch opened than there are passed tickets that verify with it (a ticket without its own `verificationCommands` verifies with the batch's whole list). Lists each such command with `needed` and `seen`. A run by the exec worker does not count. The log does not say which ticket's checker skipped its run, so no ticket is told apart. Not checked for a batch an earlier kit opened, whose hook did not log approved commands | all held |
    | `NESTED_REPOSITORY` | a worker created a Git repository inside the product; Git would commit a link to it, not its files | the folder is left uncommitted |
@@ -967,23 +976,11 @@ still holds; when no brief is complete, every recorded failure counts. A
 brief recorded before `seq` existed comes before every numbered one, and such
 briefs are ordered by `madeAt` among themselves. A later run that passed clears
 an earlier failure, and a later failure stands, whatever the commands wrote in
-between. When the most recent run failed or timed out, `resolve`, which holds
-the lock and the kit's runner, runs the batch's frozen commands once itself, as
-far as the owner still confirms them, on the tree as it stands, before it
-removes anything: a single flaky run does not end a reviewed batch. When that
-run passes every frozen command, it goes on and records both runs: the
-failure at the brief in `failedAtBrief` and its own run in `rerun`
-(`{failed, commands, dropped}`), and the ledger line says "run again by
-resolve: passed". When that run fails too, or a frozen command is no longer
-confirmed, it refuses whatever else the tree holds (a path `after` left, a
-path changed before the batch, a ticket a review holds): the kit cannot tell
-which ticket broke the tree. The refusal names both runs, says that a
-reviewer can be briefed again, which runs the commands again, only while its
-verdict is not final, and names `abort`, which saves each flagged ticket no
-review passed as a patch, then `left` for the other tickets' work. It writes
-no record, so a later `resolve` runs the commands again. An earlier failure
-that a later complete run cleared is recorded in the resolution
-(`failedAtBrief`) and on its ledger line, with no run by `resolve`. A batch whose briefs ran
+between. When the most recent run failed or timed out and the tree is exactly
+what would be committed (nothing changed before the batch, `after` left no
+path, and no review holds a ticket), it refuses and names the command, and
+`abort` is the way out. Otherwise every failure at a brief is recorded in the
+resolution (`failedAtBrief`) and on its ledger line. A batch whose briefs ran
 no command and recorded no failure (the batch freezes none, or none is still
 confirmed for the team) is never held here. A reviewer's verdict is
 never changed by it. Then:
@@ -1027,8 +1024,7 @@ reviewsDigest, resolvedAt, removed: [{ticket, reason:
 "rejected"|"review-not-obtained"|"verification-failed-after-removal", patch,
 patchDigest, paths}], verification: {ran, failed, commands: [{command, exit,
 timedOut, outputDigest, tail}], dropped, changed, wrote}, failedAtBrief:
-[{reviewer, attempt, command, exit, timedOut}], rerun: {failed, commands,
-dropped} | null, commits, left}`.
+[{reviewer, attempt, command, exit, timedOut}], commits, left}`.
 `commit` checks it against the verdicts (`reviewsDigest`), `after`'s plan (the
 commits are after's commits less the removed tickets, and every ticket a review
 held is removed) and the patches on disk (each at its exact path with its
@@ -1036,8 +1032,8 @@ digest). The work tree it expects is `after`'s, less the removed paths, plus
 `wrote`, and each path it commits must still have the content the review saw.
 
 **Resume.** While it works the record has `stage: "batch-resolving"` and
-carries each patch as soon as it is saved, its own run of the commands after a
-failure at a brief, the verification outcome once the commands ran, the lock's
+carries each patch as soon as it is saved, the verification outcome once the
+commands ran, the lock's
 digest and the process id. A `resolve` that died is
 finished by the next one: it takes over the lock when that process is gone,
 checks each saved patch against its digest, removes again what is not yet
@@ -1637,6 +1633,12 @@ The limits not being the ones the ledger binds is refused with its own code,
 - **The kit runs no command on a tree that holds more than the planned
   commits.** A path outside every ticket, or a batch started as is, is enough:
   `VERIFICATION_NOT_RUN` says so, and the commits rest on the checkers' word.
+- **A verification command that writes a file Git does not ignore outside
+  every ticket** (a cache) gets `VERIFICATION_NOT_RUN` in every batch: the
+  path is in the tree at the first batch and, once that batch is started as
+  is, counts as changed before the next. No command of the kit clears it.
+  The owner ignores such paths in the product's `.gitignore` to get the
+  verification; `next` says so.
 - **Git-ignored files a worker wrote are invisible**, inside or outside the
   tickets' paths. ADR 0010 tolerates ignored build output; nothing compares it
   with the state before the batch.
