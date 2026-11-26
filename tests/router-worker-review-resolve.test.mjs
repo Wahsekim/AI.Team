@@ -123,13 +123,31 @@ test('resolve refuses a product changed since after; abort after resolve re-appl
   assert.match(refusal(f.resolve()).reason, /src\/list\/b\.js.*changed since after/);
   assert.equal(f.state(), 'review'); assert.equal(readLease({ productRoot: f.product }).status, 'free');
   writeFileSync(join(f.product, 'src/list/b.js'), EDITS['src/list/b.js']);
-  assert.equal(f.resolve().errors, undefined);
+  const resolved = f.resolve(), patch = `reviews/held/${open.runId}/US-02.patch`;
+  assert.equal(resolved.errors, undefined);
   const aborted = abortBatch(f.common);
   assert.equal(aborted.errors, undefined, JSON.stringify(aborted.errors));
-  assert.match(aborted.next, /reviews\/held\//);
-  assert.ok(existsSync(join(f.root, `reviews/held/${open.runId}/US-02.patch`)));
+  assert.deepEqual(aborted.held, [{ ticket: 'US-02', reason: 'rejected', state: 'patch', patch, by: 'resolve' }]);
+  assert.match(aborted.next, new RegExp(`US-02 \\(rejected, by resolve\\) ${patch}`));
+  assert.equal(bytesDigest(readFileSync(join(f.root, patch))), resolved.removed[0].patchDigest, 'the patch resolve saved is not written again');
   assert.deepEqual(changed(f), ['src/list/a.js', 'src/list/b.js'], 'the held ticket is not put back');
   assert.ok(existsSync(join(f.root, 'batches', open.runId, 'resolution.json')));
+  assert.match(f.ledger(), new RegExp(`BATCH ${open.runId} ARCHIVED WITHOUT COMMIT .*US-02 \\(rejected, by resolve\\) ${patch}`));
+});
+
+test('abort of a batch in review takes out each flagged ticket no review passed, rejected or never reviewed, and keeps the one that passed', async t => {
+  const f = live(t, { commands: ['pwd'] });
+  // US-01 and US-03 are flagged for Security, US-02 for Architect only; US-04 is not flagged.
+  const { open } = await runBatch(f, [ticket('US-01', ['src/authz.js']), ticket('US-02', ['tsconfig.json']), ticket('US-03', ['src/session.js']), ticket('US-04', ['src/list/a.js'])],
+    { 'src/authz.js': 'export const token = "x";\n', 'tsconfig.json': '{}\n', 'src/session.js': '// s\n', 'src/list/a.js': '// a\n' });
+  const made = f.brief('security');
+  assert.equal(f.judge('security', transcriptOf(f, made, { report: failing(reportOf(made), 'US-01', 'kit.sec.secret-in-code') })).outcome, 'accepted');
+  const aborted = abortBatch(f.common), at = id => `reviews/held/${open.runId}/${id}.patch`;
+  assert.equal(aborted.errors, undefined, JSON.stringify(aborted.errors)); assert.equal(f.state(), 'closed');
+  assert.deepEqual(aborted.held, [{ ticket: 'US-01', reason: 'rejected', state: 'patch', patch: at('US-01'), by: 'abort' }, { ticket: 'US-02', reason: 'not-reviewed', state: 'patch', patch: at('US-02'), by: 'abort' }]);
+  assert.deepEqual(changed(f), ['src/list/a.js', 'src/session.js'], 'the ticket the review passed and the unflagged one stay');
+  for (const id of ['US-01', 'US-02']) git(f.product, 'apply', '--check', join(f.root, at(id)));
+  assert.match(f.ledger(), new RegExp(`BATCH ${open.runId} ARCHIVED WITHOUT COMMIT .*US-01 \\(rejected\\) ${at('US-01')}, US-02 \\(not-reviewed\\) ${at('US-02')}`));
 });
 
 // The kit's own run of the commands when a reviewer is briefed; the command fails only once the marker exists.

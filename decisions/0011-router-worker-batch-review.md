@@ -202,3 +202,28 @@ logged for the owner's spot review, as a removed trigger is.
 
 Merging the pull request that adds this amendment ratifies it.
 
+## Amendment of 2026-11-26: abort holds flagged tickets, and before names hand commits
+
+Status: Accepted. The owner decided in session on 2026-11-26, accepting the
+recommendation of that day's review of the kit.
+
+Decision 3 bound the commits the kit makes. It left open the way out of a batch
+the kit will not commit: a finding that holds every commit drops the batch's
+reviews, and `abort` of a closed batch, also one in review, sent everything it
+left in the work tree to a commit by hand, flagged tickets included. Two rules
+close that gap.
+
+`abort` of a batch that `after` closed holds each ticket `after` flagged for a
+reviewer that has no passed verdict from each of its reviewers (rejected,
+review not obtained, or never reviewed), as `resolve` holds a rejected one: its
+changes are saved as a patch under `reviews/held/<run id>/` and taken out of
+the work tree, and a later batch takes the patch back as a ticket's `resume`,
+where it is checked and reviewed again. A ticket `abort` cannot take out is
+left in place and named in the ledger as not passed by a review; `abort` still
+archives the batch.
+
+`before` names, in the ledger and for the owner's spot review, every commit made
+on the branch since the end of the newest batch archived on it, and freezes
+their ids in the batch record. It refuses nothing on that account, and the
+periodic review of decision 7 still counts only the commits the kit made.
+

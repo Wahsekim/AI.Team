@@ -749,6 +749,78 @@ test('abort after a claimed or closed batch always frees the team; a forged arch
   assert.equal(left.commitsMade.length, 1); assert.match(left.next, /1 commit\(s\) were already made by the kit and stay on the branch/); assert.match(partial.read('pm-decisions.md'), /ARCHIVED WITHOUT COMMIT.*1 commit\(s\) were already made/);
 });
 
+const runaway = () => ({ verdict: 'runaway', findings: ['the worker looped'], summary: 'not clean' });
+const inTree = (f, path) => existsSync(join(f.product, path)) ? readFileSync(join(f.product, path), 'utf8') : null;
+
+test('abort of a batch a finding held saves each ticket flagged for review as a patch and takes it out of the work tree; the rest stays, and the patch resumes in a later batch', async t => {
+  const flaggedEdits = { 'src/authz.js': 'export const token = "x";\n', 'src/app.js': 'export const x = 2;\n' };
+  const f = await ran(t, { tickets: [ticket('US-01', ['src/authz.js', 'src/app.js']), ticket('US-02', ['src/api/tags.js'])], agents: { guardian: runaway }, edits: { ...flaggedEdits, 'src/api/tags.js': 'tags\n' } });
+  const closed = f.after();
+  assert.equal(closed.holdAll, true); assert.deepEqual(closed.reviews, {}, 'a held batch is not put in review'); assert.deepEqual(closed.tickets.map(entry => entry.review?.required), [['security'], []]);
+  const out = abortBatch({ teamRoot: f.kit, instanceRoot: f.root }), patch = `reviews/held/${f.open.runId}/US-01.patch`;
+  assert.equal(out.errors, undefined, JSON.stringify(out.errors)); assert.equal(out.stage, 'batch-archived-without-commit');
+  assert.deepEqual(out.held, [{ ticket: 'US-01', reason: 'not-reviewed', state: 'patch', patch, by: 'abort' }]);
+  assert.deepEqual(['src/app.js', 'src/authz.js', 'src/api/tags.js'].map(path => inTree(f, path)), [git(f.product, 'show', 'HEAD:src/app.js'), null, 'tags\n'],
+    'the flagged ticket\'s paths hold what HEAD holds; the unflagged ticket\'s change is still there');
+  assert.deepEqual(JSON.parse(f.read(`batches/${f.open.runId}/abandoned.json`)).held, out.held);
+  assert.match(f.read('pm-decisions.md'), new RegExp(`BATCH ${f.open.runId} ARCHIVED WITHOUT COMMIT .*Held as patches, out of the work tree: US-01 \\(not-reviewed\\) ${patch}\\.`));
+  assert.match(out.next, new RegExp(`US-01 \\(not-reviewed\\) ${patch}.*resume`));
+  git(f.product, 'apply', join(f.root, patch));
+  const flagged = ['src/app.js', 'src/authz.js'];
+  assert.deepEqual(flagged.map(path => inTree(f, path)), flagged.map(path => flaggedEdits[path]), 'the patch gives back the same bytes');
+  git(f.product, 'apply', '-R', join(f.root, patch));
+  // The held patch comes back as the resume of the same ticket, where it is checked and reviewed as its work.
+  f.unmetered();
+  const next = await f.before(batchOf(ticket('US-01', ['src/authz.js', 'src/app.js'], { resume: patch })), { startAsIs: true });
+  assert.equal(next.errors, undefined, JSON.stringify(next.errors)); assert.equal(next.tickets[0].resume.patch, patch);
+  assert.deepEqual(flagged.map(path => inTree(f, path)), flagged.map(path => flaggedEdits[path]));
+});
+
+test('abort names, and leaves in the work tree, a flagged ticket it cannot take out whole; the batch is archived all the same', async t => {
+  const f = await ran(t, { tickets: [ticket('US-01', ['src/authz.js']), ticket('US-03', ['src/session.js'])], agents: { guardian: runaway }, edits: { 'src/authz.js': 'a\n', 'src/session.js': 's\n' } });
+  assert.equal(f.after().holdAll, true);
+  // A file already where US-03's patch goes is never overwritten: US-03 cannot be saved aside, so nothing of it is removed.
+  const stale = `reviews/held/${f.open.runId}/US-03.patch`; mkdirSync(join(f.root, stale, '..'), { recursive: true }); writeFileSync(join(f.root, stale), 'another patch\n');
+  const out = abortBatch({ teamRoot: f.kit, instanceRoot: f.root });
+  assert.equal(out.errors, undefined, JSON.stringify(out.errors)); assert.equal(out.stage, 'batch-archived-without-commit');
+  assert.equal(existsSync(join(f.root, BATCH_FILE)), false); assert.ok(existsSync(join(f.root, `batches/${f.open.runId}/abandoned.json`)));
+  assert.deepEqual(out.held.map(entry => [entry.ticket, entry.state, entry.paths]), [['US-01', 'patch', undefined], ['US-03', 'in-tree', ['src/session.js']]]);
+  assert.match(out.held[1].problem, /already holds another patch/);
+  assert.deepEqual([inTree(f, 'src/authz.js'), inTree(f, 'src/session.js'), f.read(stale)], [null, 's\n', 'another patch\n']);
+  assert.match(out.next, /never committed by hand.*LEFT IN THE WORK TREE with no review passed.*US-03 \(not-reviewed; /);
+  assert.match(f.read('pm-decisions.md'), new RegExp(`BATCH ${f.open.runId} ARCHIVED WITHOUT COMMIT .*LEFT IN THE WORK TREE with no review passed.*US-03`));
+  // A Git operation in progress in the product: abort takes nothing out, and says why.
+  const busy = await ran(t, { tickets: [ticket('US-01', ['src/authz.js'])], agents: { guardian: runaway }, edits: { 'src/authz.js': 'a\n' } });
+  assert.equal(busy.after().holdAll, true); writeFileSync(join(busy.product, '.git/index.lock'), '');
+  const stuck = abortBatch({ teamRoot: busy.kit, instanceRoot: busy.root }); rmSync(join(busy.product, '.git/index.lock'));
+  assert.equal(stuck.stage, 'batch-archived-without-commit'); assert.deepEqual(stuck.held.map(entry => [entry.ticket, entry.state]), [['US-01', 'in-tree']]);
+  assert.match(stuck.held[0].problem, /Git operation is in progress.*index\.lock/);
+  assert.equal(inTree(busy, 'src/authz.js'), 'a\n'); assert.equal(existsSync(join(busy.root, `reviews/held/${busy.open.runId}/US-01.patch`)), false);
+});
+
+test('before names the commits made on the branch outside the kit since the newest batch archived on it, for the owner\'s spot review', async t => {
+  const f = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n' } }), one = batchOf(ticket('US-03', ['src/b.js'])), abort = () => assert.equal(abortBatch({ teamRoot: f.kit, instanceRoot: f.root }).errors, undefined);
+  const lines = () => f.read('pm-decisions.md').split('\n').filter(line => line.includes('OUTSIDE THE KIT'));
+  assert.equal(f.open.outsideCommits.commits, null); assert.equal(f.open.outsideCommits.since, null); assert.match(f.open.outsideCommits.reason, /No batch was archived on this branch/);
+  assert.equal(f.after().errors, undefined); const done = f.commit(); assert.equal(done.errors, undefined); f.unmetered();
+  const tip = done.commits.at(-1).sha, clean = await f.before(one);
+  assert.equal(clean.errors, undefined, JSON.stringify(clean.errors));
+  assert.deepEqual(clean.outsideCommits, { since: { runId: f.open.runId, commit: tip }, commits: [] }); assert.deepEqual(lines(), [], 'no line when the kit made every commit');
+  abort();
+  for (let i = 1; i <= 11; i++) git(f.product, 'commit', '-q', '--allow-empty', '-m', `by hand ${i}`);
+  const hand = git(f.product, 'rev-list', '--reverse', `${tip}..HEAD`).trim().split('\n'), named = await f.before(one);
+  assert.equal(named.errors, undefined, JSON.stringify(named.errors)); assert.equal(hand.length, 11);
+  assert.deepEqual(named.outsideCommits, { since: { runId: f.open.runId, commit: tip }, commits: hand });
+  assert.deepEqual(lines(), [`${named.openedAt.slice(0, 10)} BATCH ${named.runId} COMMITS MADE OUTSIDE THE KIT (owner spot review): 11 commit(s) on work since batch ${f.open.runId} ended at ${tip.slice(0, 8)} (${hand.slice(0, 10).map(sha => sha.slice(0, 8)).join(', ')}, ...).`]);
+  abort();
+  // The branch rebuilt under the batch's last commit: nothing can be compared, nothing is refused.
+  git(f.product, 'reset', '-q', '--hard', f.open.productHead); git(f.product, 'commit', '-q', '--allow-empty', '-m', 'rebuilt');
+  const rebuilt = await f.before(one);
+  assert.equal(rebuilt.errors, undefined, JSON.stringify(rebuilt.errors)); assert.equal(rebuilt.outsideCommits.commits, null);
+  assert.deepEqual(rebuilt.outsideCommits.since, { runId: f.open.runId, commit: tip }); assert.match(rebuilt.outsideCommits.reason, /not an ancestor of HEAD/);
+  assert.equal(lines().length, 1);
+});
+
 test('settle sets each ticket\'s measured usage against its authorization, before or after the commit, and reports a ticket over it', async t => {
   const f = await ran(t, { tickets: two, edits: { 'src/app.js': 'x\n', 'src/api/tags.js': 't\n' } }), rules = loadRetryRules({ teamRoot: f.kit, instanceRoot: f.root });
   const settle = (meter, extra = {}) => settleBatch({ teamRoot: f.kit, instanceRoot: f.root, meter, rules, ...extra });

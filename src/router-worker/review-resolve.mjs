@@ -1,13 +1,13 @@
 import { readFileSync, writeFileSync, appendFileSync, renameSync, mkdirSync, mkdtempSync, rmSync, lstatSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { digest, bytesDigest } from '../loop/contracts.mjs';
 import { git, gitRun, acquireLease, releaseLease, readLease } from './lease.mjs';
 import { readBoundary, closeBoundary, stateOf } from './write-boundary.mjs';
 import { runCommands, confirmedOf } from './run-commands.mjs';
-import { AFTER_FILE, RESOLUTION_FILE, changedPaths, contentOf, hooksOf, plain, HOOKS_MOVED } from './batch.mjs';
-import { openBatch, intact, Refusal, IN_PROGRESS, ABANDON } from './batch-close.mjs';
-import { reviewGate, verdictsOf, briefsOf } from './review-judge.mjs';
+import { AFTER_FILE, RESOLUTION_FILE, TICKET_ID, changedPaths, contentOf, hooksOf, plain, HOOKS_MOVED } from './batch.mjs';
+import { openBatch, intact, Refusal, IN_PROGRESS, ABANDON, HELD_REASONS } from './batch-close.mjs';
+import { reviewGate, verdictsOf, briefsOf, finalOf } from './review-judge.mjs';
 
 // ADR 0011, decisions 14 and 15, with the owner's answer of 2026-11-20: once the reviews are over, each ticket a review
 // rejected or could not obtain is saved as a patch and taken out of the work tree; when a later ticket is still to be
@@ -46,6 +46,47 @@ function removeFrom(product, head, paths) {
   for (const path of fresh) rmSync(join(product, path), { force: true });
   const still = changedPaths(product).filter(path => paths.includes(path));
   need(!still.length, `${still.slice(0, 5).map(plain).join(', ')} still show as changed after the held ticket was removed`);
+}
+const savePatch = (instance, patch, bytes) => { const file = join(instance, patch); mkdirSync(dirname(file), { recursive: true }); writeFileSync(`${file}.tmp`, bytes); renameSync(`${file}.tmp`, file); };
+
+// ADR 0011, amendment of 2026-11-26: abort holds each ticket after flagged that no review passed, and each one resolve held.
+// Against the product's HEAD, where a resume applies; a saved patch is never written over, so a second abort finds the first one's work done.
+export function holdUnpassed({ instance, productRoot, runId }) {
+  const after = readJSON(join(instance, AFTER_FILE));
+  if (after?.stage !== 'batch-closed' || !Array.isArray(after.tickets)) return [];
+  let verdicts = [];
+  try { verdicts = verdictsOf(instance, after.runId); } catch { /* verdicts that cannot be read pass no ticket */ }
+  const removed = readJSON(join(instance, RESOLUTION_FILE))?.removed, byResolve = new Map((Array.isArray(removed) ? removed : []).map(entry => [entry?.ticket, entry]));
+  // Why no review passed it, weighed as reviewGate weighs it; a reviewer with no final verdict never reviewed it.
+  const outcome = (id, reviewer) => { const final = finalOf(verdicts, reviewer), verdict = final?.tickets?.find?.(item => item?.id === id)?.verdict;
+    return !final ? 'not-reviewed' : verdict === 'passed' ? null : verdict === 'rejected' ? 'rejected' : 'review-not-obtained'; };
+  const reasonOf = ticket => { const resolved = byResolve.get(ticket.id)?.reason; if (HELD_REASONS.includes(resolved)) return resolved;
+    const outcomes = (Array.isArray(ticket.review?.required) ? ticket.review.required : []).map(reviewer => outcome(ticket.id, reviewer));
+    return outcomes.find(reason => reason === 'rejected') ?? outcomes.find(Boolean) ?? null; };
+  const held = after.tickets.filter(ticket => typeof ticket?.id === 'string' && TICKET_ID.test(ticket.id) && Array.isArray(ticket.changedPaths))
+    .map(ticket => ({ ticket: ticket.id, reason: reasonOf(ticket), recorded: ticket.changedPaths })).filter(entry => entry.reason);
+  if (!held.length) return [];
+  const taken = acquireLease({ teamRoot: instance, productRoot }), head = git(productRoot, 'rev-parse', 'HEAD')?.trim(), gitDir = git(productRoot, 'rev-parse', '--absolute-git-dir')?.trim();
+  try {
+    const busy = IN_PROGRESS.filter(name => gitDir && exists(join(gitDir, name)));
+    let changed = null; try { changed = changedPaths(productRoot); } catch { /* named below */ }
+    const problem = taken.errors ? `The lock on the product repository could not be taken: ${taken.errors[0].reason}` : !head || !gitDir ? 'The product repository cannot be read'
+      : busy.length ? `A Git operation is in progress in the product repository (${busy.join(', ')})` : changed ? null : 'The state of the product repository cannot be read';
+    return held.map(({ ticket, reason, recorded }) => {
+      const patch = `${HELD}/${runId}/${ticket}.patch`, file = join(instance, patch), by = byResolve.get(ticket)?.patch === patch ? 'resolve' : 'abort';
+      const paths = changed ? changed.filter(path => recorded.includes(path)) : recorded;
+      let saved = false;
+      try {
+        if (changed && !paths.length) return exists(file) ? { ticket, reason, state: 'patch', patch, by } : { ticket, reason, state: 'not-in-tree' };
+        need(!problem, problem);
+        const bytes = patchOf(productRoot, head, paths);
+        if (exists(file)) need(readFileSync(file).equals(bytes), `${patch} already holds another patch, which is not written over`); else savePatch(instance, patch, bytes);
+        saved = true;
+        removeFrom(productRoot, head, paths);
+        return { ticket, reason, state: 'patch', patch, by };
+      } catch (error) { return { ticket, reason, state: 'in-tree', paths, problem: plain(error?.message ?? error).slice(0, 300), ...(saved ? { patch } : {}) }; }
+    });
+  } finally { if (!taken.errors) releaseLease({ productRoot, lease: taken.lease.digest }); }
 }
 
 // The commits after the first removed one, from the first ticket whose file a command changed if that comes earlier.
@@ -112,9 +153,8 @@ export function resolveBatch({ teamRoot, instanceRoot, run = runCommands }) {
 
     const hold = (commit, reason) => {
       if (!isRemoved(commit.ticket)) {
-        const patch = `${HELD}/${batch.runId}/${commit.ticket}.patch`, bytes = patchOf(product, batch.productHead, commit.paths), file = join(instance, patch);
-        mkdirSync(join(instance, HELD, batch.runId), { recursive: true });
-        writeFileSync(`${file}.tmp`, bytes); renameSync(`${file}.tmp`, file);
+        const patch = `${HELD}/${batch.runId}/${commit.ticket}.patch`, bytes = patchOf(product, batch.productHead, commit.paths);
+        savePatch(instance, patch, bytes);
         save({ ...journal, removed: [...journal.removed, { ticket: commit.ticket, reason, patch, patchDigest: bytesDigest(bytes), paths: commit.paths }] });
       }
       removeFrom(product, batch.productHead, commit.paths);
