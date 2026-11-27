@@ -14,6 +14,7 @@ import { runWorkflow, makeAgentImpl } from '../scripts/lib/workflow-harness.mjs'
 import { reviewBrief } from '../src/router-worker/review-brief.mjs';
 import { readLease } from '../src/router-worker/lease.mjs';
 import { git, checksRan, afterBatch } from './fixtures/router-worker/standing-team.mjs';
+import { commitBatch } from '../src/router-worker/batch-close.mjs';
 import { refusal, ticket, live, changed, runBatch, reportOf, failing, transcriptOf, batchOf, agentsOf } from './fixtures/router-worker/review.mjs';
 
 // The engine refuses a no-op verification command such as true, so pwd stands for a command that passes.
@@ -57,6 +58,7 @@ test('a rejected ticket is saved as a patch that applies on the batch head and r
   assert.deepEqual(committed.commits.map(commit => commit.ticket), ['US-01', 'US-03']);
   assert.deepEqual(committed.held, [{ ticket: 'US-02', reason: 'rejected', patch: held.patch }]);
   assert.deepEqual(changed(f), []); assert.ok(existsSync(patch), 'the patch stays for the PM');
+  assert.deepEqual(committed.verification, { committedTree: 'verified', after: 'passed', resolve: 'passed' }, 'the commands ran again on what was left');
   assert.ok(existsSync(join(f.root, 'batches', open.runId, 'resolution.json')), 'the resolution is archived with the batch');
 });
 
@@ -70,7 +72,12 @@ test('when a command fails after the removal, every ticket after the first remov
   assert.deepEqual(resolved.commits.map(commit => commit.ticket), ['US-01']);
   assert.deepEqual(changed(f), ['src/list/a.js']);
   git(f.product, 'apply', '--check', join(f.root, `reviews/held/${open.runId}/US-03.patch`));
-  assert.deepEqual(f.commit().commits.map(commit => commit.ticket), ['US-01']);
+  // What is left was never run alone: after ran the commands with the held tickets in the tree, and resolve's run failed.
+  assert.match(refusal(commitBatch({ ...f.common, verifiedOnly: true }))?.reason, /The kit did not verify the tree this batch would commit \(tickets were held after the kit last ran the commands/);
+  const last = f.commit();
+  assert.deepEqual(last.commits.map(commit => commit.ticket), ['US-01']);
+  assert.deepEqual([last.verification.committedTree, last.verification.after, last.verification.resolve], ['not-verified', 'passed', 'failed']);
+  assert.match(f.ledger(), /COMMITTED on \S+: 1 commit\(s\).*; the kit did not verify the committed tree\. Nothing was pushed\./);
 });
 
 test('a command that changes a file still to be committed holds the rest; what else it wrote is recorded and left uncommitted', async t => {

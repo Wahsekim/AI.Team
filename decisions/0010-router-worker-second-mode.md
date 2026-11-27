@@ -671,3 +671,33 @@ record says.
   `after` refuses and changes nothing.
 
 Detail: `docs/design/router-worker/batch-reference.md`.
+
+### 2026-11-27: what a batch reports about itself
+
+Status: Accepted (reports and opt-in switches; no rule of this record changes).
+
+The same review asked that the kit say plainly what it did and did not check,
+and spend less of the PM's context saying it. Its proposal to shorten the
+output a reviewer is given for a command that passed was declined by the
+owner: a tool can exit 0 and still warn, and no check or reviewer input is
+weakened to save tokens.
+
+- **A receipt for `before`.** `before --receipt` prints the run id, the
+  record's digest and path, what the PM tells the owner, the next step and the
+  engine's arguments, byte for byte those of the record. The record on disk
+  and the default output are unchanged.
+- **What the kit verified.** `commit.json` and the ledger line say whether
+  the kit's last run of the commands passed on exactly the tree that was
+  committed; `commit --verified-only` commits nothing else. Without the flag
+  the rule of 2026-11-26 stands.
+- **Check runs are counted by batch.** The after record carries the counts
+  with `attribution: "batch"`: they prove no single ticket's check.
+- **The PM's attestation.** `settle` prints, and `rw-batch.mjs monitoring`
+  lists, whether the PM attested each run: `complete`, `partial` or `missing`.
+  Missing means no one attested, never that no stop occurred. Nothing is
+  refused on it.
+- **Size of one dispatch.** A test measures the bytes of the exec brief, the
+  check brief, the engine arguments, the open record and a reviewer's brief on
+  fixed fixtures, each against a ceiling.
+
+Detail: `docs/design/router-worker/batch-reference.md`.

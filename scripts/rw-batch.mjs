@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // The batch commands of a standing Router/Worker team (ADR 0010, decisions 8 to 12).
-// before BATCH.json --instance <instance-root> [--start-as-is]
+// before BATCH.json --instance <instance-root> [--start-as-is] [--receipt]
 //   Checks and freezes the tickets, checks the product repository, computes the ceiling, takes the lock and
-//   opens the write boundary. Prints the batch record; its `args` are the arguments of run-n-rounds.
+//   opens the write boundary. Prints the batch record; its `args` are the arguments of run-n-rounds. --receipt prints
+//   only the run id, the record's digest and path, what the PM tells the owner, the next step and the same `args`.
 // BATCH.json: {"tickets": [{"id", "title", "goal", "acceptance": [...], "paths": [...], "estimate": {"execTokens", "checkTokens", "reworkTokens"}}],
 //              "verificationCommands": [...], "sensitivePaths": [...], "nextLifecycleNumber": n, "runId"?, "date"?}
 // abort --instance <instance-root>
@@ -18,7 +19,8 @@
 // settle METER.json --instance <instance-root> [--run <run id>]
 //   METER.json is `measure-spawn.mjs <session-dir> --json`. Sets each ticket's measured usage against its
 //   authorization, for the batch that after closed or for an archived one. Exit 2 when it is in review.
-//   The next "before" is refused until the batch is settled.
+//   The next "before" is refused until the batch is settled. Both forms print, beside the record, `monitoring`: the status
+//   of the PM's attestation of the run, as the monitoring command below gives it.
 // settle --not-metered "<reason>" --instance <instance-root> [--run <run id>]
 //   Marks a batch whose usage cannot be measured, with the reason, in the place of its settlement.
 // review-brief --reviewer <security|architect> --instance <instance-root> [--ticket <id> ...]
@@ -33,8 +35,9 @@
 //   Once every reviewer is judged: saves each ticket a review rejected or could not judge as a patch under
 //   reviews/held/<run id>/, removes it from the work tree, runs the verification commands again when a later ticket
 //   is still to be committed, and holds the rest if they fail. Ends the review. Exit 2 when a ticket is held.
-// commit --instance <instance-root>
+// commit --instance <instance-root> [--verified-only]
 //   One commit per ticket that passed, on the batch's branch, then archives the batch under batches/<run id>/.
+//   --verified-only refuses when after did not run the verification commands on the tree to commit (VERIFICATION_NOT_RUN).
 //   A reviewed batch commits what its resolution kept.
 // periodic-brief --reviewer <security|architect> --instance <instance-root>
 //   Between batches, when the reviewer's periodic review is due (ADR 0011, decision 7): prints and records its brief over
@@ -44,13 +47,16 @@
 //   accepted, 2 when refused or not obtained. --meter (measure-spawn.mjs --json) records the call's tokens.
 // periodic --no-answer "<reason>" --reviewer <security|architect> --instance <instance-root>
 //   Records an attempt that brought no answer. Not obtained twice is reported to the owner and stops no batch.
+// monitoring --instance <instance-root>
+//   Read only: the newest 10 archived batches, each with the status of the PM's attestation of its run (reconcile-run.mjs
+//   --monitoring): complete, partial, or missing when no one attested it. Missing never means that no stop occurred.
 // No model or network. Exit 0 done and clean, 2 refused or in review, 1 usage.
 import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { beforeBatch, abortBatch } from '../src/router-worker/batch.mjs';
+import { beforeBatch, abortBatch, BATCH_FILE } from '../src/router-worker/batch.mjs';
 import { afterBatch, commitBatch } from '../src/router-worker/batch-close.mjs';
 import { settleBatch, markNotMetered } from '../src/router-worker/batch-settle.mjs';
 import { loadRetryRules } from '../src/router-worker/retries.mjs';
@@ -59,15 +65,24 @@ import { judgeReview, recordNoAnswer } from '../src/router-worker/review-judge.m
 import { resolveBatch } from '../src/router-worker/review-resolve.mjs';
 import { saveLeftWork } from '../src/router-worker/batch-left.mjs';
 import { periodicBrief, judgePeriodic, recordPeriodicNoAnswer } from '../src/router-worker/review-periodic.mjs';
+import { monitoringOf, archivedMonitoring, MEANING } from '../src/router-worker/monitoring.mjs';
 
+// Printed beside a settlement, not sealed in it: the PM may attest the run after settling it.
+const attested = (record, root) => record.errors ? record : { ...record, monitoring: (m => ({ ...m, meaning: MEANING[m.status] }))(monitoringOf(resolve(root), record.runId)) };
 const print = result => { if (result.errors) { console.error(JSON.stringify(result)); process.exitCode = 2; } else process.stdout.write(JSON.stringify(result, null, 2) + '\n'); };
-const USAGE = 'usage: node scripts/rw-batch.mjs before BATCH.json --instance <instance-root> [--start-as-is]\n       node scripts/rw-batch.mjs after RESULT.json --instance <instance-root>\n       node scripts/rw-batch.mjs settle METER.json --instance <instance-root> [--run <run id>]\n       node scripts/rw-batch.mjs settle --not-metered "<reason>" --instance <instance-root> [--run <run id>]\n       node scripts/rw-batch.mjs review-brief --reviewer <security|architect> --instance <instance-root> [--ticket <id> ...]\n       node scripts/rw-batch.mjs review --reviewer <security|architect> --transcript <agent-*.jsonl> --instance <instance-root> [REPORT.json]\n       node scripts/rw-batch.mjs review --no-answer "<reason>" --reviewer <security|architect> --instance <instance-root>\n       node scripts/rw-batch.mjs resolve --instance <instance-root>\n       node scripts/rw-batch.mjs commit --instance <instance-root>\n       node scripts/rw-batch.mjs periodic-brief --reviewer <security|architect> --instance <instance-root>\n       node scripts/rw-batch.mjs periodic --reviewer <security|architect> --transcript <agent-*.jsonl> --instance <instance-root> [--meter METER.json] [REPORT.json]\n       node scripts/rw-batch.mjs periodic --no-answer "<reason>" --reviewer <security|architect> --instance <instance-root>\n       node scripts/rw-batch.mjs abort --instance <instance-root>\n       node scripts/rw-batch.mjs left --instance <instance-root> [--run <run id>]';
+const USAGE = 'usage: node scripts/rw-batch.mjs before BATCH.json --instance <instance-root> [--start-as-is] [--receipt]\n       node scripts/rw-batch.mjs after RESULT.json --instance <instance-root>\n       node scripts/rw-batch.mjs settle METER.json --instance <instance-root> [--run <run id>]\n       node scripts/rw-batch.mjs settle --not-metered "<reason>" --instance <instance-root> [--run <run id>]\n       node scripts/rw-batch.mjs review-brief --reviewer <security|architect> --instance <instance-root> [--ticket <id> ...]\n       node scripts/rw-batch.mjs review --reviewer <security|architect> --transcript <agent-*.jsonl> --instance <instance-root> [REPORT.json]\n       node scripts/rw-batch.mjs review --no-answer "<reason>" --reviewer <security|architect> --instance <instance-root>\n       node scripts/rw-batch.mjs resolve --instance <instance-root>\n       node scripts/rw-batch.mjs commit --instance <instance-root> [--verified-only]\n       node scripts/rw-batch.mjs periodic-brief --reviewer <security|architect> --instance <instance-root>\n       node scripts/rw-batch.mjs periodic --reviewer <security|architect> --transcript <agent-*.jsonl> --instance <instance-root> [--meter METER.json] [REPORT.json]\n       node scripts/rw-batch.mjs periodic --no-answer "<reason>" --reviewer <security|architect> --instance <instance-root>\n       node scripts/rw-batch.mjs abort --instance <instance-root>\n       node scripts/rw-batch.mjs left --instance <instance-root> [--run <run id>]\n       node scripts/rw-batch.mjs monitoring --instance <instance-root>';
 if (['abort', 'commit', 'resolve'].includes(process.argv[2])) {
-  const [flag, root, ...extra] = process.argv.slice(3);
-  if (flag !== '--instance' || !root || extra.length) { console.error(USAGE); process.exit(1); }
-  const done = { abort: abortBatch, commit: commitBatch, resolve: resolveBatch }[process.argv[2]]({ teamRoot: join(resolve(root), 'kit'), instanceRoot: resolve(root) });
+  const [flag, root, ...extra] = process.argv.slice(3), verifiedOnly = process.argv[2] === 'commit' && extra.length === 1 && extra[0] === '--verified-only';
+  if (flag !== '--instance' || !root || (extra.length && !verifiedOnly)) { console.error(USAGE); process.exit(1); }
+  const done = { abort: abortBatch, commit: commitBatch, resolve: resolveBatch }[process.argv[2]]({ teamRoot: join(resolve(root), 'kit'), instanceRoot: resolve(root), ...(verifiedOnly ? { verifiedOnly } : {}) });
   print(done);
   if (!done.errors && done.removed?.length) process.exitCode = 2;
+  process.exit();
+}
+if (process.argv[2] === 'monitoring') {
+  const [flag, root, ...extra] = process.argv.slice(3);
+  if (flag !== '--instance' || !root || extra.length) { console.error(USAGE); process.exit(1); }
+  print({ batches: archivedMonitoring(resolve(root)), meaning: MEANING });
   process.exit();
 }
 if (process.argv[2] === 'left') {
@@ -122,7 +137,7 @@ if (process.argv[2] === 'review' || process.argv[2] === 'periodic') {
 if (process.argv[2] === 'settle' && process.argv[3] === '--not-metered') {
   const [reason, flag, root, runFlag, runId, ...extra] = process.argv.slice(4);
   if (reason === undefined || flag !== '--instance' || !root || (runFlag !== undefined && (runFlag !== '--run' || !runId)) || extra.length) { console.error(USAGE); process.exit(1); }
-  print(markNotMetered({ teamRoot: join(resolve(root), 'kit'), instanceRoot: resolve(root), reason, ...(runId ? { runId } : {}) }));
+  print(attested(markNotMetered({ teamRoot: join(resolve(root), 'kit'), instanceRoot: resolve(root), reason, ...(runId ? { runId } : {}) }), root));
   process.exit();
 }
 if (process.argv[2] === 'settle') {
@@ -132,7 +147,7 @@ if (process.argv[2] === 'settle') {
   // The retry rules are the team's own charter, read through the kit that serves this command.
   try { rules = loadRetryRules({ instanceRoot: resolve(root) }); } catch (error) { print({ errors: [{ code: 'BATCH_REFUSED', field: 'batch', reason: `The retry rules of the team could not be read: ${error?.message}` }] }); process.exit(); }
   const settled = settleBatch({ teamRoot: join(resolve(root), 'kit'), instanceRoot: resolve(root), meter, rules, ...(runId ? { runId } : {}) });
-  print(settled);
+  print(attested(settled, root));
   if (!settled.errors && settled.status !== 'clear') process.exitCode = 2;
   process.exit();
 }
@@ -147,7 +162,7 @@ if (process.argv[2] === 'after') {
 }
 const [command, file, ...rest] = process.argv.slice(2), at = rest.indexOf('--instance'), instance = at === -1 ? undefined : rest[at + 1];
 const others = rest.filter((_, i) => i !== at && i !== at + 1);
-if (command !== 'before' || !file || !instance || others.some(flag => flag !== '--start-as-is') || others.length > 1) { console.error(USAGE); process.exit(1); }
+if (command !== 'before' || !file || !instance || others.some(flag => !['--start-as-is', '--receipt'].includes(flag)) || new Set(others).size !== others.length) { console.error(USAGE); process.exit(1); }
 // The engine's static launch preflight, run on the frozen arguments; its digest goes into them.
 function manifest(args, { teamRoot, productRoot, allowDirty }) {
   const dir = mkdtempSync(join(tmpdir(), 'rw-batch-manifest-'));
@@ -164,4 +179,10 @@ let batch; try { batch = JSON.parse(readFileSync(file, 'utf8')); } catch { batch
 const instanceRoot = resolve(instance);
 const result = batch === undefined ? { errors: [{ code: 'BATCH_REFUSED', field: 'batch', reason: `${file} is not readable JSON` }] }
   : await beforeBatch({ teamRoot: join(instanceRoot, 'kit'), instanceRoot, batch, startAsIs: others.includes('--start-as-is'), manifest });
-print(result);
+// The receipt: what the PM passes to the engine or tells the owner. The record stays whole in rw-batch.json.
+const receiptOf = record => ({ runId: record.runId, digest: record.digest, record: join(instanceRoot, BATCH_FILE), ceiling: record.ceiling,
+  ...(record.startedAsIs ? { startedAsIs: true, preexisting: record.preexisting } : {}), ...(record.runsAgain ? { runsAgain: record.runsAgain } : {}),
+  ...(record.tickets.some(ticket => ticket.resume) ? { resumes: record.tickets.filter(ticket => ticket.resume).map(ticket => ({ ticket: ticket.id, patch: ticket.resume.patch })) } : {}),
+  triggerChanges: record.triggerChanges, outsideCommits: record.outsideCommits,
+  next: 'Run run-n-rounds with `args` exactly as printed, then: rw-batch.mjs after RESULT.json --instance <instance-root>', args: record.args });
+print(result.errors || !others.includes('--receipt') ? result : receiptOf(result));
