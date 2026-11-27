@@ -81,7 +81,9 @@ test('before freezes the merged trigger list and logs each trigger or rule added
   // US-01 ran in both archived batches and the kit committed it in neither: before names those runs too.
   assert.match(ledger(), new RegExp(`BATCH ${narrowed.runId} RUNS US-01 AGAIN \\(owner spot review\\): 2 earlier run\\(s\\)`)); assert.equal(ledger().split('\n').length, lines + 3);
   await archive(f, narrowed); f.project({ ...project, triggers: [{ ...project.triggers[0], match: { glob: ['src/billing/**', 'src/pay/**'] } }] });
-  const widened = await f.before(again(3));
+  // US-01 has now run three times without a commit and goes to the owner: another ticket shows the next change.
+  const widened = await f.before(batchOf(ticket('US-02', ['src/b.js'])));
+  assert.equal(widened.errors, undefined, JSON.stringify(widened.errors));
   assert.deepEqual(widened.triggerChanges.added, ['trigger billing security glob:src/billing/**', 'trigger billing security glob:src/pay/**']);
   assert.deepEqual(widened.triggerChanges.removed, ['rule layers architect']);
 });
