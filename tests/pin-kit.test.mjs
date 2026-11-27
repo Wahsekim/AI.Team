@@ -125,7 +125,7 @@ test('an instance deployed before the read scope gets .ignore and the read rule 
     await assert.rejects(readFile(join(root, '.ignore')), 'a dry run writes nothing')
     await release(upstream, { 'agents/pm.md': '# PM v2\n' }, 'v2'); await git(kit, 'pull', '-q', '--ff-only')
     r = await pin(root); assert.equal(r.code, 0, r.out); assert.match(r.out, /RESULT: KIT-PINNED/)
-    assert.match(await readFile(join(root, '.ignore'), 'utf8'), /^kit\/tests\/\nkit\/\.github\/\nkit\/docs\/design\/router-worker\/history\/\n/m)
+    assert.match(await readFile(join(root, '.ignore'), 'utf8'), /^kit\/tests\/\nkit\/\.github\/\n/m)
     assert.deepEqual(JSON.parse(await readFile(join(root, '.claude/settings.json'), 'utf8')), { hooks, permissions: { deny: ['Read(./secret)', 'Read(./kit/tests/**)'] } })
     await rm(join(root, '.ignore'))
     r = await pin(root); assert.match(r.out, /RESULT: KIT-PIN-UNCHANGED/)

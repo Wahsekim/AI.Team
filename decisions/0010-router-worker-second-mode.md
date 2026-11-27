@@ -71,14 +71,18 @@ not the goal.
 
    Models are stored in the roster only, as for specialist roles. Running
    without the owner means nobody answers permission prompts: the workers use
-   an allow-list for the project's verification commands.
+   an allow-list for the project's verification commands. Changed by the
+   amendments of 2026-11-18: the workers' shell in a batch, 2026-11-20: who
+   changes the limits, and 2026-11-24: a worker moves and deletes the files
+   its ticket declares.
 
 ### Running a batch
 
 8. **The PM prepares the N tickets** from the project's backlog with one kit
    command: goal, acceptance, allowed paths and estimate per ticket. The kit
    checks and freezes; it refuses a batch with an incomplete ticket or with two
-   tickets that claim the same file.
+   tickets that claim the same file. Ticket fields and refusals are added by
+   the amendments of 2026-11-24, 2026-11-25 and 2026-11-27.
 9. **The count engine runs the batch**, as in specialist mode. A ticket whose
    check fails stops the batch and goes to the PM. There is no automatic retry.
 10. **The whole-run ceiling is computed by the kit**: N times the approved
@@ -95,7 +99,11 @@ not the goal.
     the after-run checks (the engine's return matched against what was frozen,
     files changed outside the tickets' paths, usage settled per ticket). The
     hook that enforces the write limits is installed in the team's settings at
-    the switch and judges only the three workers.
+    the switch and judges only the three workers. Changed by the amendments
+    of 2026-11-18 and 2026-11-24 on the workers' shell, of 2026-11-25 and
+    2026-11-26 on what `after` checks, what holds a commit and a command's
+    lock, and of 2026-11-27 on the lock at the close, what a commit holds and
+    packages.
 13. **The PM commits at reconciliation**, one commit per ticket, on a working
     branch, never on the default branch
     ([ADR 0007](0007-pm-only-commits.md)). Workers do not commit.
@@ -182,522 +190,249 @@ Nothing touches the real test team or repository before step 9.
 
 ## Amendments
 
+Each amendment states its decision as it stands; the full earlier text is in
+Git history. "Detail" names a section of
+[batch-reference.md](../docs/design/router-worker/batch-reference.md), which
+holds the rules in full, unless it names another file. The amendments of
+2026-11-18 to 2026-11-25 are ratified by merging the pull request that adds
+each. The owner decided those of 2026-11-18 and 2026-11-20 in session, and
+those of 2026-11-26 in session by accepting the recommendation of that day's
+review of the kit.
+
 ### 2026-11-18: the workers' shell in a batch
 
-Decision 7 says the workers use an allow-list for the project's verification
-commands. The owner decided in session on 2026-11-18 how it is confirmed and
-what happens to every other command ("您在切换时确认" for the first question,
-"按你的建议来" for the second, the recommendation being refusal):
-
-- The list is one of the team's limits (`allowedCommands`). The kit proposes it
-  from the required gates of `profiles/stack.md`; the owner confirms it with
-  the switch proposal, and changes it later by the same confirmation as the
-  other limits.
-- "before" refuses a batch that names a verification command the list does not
-  hold.
-- While a batch is open, the exec worker and the checker run those commands
-  without a permission prompt, as written and from the product root. Any other
-  shell command of the three workers is refused by the hook, in a batch and
-  between batches.
-
-This narrows the consequence stated above: without a sandbox, a worker's
-shell starts only the confirmed commands. It does not bound what those
-commands do: they write what they write, and they run the files the exec
-worker may write, a test file for one. Merging the pull request that adds this
-amendment ratifies it.
+The allow-list of decision 7 is the team limit `allowedCommands`, proposed
+from the required gates of `profiles/stack.md` and confirmed by the owner like
+the other limits. `before` refuses a batch that names a verification command
+the list does not hold. While a batch is open, the exec worker and the checker
+run those commands, exactly as confirmed and from the product root, without a
+permission prompt. The hook refuses every other shell command of the three
+workers, in a batch and between batches; the amendment of 2026-11-24 adds the
+exec worker's declared moves and deletions. This narrows the consequence on a
+worker's shell: it starts only confirmed commands. What those commands write
+or run is not bounded. Detail: "The workers' shell".
 
 ### 2026-11-18: a batch is settled before the next one opens
 
-The consequence above says the per-ticket authorization "is judged afterwards,
-at settlement". Nothing made that settlement happen: a batch could be committed
-and the next one opened with no ticket ever set against its authorization. The
-owner decided in session on 2026-11-18 ("按你的建议来", the recommendation
-being enforcement with a logged way out):
-
-- "before" refuses a batch while an archived batch that ran has no settlement.
-- A batch whose usage cannot be measured is marked as not metered by the PM,
-  with a reason, in the place of its settlement and on one line of
-  `pm-decisions.md`. The kit records the reason and does not judge it; the
-  owner reads those lines at the spot review.
-- Settlement still reports cost only: it does not hold or undo a commit, and
-  "commit" does not wait for it.
-
-Merging the pull request that adds this amendment ratifies it.
-
+`before` refuses a batch while an archived batch that ran has no settlement.
+The PM marks a batch whose usage cannot be measured as not metered, with a
+reason the kit records and does not judge. Settlement still reports cost only:
+it holds and undoes no commit, and `commit` does not wait for it. Detail:
+"Settle".
 
 ### 2026-11-20: who changes the limits
 
-The limits of a Router/Worker team (`attemptsPerTicket`,
+Only the owner changes the limits (`attemptsPerTicket`,
 `outputAllowancePerTicket`, `guardianOutputShare`, `authorizationPerTicket`,
-`allowedCommands`) were confirmed by the owner at the switch or with
-`team-mode.mjs limits`, but stored in `profiles/team-mode.json`, a file a PM
-session could edit with nothing to detect it. The owner decided in session on
-2026-11-20: "only human user, human tells router to change." and "router can
-report to human any case like token limit not enough etc... decision is made by
-human."
+`allowedCommands`, in `profiles/team-mode.json`), by a code typed at a
+terminal. The kit
+reports a limit that stopped or nearly stopped work, with a proposal, and
+nothing in the kit writes a limit. The last `MODE SWITCH` or `LIMITS CHANGED`
+line binds the limits by digest, and `before` refuses limits it does not bind
+(`LIMITS_NOT_BOUND`). The hook refuses a file-tool write of
+`profiles/team-mode.json` from any session, the PM's included. A PM session
+that imports the kit and calls `changeLimits`, or `switchMode` into
+Router/Worker mode, changes nothing.
 
-- **The ledger binds the limits.** The `MODE SWITCH` line of a switch into
-  Router/Worker mode and every `LIMITS CHANGED` line end with
-  `limits <digest>`, the digest of the limits confirmed. "before" refuses a
-  batch (`LIMITS_NOT_BOUND`) when the limits in the profile are not the ones
-  the last such line binds, and names the owner's command. A team that went
-  live before lines carried a digest is refused the same way; the owner binds
-  its limits as they stand with `team-mode.mjs limits` and a request that
-  changes nothing, which is accepted only while the limits are unbound.
-- **Only a terminal confirms them.** `changeLimits`, and `switchMode` into
-  Router/Worker mode, refuse unless the caller says the code was typed at a
-  terminal and the process has one (`process.stdin.isTTY`), or runs under
-  `node --test` (`NODE_TEST_CONTEXT`). A PM session that imports the kit and
-  calls them changes nothing. Only a line that says the code was "typed at an
-  interactive terminal" binds limits.
-- **No session's file tool writes the limits.** The PreToolUse hook refuses a
-  Write, Edit, MultiEdit or NotebookEdit of the team's
-  `profiles/team-mode.json` from any session, the PM's own included, and names
-  `team-mode.mjs limits`, run by the owner. A shell command that writes the
-  file is not judged by the hook; the ledger digest is what catches it.
-- **The kit reports, the owner decides.** The records of "after" and "settle"
-  carry a `limits` list: each limit that stopped or nearly stopped work in the
-  batch, what was observed, the current value and a proposal the owner may
-  confirm. Nothing in the kit writes a limit from that list.
-
-Not covered: a PM that fakes a terminal (`script`, a pseudo-terminal of its
-own, or one line setting `process.stdin.isTTY` in a program that imports the
-kit) or sets `NODE_TEST_CONTEXT` gets past the terminal check; the profile
-packed under `holiday/` is not guarded and binds at the next switch back,
-where the owner sees it in the proposal; and a PM that
-forges a ledger line together with the digest of the limits it wrote is not
-detected. Nothing detects either. As for the batch records, the digests detect
-an accidental or careless edit, not a deliberate one by a session that can
-write the team's files; the owner's spot review of `pm-decisions.md` is the
-check on that.
-
-Merging the pull request that adds this amendment ratifies it.
+Not covered: a faked terminal or test context, and a forged ledger line with
+the digest of the limits it wrote. The profile packed under `holiday/` is not
+guarded; it binds at the next switch back, where the owner sees it in the
+proposal. The digests of the batch records detect an accidental edit, not a
+deliberate one; the
+owner's spot review of `pm-decisions.md` is the check on that. Detail: "What
+decides the limits";
+[mode-switch.md](../docs/design/router-worker/mode-switch.md), "Changing the
+limits later".
 
 ### 2026-11-24: a worker moves and deletes the files its ticket declares
 
 Status: Proposed.
 
-On 2026-11-24 a batch on a real team ran a refactor that moves four source
-files. The exec worker stopped before writing: in a batch it has its
-file tools and the confirmed verification commands only (amendment of
-2026-11-18), so it could not rename or delete a tracked file, though "commit"
-already commits a staged rename or deletion. Its brief also gave it a narrower
-scope than the hook enforces (the planned paths, not the ticket's `paths`) and
-opened with the offline-preview line that calls the brief no dispatch
-authority.
-
-- A ticket may declare `moves` (`from`, `to`) and `deletes`. "before" accepts
-  each only as one plain file path inside the ticket's `paths`, named once;
-  each moved or deleted file is tracked at the product's HEAD, a moved file is
-  not a symbolic link at HEAD or in the work tree, no moved or deleted path
-  has assume-unchanged or skip-worktree set in the index, each path is in
-  composed Unicode (NFC), no path the batch moves or deletes lies under
-  another (compared without case),
-  and each `to` does not exist and lies in a real folder of the product. A
-  moved link, or a path one command creates that another command's path lies
-  under, could carry a later move out of the grant (an independent review
-  reproduced a move into `.git/hooks`).
-- From each, "before" derives one exact command:
-  `mkdir -p -- "<folder>" && git --literal-pathspecs mv -- "<from>" "<to>"`,
-  `<folder>` being the folder of `to` (the `git mv` alone for a `to` at the
-  top of the product), so that a folder an earlier `git rm` emptied and
-  removed is made again; or
-  `git --literal-pathspecs rm -q -- "<path>"`. The exec worker's command list
-  in the write boundary holds the batch's declared moves and deletions, all
-  tickets together, as its write paths hold all tickets' `paths`; the
-  checker's and the Guardian's lists hold none. The hook judges them like the
-  verification commands: the exact text, from the product root, inside the
-  sandbox if there is one, for that batch only.
-- The exec brief states the real grant (`writePaths`, the ticket's `paths`),
-  the planned paths and the ticket's own commands. It tells the worker to run
-  only those, says the host also accepts the other tickets' moves and
-  deletions and that they are not the worker's to run, and says the worker
-  runs no other command, Git included. A brief compiled for a standing batch
-  no longer opens with the offline-preview line.
-
-This widens the amendment of 2026-11-18 by those commands only. They are not
-confirmed by the owner one by one: the PM declares them in the ticket, and the
-owner reads them in the batch record (`moves`, `deletes`) and in the briefs.
-Merging the pull request that adds this amendment ratifies it.
+A ticket may declare `moves` and `deletes` of tracked files inside its
+`paths`. `before` checks each path and derives one exact Git command per move
+or deletion. The exec worker's shell accepts the commands of all the batch's
+tickets, for that batch only; no other worker's shell accepts them. This
+widens the amendment of 2026-11-18 by those commands only. The owner does not
+confirm them one by one: the PM declares them in the ticket, and the owner
+reads them in the batch record (`moves`, `deletes`) and in the briefs. A brief
+of a standing batch does not open with the offline-preview line. Detail:
+"Moves and deletions".
 
 ### 2026-11-25: a ticket resumes the work an earlier batch left
 
 Status: Proposed.
 
-On 2026-11-25 the exec worker of a real batch reached its turn limit during
-its last verification pass and returned no report. The checker never ran, and
-the work it left passed every gate when the PM ran them. The same had happened
-on 2026-11-24 with an output ceiling. The kit had no way to give such work its
-independent check and review: `--start-as-is` keeps changes found in the work
-tree out of the tickets' commits, and a rerun from a clean tree throws the work
-away and spends the same tokens again.
-
-- A ticket may name a `resume` patch in the team's folder. "before" accepts it
-  only as a regular file there, outside `kit/`, holding edits and new regular
-  files inside the ticket's `paths` that apply on the product's HEAD. It
-  applies those exact bytes to the work tree once nothing else can refuse the
-  batch, records the patch's path, digest and paths, and logs one line. A
-  refusal after that takes the patch back out.
-- What the patch changes is the ticket's own work from then on: checked by the
-  checker, flagged by the review triggers and the ticket's risk flags, and
-  committed with the ticket. The exec brief names the resumed paths and tells
-  the worker to finish them, not start over.
-- The patch is written by the PM, who is trusted with the team's folder; its
-  bytes, digest and paths are in the batch record for the owner to read. It
-  grants no write beyond the ticket's `paths` and no command.
-
-Merging the pull request that adds this amendment ratifies it.
+A ticket may name a `resume` patch in the team's folder that holds work an
+earlier batch left. `before` applies it to the work tree, and from then on it
+is the ticket's own work: checked, reviewed and committed with it. The PM,
+trusted with the team's folder, writes the patch; the owner reads its bytes,
+digest and paths in the batch record. It grants no write beyond the ticket's
+`paths` and no command. Detail: "Resuming left work".
 
 ### 2026-11-25: what of the Guardian's verdict holds a batch
 
 Status: Proposed.
 
-On 2026-11-25 a batch on a real team passed both tickets' checks and a
-Security review, and the kit committed nothing: the Guardian answered
-`main-session-action-required` because no observer had watched the run for an
-owner stop or a hardware halt (`missedHaltRisk`), and any verdict but `clean`
-held every commit with no way in the kit to clear it. A headless batch never
-has such an observer, so that rule held every unattended batch whenever the
-Guardian said so; an earlier headless batch had been called clean under the
-same condition.
-
-- A batch's commits are all held when the Guardian did not answer, asked to
-  halt and investigate, or reports a problem in the run itself: a runaway, a
-  budget gate that did not behave, or a failed check at risk of being
-  dropped (`GUARDIAN_NOT_CLEAN`, as before).
-- Any other verdict that is not `clean`, a missed halt risk included, is
-  recorded as `GUARDIAN_ATTENTION` and holds nothing. The tickets are still
-  committed only when their own check passed and their review, if any, passed.
-
-Merging the pull request that adds this amendment ratifies it.
+A batch's commits are all held for the Guardian (`GUARDIAN_NOT_CLEAN`) when
+it did not answer, asked to halt and investigate, or reports a problem in the
+run itself: a runaway, a budget gate that did not behave, or a failed check at
+risk of being dropped. Any other verdict of its that is not `clean`, a missed
+halt risk included, is recorded as `GUARDIAN_ATTENTION` and holds nothing,
+since a headless batch never has an observer. The tickets are still committed
+only when their own check passed and their review, if any, passed. Detail:
+"After".
 
 ### 2026-11-25: a ticket names the verification commands its workers run
 
 Status: Proposed.
 
-The verification commands of a batch applied to every ticket, so on
-2026-11-25 a ticket that changed one diagram file had its checker run the
-product's full test suite. A ticket may now name `verificationCommands`, one
-or more of the batch's own; its briefs list only those. The engine still
-refuses a pass with no command run, so the list is never empty. The hook keeps
-accepting the batch's whole list, and the kit's own re-verification at review
-time runs the whole list.
-
-Merging the pull request that adds this amendment ratifies it.
+A ticket may name `verificationCommands`, one or more of the batch's; its
+briefs list only those. The hook and the review's re-verification keep the
+batch's whole list. What `after` runs is set by the amendment of 2026-11-26,
+"after verifies the tree it would commit". Detail: "What the PM writes".
 
 ### 2026-11-26: the Guardian of a batch can call it clean
 
 Status: Accepted.
 
-In four of four real batches the Guardian answered
-`main-session-action-required` with `missedHaltRisk`, because the engine asked
-it whether an observer had watched a run that has none by design; one Guardian
-also called the budget gate wrong because the computed ceiling was far above
-the spend. The owner decided in session on 2026-11-26, accepting the
-recommendation of that day's review of the kit.
-
 The engine tells the Guardian of a batch that no observer watches the run by
-design and that the PM attests an owner stop or a hardware halt after the run
-(`reconcile-run.mjs --monitoring`), so `missedHaltRisk` is true only when the
-run data shows a halt signal the loop did not honour. It also tells it that the
-ceiling comes from the owner's limits, so `budgetGateCorrect` judges only
-whether the gate tripped when the spend crossed the stop line. What `clean`
-requires does not change, and specialist mode does not change. The engine's
-blockers name the Guardian exactly when the batch's commits are held for it,
-and a batch frozen before this amendment keeps the blockers it was closed
-with, so it still settles.
+design, that the PM attests an owner stop or a hardware halt after it, and
+that the ceiling comes from the owner's limits. Neither is then a finding.
+What `clean` requires does not change, and specialist mode does not change.
+The engine's blockers name the Guardian exactly when the batch's commits are
+held for it; a batch frozen before this amendment keeps the blockers it was
+closed with. Detail: [engine.md](../docs/engine.md), `standingBatch`;
+[run-args.md](../docs/design/router-worker/run-args.md), "Call accounting".
 
 ### 2026-11-26: after counts the checker's runs and holds a batch the hook did not see
 
 Status: Accepted.
 
-A batch whose session never loaded the write-boundary hook was still committed:
-`HOOK_SAW_NO_WORKER` held nothing, and one call by a governance role hid it.
-A ticket also passed on the checker's own report. The owner decided in session
-on 2026-11-26, accepting the recommendation of that day's review of the kit.
-
-`HOOK_SAW_NO_WORKER` counts only the calls of the batch's three workers and
-holds every commit; a hook that ran but could not append to its log leaves the
-same empty log and is held the same. The hook logs, for each approved shell
-call of the checker, the verification command it matched. `after` holds every
-commit (`CHECK_RUNS_MISSING`) when, for a verification command, the checker's
-approved runs since the batch opened are fewer than the passed tickets that
-verify with it, so the checker's brief of a standing batch tells it to run every
-command it lists and omit none. The count does not tell tickets apart, so a checker that runs a
-command twice for one ticket covers for another that ran it not at all, and
-whether a run passed stays the checker's word; a batch opened before this
-amendment, whose record lacks `hookLogsCommands`, is not counted. The log is a
-file in the team folder, and a confirmed command that runs a file the exec
-worker may write (a test file) can append lines that read as the checker's runs
-or as worker calls: `after` cannot tell them from the hook's.
+`after` holds every commit when files changed and the hook logged no call of
+the batch's three workers (`HOOK_SAW_NO_WORKER`), or when the checker's approved runs of a
+verification command are fewer than the passed tickets that verify with it
+(`CHECK_RUNS_MISSING`). The count does not tell tickets apart, and whether a
+run passed stays the checker's word. Detail: "After"; "What these commands
+trust".
 
 ### 2026-11-26: the budget gate of a batch is judged from the engine's trace
 
 Status: Accepted.
 
-The amendment of 2026-11-25 holds a batch for a budget gate that did not
-behave, and the kit compared the engine's `tripped` with its final spend. Both
-come from the same expression at the same moment, so the check could not see a
-call dispatched after the stop line. The owner decided in session on
-2026-11-26, accepting the recommendation of that day's review of the kit.
-
-For a run with `standingBatch`, the engine's return lists each gate decision
-before a worker, retry or checker call, with the spend at that moment and
-whether it dispatched (`budgetStatus.gateTrace`). `after` and the blockers hold
-the batch (`GUARDIAN_NOT_CLEAN`, `budgetGate: inconsistent`) when that trace is
-missing or malformed, when a call was dispatched at or above 80% of the ceiling
-or declined below it, or when its dispatched calls differ from the exec and
-checker calls the return reports. The check still trusts the engine's return,
-as `after` does everywhere: a hand-edited return can carry any trace. A batch
-frozen without `standingBatch` keeps the earlier rule and still settles. A batch
-frozen with `standingBatch` and closed before this amendment has no trace, so it
-is held and its account no longer matches at settlement; no such batch exists
-outside the kit's tests. Specialist mode does not change.
+For a standing batch the engine's return lists its gate decisions
+(`budgetStatus.gateTrace`). `after` holds the batch (`GUARDIAN_NOT_CLEAN`,
+`budgetGate: inconsistent`) when the trace is missing or malformed, or shows a
+call dispatched at or above 80% of the ceiling, one declined below it, or
+dispatched calls that differ from the exec and checker calls the return
+reports. This refines the hold of 2026-11-25 for a budget gate that did not
+behave. Comparing `tripped` with the final spend
+could not see a late dispatch, since both come from one expression. The check
+trusts the engine's return. A batch frozen without `standingBatch` keeps the
+earlier rule. One frozen with it and closed before this amendment has no
+trace, so it is held and its account no longer matches at settlement.
+Specialist mode does not change. Detail: "After"; engine.md.
 
 ### 2026-11-26: the kit saves left work and counts its runs
 
 Status: Accepted. Superseded in part by the amendment of 2026-11-27 below: the count now refuses, and runs are no longer matched by overlapping paths.
 
-In three real batches in a row a ticket's work was left in the product work
-tree, and the PM saved it as patches by hand, cleaned the tree and named the
-patches as `resume` before the next batch could take the work up. The same two
-tickets ran in those three batches with one attempt each, and nothing in the
-kit counted runs across batches. The owner decided in session on 2026-11-26,
-accepting the recommendation of that day's review of the kit.
-
-- `rw-batch.mjs left` saves the work each ticket of an archived batch left in
-  the work tree as one patch per ticket in the team folder, under the run id,
-  and takes it out of the tree, by the rule `abort` follows: nothing is removed
-  before its patch is saved, and a saved patch is never written over. It names
-  the patches `resolve` and `abort` already saved, the `resume` value of each
-  patch, and every changed path that is no ticket's work, which it leaves. It
-  refuses while a batch is open or in review, and takes the lock for its
-  length.
-- `before` freezes, for each ticket, the archived batches in which the engine
-  ran a ticket of the same id, or one whose paths overlap its paths, and the
-  kit did not commit it, and writes one line per such ticket for the owner's
-  spot review. It refuses nothing on that account: whether a count should stop
-  a batch is the owner's to decide, and ADR 0008 sets the attempts within one
-  run.
+`rw-batch.mjs left` saves the work each ticket of an archived batch left in
+the work tree as one patch per ticket, then takes it out. It removes nothing
+before the patch is saved and never writes over a saved patch. The count of
+earlier runs is now the amendment of 2026-11-27, "a ticket that ran before is
+replanned". Detail: "Resuming left work".
 
 ### 2026-11-26: after verifies the tree it would commit
 
 Status: Accepted.
 
-What the kit committed was not what any check had seen. The exec worker may
-write every ticket's paths, so a later ticket's worker could change a file
-after an earlier ticket's checker passed, and a ticket that names its own
-`verificationCommands` may have been checked by a formatter alone. Only a
-review ran the commands again. The owner decided in session on 2026-11-26,
-accepting the recommendation of that day's review of the kit.
-
-`after` first sets aside the work of each ticket that did not pass, or was not
-run, as a patch at `left/<run id>/<ticket>.patch`, with the step `left` uses,
-and takes it out of the product tree: the engine halts a batch at its first
-failed ticket, so earlier tickets passed and the last one failed is the usual
-shape of a batch with a failure, and that ticket's code would fail the
-commands of the passed ones. In three real batches the PM saved that work by
-hand to resume it. A ticket that cannot be set aside keeps all its work in the
-tree. Then, only when every changed path in the tree is a path of a passed
-ticket, `after` runs the union of the passed tickets' own verification
-commands (a ticket without its own list uses the batch's list), in the batch's
-order and as far as the owner still confirms them, on the product as it
-stands, under the lock the batch holds, and records the run. A command every
-passed ticket left out is one the PM said they do not need. This narrows the
-amendment of 2026-11-25 on per-ticket commands for `after` alone: the review
-brief still runs the batch's whole list. `after` runs the commands before it
-pins content and plans commits, so what is pinned is what they left, and it judges the commit hooks
-again on the tree they leave. A command that fails or times out is run once
-more, since `after` cannot be run again once it closed the batch; one that
-fails again, or no confirmed command left to run, holds every commit
-(`VERIFICATION_FAILED`): the kit cannot tell which ticket broke the tree. When the tree holds anything else
-(a path outside every ticket, a path changed before the batch, a ticket that
-could not be set aside), `after` runs nothing, records why
-(`VERIFICATION_NOT_RUN`, which holds nothing), says in `next` that the kit did
-not verify the tree it will commit, and plans the passed tickets as before. A
-batch another finding already holds, or one with no ticket passed, sets
-nothing aside and runs no command. The run does not verify the intermediate
-commits or each ticket alone. Since `after` now runs as long as the product's
-checks, its claim on the close names its process: a claim whose process is
-alive is running, however old, and the refusal names `abort` for a process id
-that is no longer this batch's `after`. The write grant per ticket and a
-snapshot per ticket are not adopted, since the hook has no ticket identity.
+`after` sets aside, as patches, the work of each ticket that did not pass.
+When the tree then holds only the passed tickets' paths, it runs their
+verification commands on it, so what is committed is what a check saw. A
+command that fails twice holds every commit (`VERIFICATION_FAILED`). A tree
+that holds anything else is not verified (`VERIFICATION_NOT_RUN`, which holds
+nothing), and `next` says so. This narrows the amendment of 2026-11-25 on
+per-ticket commands for `after` alone. The run does not verify the
+intermediate commits or each ticket alone. A write grant and a snapshot per
+ticket are not adopted, since the hook has no ticket identity. Detail:
+"After".
 
 ### 2026-11-26: a dead command's lock, one spelling of a path, and the order of two writes
 
 Status: Accepted.
 
-A command killed while it held the lock on the product left the next one no way
-on but `abort`, which archives the batch without commit; `before` accepted a
-path its grant covered only in another case, whose work `after` then found
-outside every ticket; and two writes in the wrong order left an open batch the
-ledger did not name, or limits the ledger bound and the profile did not hold.
-The owner decided in session on 2026-11-26, accepting the recommendation of
-that day's review of the kit.
-
-A lock taken by a command for its own length names the command's process; once
-that process is gone, the next command of the same team takes it over. A lock
-held across commands (a batch's, a launch's), one held by a live process, and
-another team's are never taken over. `abort` refuses while a command of the
+The next command of the team takes over a command's lock whose process is
+gone; no other lock is taken over. Whether a path lies inside a ticket's grant
+is judged with case, as `after` and the hook judge it; whether two tickets
+claim one file is judged without case. `abort` refuses while a command of the
 team that holds the lock, or the `after` that claimed the batch, still runs.
-Whether two tickets claim one file is still judged without case; whether a
-path lies inside a ticket's grant is judged with case, as `after` and the hook
-judge it, and a path that names a file or folder of the product in another
-case than Git spells it, or, for a part Git does not track, the file system, is
-refused with the spelling to use and which of the two gave it. An exact name
-always wins, and a name in another case counts as the same file only where the
-file system folds case. `before` appends its ledger lines before it writes the
-batch record, and a change of limits that died before its rename is finished by
-the next change of limits confirmed at a terminal when the last ledger line
-binds the limits it holds: that change was confirmed at a terminal, so
-finishing it is not a new change. Any other leftover is removed by that change
-and applies nothing. A proposal names the leftover and changes nothing, and
-the hook refuses a file-tool write of the leftover as it refuses the limits
-file.
+`before` appends its ledger lines before it writes the batch record. The next confirmed change of limits
+finishes or removes a change that died before its rename. Detail: "The lock
+of a command"; "Abort"; "What "before" does, in order"; mode-switch.md,
+"Changing the limits later".
 
 ### 2026-11-27: a ticket that ran before is replanned, and runs at most three times
 
 Status: Accepted.
 
-The amendment of 2026-11-26 counted a ticket's earlier runs for the owner and
-refused nothing, so a ticket that failed could be filed again unchanged, any
-number of times. The owner decided in session on 2026-11-27:
+The owner decided in session on 2026-11-27 that after a failed run the router
+re-examines whether the task can be done and why it failed before it
+dispatches again, and reports to the user; and that a ticket gets at most two
+retries, as in the specialist team.
 
-> 跑一次失败后 router 重新计划时候不是机械的重新发放任务，需要重新审视问题：是否可实现，为什么失败，然后发放，并报告使用者
-
-(after a failed run the router does not hand the task out again mechanically
-when it replans: it re-examines the problem, whether it can be done and why it
-failed, then dispatches, and reports to the user), and:
-
-> 原来 specialist team 规定 max retry 2 times，我想也要最多尝试两次
-
-(the specialist team's rule is at most two retries; the same here).
-
-A ticket's earlier runs are the archived batches, since the kit last committed
-it, in which the engine ran it and the kit did not commit it, where "it" is a
-ticket of the same id, the ticket it names in `continues`, or the ticket whose
-saved patch (under `left/` or `reviews/held/`, told by its place or, for a
-copy, by its bytes) it resumes, followed back through the links the archives
-froze. Tickets that only share a file are not one piece of work. `before` refuses a ticket with an
-earlier run until it carries a `replan` of three one-line texts: why the
-earlier run was not committed, why the ticket can be done as now written, and
-what is different this time. It refuses the replan of the ticket's latest run
-unchanged, and a replan on a ticket that never ran. The replan is frozen in the
-batch record, put in the ticket's exec and check briefs with its earlier runs,
-and logged in the ledger line for the owner, which is the report to the user.
-"Two retries" is read as ADR 0008 reads it: the initial run plus two. Asked the
-same day which runs count, the owner chose every run without a commit, whatever
-kept it from one: a check that did not pass, a rejection, a batch held, or one
-aborted after `after` closed it. A ticket with three such runs is refused with
-`TICKET_ATTEMPTS_EXHAUSTED` and escalated to the owner with the kind
-`attempts-exhausted`, which blocks it, a ticket that continues it or resumes
-its saved patch and a ticket that depends on it, and no ticket that only shares
-a file, until the owner acknowledges it; after that it may be filed again with
-a replan, and a further run without a commit escalates it again. The owner
-also asked that a ticket opened anew name the original, to follow the work: a
-ticket may carry `continues`, the id of the earlier ticket whose work it takes
-up, and that ticket's runs then count as its own. The cap is a constant of
-the kit, not a team limit, and `attemptsPerTicket`, the attempts inside one
-engine run, is unchanged. This supersedes the amendment of 2026-11-26, "the kit
-saves left work and counts its runs", where it says the count refuses nothing
-and where it matches runs by overlapping paths.
+`before` refuses a ticket that ran before and was not committed until it
+carries a new `replan`, which the ledger line gives the owner as the report.
+Earlier runs are linked by id, `continues` and resumed patch, never by shared
+files. "Two retries" is read as ADR 0008 reads it: the initial run plus two.
+Every run without a commit counts. A ticket with three is refused
+(`TICKET_ATTEMPTS_EXHAUSTED`) and escalated until the owner acknowledges it.
+The cap is a constant of the kit, not a team limit; `attemptsPerTicket` is
+unchanged. This supersedes the amendment of 2026-11-26, "the kit saves left
+work and counts its runs", where it says the count refuses nothing and where
+it matches runs by overlapping paths. Detail: "What "before" does, in order",
+the paragraphs "Earlier runs of a ticket" and "At most two retries".
 
 ### 2026-11-27: packages of one repository
 
 Status: Accepted.
 
-The owner asked on 2026-11-27 for a team on one repository with several
-sub-projects on different stacks, whose number and names are the project's
-own, with the right conventions loaded for each task and little context spent
-on exchanges between them. Until then every worker's wrapper told it to read
-all of `profiles/stack.md`, the rules of every stack, a ticket's scope inside the repository was only its
-hand-written `paths`, and nothing told the PM that a file another sub-project
-builds against had changed.
-
-A team may list its packages in `profiles/packages.json` in its instance root:
-each a name, a folder of the product, and optionally a conventions file in the
-team root, verification commands and interface patterns naming the files
-outside its folder that it builds against. The file is optional; without it
-nothing changes. A ticket may name its `package`. `before` refuses an unknown
-package, a ticket path, move or deletion outside the package's folder, and a
-package command the batch does not list; a ticket without commands of its own
-verifies with its package's. `before` freezes the file's digest and the
-packages in the batch record, and inlines the package's conventions in the
-ticket's exec and check briefs with its name, folder and interfaces: the
-right conventions reach the worker without a tool call, and no other package's
-are named. Sub-projects exchange through interface files, not by reading each
-other's code. `after` matches each ticket's changed paths against the other
-frozen packages' interfaces and logs, for the owner's spot review, each change
-with the packages that read it, for the PM to file their follow-up tickets
-with `dependsOn`; it holds nothing. A ticket without `package` is repository-wide
-work and its briefs and record entry are unchanged; one whose every path lies
-inside one package's folder is refused until it names that package. The exec
-and check wrappers the switch writes now tell a worker to read
-`profiles/stack.md` except when its assignment carries a package; a team
-switched before this change keeps its wrappers until the next switch. The kit
-does not stop a worker from reading another package's files or the shared
-file: the hook guards writes and commands only. Detail: `docs/design/router-worker/batch-reference.md`,
-"Packages of one repository".
+At the owner's request, a team may list the packages of its one repository in
+`profiles/packages.json`; without the file nothing changes. A ticket that
+names its `package` is scoped to the package's folder, verifies with its
+commands unless it has its own, and gets its conventions inlined in its exec
+and check briefs. `after` logs a change to another package's interface files
+for the PM to file follow-up tickets; it holds nothing. The kit does not stop
+a worker from reading another package's files. Detail: "Packages of one
+repository".
 
 ### 2026-11-27: three findings of the review of main
 
 Status: Accepted (they correct the kit against rules this record already
 holds; no owner decision changes).
 
-An outside review of main found three places where the kit did less than this
-record says.
-
-- **Earlier runs.** A ticket filed again under its own id, without the
-  `continues` an archived filing of it carried, was counted from its own runs
-  only: three runs without a commit could look like one. The links the archives
-  froze for the ticket's own id, since the kit last committed it, are now
-  followed like those of the tickets it reaches.
-- **What a commit holds.** `after` pinned the bytes of each changed file, and
-  `commit` compared bytes: a file made executable, a link aimed elsewhere, or a
-  deletion a commit hook restored after the close could be committed as the
-  ticket's work. `after` now also pins what Git would record for each path (a
-  mode and an object id, or nothing), computed by Git through an index of its
-  own; `commit` compares the work tree before it commits, each commit after it
-  lands, a commit it takes up and the ones it already recorded, and `resolve`
-  compares the same. A commit that differs is refused and left as it is. A
-  path Git refuses to stage holds every commit of the batch
-  (`ENTRIES_NOT_READ`), and the close is still written. A record closed by an
-  earlier kit holds bytes only and is bound as before.
-- **The lock at the close.** `after` set work aside and ran the product's
-  commands before it read the lock. It now reads it first. A lock that is not
-  the batch's is taken for the length of that `after` when it is free or was
-  left by a command of the team that ended, and the close records
+- Earlier runs follow the links the archives froze for the ticket's own id
+  too, since the kit last committed it.
+- `after` pins what Git would record for each path, and `commit` and
+  `resolve` refuse a commit that differs. A path Git refuses to stage holds
+  every commit (`ENTRIES_NOT_READ`), and the close is still written.
+- `after` reads the lock before it changes anything. It takes the lock again
+  when it is free or was left by a command of the team that ended, and records
   `LOCK_TAKEN_AGAIN` unless it resumes a close that died; held by anyone else,
-  `after` refuses and changes nothing.
+  it refuses and changes nothing.
 
-Detail: `docs/design/router-worker/batch-reference.md`.
+Detail: "What "before" does, in order"; "After"; "Commit".
 
 ### 2026-11-27: what a batch reports about itself
 
 Status: Accepted (reports and opt-in switches; no rule of this record changes).
 
-The same review asked that the kit say plainly what it did and did not check,
-and spend less of the PM's context saying it. Its proposal to shorten the
-output a reviewer is given for a command that passed was declined by the
-owner: a tool can exit 0 and still warn, and no check or reviewer input is
-weakened to save tokens.
-
-- **A receipt for `before`.** `before --receipt` prints the run id, the
-  record's digest and path, what the PM tells the owner, the next step and the
-  engine's arguments, byte for byte those of the record. The record on disk
-  and the default output are unchanged.
-- **What the kit verified.** `commit.json` and the ledger line say whether
-  the kit's last run of the commands passed on exactly the tree that was
-  committed; `commit --verified-only` commits nothing else. Without the flag
-  the rule of 2026-11-26 stands.
-- **Check runs are counted by batch.** The after record carries the counts
-  with `attribution: "batch"`: they prove no single ticket's check.
-- **The PM's attestation.** `settle` prints, and `rw-batch.mjs monitoring`
-  lists, whether the PM attested each run: `complete`, `partial` or `missing`.
-  Missing means no one attested, never that no stop occurred. Nothing is
-  refused on it.
-- **Size of one dispatch.** A test measures the bytes of the exec brief, the
-  check brief, the engine arguments, the open record and a reviewer's brief on
-  fixed fixtures, each against a ceiling.
-
-Detail: `docs/design/router-worker/batch-reference.md`.
+The owner declined to shorten the output a reviewer is given for a command
+that passed: a tool can exit 0 and still warn, and no check or reviewer input
+is weakened to save tokens. The kit adds `before --receipt`, the
+`verification` statement of `commit.json` with `commit --verified-only`, the
+record of check runs as counted by batch (they prove no single ticket's
+check), and the PM's attestation status in `settle` and `rw-batch.mjs
+monitoring`. Without `--verified-only` the rule of
+2026-11-26 stands. `tests/router-worker-dispatch-size.test.mjs` holds the
+bytes of one dispatch under ceilings. Detail: "What "before" does, in order";
+"The workers' shell"; "Commit"; "Settle".

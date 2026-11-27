@@ -40,6 +40,10 @@ heartbeats/
 .rw-retries-*/
 *.rw-settlement.json
 
+# Local development notes of the kit itself: plans, reviews, hand-offs, dated
+# assessments. Never tracked (tests/tracked-tree.test.mjs).
+/dev-notes/
+
 # Internal working docs (kept local, not published)
 ai-team-quality-improvement-plan.md
 

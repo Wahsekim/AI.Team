@@ -1,8 +1,7 @@
 # Offline retry and session accounting
 
 Status: implementation of ADR 0008's accepted counting semantics; no live
-dispatcher, session-resume API or settlement adapter. A separate
-[SQLite persistence adapter](retry-persistence.md) now stores this journal.
+dispatcher, session-resume API or settlement adapter.
 All summaries remain `launchable: false`, `deliveryAuthorized: false`.
 
 ## Interface and authority
@@ -31,8 +30,7 @@ Capacity exhaustion requires a future reviewed archival procedure, not reset.
 These events must ultimately come from a trusted host, never directly from worker
 reports. Source hashes, session/call references and a matching journal digest
 are consistency checks, **not authentication**. The pure library has no storage
-or lock. Its optional persistence adapter provides transactional version checks,
-but no product lock or trusted event producer. A caller able to replace/re-hash
+or lock, and no trusted event producer. A caller able to replace/re-hash
 the entire journal can erase its history; the future host must prevent that.
 Do not claim this library alone enforces a deployed team's retry limit.
 

@@ -221,12 +221,12 @@ else
   else
     pass "kit-review" "no open kit-upgrade review items"
   fi
-  # Kit tests, CI and development history stay out of the team's searches and reads.
+  # Kit tests and CI stay out of the team's searches and reads.
   SCOPE_SCRIPT="$(cd "$(dirname "$0")" && pwd)/scope-kit-reads.mjs"
   if ! command -v node >/dev/null 2>&1; then
     skip "kit-read-scope" "node not found — .ignore and the read rule were not checked"
   elif SCOPE_OUT=$(node "$SCOPE_SCRIPT" --check "$ROOT" 2>&1); then
-    pass "kit-read-scope" ".ignore and .claude/settings.json keep kit tests and development history out of reads"
+    pass "kit-read-scope" ".ignore and .claude/settings.json keep kit tests and CI out of reads"
   else
     SCOPE_GAPS=$(printf '%s\n' "$SCOPE_OUT" | sed -n 's/^MISSING - //p' | paste -sd ';' - | sed 's/;/; /g')
     if [ -n "$SCOPE_GAPS" ]; then

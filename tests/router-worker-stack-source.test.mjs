@@ -5,14 +5,11 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
 import { readStackSource, checkStackBinding } from '../src/router-worker/stack-source.mjs';
 import { compile } from '../src/router-worker/compile.mjs';
 import { digest, bytesDigest } from '../src/loop/contracts.mjs';
 import { inputFixture } from './fixtures/router-worker/input.mjs';
 
-const CLI = fileURLToPath(new URL('../scripts/stack-source-router-worker.mjs', import.meta.url));
 const stack = (required = ['"make lint"', '"make test   # unit and widget"'], extra = '') => `# Stack Profile
 
 \`\`\`yaml
@@ -81,13 +78,4 @@ test('an unresolved, missing or unreadable profile yields no commands', t => {
   assert.equal(code(readStackSource({ root: fixture(t, stack() + stack()) })), 'STACK_SOURCE_UNREADABLE', 'two verification blocks are ambiguous');
   const real = fixture(t), link = `${real}-link`; symlinkSync(real, link); t.after(() => rmSync(link, { force: true }));
   assert.equal(code(readStackSource({ root: link })), 'STACK_SOURCE_MISSING', 'a non-canonical root is refused');
-});
-
-test('CLI prints the record, checks an input when given, exits 2 on refusal and 1 on usage', t => {
-  const root = fixture(t), run = (...argv) => spawnSync(process.execPath, [CLI, ...argv], { encoding: 'utf8' });
-  const ok = run('--root', root);
-  assert.equal(ok.status, 0, ok.stderr); assert.deepEqual(JSON.parse(ok.stdout).verificationCommands, ['make lint', 'make test   # unit and widget']);
-  const file = join(root, 'input.json'); writeFileSync(file, JSON.stringify(inputFixture()));
-  assert.equal(run('--root', root, file).status, 2);
-  assert.equal(run().status, 1);
 });

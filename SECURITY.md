@@ -68,3 +68,12 @@ damage limitation, never the control.
 The kit tracks Claude Code >= 2.1.154 (see `scripts/check-claude-compat.sh`).
 Pre-release snapshots (no tagged release yet) have no security-support
 guarantees.
+
+## Pilot scope
+
+Use the kit for attended, low-sensitivity pilots that you can roll back.
+Not yet validated: end-to-end runs with real Claude sessions, and unattended
+operation on private code.
+These owner decisions are still open: a production permission manifest,
+retention limits for ledgers and evidence, branch protection rules and a
+first tagged release.

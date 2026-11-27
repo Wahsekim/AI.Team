@@ -19,7 +19,6 @@ import { draftSpecFixture } from './fixtures/router-worker/draft-spec.mjs';
 import { inputFixture } from './fixtures/router-worker/input.mjs';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
-const CLI = fileURLToPath(new URL('../scripts/activate-router-worker.mjs', import.meta.url));
 const HOOK = fileURLToPath(new URL('../scripts/hooks/rw-write-boundary.mjs', import.meta.url));
 const snapshot = dir => execFileSync('bash', ['-c', 'cd "$1" && find . -type f -exec shasum -a 256 {} + | sort', 'sh', dir], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
 const git = (dir, ...args) => execFileSync('git', ['-C', dir, '-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid', ...args], { encoding: 'utf8' });
@@ -121,18 +120,6 @@ test('activation is refused when the staged team is incomplete', t => {
   const unanswered = fixture(t, { answered: false });
   assert.equal(code(unanswered.activate()), 'ACTIVATION_REFUSED', 'a copy the deployment validator fails is not activated');
   assert.deepEqual(leftovers(unanswered.base), []);
-});
-
-test('CLI activates, exits 2 on refusal and 1 on usage', t => {
-  const f = fixture(t), specFile = join(f.base, 'spec.json'), draftFile = join(f.base, 'draft.json');
-  writeFileSync(specFile, JSON.stringify(f.spec)); writeFileSync(draftFile, JSON.stringify(f.draft));
-  const run = (...argv) => spawnSync(process.execPath, [join(f.kit, 'scripts/activate-router-worker.mjs'), ...argv], { encoding: 'utf8' });
-  cpSync(join(ROOT, 'src'), join(f.kit, 'src'), { recursive: true });
-  const refused = run(specFile, draftFile, f.active, '--instance', f.root, '--approval', f.approvalPath, '--approval-digest', bytesDigest('wrong'));
-  assert.equal(refused.status, 2, refused.stdout);
-  const ok = run(specFile, draftFile, f.active, '--instance', f.root, '--approval', f.approvalPath, '--approval-digest', f.expectedApprovalDigest);
-  assert.equal(ok.status, 0, ok.stderr); assert.equal(JSON.parse(ok.stdout).stage, 'activated-disposable-smoke');
-  assert.equal(spawnSync(process.execPath, [CLI, specFile], { encoding: 'utf8' }).status, 1);
 });
 
 test('a staging directory another attempt created after the precheck is left byte-identical', t => {

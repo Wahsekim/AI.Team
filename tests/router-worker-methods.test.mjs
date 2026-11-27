@@ -35,7 +35,7 @@ function copyKit(t) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'rw-methods-')));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   for (const relative of ['config/router-worker', 'agents/skill-packs', 'src/router-worker',
-    'src/loop/contracts.mjs', 'src/loop/display.mjs', 'scripts/compile-router-worker.mjs'])
+    'src/loop/contracts.mjs', 'src/loop/display.mjs'])
     cpSync(join(root, relative), join(dir, relative), { recursive: true });
   return dir;
 }
@@ -149,18 +149,4 @@ test('a long-lived loader cannot attest a newly edited adapter as its already-lo
   `;
   const result = spawnSync(process.execPath, ['--input-type=module', '-e', source], { encoding: 'utf8', timeout: 10000 });
   assert.equal(result.status, 0, result.stderr);
-});
-
-test('CLI resolves only its local catalog and fails without partial stdout on tampering', t => {
-  const dir = copyKit(t), input = methodInput(); input.mandate.policyDigest = digest(input.policy);
-  const file = join(dir, 'input.json'); writeFileSync(file, JSON.stringify(input));
-  const run = () => spawnSync(process.execPath, [join(dir, 'scripts/compile-router-worker.mjs'), file],
-    { cwd: dir, encoding: 'utf8', timeout: 10000 });
-  const success = run();
-  assert.equal(success.status, 0, success.stderr);
-  assert.deepEqual(JSON.parse(success.stdout), compileMethods(input));
-  writeFileSync(join(dir, sourcePath), 'modified');
-  const refused = run();
-  assert.equal(refused.status, 2); assert.equal(refused.stdout, '');
-  assert.equal(JSON.parse(refused.stderr).errors[0].code, 'METHOD_INTEGRITY_FAILED');
 });

@@ -8,14 +8,8 @@ mandate after the run. In the E-02 smoke run the execution worker left `lib/`
 alone because the ticket told it to, not because anything refused the write.
 
 This step adds a Claude Code `PreToolUse` hook that refuses such a write before
-it happens.
-
-```sh
-node kit/scripts/arm-boundary-router-worker.mjs RUN.json --team-root <activated copy> --product-root <product-root>
-```
-
-`RUN.json` is the request of `freeze-run-router-worker.mjs`. Exit 0 prints the
-record, 2 is a refusal, 1 is usage. Run it after activation and before launch.
+it happens. In an activated copy `launch-router-worker.mjs prepare` arms it
+(`armBoundary`); in a standing team the mode switch registers it.
 
 ## What arming writes
 

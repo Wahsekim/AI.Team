@@ -146,13 +146,12 @@ here until the spec lists them under `governance`.
 files in the copy and not declared by hand:
 
 - `context`: `metric`, `roots` (one wrapper per `exec`, `check`, `guard`) and
-  `nodes` (`path`, `root`, `sha256`, `reads`), in the shape the offline preflight
-  approval expects for its declared context graph, without `limits`. Limits are
+  `nodes` (`path`, `root`, `sha256`, `reads`), a declared context graph without
+  `limits`. Limits are
   owner-approved ratchet values and are never inferred.
 - `governanceContext`: the same for each staffed governance wrapper.
 - `estimatedTokens`: per wrapper, the sum of `ceil(bytes/4)` over its closure.
-- `rosterRecord`: `{wrappers: {exec, check, guard}}` read from the draft, the
-  value the preflight's roster reference must carry.
+- `rosterRecord`: `{wrappers: {exec, check, guard}}` read from the draft.
 - `missingReads`: a file a wrapper names that exists in neither root. Any entry
   makes the result `staged-read-closure-incomplete` (CLI exit 2) when the
   validator itself passed.
@@ -161,9 +160,7 @@ A wrapper's reads are every `.md` team path its text names. Its own role file is
 expanded one level, keeping only paths that exist; every other file is a leaf.
 This over-counts on purpose: a path mentioned for reference is counted as read.
 Each path resolves in the copy first, then under its `kit/`, and `root` records
-which. Running the offline preflight with `--instance <staging copy>` and an
-approval built from this graph re-reads and re-hashes every node, so an edit
-after derivation is detected.
+which.
 
 Not derived: the stack record (`verificationCommands`) and the permission
 records, which still need an owner-reviewed source; context injected by the
@@ -206,10 +203,7 @@ Generating this artifact therefore does not complete RW-03 or establish
 
 ## Stack source (rollout gate G-01)
 
-```sh
-node kit/scripts/stack-source-router-worker.mjs --root <instance-root> [INPUT.json]
-```
-
+`readStackSource` and `checkStackBinding` in `src/router-worker/stack-source.mjs`.
 The verification commands of a compiler input are not typed by hand and are not
 kit defaults: they are the `verification.code_shipping.required` list of the
 project's own `profiles/stack.md`, verbatim and in order. The kit carries no
@@ -217,7 +211,7 @@ stack-specific command. The record holds the commands, the `conditional` gates
 as text, the file digest and a `stackRef` (`profiles-stack-code-shipping`,
 digest of the command list).
 
-With `INPUT.json`, the command also checks that `policy.verificationCommands`
+`checkStackBinding` checks that an input's `policy.verificationCommands`
 and `policy.stackRef` of that input are exactly those values
 (`STACK_SOURCE_MISMATCH` otherwise): a gate cannot be dropped, reordered or
 taken from an older profile. Refusals without an input: `STACK_SOURCE_MISSING`,

@@ -51,13 +51,13 @@ DIRTY=$(git -C "$KIT" status --porcelain | cut -c4- | head -5 | tr '\n' ' ')
 [ -z "$DIRTY" ] || failpin "kit: kit/ has local changes; the kit is read-only for deployments: $DIRTY"
 [ -f "$KIT/$ENGINE" ] || failpin "kit: kit/$ENGINE missing — broken kit checkout"
 
-# Kit tests, CI and development history stay out of the team's searches and reads. An instance
+# Kit tests and CI stay out of the team's searches and reads. An instance
 # deployed before that gets them here, also when its pin is unchanged.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 scope_reads() {
   if [ "$DRY" = 1 ]; then
     node "$SCRIPT_DIR/scope-kit-reads.mjs" --check "$ROOT" >/dev/null 2>&1 \
-      || echo "PLAN - .ignore, .claude/settings.json: would keep kit tests and development history out of searches and reads"
+      || echo "PLAN - .ignore, .claude/settings.json: would keep kit tests and CI out of searches and reads"
     return 0
   fi
   SOUT=$(node "$SCRIPT_DIR/scope-kit-reads.mjs" "$ROOT" 2>&1) \

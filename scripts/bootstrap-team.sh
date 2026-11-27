@@ -254,11 +254,11 @@ for pair in $COPY_PAIRS; do
 done
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-# Kit tests, CI and development history stay out of the team's searches and reads.
+# Kit tests and CI stay out of the team's searches and reads.
 if [ -n "$SEED_LABEL" ]; then
   if [ "$DRY" = 1 ]; then
     node "$SCRIPT_DIR/scope-kit-reads.mjs" --check "$ROOT" >/dev/null 2>&1 \
-      || echo "PLAN - .ignore, .claude/settings.json: would keep kit tests and development history out of searches and reads"
+      || echo "PLAN - .ignore, .claude/settings.json: would keep kit tests and CI out of searches and reads"
   else
     SOUT=$(node "$SCRIPT_DIR/scope-kit-reads.mjs" "$ROOT" 2>&1) \
       || { printf '%s\n' "$SOUT"; failboot "scope: kit development material could not be kept out of reads"; }

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // measure-spawn.mjs — per-subagent token totals read from Claude Code
-// transcripts (teamai port P01, docs/teamai-port-plan-2026-10-14.md).
+// transcripts.
 // Gives M4 a harness meter that is neither worker self-report nor the engine
 // budget delta.
 //

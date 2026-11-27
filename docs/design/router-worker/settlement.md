@@ -16,14 +16,6 @@ ledger of measured usage and derives the gate from it.
 - `usageEventFromMeterRow({row, callRef, eventId})`
 - `settleAgainstJournal({ledger, retryJournal, rules, nextEstimateTokens?})`
 
-```sh
-node kit/scripts/settle-router-worker.mjs REQUEST.json [--instance <instance-root>]
-```
-
-`REQUEST.json` is `{"ledger", "retryJournal", "nextEstimateTokens"?}`. Exit 0
-means the budget gate is `clear`; exit 2 means `blocked`, `unknown` or invalid;
-exit 1 is usage. The command only reads.
-
 ## Unit and meter
 
 The unit is `input+cache_creation`, the same unit as the lifecycle `Tokens:`
@@ -106,14 +98,9 @@ ticket settlements and the Guardian's `measure-spawn` row (or `null`). The
 engine dispatches the plan in order and may halt early, so only the tickets the
 accounting shows as dispatched are expected to be settled; the rest are listed
 as `undispatchedTickets`. In the E-02 smoke run the first ticket failed, the
-second was never dispatched, and the run settles on the first alone:
+second was never dispatched, and the run settles on the first alone.
 
-```sh
-node kit/scripts/settle-run-router-worker.mjs REQUEST.json   # {"record", "account", "tickets", "guardian"}
-```
-
-Exit 0 means the run gate is `clear`; 2 means `blocked`, `unknown` or invalid; 1
-is usage. It reports `ticketTokens`, `guardianTokens`, `totalTokens`, the summed
+`settleRun` reports the run gate and `ticketTokens`, `guardianTokens`, `totalTokens`, the summed
 ticket authorization and the Guardian estimate, all in `input+cache_creation`.
 
 | Reason | Gate | When |

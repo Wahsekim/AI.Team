@@ -1,4 +1,4 @@
-// Tests for scripts/lessons-stats.sh (teamai port P03): lesson citation
+// Tests for scripts/lessons-stats.sh: lesson citation
 // counts from lifecycle `- Lessons:` lines, printed to stdout, never written
 // into the index; threshold advisories are WARN-only.
 import { test } from 'node:test'
