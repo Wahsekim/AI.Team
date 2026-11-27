@@ -32,7 +32,7 @@ the kit does not cover. The runbook sends you to a section here by its title.
 | `sensitivePaths` | Paths whose tickets Security always reviews ([ADR 0011](../../../decisions/0011-router-worker-batch-review.md), decision 6). They are judged against `paths`, which is what bounds the worker, not against the plan: a ticket whose grant covers a sensitive path, or lies under one, is declared sensitive (`sensitivePath:<entry>`). An entry written as a bare folder (`src/auth`) guards everything under it. At least one entry |
 | `riskFlags` (optional) | 1 to 10 plain names (`auth`, `payments`), each named once. Each declares the ticket sensitive (`riskFlag:<name>`). What a ticket declares is frozen in the record as its `declared` list. A declared-sensitive ticket that passed and changed something is flagged for Security on every changed path, even when no trigger matches, and is not committed without a passed Security verdict; one that changed nothing is not committed, so it is not flagged |
 | `commitMessage` (optional) | The message of the ticket's commit, one line; by default `<id>: <title>` |
-| `dependsOn` (optional) | Ids of tickets this one builds on: an earlier ticket of the batch, or a ticket of an archived batch. Frozen in the record (`[]` when absent); an escalated ticket blocks every ticket that depends on it, directly or through others (see "Review verdict, commit gate and escalation") |
+| `dependsOn` (optional) | Ids of tickets this one builds on: an earlier ticket of the batch, or a ticket of an archived batch. Frozen in the record (`[]` when absent); an escalated ticket blocks every ticket that depends on it, directly or through others (see "Review verdict, commit gate and escalation"). Inside the batch it is a delivery dependency: the kit commits a ticket only when every ticket of the batch it depends on, directly or through others, is committed, or passed and changed nothing (see "After", step 8, and "Resolve"). A dependency on a ticket of an archived batch is not checked at commit (see "Not covered") |
 | `moves` (optional) | Tracked files the worker renames: `[{ "from": "src/a.js", "to": "lib/a.js" }]`. Each gives the exec worker one exact command, `mkdir -p -- "<folder>" && git --literal-pathspecs mv -- "<from>" "<to>"`, where `<folder>` is the folder of `to` (Git does not create it, and an earlier `git rm` may have removed it); a `to` at the top of the product gives the `git mv` alone. An empty list declares nothing, as an absent one. Frozen in the record (`[]` when absent). See "Moves and deletions" |
 | `deletes` (optional) | Tracked files the worker deletes: `["src/old.js"]`. Each gives the exec worker one exact command, `git --literal-pathspecs rm -q -- "<path>"`. An empty list declares nothing, as an absent one. Frozen in the record (`[]` when absent) |
 | `verificationCommands` (optional, per ticket) | 1 or more of the batch's `verificationCommands`, each once. The ticket's exec and check briefs list only these, so a ticket that changes a document need not run the product's test suite. Absent, the ticket runs the batch's whole list. The hook still accepts the batch's whole list from any worker, and the review's re-verification runs the whole list. Frozen in the ticket's entry of the record when given |
@@ -348,7 +348,10 @@ only for a `resume` outside `left/` and `reviews/held/`.
    something, of that ticket's own paths. A ticket that did not pass, or was not
    run because the batch halted, is not in the plan. A ticket passed when the
    engine's record says it is done and nothing else in that record says
-   otherwise (a failed verification, a pending fix or recovery).
+   otherwise (a failed verification, a pending fix or recovery). The engine
+   halts a batch at its first ticket that does not pass, so no later ticket
+   runs: a ticket whose dependency in the batch did not pass is `not-run`, and
+   `after` needs no rule of its own for `dependsOn`.
 9. **The record** `rw-batch-after.json` and one line in `pm-decisions.md`.
    `status` is `clean` when there is no finding, the engine reports no
    blocker and no ticket is flagged for a reviewer, otherwise `review`. `next` says what the PM must do when something
@@ -1043,6 +1046,16 @@ never changed by it. Then:
 2. **Removal.** The ticket's paths go back to the batch's start: a path the start
    holds is checked out from it, index included; a new path is unstaged and
    deleted. The kit checks that none of them still shows as changed.
+   **Dependents.** Then each ticket still to be committed that depends on a
+   held ticket (`dependsOn`), directly or through others of the batch, is held
+   the same way, with the reason `dependency-held` and `waitsOn`, the ids of
+   the batch it depends on directly that are not delivered. This happens
+   before step 3, so the commands judge the tree that will be committed. A
+   ticket that passed and changed nothing is delivered and holds no dependent.
+   A ticket held by step 3 needs no such pass: step 3 holds every ticket after
+   it, and a dependent comes later in the batch. `dependency-held` is not a
+   review outcome: it is not written to `reviews/tickets.jsonl` and does not
+   count toward a second rejection.
 3. **Re-verification.** When a ticket after the first removed one is still to be
    committed, the kit runs the batch's verification commands from the product
    root, only those that are both frozen in the batch and still in the team's
@@ -1070,13 +1083,17 @@ the same record.
 **Resolution record** `rw-batch-resolution.json` (archived as
 `resolution.json`): `{stage: "batch-resolved", runId, batchDigest, afterDigest,
 reviewsDigest, resolvedAt, removed: [{ticket, reason:
-"rejected"|"review-not-obtained"|"verification-failed-after-removal", patch,
-patchDigest, paths}], verification: {ran, failed, commands: [{command, exit,
+"rejected"|"review-not-obtained"|"verification-failed-after-removal"|"dependency-held",
+waitsOn?, patch, patchDigest, paths}], verification: {ran, failed, commands: [{command, exit,
 timedOut, outputDigest, tail}], dropped, changed, wrote}, failedAtBrief:
 [{reviewer, attempt, command, exit, timedOut}], commits, left}`.
+The `RESOLVED` ledger line names each held ticket with its reason, and a
+`dependency-held` one with the tickets it waits on (`<ticket> (dependency-held
+on <ids>)`). To take the work back, file the held dependency again and each
+dependent with its patch as its `resume` (see "Resuming left work").
 `commit` checks it against the verdicts (`reviewsDigest`), `after`'s plan (the
-commits are after's commits less the removed tickets, and every ticket a review
-held is removed) and the patches on disk (each at its exact path with its
+commits are after's commits less the removed tickets, every ticket a review
+held is removed, and so is every ticket that depends on a removed one) and the patches on disk (each at its exact path with its
 digest). The work tree it expects is `after`'s, less the removed paths, plus
 `wrote`, and each path it commits must still have the content the review saw.
 
@@ -1310,7 +1327,8 @@ holds each ticket that `after` recorded as needing a reviewer
 batch is not put in review) and that has no passed verdict from each of those
 reviewers, and each ticket `resolve` already held. The reason is `rejected`,
 `review-not-obtained`, `not-reviewed` (a required reviewer has no final
-verdict, or the verdicts cannot be read), or the reason `resolve` recorded.
+verdict, or the verdicts cannot be read), or the reason `resolve` recorded
+(`dependency-held` among them).
 With the lock taken, each held ticket whose changed paths (as `after` recorded
 them) still show as changed is saved and removed with `resolve`'s own
 functions: a binary patch of those paths against the product's HEAD at
@@ -1852,3 +1870,6 @@ The limits not being the ones the ledger binds is refused with its own code,
   `commit` then refuses because the product changed, and the batch is aborted.
 - A `resolve` that dies after its ledger line and before its record writes a
   second `RESOLVED` line when it is finished.
+- A `dependsOn` on a ticket of an archived batch is checked by `before` (the id
+  exists) and followed by escalations, nothing more: the kit does not check at
+  `commit` that the archived ticket was committed.
