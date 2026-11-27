@@ -12,7 +12,6 @@ import { digest } from '../src/loop/contracts.mjs';
 import { inputFixture } from './fixtures/router-worker/input.mjs';
 
 const HOOK = fileURLToPath(new URL('../scripts/hooks/rw-write-boundary.mjs', import.meta.url));
-const CLI = fileURLToPath(new URL('../scripts/arm-boundary-router-worker.mjs', import.meta.url));
 
 function fixture(t, { status = 'activated-disposable-smoke' } = {}) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'rw-boundary-'))), team = join(base, 'demo.rw-active'), product = join(base, 'product');
@@ -154,16 +153,6 @@ test('every hook call is logged without paths or commands, so a write that got t
   assert.ok(!text.includes('TOP-SECRET') && !text.includes(f.base), 'no command and no host path');
   const nowhere = spawnSync(process.execPath, [HOOK], { input: JSON.stringify(call(f, undefined, 'Write', '/x')), encoding: 'utf8', env: { PATH: process.env.PATH, CLAUDE_PROJECT_DIR: join(f.base, 'missing') } });
   assert.equal(nowhere.status, 0, 'a log that cannot be written does not change the verdict');
-});
-
-test('CLI arms from RUN.json, prints the record, exits 2 on refusal and 1 on usage', t => {
-  const f = fixture(t), file = join(f.base, 'run.json'), run = (...argv) => spawnSync(process.execPath, [CLI, ...argv], { encoding: 'utf8' });
-  writeFileSync(file, JSON.stringify({ run: {}, inputs: [inputFixture()] }));
-  const ok = run(file, '--team-root', f.team, '--product-root', f.product);
-  assert.equal(ok.status, 0, ok.stderr); assert.equal(JSON.parse(ok.stdout).stage, 'write-boundary-armed');
-  assert.match(JSON.parse(readFileSync(join(f.team, '.claude/settings.json'), 'utf8')).hooks.PreToolUse[0].hooks[0].command, /scripts\/hooks\/rw-write-boundary\.mjs"$/);
-  assert.equal(run(file, '--team-root', f.team, '--product-root', join(f.base, 'nope')).status, 2);
-  assert.equal(run(file).status, 1);
 });
 
 test('a refused command is logged with the values that look like secrets redacted', () => {

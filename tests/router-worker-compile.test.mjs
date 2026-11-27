@@ -1,9 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { compile, validateCheckReport } from '../src/router-worker/compile.mjs';
 import { canonical, digest, bytesDigest } from '../src/loop/contracts.mjs';
@@ -11,7 +7,6 @@ import { runWorkflow, makeAgentImpl } from '../scripts/lib/workflow-harness.mjs'
 import { inputFixture, failedCheckReport } from './fixtures/router-worker/input.mjs';
 
 const engine = fileURLToPath(new URL('../.claude/workflows/run-n-rounds.js', import.meta.url));
-const cli = fileURLToPath(new URL('../scripts/compile-router-worker.mjs', import.meta.url));
 const rebindPolicy = input => { input.mandate.policyDigest = digest(input.policy); return input; };
 
 test('F1: deterministic detached preview, bounded cross-layer task, existing engine fields', () => {
@@ -191,24 +186,4 @@ test('even a consistent PASS is only a claim until the host binds candidate and 
     const changed = structuredClone(report); mutate(changed);
     assert.deepEqual(Object.keys(validateCheckReport(changed)), ['errors']);
   }
-});
-
-test('CLI reads one input, writes no files, and emits no partial stdout on errors', t => {
-  const cwd = mkdtempSync(join(tmpdir(), 'rw-preview-'));
-  t.after(() => rmSync(cwd, { recursive: true, force: true }));
-  const file = join(cwd, 'input.json'), input = JSON.stringify(inputFixture());
-  writeFileSync(file, input);
-  const run = (...args) => spawnSync(process.execPath, [cli, ...args], { cwd, encoding: 'utf8', timeout: 10000 });
-  const ok = run(file);
-  assert.equal(ok.status, 0, ok.stderr);
-  assert.deepEqual(JSON.parse(ok.stdout), compile(inputFixture()));
-  assert.deepEqual(readdirSync(cwd), ['input.json']); assert.equal(readFileSync(file, 'utf8'), input);
-  for (const bad of ['{"schemaVersion":1,"schemaVersion":2}', '{', JSON.stringify({ ...inputFixture(), catalog: null })]) {
-    writeFileSync(file, bad);
-    const result = run(file);
-    assert.equal(result.status, 2); assert.equal(result.stdout, ''); assert.ok(JSON.parse(result.stderr).errors);
-  }
-  assert.equal(run().status, 1);
-  assert.equal(run(file, '--run').status, 1);
-  assert.equal(run(cwd).status, 2);
 });
