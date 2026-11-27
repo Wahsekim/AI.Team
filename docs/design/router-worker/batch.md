@@ -100,6 +100,7 @@ the team's hook and its wrappers:
 | `resume` | Optional patch that holds earlier work of this ticket, as `left`, `after`, `abort` or `resolve` printed it |
 | `continues` | Optional id of the earlier ticket whose work this one takes up under a new id (a new attempt from nothing, a split); its runs count as this ticket's |
 | `replan` | For a ticket that ran before and was not committed, only then: `{"cause", "feasible", "change"}`, one line each (below) |
+| `package` | Optional name of a package in `profiles/packages.json`. Its `paths`, `moves` and `deletes` stay in the package's folder (below) |
 | `commitMessage` | Optional, one line. Default `<id>: <title>` |
 | `nextLifecycleNumber` | The next lifecycle entry number |
 | `runId`, `date` | Optional. Default: a new run id, and today |
@@ -126,6 +127,17 @@ kept each from it (a failed check, a rejection, a batch held or aborted after `a
 `before` refuses it with `TICKET_ATTEMPTS_EXHAUSTED` and escalates it to the
 owner. Detail:
 [Earlier runs of a ticket](batch-reference.md#what-before-does-in-order).
+
+**Packages of one repository.** A product with several sub-projects lists
+them in the team's `profiles/packages.json`: a name, a folder, and optionally
+a conventions file, verification commands and the interface files outside the
+folder it builds against. A ticket that names its `package` writes only in the
+package's folder, verifies with the package's commands when it lists none, and
+gets the package's conventions inlined in its briefs. What two packages share
+goes through an interface file, with a ticket of its own and `dependsOn`.
+`after` logs each interface file a ticket changed, with the packages that read
+it, for the PM to file their follow-up tickets. Detail:
+[Packages of one repository](batch-reference.md#packages-of-one-repository).
 
 A ticket's worker runs only the batch's verification commands and the Git
 commands of its moves and deletions, each typed exactly as given, and reads

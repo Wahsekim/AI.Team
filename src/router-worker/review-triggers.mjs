@@ -15,7 +15,7 @@ const text = (value, max) => typeof value === 'string' && value.length > 0 && va
 const list = (value, check) => Array.isArray(value) && value.every(check);
 const shape = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).sort().join() === [...keys].sort().join();
 const plainName = name => typeof name === 'string' && ID.test(name) ? name : '(none or not a name)';
-const relativePath = path => text(path, 200) && !path.startsWith('/') && !path.split('/').includes('..');
+export const relativePath = path => text(path, 200) && !path.startsWith('/') && !path.split('/').includes('..');
 
 // One part of the list. Kit ids start with "kit.", project ids never do, so neither part can replace the other's entries.
 function checkPart(part, { kit, reviewers }) {
@@ -91,7 +91,7 @@ export function recordFrozen({ instance, review, changes, runId, at }) {
 }
 
 // A glob matches the whole path: `**/` is any number of folders, `*` and `?` stay inside one. Case is ignored, as in `covers`.
-const globOf = pattern => new RegExp(`^${pattern.split(/(\*\*\/|\*\*|\*|\?)/).map(part => ({ '**/': '(?:.*/)?', '**': '.*', '*': '[^/]*', '?': '[^/]' })[part] ?? part.replace(/[.+^${}()|[\]\\]/g, '\\$&')).join('')}$`, 'i');
+export const globOf = pattern => new RegExp(`^${pattern.split(/(\*\*\/|\*\*|\*|\?)/).map(part => ({ '**/': '(?:.*/)?', '**': '.*', '*': '[^/]*', '?': '[^/]' })[part] ?? part.replace(/[.+^${}()|[\]\\]/g, '\\$&')).join('')}$`, 'i');
 const hits = (match, path) => (match.glob ?? []).some(pattern => globOf(pattern).test(path)) || (match.contains ?? []).some(word => path.toLowerCase().includes(word.toLowerCase()));
 
 // The reviewers a ticket's changed paths require, in the kit's order, and why. A ticket that declared itself
