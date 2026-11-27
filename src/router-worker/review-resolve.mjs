@@ -6,7 +6,7 @@ import { git, gitRun, acquireLease, releaseLease } from './lease.mjs';
 import { readBoundary, closeBoundary, stateOf } from './write-boundary.mjs';
 import { runCommands, confirmedOf } from './run-commands.mjs';
 import { AFTER_FILE, RESOLUTION_FILE, RUN_ID, TICKET_ID, changedPaths, contentOf, entriesOf, hooksOf, plain, HOOKS_MOVED } from './batch.mjs';
-import { openBatch, intact, Refusal, IN_PROGRESS, ABANDON, HELD_REASONS, alive } from './batch-close.mjs';
+import { openBatch, intact, Refusal, IN_PROGRESS, ABANDON, HELD_REASONS, DEPENDENCY_HELD, waitingOn, alive } from './batch-close.mjs';
 import { reviewGate, verdictsOf, briefsOf, finalOf } from './review-judge.mjs';
 
 // ADR 0011, decisions 14 and 15, with the owner's answer of 2026-11-20: once the reviews are over, each ticket a review
@@ -187,15 +187,19 @@ export function resolveBatch({ teamRoot, instanceRoot, run = runCommands }) {
     const moved = drift(commits.filter(commit => !isRemoved(commit.ticket) && !condemned.has(commit.ticket)));
     need(!moved.length, `${moved.slice(0, 5).map(plain).join(', ')} changed since after; what would be committed is not what was reviewed. Restore it, or abort the batch`);
 
-    const hold = (commit, reason) => {
+    const hold = (commit, reason, waitsOn) => {
       if (!isRemoved(commit.ticket)) {
         const patch = `${HELD}/${batch.runId}/${commit.ticket}.patch`, bytes = patchOf(product, batch.productHead, commit.paths);
         savePatch(instance, patch, bytes);
-        save({ ...journal, removed: [...journal.removed, { ticket: commit.ticket, reason, patch, patchDigest: bytesDigest(bytes), paths: commit.paths }] });
+        save({ ...journal, removed: [...journal.removed, { ticket: commit.ticket, reason, ...(waitsOn ? { waitsOn } : {}), patch, patchDigest: bytesDigest(bytes), paths: commit.paths }] });
       }
       removeFrom(product, batch.productHead, commit.paths);
     };
     commits.forEach((commit, i) => { if (reasons[i]) hold(commit, reasons[i]); });
+    // Before the commands run again, so they judge the tree that is committed. The commands' own holds below take every commit
+    // from one on, and a dependent comes later in the batch, so they need no second pass.
+    const waits = waitingOn(batch.tickets, journal.removed.map(entry => entry.ticket));
+    for (const commit of commits.filter(entry => waits[entry.ticket])) hold(commit, DEPENDENCY_HELD, waits[commit.ticket]);
 
     if (first !== -1 && !journal.verification && commits.slice(first + 1).some(commit => !isRemoved(commit.ticket))) {
       const toCommit = commits.filter(commit => !isRemoved(commit.ticket));
@@ -220,7 +224,7 @@ export function resolveBatch({ teamRoot, instanceRoot, run = runCommands }) {
     const record = sealed({ schemaVersion: 1, stage: 'batch-resolved', runId: batch.runId, batchDigest: batch.digest, afterDigest: after.digest, reviewsDigest, resolvedAt: at,
       removed, verification, failedAtBrief, commits: plan, left: after.left });
     const again = `${verification.ran ? `; verification run again ${verification.failed ? 'FAILED' : 'passed'}${verification.changed.length ? `, changed ${verification.changed.slice(0, 10).map(plain).join(', ')}` : ''}` : ''}${wrote.length ? `; written since after, left uncommitted: ${wrote.slice(0, 10).map(plain).join(', ')}` : ''}`;
-    appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} BATCH ${batch.runId} RESOLVED: ${removed.length ? `held ${removed.map(entry => `${entry.ticket} (${entry.reason})`).join(', ')} as patches under ${HELD}/${batch.runId}/` : 'nothing held'}; ${plan.length} to commit${again}${failures ? `; verification failed when the review was briefed: ${failures}` : ''}.\n`);
+    appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} BATCH ${batch.runId} RESOLVED: ${removed.length ? `held ${removed.map(entry => `${entry.ticket} (${entry.reason}${entry.waitsOn ? ` on ${entry.waitsOn.join(', ')}` : ''})`).join(', ')} as patches under ${HELD}/${batch.runId}/` : 'nothing held'}; ${plan.length} to commit${again}${failures ? `; verification failed when the review was briefed: ${failures}` : ''}.\n`);
     replace(path, record);
     return record;
   } catch (error) {

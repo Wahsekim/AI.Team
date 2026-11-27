@@ -335,3 +335,33 @@ refuse because the product had changed, with `abort` as the only way out.
 changed since `after` closed the batch that no ticket to commit holds; `commit`
 leaves those uncommitted and names them. A path of a ticket to commit whose
 content changed is still refused.
+## Amendment of 2026-11-27: a ticket held in review holds the tickets that depend on it
+
+Status: Proposed (the owner has not confirmed it; merging the pull request
+that adds this amendment ratifies it).
+
+Decision 15 commits the tickets after a rejected one when the verification
+commands still pass without it. An outside review of main showed what that
+leaves open: a ticket that names the rejected one in `dependsOn` was committed
+alone when the commands passed, though the PM had declared it builds on the
+other.
+
+Inside one batch `dependsOn` is now a delivery dependency. When `resolve`
+holds a ticket (rejected, review not obtained), it holds every ticket of the
+batch that depends on it, directly or through others, as a patch under
+`reviews/held/<run id>/` with the reason `dependency-held` and the tickets it
+waits on, before it runs the commands again; the tickets that depend on none
+of them are judged by that run as decision 15 says. `commit` refuses a
+resolution that keeps such a dependent. A batch that an earlier kit
+resolved with a dependent kept, and that is not yet committed, is refused the
+same way and is closed with `abort`. The reason is not a rejection: it
+does not count toward decision 16.
+
+Not changed: `after` needs no such rule, because a standing batch halts at the
+first ticket that does not pass and a dependent always runs later. A
+dependency on a ticket of an archived batch is still checked only for its id
+and for an owner escalation; the kit does not check that it was committed.
+
+The other reading, kept open for the owner: leave `dependsOn` as an ordering
+hint and let decision 15 alone decide. Then this amendment is withdrawn and
+the field's row in the reference says it holds nothing.
