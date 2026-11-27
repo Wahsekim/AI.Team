@@ -72,7 +72,7 @@ export function exhaustion({ instance, runs, at }) {
   const last = runs.at(-1), runIds = runs.map(run => run.runId);
   const known = linesOf(join(instance, ESCALATIONS)), id = `ESC-${last.ticket}-exhausted-${last.runId}`, raised = known.find(entry => same(entry.id, id));
   if (raised) return liftedIn(instance)(raised) ? null : raised;
-  const entry = { id, kind: EXHAUSTED, ticket: last.ticket, runIds, paths: [], at };
+  const entry = { id, kind: EXHAUSTED, ticket: last.ticket, tickets: [...new Set(runs.map(run => run.ticket))], runIds, paths: [], at };
   mkdirSync(join(instance, 'reviews'), { recursive: true });
   append(join(instance, ESCALATIONS), [entry]);
   appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} ESCALATED ${id}: ticket ${entry.ticket} ran ${runs.length} times by the engine without a commit: ${runs.map(run => runSaid({ ...run, as: entry.ticket })).join(', ')}. The initial run and two retries are spent; it, a ticket that continues or resumes its work and every ticket that depends on it are blocked until the owner reviews it and runs: team-mode.mjs acknowledge ${id} --instance <instance-root>. Then it may be filed again with a replan, and a further run without a commit escalates it again. Other tickets go on.\n`);
@@ -83,7 +83,8 @@ export function exhaustion({ instance, runs, at }) {
 // paths, and a ticket that depends on a blocked one, directly or through others, here or in an archived batch.
 export function blockedTickets({ instance, tickets, archived }) {
   const open = openEscalations(instance), blocked = new Map();
-  for (const entry of open) blocked.set(entry.ticket.toLowerCase(), entry);
+  // An exhausted ticket is blocked under every id its runs were filed under.
+  for (const entry of open) for (const id of [entry.ticket, ...(Array.isArray(entry.tickets) ? entry.tickets : [])]) if (!blocked.has(String(id).toLowerCase())) blocked.set(String(id).toLowerCase(), entry);
   for (const ticket of tickets) {
     const entry = open.find(item => ticket.paths.some(path => item.paths.some(other => overlap(path, other))));
     if (entry && !blocked.has(ticket.id.toLowerCase())) blocked.set(ticket.id.toLowerCase(), entry);

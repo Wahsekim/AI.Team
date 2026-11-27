@@ -178,7 +178,8 @@ for it (`passed` or `not-passed`; a ticket the engine never reached, `not-run`,
 is not a run). The kit committed it when the archive's `commit.json` or
 `commits.json` lists a commit for it. Runs before the latest archived batch
 that committed the ticket do not count: committed work is done, and the id
-filed again is new work. Each entry is `{runId, ticket, status}`: the archived
+filed again is new work. The same holds for a linked ticket: its runs before
+the kit last committed it are closed with that commit. Each entry is `{runId, ticket, status}`: the archived
 batch, the ticket's id there, and its status.
 
 A ticket with at least one earlier run is replanned, not handed out again:
@@ -201,16 +202,20 @@ A ticket with at least one earlier run is replanned, not handed out again:
 
 **At most two retries** (decisions/0008: the initial run and two retries).
 Every earlier run counts, whatever kept it from being committed (owner rule of
-2026-11-27): a check that did not pass, a rejection, a batch held or aborted.
+2026-11-27): a check that did not pass, a rejection, a batch held, or one
+aborted after `after` closed it (a batch aborted before `after` is not
+archived, and is no run).
 A ticket with three earlier runs is refused with `TICKET_ATTEMPTS_EXHAUSTED`,
 which names each run with its status and, for a run that passed, the findings
-of its batch, and escalated: `{id: "ESC-<ticket>-exhausted-<latest failed run>", kind:
-"attempts-exhausted", ticket, runIds, paths: [], at}` in
+of its batch, and escalated: `{id: "ESC-<ticket>-exhausted-<latest run>", kind:
+"attempts-exhausted", ticket, tickets, runIds, paths: [], at}` in
 `reviews/escalations.jsonl` and an `ESCALATED` ledger line, where `<ticket>` is
-the ticket's id in its latest run. Until the owner runs `team-mode.mjs
-acknowledge <id>` the ticket is refused under that id (`TICKET_ESCALATED`), a
-new id that continues it or resumes its saved patch is refused with the same
-escalation (`TICKET_ATTEMPTS_EXHAUSTED`), and so is a ticket that depends on it. The
+the ticket's id in its latest run and `tickets` every id its runs were filed
+under. Until the owner runs `team-mode.mjs acknowledge <id>` the ticket is
+refused under each of those ids, and so is a ticket that depends on one of them
+(`TICKET_ESCALATED`); a new id that continues it or resumes its saved patch is
+refused with the same escalation (`TICKET_ATTEMPTS_EXHAUSTED`). The escalation
+is written when the spent ticket is next filed, not when its third run ends. The
 escalation names no paths: a ticket that only shares a file goes on, unlike a
 review escalation. Once it is acknowledged the ticket may be filed again, with
 a `replan`, and its next run without a commit escalates it again under a new
@@ -1635,7 +1640,9 @@ The limits not being the ones the ledger binds is refused with its own code,
 - **Earlier runs are told by id, by `continues` and by the saved patch a ticket
   resumes.** The same work filed under a new id and done again from nothing,
   with no `continues`, starts a new count: the kit cannot tell it from new
-  work, and the field is the PM's to fill. So does a copy of a saved patch edited outside `left/` and
+  work, and the field is the PM's to fill. Links are followed back only: an
+  earlier id filed again after the work went on under a new one carries its
+  own runs, not those of the tickets that continued it. So does a copy of a saved patch edited outside `left/` and
   `reviews/held/`. A run that was not committed although the work later landed
   under another id still counts. A batch aborted before `after` is not
   archived and is not counted, nor is an archive whose batch record cannot be

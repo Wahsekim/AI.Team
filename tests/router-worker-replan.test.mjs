@@ -77,7 +77,7 @@ test('a ticket runs at most three times without a commit, whatever kept each run
   assert.equal(exhausted?.code, 'TICKET_ATTEMPTS_EXHAUSTED');
   assert.match(exhausted.reason, new RegExp(`US-01 ran 3 times by the engine without a commit: ${spent[0]} \\(passed[^)]*\\), ${spent[1]} \\(did not pass its check\\), ${spent[2]} \\(did not pass its check\\)`));
   const [escalation] = f.lines('reviews/escalations.jsonl');
-  assert.deepEqual([escalation.kind, escalation.ticket, escalation.runIds, escalation.paths], ['attempts-exhausted', 'US-01', spent, []]);
+  assert.deepEqual([escalation.kind, escalation.ticket, escalation.tickets, escalation.runIds, escalation.paths], ['attempts-exhausted', 'US-01', ['US-01'], spent, []]);
   assert.ok(exhausted.reason.includes(escalation.id));
   assert.match(f.ledger(), new RegExp(`ESCALATED ${escalation.id}: ticket US-01 ran 3 times by the engine without a commit: ${spent[0]} \\(passed.*team-mode\\.mjs acknowledge ${escalation.id}`));
   const blocked = refusal(await f.before(batchOf(file(3))));
@@ -109,6 +109,32 @@ test('a ticket the kit committed starts a new count when its id is filed again',
   assert.equal(markNotMetered({ ...f.common, reason: 'not measured in this test', runId: done.open.runId }).errors, undefined);
   const fresh = await f.before(batchOf(ticket('US-01', ['src/list/a.js'])));
   assert.equal(fresh.errors, undefined, JSON.stringify(fresh.errors)); assert.deepEqual(fresh.tickets[0].earlierRuns, { runs: [], count: 0 });
+  assert.equal(abortBatch(f.common).errors, undefined);
+});
+
+test('a ticket exhausted under a new id is blocked under the id it continues too', async t => {
+  const f = live(t);
+  for (const n of [0, 1]) await ran(f, [ticket('US-01', ['src/list/a.js'], n ? { replan: replan(n) } : {})], ['src/list/a.js']);
+  await ran(f, [ticket('US-02', ['src/list/a.js'], { continues: 'US-01', replan: replan(2) })], ['src/list/a.js']);
+  assert.equal(refusal(await f.before(batchOf(ticket('US-02', ['src/list/a.js'], { continues: 'US-01', replan: replan(3) }))))?.code, 'TICKET_ATTEMPTS_EXHAUSTED');
+  const [escalation] = f.lines('reviews/escalations.jsonl');
+  assert.deepEqual([escalation.ticket, escalation.tickets], ['US-02', ['US-01', 'US-02']]);
+  const original = refusal(await f.before(batchOf(ticket('US-01', ['src/list/a.js'], { replan: replan(3) }))));
+  assert.equal(original?.code, 'TICKET_ESCALATED'); assert.match(original.reason, new RegExp(escalation.id));
+});
+
+test('one half of a split keeps its own runs when the kit commits the other half', async t => {
+  const f = live(t);
+  for (const n of [0, 1]) await ran(f, [ticket('US-01', ['src/list/a.js', 'src/list/b.js'], n ? { replan: replan(n) } : {})], ['src/list/a.js', 'src/list/b.js']);
+  // The third batch runs the two halves: the kit commits the first, and the second does not pass.
+  const split = await runBatch(f, [ticket('US-01', ['src/list/a.js'], { replan: replan(2) }), ticket('US-02', ['src/list/b.js'], { continues: 'US-01', replan: replan(2) })], edits(['src/list/a.js', 'src/list/b.js']), {}, checker(2));
+  assert.deepEqual(split.after.tickets.map(entry => entry.status), ['passed', 'not-passed']);
+  assert.deepEqual(f.commit().commits?.map(commit => commit.ticket), ['US-01']); assert.equal(saveLeftWork(f.common).errors, undefined);
+  assert.equal(markNotMetered({ ...f.common, reason: 'not measured in this test', runId: split.open.runId }).errors, undefined);
+  assert.match(refusal(await f.before(batchOf(ticket('US-02', ['src/list/b.js'], { continues: 'US-01' }))))?.reason, /US-02 ran before/);
+  const next = await f.before(batchOf(ticket('US-02', ['src/list/b.js'], { continues: 'US-01', replan: replan(3) })));
+  assert.equal(next.errors, undefined, JSON.stringify(next.errors));
+  assert.deepEqual(next.tickets[0].earlierRuns, { runs: [{ runId: split.open.runId, ticket: 'US-02', status: 'not-passed' }], count: 1 }, 'the committed half closes its own earlier runs, not the run of the other half');
   assert.equal(abortBatch(f.common).errors, undefined);
 });
 

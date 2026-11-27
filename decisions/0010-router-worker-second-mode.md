@@ -587,8 +587,8 @@ batch record, put in the ticket's exec and check briefs with its earlier runs,
 and logged in the ledger line for the owner, which is the report to the user.
 "Two retries" is read as ADR 0008 reads it: the initial run plus two. Asked the
 same day which runs count, the owner chose every run without a commit, whatever
-kept it from one: a check that did not pass, a rejection, a batch held or
-aborted. A ticket with three such runs is refused with
+kept it from one: a check that did not pass, a rejection, a batch held, or one
+aborted after `after` closed it. A ticket with three such runs is refused with
 `TICKET_ATTEMPTS_EXHAUSTED` and escalated to the owner with the kind
 `attempts-exhausted`, which blocks it, a ticket that continues it or resumes
 its saved patch and a ticket that depends on it, and no ticket that only shares

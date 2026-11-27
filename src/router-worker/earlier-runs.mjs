@@ -56,9 +56,10 @@ export function earlierRuns(instance, archived) {
     const linked = (entry, patch) => [entry.continues, resumedFrom(instance, patch)?.ticket].filter(id => typeof id === 'string' && TICKET_ID.test(id) && !isMine(id));
     ids.push(...linked(ticket, resume));
     for (let i = 1; i < ids.length; i++) for (const entry of filed.filter(other => same(other.id, ids[i]))) ids.push(...linked(entry, entry.resume));
-    // Committed work is done: the id filed again is new work, and the runs before that commit are not its runs.
-    const since = batches.findLastIndex(batch => batch.committed.some(isMine));
-    const mine = batches.slice(since + 1).flatMap(batch => batch.ran).filter(run => isMine(run.ticket)), plainRun = ({ runId, ticket: id, status }) => ({ runId, ticket: id, status });
+    // Committed work is done: the id filed again is new work, and the runs before that commit are not its runs;
+    // and so is a linked ticket the kit committed since: its runs before that commit are closed with it.
+    const committedLast = id => batches.findLastIndex(batch => batch.committed.some(other => same(other, id))), since = committedLast(ticket.id);
+    const mine = batches.flatMap((batch, i) => i > since ? batch.ran.filter(run => isMine(run.ticket) && i > committedLast(run.ticket)) : []), plainRun = ({ runId, ticket: id, status }) => ({ runId, ticket: id, status });
     return { runs: mine.slice(-EARLIER_KEPT).map(plainRun), count: mine.length, every: mine.map(({ replan, ...run }) => run), replan: mine.at(-1)?.replan,
       stranger: typeof ticket.continues === 'string' && !filed.some(entry => same(entry.id, ticket.continues)) ? ticket.continues : null };
   };

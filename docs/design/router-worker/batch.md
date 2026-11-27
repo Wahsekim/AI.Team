@@ -122,7 +122,7 @@ why it can be done as now written (`feasible`) and what is different
 same replan as last time is refused. `before` logs the replan for the owner
 and lists it under `runsAgain`: report it to the owner. A ticket gets the
 initial run and two retries: after its third run without a commit, whatever
-kept each from it (a failed check, a rejection, a held or aborted batch),
+kept each from it (a failed check, a rejection, a batch held or aborted after `after`),
 `before` refuses it with `TICKET_ATTEMPTS_EXHAUSTED` and escalates it to the
 owner. Detail:
 [Earlier runs of a ticket](batch-reference.md#what-before-does-in-order).
