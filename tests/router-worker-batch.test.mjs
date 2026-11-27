@@ -777,7 +777,8 @@ test('abort of a batch a finding held saves each ticket flagged for review as a 
   git(f.product, 'apply', '-R', join(f.root, patch));
   // The held patch comes back as the resume of the same ticket, where it is checked and reviewed as its work.
   f.unmetered();
-  const next = await f.before(batchOf(ticket('US-01', ['src/authz.js', 'src/app.js'], { resume: patch })), { startAsIs: true });
+  const replan = { cause: 'The guardian held the batch before a review', feasible: 'The checker passed the work as saved', change: 'The held patch is resumed and reviewed' };
+  const next = await f.before(batchOf(ticket('US-01', ['src/authz.js', 'src/app.js'], { resume: patch, replan })), { startAsIs: true });
   assert.equal(next.errors, undefined, JSON.stringify(next.errors)); assert.equal(next.tickets[0].resume.patch, patch);
   assert.deepEqual(flagged.map(path => inTree(f, path)), flagged.map(path => flaggedEdits[path]));
 });

@@ -13,16 +13,14 @@ import { earlierRuns } from '../src/router-worker/earlier-runs.mjs';
 import { acquireLease, releaseLease } from '../src/router-worker/lease.mjs';
 import { reviewBoundary, closeBoundary } from '../src/router-worker/write-boundary.mjs';
 import { git } from './fixtures/router-worker/standing-team.mjs';
-import { ticket, live, changed, runBatch, batchOf, agentsOf, edits, COMMANDS } from './fixtures/router-worker/review.mjs';
+import { ticket, live, changed, runBatch, batchOf, agentsOf, edits, checker, COMMANDS } from './fixtures/router-worker/review.mjs';
 
-const failed = { pass: false, staticPass: false, e2ePass: false, summary: 'broken', commandsRun: COMMANDS.map(command => ({ command, exitCode: 1 })), failures: ['a test fails'] };
-// The checker fails the checks named by their order, 1 being the first ticket's.
-const checker = (...failing) => { let n = 0; const pass = agentsOf(COMMANDS).verifier; return { verifier: () => failing.includes(++n) ? failed : pass() }; };
 const inTree = (f, path) => existsSync(join(f.product, path)) ? readFileSync(join(f.product, path), 'utf8') : null;
 const left = (f, ...args) => {
   const run = spawnSync(process.execPath, [join(f.kit, 'scripts/rw-batch.mjs'), 'left', '--instance', f.root, ...args], { encoding: 'utf8' });
   return { status: run.status, out: run.stdout ? JSON.parse(run.stdout) : null, refused: run.stderr ? JSON.parse(run.stderr).errors?.[0] : null };
 };
+const replan = { cause: 'The checker failed the last run', feasible: 'The goal fits the paths as written', change: 'The saved work is resumed and finished' };
 const settled = (f, runId) => assert.equal(markNotMetered({ ...f.common, reason: 'not measured in this test', runId }).errors, undefined);
 
 test('the work of a ticket that after set aside, applied back by the PM, is that ticket\'s work to left, not the work of no ticket', async t => {
@@ -75,7 +73,7 @@ test('left saves the work each ticket of an archived batch left in the work tree
   // The printed resume values open a batch that resumes both tickets.
   settled(f, open.runId);
   const [one, , two] = saved.out.tickets;
-  const next = await beforeBatch({ ...f.common, startAsIs: true, batch: batchOf(ticket('US-01', ['src/list/a.js'], { resume: one.resume }), ticket('US-02', ['src/app.js', 'src/list/new/**'], { expectedPaths: ['src/app.js'], resume: two.resume })) });
+  const next = await beforeBatch({ ...f.common, startAsIs: true, batch: batchOf(ticket('US-01', ['src/list/a.js'], { resume: one.resume, replan }), ticket('US-02', ['src/app.js', 'src/list/new/**'], { expectedPaths: ['src/app.js'], resume: two.resume, replan })) });
   assert.equal(next.errors, undefined, JSON.stringify(next.errors)); assert.deepEqual(next.tickets.map(entry => entry.resume.patch), [at('US-01'), at('US-02')]);
   const resumed = ['src/list/a.js', 'src/app.js', 'src/list/new/c.js'];
   assert.deepEqual(resumed.map(path => inTree(f, path)), resumed.map(path => work[path]));
@@ -137,30 +135,30 @@ test('left names a patch before would refuse as a resume, and says the ticket mu
   assert.deepEqual([inTree(f, 'src/app.js'), inTree(f, 'src/list/f.js')], [null, '// f\n'], 'the work is saved whole all the same');
 });
 
-test('before freezes and logs the earlier runs of a ticket the kit did not commit, found by its id or by paths that overlap', async t => {
+test('before freezes and logs the earlier runs of a ticket the kit did not commit, found by its id and not by paths that overlap', async t => {
   const f = live(t), discard = () => { git(f.product, 'checkout', '-q', '--', '.'); git(f.product, 'clean', '-fdq'); };
   const lines = () => f.ledger().split('\n').filter(line => / RUNS \S+ AGAIN \(owner spot review\)/.test(line));
   // Batch 1: US-02 passes and is committed; US-01 does not pass.
   const one = await runBatch(f, [ticket('US-02', ['src/list/b.js']), ticket('US-01', ['src/list/a.js'])], edits(['src/list/b.js', 'src/list/a.js']), {}, checker(2));
   assert.equal(f.commit().errors, undefined); discard(); settled(f, one.open.runId);
   // Batch 2: US-01 does not pass again, and the engine halts before it runs US-04.
-  const two = await runBatch(f, [ticket('US-01', ['src/list/a.js']), ticket('US-04', ['src/list/d.js'])], edits(['src/list/a.js']), {}, checker(1));
+  const two = await runBatch(f, [ticket('US-01', ['src/list/a.js'], { replan }), ticket('US-04', ['src/list/d.js'])], edits(['src/list/a.js']), {}, checker(1));
   assert.deepEqual(two.after.tickets.map(entry => entry.status), ['not-passed', 'not-run']);
   assert.deepEqual(two.open.tickets.map(entry => entry.earlierRuns), [{ runs: [{ runId: one.open.runId, ticket: 'US-01', status: 'not-passed' }], count: 1 }, { runs: [], count: 0 }]);
   assert.equal(f.commit().errors, undefined); discard(); settled(f, two.open.runId);
 
   const runs = [{ runId: one.open.runId, ticket: 'US-01', status: 'not-passed' }, { runId: two.open.runId, ticket: 'US-01', status: 'not-passed' }];
-  const third = await f.before(batchOf(ticket('US-01', ['src/list/a.js']), ticket('US-02', ['src/list/b.js']), ticket('US-04', ['src/list/d.js'])));
+  const third = await f.before(batchOf(ticket('US-01', ['src/list/a.js'], { replan: { ...replan, change: 'The ticket is split; this part edits a.js only' } }), ticket('US-02', ['src/list/b.js']), ticket('US-04', ['src/list/d.js'])));
   assert.equal(third.errors, undefined, JSON.stringify(third.errors));
   assert.deepEqual(third.tickets.map(entry => entry.earlierRuns), [{ runs, count: 2 }, { runs: [], count: 0 }, { runs: [], count: 0 }], 'a ticket the kit committed, or the engine never ran, has none');
-  assert.deepEqual(lines(), [`${two.open.openedAt.slice(0, 10)} BATCH ${two.open.runId} RUNS US-01 AGAIN (owner spot review): 1 earlier run(s) by the engine that the kit did not commit: ${one.open.runId} as US-01 (not-passed).`,
-    `${third.openedAt.slice(0, 10)} BATCH ${third.runId} RUNS US-01 AGAIN (owner spot review): 2 earlier run(s) by the engine that the kit did not commit: ${one.open.runId} as US-01 (not-passed), ${two.open.runId} as US-01 (not-passed).`]);
+  assert.deepEqual(lines(), [`${two.open.openedAt.slice(0, 10)} BATCH ${two.open.runId} RUNS US-01 AGAIN (owner spot review): 1 earlier run(s) by the engine that the kit did not commit: ${one.open.runId} as US-01 (not-passed). Replanned by the PM: cause: ${replan.cause}; feasible: ${replan.feasible}; change: ${replan.change}.`,
+    `${third.openedAt.slice(0, 10)} BATCH ${third.runId} RUNS US-01 AGAIN (owner spot review): 2 earlier run(s) by the engine that the kit did not commit: ${one.open.runId} as US-01 (not-passed), ${two.open.runId} as US-01 (not-passed). Replanned by the PM: cause: ${replan.cause}; feasible: ${replan.feasible}; change: The ticket is split; this part edits a.js only.`]);
   assert.equal(abortBatch(f.common).errors, undefined);
 
-  // The same work under a new id: its folder grant overlaps US-01's file.
-  const renamed = await f.before(batchOf(ticket('US-11', ['src/list/**'], { expectedPaths: ['src/list/a.js'] })));
-  assert.equal(renamed.errors, undefined, JSON.stringify(renamed.errors)); assert.deepEqual(renamed.tickets[0].earlierRuns, { runs, count: 2 });
-  assert.equal(lines().length, 3); assert.match(lines()[2], new RegExp(`BATCH ${renamed.runId} RUNS US-11 AGAIN \\(owner spot review\\): 2 earlier run\\(s\\)`));
+  // A new id whose folder grant overlaps US-01's file, resuming nothing, is other work (owner rule of 2026-11-26).
+  const other = await f.before(batchOf(ticket('US-11', ['src/list/**'], { expectedPaths: ['src/list/a.js'] })));
+  assert.equal(other.errors, undefined, JSON.stringify(other.errors)); assert.deepEqual(other.tickets[0].earlierRuns, { runs: [], count: 0 });
+  assert.equal(lines().length, 2);
 });
 
 test('a ticket whose removal failed part-way is named with the patch left saved, the complete one, on every later run, until what is left of it is discarded', async t => {

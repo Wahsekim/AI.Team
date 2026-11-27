@@ -456,7 +456,7 @@ outside the kit's tests. Specialist mode does not change.
 
 ### 2026-11-26: the kit saves left work and counts its runs
 
-Status: Accepted.
+Status: Accepted. Superseded in part by the amendment of 2026-11-27 below: the count now refuses, and runs are no longer matched by overlapping paths.
 
 In three real batches in a row a ticket's work was left in the product work
 tree, and the PM saved it as patches by hand, cleaned the tree and named the
@@ -554,3 +554,50 @@ finishing it is not a new change. Any other leftover is removed by that change
 and applies nothing. A proposal names the leftover and changes nothing, and
 the hook refuses a file-tool write of the leftover as it refuses the limits
 file.
+
+### 2026-11-27: a ticket that ran before is replanned, and runs at most three times
+
+Status: Accepted.
+
+The amendment of 2026-11-26 counted a ticket's earlier runs for the owner and
+refused nothing, so a ticket that failed could be filed again unchanged, any
+number of times. The owner decided in session on 2026-11-27:
+
+> 跑一次失败后 router 重新计划时候不是机械的重新发放任务，需要重新审视问题：是否可实现，为什么失败，然后发放，并报告使用者
+
+(after a failed run the router does not hand the task out again mechanically
+when it replans: it re-examines the problem, whether it can be done and why it
+failed, then dispatches, and reports to the user), and:
+
+> 原来 specialist team 规定 max retry 2 times，我想也要最多尝试两次
+
+(the specialist team's rule is at most two retries; the same here).
+
+A ticket's earlier runs are the archived batches, since the kit last committed
+it, in which the engine ran it and the kit did not commit it, where "it" is a
+ticket of the same id, the ticket it names in `continues`, or the ticket whose
+saved patch (under `left/` or `reviews/held/`, told by its place or, for a
+copy, by its bytes) it resumes, followed back through the links the archives
+froze. Tickets that only share a file are not one piece of work. `before` refuses a ticket with an
+earlier run until it carries a `replan` of three one-line texts: why the
+earlier run was not committed, why the ticket can be done as now written, and
+what is different this time. It refuses the replan of the ticket's latest run
+unchanged, and a replan on a ticket that never ran. The replan is frozen in the
+batch record, put in the ticket's exec and check briefs with its earlier runs,
+and logged in the ledger line for the owner, which is the report to the user.
+"Two retries" is read as ADR 0008 reads it: the initial run plus two. Asked the
+same day which runs count, the owner chose every run without a commit, whatever
+kept it from one: a check that did not pass, a rejection, a batch held, or one
+aborted after `after` closed it. A ticket with three such runs is refused with
+`TICKET_ATTEMPTS_EXHAUSTED` and escalated to the owner with the kind
+`attempts-exhausted`, which blocks it, a ticket that continues it or resumes
+its saved patch and a ticket that depends on it, and no ticket that only shares
+a file, until the owner acknowledges it; after that it may be filed again with
+a replan, and a further run without a commit escalates it again. The owner
+also asked that a ticket opened anew name the original, to follow the work: a
+ticket may carry `continues`, the id of the earlier ticket whose work it takes
+up, and that ticket's runs then count as its own. The cap is a constant of
+the kit, not a team limit, and `attemptsPerTicket`, the attempts inside one
+engine run, is unchanged. This supersedes the amendment of 2026-11-26, "the kit
+saves left work and counts its runs", where it says the count refuses nothing
+and where it matches runs by overlapping paths.

@@ -118,7 +118,7 @@ function validateInput(input, bundle, standingBatch) {
   requireValue(policy.budgetUnit === 'input+cache_creation', 'policy.budgetUnit', 'Unsupported budget unit');
   positive(policy.maxTicketBudget, 'policy.maxTicketBudget');
 
-  fields(m, ['ticketId', 'repoId', 'approvalRef', 'policyDigest', 'allowedWritePaths', 'allowedTools', 'budgetTokens', 'stopConditions', ...['gitCommands', 'resumedPaths', 'verificationCommands'].filter(key => Object.hasOwn(m ?? {}, key))], 'mandate');
+  fields(m, ['ticketId', 'repoId', 'approvalRef', 'policyDigest', 'allowedWritePaths', 'allowedTools', 'budgetTokens', 'stopConditions', ...['gitCommands', 'resumedPaths', 'ranBefore', 'verificationCommands'].filter(key => Object.hasOwn(m ?? {}, key))], 'mandate');
   // ADR 0010, amendment of 2026-11-24: the moves and deletions a standing batch derived from its ticket; the input cannot vouch for itself.
   if (Object.hasOwn(m, 'verificationCommands')) {
     requireValue(standingBatch === true, 'mandate.verificationCommands', 'Only a standing batch narrows the verification commands of a ticket');
@@ -127,6 +127,18 @@ function validateInput(input, bundle, standingBatch) {
   if (Object.hasOwn(m, 'resumedPaths')) {
     requireValue(standingBatch === true, 'mandate.resumedPaths', 'Only a standing batch resumes earlier work');
     list(m.resumedPaths, 'mandate.resumedPaths', (path, field) => requireValue(typeof path === 'string' && within(path, m.allowedWritePaths), field, 'Expected a path the ticket may write'));
+  }
+  // ADR 0010, amendment of 2026-11-27: the earlier runs of a ticket that runs again, and the PM's replan.
+  if (Object.hasOwn(m, 'ranBefore')) {
+    requireValue(standingBatch === true, 'mandate.ranBefore', 'Only a standing batch runs a ticket again');
+    fields(m.ranBefore, ['runs', 'count', 'replan'], 'mandate.ranBefore');
+    list(m.ranBefore.runs, 'mandate.ranBefore.runs', (run, field) => {
+      fields(run, ['runId', 'ticket', 'status'], field); id(run.runId, `${field}.runId`); id(run.ticket, `${field}.ticket`);
+      requireValue(['passed', 'not-passed'].includes(run.status), `${field}.status`, 'Expected passed or not-passed');
+    });
+    positive(m.ranBefore.count, 'mandate.ranBefore.count');
+    fields(m.ranBefore.replan, ['cause', 'feasible', 'change'], 'mandate.ranBefore.replan');
+    for (const key of ['cause', 'feasible', 'change']) text(m.ranBefore.replan[key], `mandate.ranBefore.replan.${key}`, 200);
   }
   if (Object.hasOwn(m, 'gitCommands')) {
     requireValue(standingBatch === true, 'mandate.gitCommands', 'Only a standing batch grants Git moves and deletions');
@@ -193,6 +205,7 @@ const CHECK = {
 const PATHS = 'A team-relative path named here or in a role file (agents/..., docs/..., profiles/...) resolves in the team root when it exists there, otherwise under kit/; writePaths, plannedPaths and gitCommands are relative to the product root. Read files with Read, Grep and Glob, never with the shell.';
 const EXIT = 'Run each command in the foreground with a timeout long enough for it (up to 600000 ms). Only a command that takes longer goes to the background; then wait for its completion notice instead of checking on it, since each check costs a turn and sleep is refused. The Bash tool reports each command\'s exit code: append nothing to a command (no `; echo $?`, pipe or redirect); the host refuses any other form.';
 const RESUMED = 'resumedPaths hold an earlier attempt at this ticket, which the host applied before you started: read them first, keep what is right, finish the rest and verify. Do not start over.';
+const RAN_BEFORE = 'ranBefore names the earlier runs of this ticket that were not committed, and the PM\'s replan: why the latest was not committed, why the ticket can be done as written, and what is different this time. What failed before must not fail again.';
 const SHELL = 'Run only the verificationCommands and this ticket\'s own gitCommands listed here, each exactly as written, from the product root; run no other command, Git included. The host also accepts the moves and deletions the other tickets of this batch declare: they are not yours to run. Move or delete a tracked file only with these gitCommands. ' + EXIT;
 
 function render(input, duty, methods, standingBatch) {
@@ -204,6 +217,7 @@ function render(input, duty, methods, standingBatch) {
     ...(duty === 'exec' ? { writePaths: m.allowedWritePaths } : {}),
     ...(duty === 'exec' && standingBatch ? { gitCommands: m.gitCommands ?? [], shell: SHELL } : {}),
     ...(duty === 'exec' && m.resumedPaths ? { resumedPaths: m.resumedPaths, resumed: RESUMED } : {}),
+    ...(m.ranBefore ? { ranBefore: m.ranBefore, ranBeforeNote: RAN_BEFORE } : {}),
     // The exact text the hook accepts, from any folder: the worker's shell does not start at the product root.
     ...(policy.productRoot ? { runAs: [...(m.verificationCommands ?? policy.verificationCommands), ...(duty === 'exec' ? m.gitCommands ?? [] : [])].map(command => `cd "${policy.productRoot}" && ${command}`) } : {}),
     writeBoundary: duty === 'exec' ? 'Write only inside writePaths; plannedPaths are the files expected to change. The host refuses any other write' : standingBatch ? `No product write; run only the listed verification commands, from the product root. ${EXIT}` : 'No product mutation; use the approved isolated verification runner',

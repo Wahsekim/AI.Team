@@ -8,10 +8,10 @@ import { openBoundary, closeBoundary, readBoundary, quotable, stateOf, within, U
 import { observeIsolation } from './isolation.mjs';
 import { limitsOf, COUNT_LIMITS, LATER_LIMITS, boundLimits, rosterWrapper, GATE_PATH_OFF } from './switch.mjs';
 import { loadReview, isReviewListError, triggerChanges, recordFrozen } from './review-triggers.mjs';
-import { blockedTickets } from './escalations.mjs';
+import { blockedTickets, exhaustion, runSaid } from './escalations.mjs';
 import { periodicDue, periodicDueReason } from './review-periodic.mjs';
 import { resumePathProblem, resumePlan, applyResume, revertResume } from './batch-resume.mjs';
-import { holdUnpassed, savedWhole, attributable, BY_HAND, HELD } from './review-resolve.mjs';
+import { holdUnpassed, savedWhole, attributable, heldAt, BY_HAND, HELD } from './review-resolve.mjs';
 import { earlierRuns } from './earlier-runs.mjs';
 import { LEFT_COMMAND } from './batch-close.mjs';
 import { leftAt, LEFT } from './batch-left.mjs';
@@ -34,8 +34,10 @@ export const HOOKS_FIRST = 'A commit by hand runs the repository\'s commit hooks
 export const HOOKS_MOVED = `The repository's commit hooks were changed or moved since the batch opened. ${HOOKS_FIRST}`;
 const MODE_FILE = 'profiles/team-mode.json', JOURNAL = 'holiday/.switch-in-progress.json', LEDGER = 'pm-decisions.md';
 const IN_PROGRESS = ['index.lock', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'BISECT_LOG', 'rebase-merge', 'rebase-apply'];
-const TICKET_FIELDS = ['id', 'title', 'goal', 'acceptance', 'paths', 'estimate'], TICKET_OPTIONAL = ['expectedPaths', 'commitMessage', 'dependsOn', 'riskFlags', 'moves', 'deletes', 'resume', 'verificationCommands'], BATCH_FIELDS = ['tickets', 'verificationCommands', 'sensitivePaths', 'nextLifecycleNumber'];
+const TICKET_FIELDS = ['id', 'title', 'goal', 'acceptance', 'paths', 'estimate'], TICKET_OPTIONAL = ['expectedPaths', 'commitMessage', 'dependsOn', 'riskFlags', 'moves', 'deletes', 'resume', 'continues', 'replan', 'verificationCommands'], BATCH_FIELDS = ['tickets', 'verificationCommands', 'sensitivePaths', 'nextLifecycleNumber'];
 const ESTIMATE = ['execTokens', 'checkTokens', 'reworkTokens'], MAX_PATHS = 100, MAX_FLAGS = 10;
+// ADR 0010, amendment of 2026-11-27: what the PM writes for a ticket that runs again.
+const REPLAN = ['cause', 'feasible', 'change'];
 const STOP = ['Owner stop', 'Required scope or permission change', 'Missing verification environment'];
 // What a standing team accepts by decision: no sandbox is required, and Git-ignored build output is tolerated.
 const STANDING = ['BASH_NOT_SANDBOXED', 'IGNORED_PATHS_PRESENT'];
@@ -150,6 +152,10 @@ function checkBatch(batch, known) {
       `Ticket ${ticket.id}: verificationCommands must list 1 or more of the batch's verification commands, each once; its workers run only those`);
     const resumeProblem = resumePathProblem(ticket);
     need(!resumeProblem, resumeProblem);
+    need(ticket.continues === undefined || (typeof ticket.continues === 'string' && TICKET_ID.test(ticket.continues) && ticket.continues.toLowerCase() !== ticket.id.toLowerCase()),
+      `Ticket ${ticket.id}: continues must name the id of the earlier ticket whose work this one takes up, not its own`);
+    need(ticket.replan === undefined || (ticket.replan && typeof ticket.replan === 'object' && !Array.isArray(ticket.replan) && Object.keys(ticket.replan).sort().join() === [...REPLAN].sort().join() && REPLAN.every(key => oneLine(ticket.replan[key]))),
+      `Ticket ${ticket.id}: replan must carry exactly cause, feasible and change, each one line of at most 200 characters, with no space at either end`);
     need(ticket.riskFlags === undefined || (strings(ticket.riskFlags) && ticket.riskFlags.length <= MAX_FLAGS && ticket.riskFlags.every(flag => TICKET_ID.test(flag))
       && new Set(ticket.riskFlags.map(flag => flag.toLowerCase())).size === ticket.riskFlags.length),
       `Ticket ${ticket.id}: riskFlags must list 1 to ${MAX_FLAGS} plain names ("auth", "payments"), each named once`);
@@ -280,7 +286,7 @@ const gitCommandsOf = ticket => [
   ...(ticket.deletes ?? []).map(path => `git --literal-pathspecs rm -q -- "${path}"`)];
 
 // The compiler input of one ticket, built from what the PM wrote and what the team's mode profile holds.
-function inputOf(ticket, { batch, profile, wrappers, product, productRoot, limits, allPaths, gitCommands, resumedPaths }) {
+function inputOf(ticket, { batch, profile, wrappers, product, productRoot, limits, allPaths, gitCommands, resumedPaths, ranBefore }) {
   const staffing = profile.staffing, tools = staffing.exec.tools, repoId = profile.spec.project.slug;
   const amounts = Object.fromEntries(ESTIMATE.map(key => [key, ticket.estimate[key]]));
   const policy = { schemaVersion: 1, mode: 'router-worker', approvalRef: ref('mode-switch', profile.confirmedProposal ?? profile.specDigest), stackRef: ref('team-spec', profile.spec),
@@ -291,7 +297,7 @@ function inputOf(ticket, { batch, profile, wrappers, product, productRoot, limit
   return { schemaVersion: 1,
     ticket: { id: ticket.id, title: ticket.title, goal: ticket.goal, acceptance: ticket.acceptance, acceptanceRef: ref('acceptance', ticket.acceptance), isCodeShipping: true, deliveryRequired: false, riskFlags: ticket.riskFlags ?? [] },
     mandate: { ticketId: ticket.id, repoId, approvalRef: ref('batch-ticket', ticket), policyDigest: digest(policy), allowedWritePaths: ticket.paths, allowedTools: tools,
-      budgetTokens: limits.authorizationPerTicket, stopConditions: STOP, ...(gitCommands.length ? { gitCommands } : {}), ...(resumedPaths ? { resumedPaths } : {}), ...(ticket.verificationCommands ? { verificationCommands: ticket.verificationCommands } : {}) },
+      budgetTokens: limits.authorizationPerTicket, stopConditions: STOP, ...(gitCommands.length ? { gitCommands } : {}), ...(resumedPaths ? { resumedPaths } : {}), ...(ranBefore ? { ranBefore } : {}), ...(ticket.verificationCommands ? { verificationCommands: ticket.verificationCommands } : {}) },
     proposal: { assignmentId: `${ticket.id}.exec.1`, checkAssignmentId: `${ticket.id}.check.1`, duty: 'exec', attempt: 1, sessionRef: null, continuationOf: null, methodIds: [],
       selectionReason: 'Planned by the PM from the backlog', expectedPaths: ticket.expectedPaths ?? ticket.paths.filter(path => !path.endsWith('/**')), requestedTools: tools,
       estimate: { ref: ref('pm-estimate', amounts), ...amounts } },
@@ -349,6 +355,25 @@ function outsideCommits(instance, archived, productRoot, branch) {
   if (listed.status !== 0 || listed.error) return { since, commits: null, reason: `Git could not list the commits since the end of ${end} (${failedRun(listed)})` };
   const ids = listed.stdout.split('\n').filter(Boolean);
   return { since, commits: ids.slice(0, OUTSIDE_KEPT), count: ids.length };
+}
+
+// Where the PM reads why a ticket's earlier run was not committed.
+const evidenceOf = (instance, { runId, ticket }) => [`${ARCHIVE}/${runId}/after.json (the status of ${ticket})`,
+  ...(exists(join(instance, ARCHIVE, runId, 'return.json')) ? [`${ARCHIVE}/${runId}/return.json (the worker's and the checker's reports for ${ticket})`] : []),
+  ...[leftAt(runId, ticket), heldAt(runId, ticket)].filter(path => exists(join(instance, path))).map(path => `${path} (the work it left)`)].join(', ');
+// ADR 0010, amendment of 2026-11-27: a ticket that ran before and was not committed is replanned, not handed out again. One whose
+// runs without a commit reached the cap goes to the owner; the others carry a replan unlike the one their latest run froze.
+function checkRunsAgain(instance, tickets, ran) {
+  tickets.forEach((ticket, i) => need(!ran[i].stranger, `Ticket ${ticket.id}: continues names ${plain(ran[i].stranger)}, and no archived batch holds a ticket of that id. Name the id of the earlier ticket as its batch filed it, or leave the field out`));
+  const at = new Date().toISOString(), spent = tickets.map((ticket, i) => ({ ticket, runs: ran[i].every, entry: exhaustion({ instance, runs: ran[i].every, at }) })).filter(({ entry }) => entry);
+  need(!spent.length, `${spent.map(({ ticket, runs }) => `Ticket ${ticket.id} ran ${runs.length} times by the engine without a commit: ${runs.map(run => runSaid({ ...run, as: ticket.id })).join(', ')}`).join('; ')}. The initial run and two retries are spent. Nothing was started. The kit raised ${[...new Set(spent.map(({ entry }) => entry.id))].join(', ')} for the owner: report it and replan without the ticket; a batch without it opens. The owner reviews it and lifts it at an interactive terminal with: team-mode.mjs acknowledge <escalation id> --instance <instance-root>; then it may be filed again with a replan`, 'TICKET_ATTEMPTS_EXHAUSTED');
+  tickets.forEach((ticket, i) => {
+    const { count, runs, replan } = ran[i], last = runs.at(-1);
+    need(count || ticket.replan === undefined, `Ticket ${ticket.id} carries a replan, but it never ran before in a batch the kit did not commit; a replan answers an earlier run. Leave the field out`);
+    if (!count) return;
+    need(ticket.replan, `Ticket ${ticket.id} ran before and the kit did not commit it: ${count} earlier run(s), the latest in batch ${last.runId} as ${last.ticket} (${last.status}). A ticket that ran before, under its id, as the ticket it continues or as the one whose saved patch it resumes, is replanned, not handed out again. Read the evidence of that run: ${evidenceOf(instance, last)}. Decide whether it can be done, then add "replan": {"cause": "<why that run was not committed>", "feasible": "<why the ticket can be done as it is now written>", "change": "<what is different this time: the plan, the paths, the estimate, a split, a resumed patch>"}, each one line, and report it to the owner`);
+    need(!replan || REPLAN.some(key => replan[key] !== ticket.replan[key]), `Ticket ${ticket.id}: its replan is the one batch ${last.runId} froze for it, and that run was not committed; a ticket is not handed out again unchanged. Read the evidence of that run (${evidenceOf(instance, last)}) and write what is different this time`);
+  });
 }
 
 // In a batch a worker's shell runs the commands the owner confirmed for the team, and no other.
@@ -415,6 +440,8 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     const resumes = batch.tickets.map(ticket => ticket.resume === undefined ? null : resumePlan({ instance, productRoot, ticket }));
     for (const resume of resumes) need(!resume?.problem, resume?.problem);
     const plans = resumes.map(resume => resume?.plan ?? null), resumedPaths = plans.flatMap(plan => plan?.paths ?? []);
+    const runsOf = earlierRuns(instance, archivedRecords), ran = batch.tickets.map((ticket, i) => runsOf(ticket, plans[i]));
+    checkRunsAgain(instance, batch.tickets, ran);
     const unseen = resumedPaths.length ? hiddenFromGit(productRoot, resumedPaths) : [];
     need(!unseen.length, `A resumed patch changes ${plain(unseen[0])}, which Git is told not to look at (assume-unchanged or skip-worktree): what the work tree holds there is not what Git reports. Clear it with: git update-index --no-assume-unchanged --no-skip-worktree -- <path>`);
     const gitCommands = batch.tickets.map(gitCommandsOf);
@@ -424,7 +451,7 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     const hooks = hooksOf(productRoot), hooked = batch.tickets.flatMap(ticket => ticket.paths.filter(path => hooks.guarded.some(guard => overlap(path, guard) || overlap(path, `${guard}/**`))));
     need(!hooked.length, `The repository's commit hooks live in ${hooks.guarded.join(', ')}; no ticket writes there (${hooked.slice(0, 5).join(', ')}): a hook runs as the PM at the next commit`);
     const wrappers = Object.fromEntries(Object.entries(closed.wrappers).map(([name, entry]) => [entry.duty, name]));
-    const outside = outsideCommits(instance, archivedAll, productRoot, product.branch), runsOf = earlierRuns(instance, archivedRecords);
+    const outside = outsideCommits(instance, archivedAll, productRoot, product.branch);
 
     // The default id is new at every "before": the same tickets prepared again are another run, and a run is told by its id.
     const runId = batch.runId ?? `rw-${product.head.slice(0, 8)}-L${batch.nextLifecycleNumber}-${Date.now().toString(36)}`;
@@ -433,7 +460,8 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     const ceiling = count * limits.outputAllowancePerTicket + limits.guardianOutputShare, allPaths = [...new Set(batch.tickets.flatMap(ticket => ticket.paths))].sort();
     const run = { rounds: count, date: batch.date ?? new Date().toISOString().slice(0, 10), nextLifecycleNumber: batch.nextLifecycleNumber, runId,
       budgetCeilingTokens: ceiling, estimatedOutputTokens: Math.floor(ceiling / 2), guardianEstimateTokens: limits.authorizationPerTicket, maxAttemptsPerTicket: limits.attemptsPerTicket };
-    const inputs = batch.tickets.map((ticket, i) => inputOf(ticket, { batch, profile, wrappers, product, productRoot, limits, allPaths, gitCommands: gitCommands[i], resumedPaths: plans[i]?.paths }));
+    const inputs = batch.tickets.map((ticket, i) => inputOf(ticket, { batch, profile, wrappers, product, productRoot, limits, allPaths, gitCommands: gitCommands[i], resumedPaths: plans[i]?.paths,
+      ranBefore: ran[i].count ? { runs: ran[i].runs, count: ran[i].count, replan: ticket.replan } : null }));
     let frozen = await freezeRun({ inputs, run, teamRoot: instance, standingBatch: true });
     need(!frozen.errors, `The batch cannot be frozen: ${frozen.errors?.[0]?.field}: ${frozen.errors?.[0]?.reason}`);
     if (manifest) {
@@ -453,12 +481,12 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     const boundary = openBoundary({ teamRoot: instance, productRoot, writePaths: allPaths, commands: batch.verificationCommands, execCommands: gitCommands.flat() });
     opened = true;
     for (const plan of plans.filter(Boolean)) { applyResume(productRoot, plan); applied.push(plan); }
-    const at = new Date().toISOString();
+    const at = new Date().toISOString(), runsAgain = batch.tickets.flatMap((ticket, i) => ran[i].count ? [{ ticket: ticket.id, count: ran[i].count, replan: ticket.replan }] : []);
     const body = { schemaVersion: 1, stage: 'batch-open', runId: frozen.args.runId, openedAt: at, productRoot, productHead: product.head, branch: product.branch,
       startedAsIs: startAsIs === true, preexisting: product.preexisting, preexistingContent: contentOf(productRoot, product.preexisting), hooks, lease, boundaryDigest: boundary.digest, hookLogsCommands: true, isolationDigest: isolation.digest,
       limits, ceiling: { outputTokens: ceiling, stopLine: Math.floor(ceiling * 4 / 5) },
-      tickets: batch.tickets.map((ticket, i) => ({ id: ticket.id, title: ticket.title, goal: ticket.goal, acceptance: ticket.acceptance, commitMessage: ticket.commitMessage ?? `${ticket.id}: ${ticket.title}`, paths: ticket.paths, expectedPaths: inputs[i].proposal.expectedPaths, dependsOn: ticket.dependsOn ?? [], moves: ticket.moves ?? [], deletes: ticket.deletes ?? [], declared: declaredOf(ticket, batch.sensitivePaths), earlierRuns: runsOf(ticket), ...(ticket.verificationCommands ? { verificationCommands: ticket.verificationCommands } : {}), ...(plans[i] ? { resume: { patch: plans[i].patch, digest: plans[i].digest, paths: plans[i].paths, content: contentOf(productRoot, plans[i].paths) } } : {}) })),
-      sensitivePaths: batch.sensitivePaths, verificationCommands: batch.verificationCommands, review, reviewWrappers, triggerChanges: triggerChanges(lastFrozen, review), outsideCommits: outside,
+      tickets: batch.tickets.map((ticket, i) => ({ id: ticket.id, title: ticket.title, goal: ticket.goal, acceptance: ticket.acceptance, commitMessage: ticket.commitMessage ?? `${ticket.id}: ${ticket.title}`, paths: ticket.paths, expectedPaths: inputs[i].proposal.expectedPaths, dependsOn: ticket.dependsOn ?? [], moves: ticket.moves ?? [], deletes: ticket.deletes ?? [], declared: declaredOf(ticket, batch.sensitivePaths), earlierRuns: { runs: ran[i].runs, count: ran[i].count }, ...(ticket.continues ? { continues: ticket.continues } : {}), ...(ticket.replan ? { replan: ticket.replan } : {}), ...(ticket.verificationCommands ? { verificationCommands: ticket.verificationCommands } : {}), ...(plans[i] ? { resume: { patch: plans[i].patch, digest: plans[i].digest, paths: plans[i].paths, content: contentOf(productRoot, plans[i].paths) } } : {}) })),
+      ...(runsAgain.length ? { runsAgain } : {}), sensitivePaths: batch.sensitivePaths, verificationCommands: batch.verificationCommands, review, reviewWrappers, triggerChanges: triggerChanges(lastFrozen, review), outsideCommits: outside,
       launchManifest: manifest ? 'chained' : 'absent', runRecord: frozen.record, args: frozen.args };
     const record = { ...body, digest: digest(body) };
     // The ledger lines come before the record: a before that dies between leaves lines of a batch that never opened, which
@@ -470,8 +498,8 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     const resumed = record.tickets.filter(entry => entry.resume).map(entry => `${at.slice(0, 10)} BATCH ${record.runId} RESUMES ${entry.id} from ${plain(entry.resume.patch)} (${entry.resume.digest.slice(0, 19)}…, ${entry.resume.paths.length} path(s)), applied to the work tree by before.\n`).join('');
     const hand = outside.commits ?? [], made = hand.length ? `${at.slice(0, 10)} BATCH ${record.runId} COMMITS MADE OUTSIDE THE KIT (owner spot review): ${outside.count} commit(s) on ${plain(product.branch)} since batch ${plain(outside.since.runId)} ended at ${outside.since.commit.slice(0, 8)} (${hand.slice(0, 10).map(sha => sha.slice(0, 8)).join(', ')}${outside.count > 10 ? ', ...' : ''}).\n`
       : outside.commits === null && outside.since ? `${at.slice(0, 10)} BATCH ${record.runId} COMMITS MADE OUTSIDE THE KIT CANNOT BE TOLD (owner spot review): on ${plain(product.branch)} since batch ${plain(outside.since.runId)}: ${outside.reason}.\n` : '';
-    // ADR 0010, amendment of 2026-11-26: a ticket whose work ran before and was not committed is named for the owner; nothing is refused.
-    const again = record.tickets.filter(entry => entry.earlierRuns.count).map(({ id, earlierRuns: { runs, count } }) => `${at.slice(0, 10)} BATCH ${record.runId} RUNS ${id} AGAIN (owner spot review): ${count} earlier run(s) by the engine that the kit did not commit: ${count > 10 ? '..., ' : ''}${runs.slice(-10).map(run => `${plain(run.runId)} as ${plain(run.ticket)} (${run.status})`).join(', ')}.\n`).join('');
+    // ADR 0010, amendment of 2026-11-27: a ticket whose work ran before and was not committed is named for the owner, with its replan.
+    const again = record.tickets.filter(entry => entry.earlierRuns.count).map(({ id, continues, earlierRuns: { runs, count }, replan }) => `${at.slice(0, 10)} BATCH ${record.runId} RUNS ${id} AGAIN${continues ? ` (continues ${continues})` : ''} (owner spot review): ${count} earlier run(s) by the engine that the kit did not commit: ${count > 10 ? '..., ' : ''}${runs.slice(-10).map(run => `${plain(run.runId)} as ${plain(run.ticket)} (${run.status})`).join(', ')}. Replanned by the PM: cause: ${replan.cause}; feasible: ${replan.feasible}; change: ${replan.change}.\n`).join('');
     if (made || again || resumed) appendFileSync(join(instance, LEDGER), made + again + resumed);
     recordFrozen({ instance, review, changes: record.triggerChanges, runId: record.runId, at });
     // No batch is open: a record of an earlier one still in the root must not be read or archived as this one's.
