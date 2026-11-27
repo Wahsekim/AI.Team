@@ -210,12 +210,10 @@ export function afterBatch({ teamRoot, instanceRoot, result, run = runCommands }
     const applied = Object.assign({}, ...batch.tickets.map(ticket => ticket.resume?.content ?? {})), now = contentOf(product, Object.keys(applied));
     if (worked.some(path => !Object.hasOwn(applied, path) || applied[path] !== now[path]) && hook.workerCalls === 0) findings.push({ code: 'HOOK_SAW_NO_WORKER' });
     // The log does not say which ticket a run was for, so the runs are counted against every passed ticket. An earlier kit's hook logged no approved command.
-    if (batch.hookLogsCommands === true) {
-      const short = batch.verificationCommands.map(command => ({ command,
-        needed: outcomes.filter((outcome, i) => outcome.status === 'passed' && (batch.tickets[i].verificationCommands ?? batch.verificationCommands).includes(command)).length,
-        seen: checkRuns.filter(run => run === command).length })).filter(entry => entry.seen < entry.needed);
-      if (short.length) findings.push({ code: 'CHECK_RUNS_MISSING', commands: short });
-    }
+    const counted = batch.hookLogsCommands === true ? batch.verificationCommands.map(command => ({ command,
+      needed: outcomes.filter((outcome, i) => outcome.status === 'passed' && (batch.tickets[i].verificationCommands ?? batch.verificationCommands).includes(command)).length,
+      seen: checkRuns.filter(run => run === command).length })) : null, short = (counted ?? []).filter(entry => entry.seen < entry.needed);
+    if (short.length) findings.push({ code: 'CHECK_RUNS_MISSING', commands: short });
     const outsideOf = paths => paths.filter(path => !path.endsWith('/') && !batch.tickets.some(ticket => within(path, ticket.paths))), strays = outsideOf(worked);
     // ADR 0010, amendment of 2026-11-26: the commands run before anything is pinned, so what is pinned is what they left; they run
     // under the lock the batch still holds, on a tree that holds the planned commits and nothing else. A batch held already, or
@@ -311,7 +309,7 @@ export function afterBatch({ teamRoot, instanceRoot, result, run = runCommands }
     // The engine's return is kept beside the record, which carries its digest: the settlement of usage needs it, and so does anyone who audits the batch.
     const kept = JSON.parse(JSON.stringify(result));
     const record = sealed({ schemaVersion: 1, stage: 'batch-closed', runId: batch.runId, batchDigest: batch.digest, closedAt: at, status: status(),
-      account, returnDigest: digest(kept), tickets, reviews, commits, left, holdAll, ...(crossed.length ? { interfaceChanges: crossed } : {}), hook, setAside: setAsideList, verification, findings, limits: limitsReached(batch.limits, result, refused), boundaryClosed, leaseReleased, ...(retaken ? { lockRetaken: true } : {}), next });
+      account, returnDigest: digest(kept), tickets, reviews, commits, left, holdAll, ...(crossed.length ? { interfaceChanges: crossed } : {}), hook, ...(counted ? { checkRuns: { attribution: 'batch', commands: counted } } : {}), setAside: setAsideList, verification, findings, limits: limitsReached(batch.limits, result, refused), boundaryClosed, leaseReleased, ...(retaken ? { lockRetaken: true } : {}), next });
     replace(join(instance, RETURN_FILE), kept);
     replace(afterPath, record);
     return record;
@@ -336,14 +334,14 @@ function resolutionOf(instance, batch, after) {
   need(!lost.length, `The patch of ${lost.map(entry => plain(String(entry.ticket))).join(', ')} is missing or was changed; the held work would be lost. ${ABANDON}`);
   const committing = new Set(plan.flatMap(commit => commit.paths)), wrote = resolution.verification.wrote;
   need(wrote.every(file => typeof file === 'string' && !committing.has(file)), `${RESOLUTION_FILE} records as written by a command a path it commits. ${ABANDON}`);
-  return { plan, held: removed.map(({ ticket, reason, patch }) => ({ ticket, reason, patch })), wrote, reviewed: true };
+  return { plan, held: removed.map(({ ticket, reason, patch }) => ({ ticket, reason, patch })), wrote, reviewed: true, rerun: resolution.verification };
 }
 
 // Paths go to Git on standard input, NUL-separated and taken literally: no length limit, no pattern.
 const withPaths = (product, args, paths, timeout) => gitRun(product, ['--literal-pathspecs', ...args, '--pathspec-from-file=-', '--pathspec-file-nul'], { input: paths.join('\0'), timeout });
 const said = result => plain(`${result.error?.code ?? ''} ${result.stderr ?? ''} ${result.stdout ?? ''}`.trim().slice(0, 300));
 
-export function commitBatch({ teamRoot, instanceRoot }) {
+export function commitBatch({ teamRoot, instanceRoot, verifiedOnly = false }) {
   let lease = null, product;
   try {
     // A commit that archived the batch and died before it cleared the team's root is finished here. The archive
@@ -368,7 +366,11 @@ export function commitBatch({ teamRoot, instanceRoot }) {
     // A held batch commits nothing: archiving it with commit would log it as committed.
     need(after.holdAll !== true, `Every commit of this batch is held (${(after.findings ?? []).filter(finding => typeof finding?.code === 'string').map(finding => plain(finding.code)).join(', ')}); nothing can be committed. Archive it with: rw-batch.mjs abort --instance <instance-root>`);
     // ADR 0011, decisions 14 and 15: a reviewed batch commits what its resolution kept; the tickets it held are patches.
-    const { plan, held, wrote, reviewed } = resolutionOf(instance, batch, after);
+    const { plan, held, wrote, reviewed, rerun } = resolutionOf(instance, batch, after);
+    // What the kit itself ran on the tree it commits: a checker's pass is not that. A failed run of after's holds every commit, so one that ran passed.
+    const verification = { after: after.verification?.ran === true ? 'passed' : 'not-run', ...(after.verification?.ran !== true && after.verification?.reason ? { reason: after.verification.reason } : {}),
+      ...(reviewed ? { resolve: rerun.ran ? (rerun.failed ? 'failed' : 'passed') : 'not-run' } : {}) };
+    need(!verifiedOnly || !plan.length || verification.after === 'passed', `The kit did not verify the tree this batch would commit (${plain(verification.reason ?? 'no command was run')}), and commit --verified-only commits nothing the kit did not verify. Run the passed tickets' verification commands yourself on a tree that holds only the planned commits, then commit without the flag; or archive the batch with: rw-batch.mjs abort --instance <instance-root>`);
     product = batch.productRoot;
     const taken = acquireLease({ teamRoot: instance, productRoot: product, command: true });
     need(!taken.errors, `The lock on the product repository could not be taken: ${taken.errors?.[0]?.reason}`);
@@ -432,9 +434,9 @@ export function commitBatch({ teamRoot, instanceRoot }) {
       replace(progressPath, { schemaVersion: 1, runId: batch.runId, commits: done });
     }
     const left = changedPaths(product).filter(path => !batch.preexisting.includes(path)), at = new Date().toISOString(), escalations = escalationsOf(instance, batch.runId);
-    const record = sealed({ schemaVersion: 1, stage: 'batch-committed', runId: batch.runId, batchDigest: batch.digest, afterDigest: after.digest, committedAt: at, branch: batch.branch, commits: done, held, escalations, left, pushed: false });
+    const record = sealed({ schemaVersion: 1, stage: 'batch-committed', runId: batch.runId, batchDigest: batch.digest, afterDigest: after.digest, committedAt: at, branch: batch.branch, commits: done, held, verification, escalations, left, pushed: false });
     let ledgerWritten = true;
-    try { appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} BATCH ${batch.runId} COMMITTED on ${plain(batch.branch)}: ${done.length} commit(s)${done.length ? ` (${done.map(commit => `${commit.ticket} ${commit.sha.slice(0, 8)}`).join(', ')})` : ''}; ${left.length} changed path(s) left uncommitted${left.length ? ` (${left.slice(0, 10).map(plain).join(', ')}${left.length > 10 ? ', ...' : ''})` : ''}${held.length ? `; held: ${held.map(entry => `${entry.ticket} (${entry.reason})`).join(', ')}` : ''}${escalations.length ? `; escalated to the owner: ${escalations.map(entry => entry.id).join(', ')}` : ''}. Nothing was pushed.\n`); }
+    try { appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} BATCH ${batch.runId} COMMITTED on ${plain(batch.branch)}: ${done.length} commit(s)${done.length ? ` (${done.map(commit => `${commit.ticket} ${commit.sha.slice(0, 8)}`).join(', ')})` : ''}; ${left.length} changed path(s) left uncommitted${left.length ? ` (${left.slice(0, 10).map(plain).join(', ')}${left.length > 10 ? ', ...' : ''})` : ''}${held.length ? `; held: ${held.map(entry => `${entry.ticket} (${entry.reason})`).join(', ')}` : ''}${escalations.length ? `; escalated to the owner: ${escalations.map(entry => entry.id).join(', ')}` : ''}${done.length && verification.after !== 'passed' ? '; the kit did not verify the committed tree' : ''}. Nothing was pushed.\n`); }
     catch { ledgerWritten = false; }
     archiveBatch(instance, batch.runId, { 'commit.json': record }, RECORDS);
     return ledgerWritten ? record : { ...record, warning: `${LEDGER} could not be written; add the COMMITTED line by hand` };

@@ -335,3 +335,15 @@ refuse because the product had changed, with `abort` as the only way out.
 changed since `after` closed the batch that no ticket to commit holds; `commit`
 leaves those uncommitted and names them. A path of a ticket to commit whose
 content changed is still refused.
+## Amendment of 2026-11-27: the output of a command that passed
+
+Status: Accepted (decision 11 still holds: the reviewer is given the output of
+the verification commands; what changes is how much of it is inline).
+
+Each reviewer's brief carried up to 4,000 characters of output for every
+verification command, also when it passed. A command that passed (exit 0,
+within its time and buffer) is now shown with its exit, its output digest and
+its last lines, about 300 characters; the brief names the record in the team
+folder that keeps the whole kept output, for the reviewer to open when a rule
+rests on it. A command that failed, timed out or overflowed is shown whole, as
+before. The brief's record now keeps every tail; it kept none before.

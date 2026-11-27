@@ -433,7 +433,10 @@ folder. The checker's approved call carries the verification command it
 matched, as the batch froze it (without the `cd`); the exec worker's approved
 call carries none, since its moves and deletions name product paths; a refused
 call carries its own text, redacted (see "Not covered"). `after` counts the
-checker's approved runs of each command (`CHECK_RUNS_MISSING`). `before` marks
+checker's approved runs of each command (`CHECK_RUNS_MISSING`) and records
+them as `checkRuns` with `attribution: "batch"`: the log does not say which
+ticket a run was for, so two runs for one ticket satisfy a count of two, and
+the count proves no single ticket's check. `before` marks
 the batch record (`hookLogsCommands`) so that `after` counts them only for a
 batch whose hook logs them. The checker's brief of a standing batch therefore
 tells it to run every verification command it lists, each exactly as given, and
@@ -614,6 +617,18 @@ tickets, then moves the batch's records to `batches/<run id>/` and appends one
 line to `pm-decisions.md`. It takes the lock for its length (see "The lock of
 a command"). It pushes nothing.
 
+- **What the kit verified.** A checker's pass and the kit's own run of the
+  commands on the tree it commits are different assurances. The record
+  (`commit.json`) says which the batch has: `verification.after` is `passed`
+  when `after` ran the passed tickets' commands on a tree that held only the
+  planned commits, and `not-run` with the `reason` when a path stood in the
+  way (`VERIFICATION_NOT_RUN`); for a reviewed batch `verification.resolve`
+  is `passed`, `failed` or `not-run` for the run `resolve` made once a ticket
+  was removed. A batch committed with `not-run` says so in its ledger line
+  ("the kit did not verify the committed tree"). `commit --verified-only`
+  refuses such a batch and commits nothing: for a caller, an unattended one
+  above all, that wants the stricter assurance. Without the flag the owner's
+  rule stands: the tickets are committed and the gap is named.
 - It refuses when the product is no longer on the batch's branch, when a Git
   operation is in progress, when the commit hooks were changed or moved, when
   an archive of this batch was already started, when the work

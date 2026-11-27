@@ -706,6 +706,7 @@ test('every passed ticket needs a checker run of each of its verification comman
   assert.deepEqual([...runUnderHook(short.root, CHECK, ['npm test']), ...runUnderHook(short.root, EXEC, ['npm test'])], ['approve', 'approve']);
   const closed = short.after(); held(closed, 'CHECK_RUNS_MISSING');
   assert.deepEqual(closed.findings.find(finding => finding.code === 'CHECK_RUNS_MISSING').commands, [{ command: 'npm test', needed: 2, seen: 1 }]);
+  assert.deepEqual(closed.checkRuns, { attribution: 'batch', commands: [{ command: 'npm test', needed: 2, seen: 1 }] }, 'the count is of the batch: it proves no single ticket\'s check');
   assert.match(closed.next.join('\n'), /checker ran.*fewer times than the tickets that passed/);
   const full = await ran(t, { tickets: two, edits: edited, hook: false });
   assert.deepEqual(runUnderHook(full.root, CHECK, ['npm test', 'npm test']), ['approve', 'approve']);
