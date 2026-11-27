@@ -65,6 +65,8 @@ test('draft is deterministic, keeps governance roles and never writes a registry
   for (const duty of ['exec', 'check', 'guard']) {
     const wrapper = result.draft.files[`.claude/agents/tag-list-fixture-worker-${duty}.md`];
     assert.match(wrapper, /Do not run from this draft/); assert.match(wrapper, /disallowedTools: Agent, Task/);
+    // ADR 0010, amendment of 2026-11-27: only the exec and check workers skip the shared stack file for a ticket of a package.
+    assert.equal(/profiles\/stack\.md \(not when the assignment carries a package/.test(wrapper), duty === 'exec' || duty === 'check');
     assert.match(result.draft.files[`agents/worker-${duty}.md`], /## Base Agent\n\nsynthetic/);
   }
   const root = temporary(t), target = join(root, 'team.rw-draft.json');

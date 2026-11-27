@@ -1508,6 +1508,102 @@ ticket's risk flags apply to it, and `commit` commits it with what the worker
 added. If the ticket does not pass, `after` sets it aside again as a patch, as
 any batch's.
 
+## Packages of one repository
+
+A team whose product repository holds several sub-projects on different stacks
+lists them in `profiles/packages.json`, in the team (instance) root. Their
+number, names and folders are the project's own. The file is optional: a team
+without it has no packages, and every batch runs as before.
+
+```json
+{ "schemaVersion": 1,
+  "packages": [
+    { "name": "server", "dir": "server", "conventions": "profiles/stack/server.md",
+      "verificationCommands": ["npm --prefix server test"], "interfaces": ["contracts/**"] },
+    { "name": "app", "dir": "app", "conventions": "profiles/stack/app.md",
+      "interfaces": ["contracts/**", "schema/tables.sql"] },
+    { "name": "schema", "dir": "schema" } ] }
+```
+
+| Key | Rule |
+|---|---|
+| `name` | 1 to 40 letters, digits, dots, dashes or underscores, unique without case |
+| `dir` | A folder of the product repository, relative, with no `.`, `..` or pattern, not a link. No two packages' folders contain one another |
+| `conventions` | Optional. A file in the team root itself, not under `kit/`, not a link, UTF-8 text of at most 8192 bytes |
+| `verificationCommands` | Optional. The commands a ticket of the package runs when it lists none of its own |
+| `interfaces` | Optional. Glob patterns of the product (`**/` any folders, `*` and `?` inside one, case ignored, as in the review triggers) naming the files outside the package's folder that it builds against |
+
+`before` reads the file and the conventions files once, after the review list.
+It refuses, naming the file and the fix, a file that is not JSON, holds another
+key, or breaks a rule above. With the file read, it refuses:
+
+- a ticket's `package` when the team has no packages file, or the name is not
+  in it; the refusal names the known packages;
+- a ticket whose `paths`, `moves` or `deletes` reach outside its package's
+  folder, naming the path: one ticket per package; what two packages share goes
+  through an interface file with a ticket of its own and `dependsOn`;
+- a ticket that would verify with a package command the batch's
+  `verificationCommands` do not list, naming it. A ticket with
+  `verificationCommands` of its own keeps them, and the package's are not used.
+
+The batch record freezes `packages`: the file's path, the digest of its bytes,
+and each package's name, folder and interfaces. Each ticket entry of a package
+carries `package: { name, dir, interfaces, conventions: { path, digest } }`
+(no `conventions` when the package has none). A ticket without `package` is
+repository-wide work: its record entry and its briefs are what they are
+without a packages file.
+
+The exec and check briefs of a ticket with a package carry, in the task data,
+`package: { name, dir, interfaces }` and a note: work inside the package's
+folder; outside it read only the listed interfaces; the conventions below are
+this package's and replace the per-stack parts of `profiles/stack.md`; do not
+read another package's conventions or code. The text of the conventions file
+follows the rules of the brief, headed `Package conventions: <path> (<digest>)`.
+Inlining is the guarantee: the right conventions are in the worker's context
+without a tool call, and no other package's conventions are named.
+
+`after` matches each ticket's changed paths against the interfaces of the
+packages the batch record froze, other than the ticket's own package, not
+against the live file. Each match goes into the after record as
+`interfaceChanges: [{ ticket, path, readBy }]` (absent when there is none),
+into `next`, and into one ledger line per ticket:
+
+```text
+<date> BATCH <run> CHANGED AN INTERFACE (owner spot review): <paths> by <ticket>; read by <packages>: file a ticket for each package that must follow, with dependsOn, or record why none is needed.
+```
+
+It holds nothing and changes no ticket's status.
+
+**Commands that run in a package's folder.** Every command runs from the
+product root, typed exactly as the owner confirmed it; a package has no run
+folder of its own. A tool that must run inside the folder is confirmed with the
+change of folder in it, as one command: `cd app && <command>`. The hook accepts
+that text from the product root or after `cd "<product root>" &&`, and `after`
+runs it the same way; the bare command typed from inside the folder is refused.
+A tool that takes the folder as an argument (`npm --prefix server test`) needs
+no `cd`.
+
+Limits:
+
+- The kit does not stop a worker from reading another package's files. The
+  hook guards writes and commands only; the brief tells the worker what to read.
+- The exec and check wrappers the switch writes tell a worker to read
+  `profiles/stack.md` except when its assignment carries a package. A team
+  switched to Router/Worker before this change keeps wrappers that name the
+  file without the exception, until the next switch writes them again: there
+  every worker still reads the whole file. Keep `profiles/stack.md` to what
+  the whole repository shares, and each stack's rules in its package's
+  conventions file; nothing checks that split.
+- Conventions cost their size in every brief of that package's tickets, exec
+  and check.
+- A ticket without `package` is not scoped to a folder and gets no package
+  conventions. `before` refuses one whose every path, move and deletion lies
+  inside one package's folder until it names that package; a ticket that
+  reaches into two packages, or outside all of them, runs unscoped.
+- One team still has one product repository.
+- No seed file is shipped: a team writes `profiles/packages.json` by hand from
+  the shape above.
+
 ## Refusals (`BATCH_REFUSED`)
 
 - The team is not live in Router/Worker mode, a mode switch was interrupted, or

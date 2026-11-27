@@ -11,6 +11,7 @@ import { escalationsOf } from './escalations.mjs';
 import { runCommands, confirmedOf } from './run-commands.mjs';
 import { setAside, productState } from './review-resolve.mjs';
 import { leftAt, resumeOf, patchAdvice } from './batch-left.mjs';
+import { interfaceChanges } from './packages.mjs';
 import { BATCH_FILE, AFTER_FILE, PROGRESS_FILE, RETURN_FILE, RESOLUTION_FILE, RECORDS, ARCHIVE, RUN_ID, TICKET_ID, oneLine, changedPaths, contentOf, hooksOf, archiveBatch, plain, proposedTokens, HOOKS_FIRST, HOOKS_MOVED } from './batch.mjs';
 
 // ADR 0010, decisions 12 and 13: what a PM runs when a batch ends in a standing Router/Worker team.
@@ -278,15 +279,21 @@ export function afterBatch({ teamRoot, instanceRoot, result, run = runCommands }
     const missing = findings.find(finding => finding.code === 'CHECK_RUNS_MISSING')?.commands ?? [];
     if (missing.length) next.push(`The checker ran ${missing.map(entry => `${plain(entry.command)} (${entry.seen} of ${entry.needed})`).join(', ')} fewer times than the tickets that passed verify with it: a ticket passed without its checker running its verification commands, and the log cannot say which. Run the verification commands yourself before any commit by hand`);
     if (!holdAll && left.length) next.push(`Paths are left uncommitted in the product; the next batch refuses until they are dealt with, or it is started as is. Once the batch is committed or archived, save the work each ticket left as a patch, out of the work tree, with: ${LEFT_COMMAND}; commit or discard by hand only what belongs to no ticket`);
+    // ADR 0010, amendment of 2026-11-27: a file another package builds against changed; the follow-up is the PM's to file.
+    const crossed = Array.isArray(batch.packages?.packages) ? interfaceChanges(batch.packages.packages, tickets.map(ticket => ({ ...ticket, package: batch.tickets.find(entry => entry.id === ticket.id).package?.name }))) : [];
+    const crossedBy = [...new Set(crossed.map(entry => entry.ticket))].map(ticket => ({ ticket, paths: crossed.filter(entry => entry.ticket === ticket).map(entry => entry.path), readBy: [...new Set(crossed.filter(entry => entry.ticket === ticket).flatMap(entry => entry.readBy))] }));
+    for (const { ticket, paths, readBy } of crossedBy) next.push(`${ticket} changed ${paths.map(plain).join(', ')}, which ${readBy.join(', ')} read: file a ticket for each package that must follow, with dependsOn on ${ticket}, or record in ${LEDGER} why none is needed`);
     const reviewers = Object.keys(reviews);
     if (reviewers.length) next.push(`The batch is in review: brief each reviewer with ${reviewers.map(reviewer => `rw-batch.mjs review-brief --reviewer ${reviewer} --instance <instance-root>`).join(', and ')}; no batch, switch or change of limits starts until the review is over`);
     const status = () => findings.length || account.blockers.length || reviewers.length ? 'review' : 'clean';
     try { appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} BATCH ${batch.runId} CLOSED (${status()}): ${passed} of ${tickets.length} ticket(s) passed; ${commits.length} to commit, ${left.length} changed path(s) left${aside.length ? `; set aside as patches: ${aside.map(entry => `${entry.ticket} ${entry.patch}`).join(', ')}` : ''}${stuck.length ? `; not set aside, left in the work tree: ${stuck.map(entry => entry.ticket).join(', ')}` : ''}${reviewers.length ? `; review required by ${reviewers.join(', ')}` : ''}${findings.length ? `; findings: ${findings.map(finding => finding.code).join(', ')}` : ''}.\n`); }
     catch { findings.push({ code: 'LEDGER_NOT_WRITTEN' }); }
+    if (crossedBy.length) try { appendFileSync(join(instance, LEDGER), crossedBy.map(({ ticket, paths, readBy }) => `${at.slice(0, 10)} BATCH ${batch.runId} CHANGED AN INTERFACE (owner spot review): ${paths.map(plain).join(', ')} by ${ticket}; read by ${readBy.join(', ')}: file a ticket for each package that must follow, with dependsOn, or record why none is needed.\n`).join('')); }
+    catch { findings.push({ code: 'LEDGER_NOT_WRITTEN' }); }
     // The engine's return is kept beside the record, which carries its digest: the settlement of usage needs it, and so does anyone who audits the batch.
     const kept = JSON.parse(JSON.stringify(result));
     const record = sealed({ schemaVersion: 1, stage: 'batch-closed', runId: batch.runId, batchDigest: batch.digest, closedAt: at, status: status(),
-      account, returnDigest: digest(kept), tickets, reviews, commits, left, holdAll, hook, setAside: setAsideList, verification, findings, limits: limitsReached(batch.limits, result, refused), boundaryClosed, leaseReleased, next });
+      account, returnDigest: digest(kept), tickets, reviews, commits, left, holdAll, ...(crossed.length ? { interfaceChanges: crossed } : {}), hook, setAside: setAsideList, verification, findings, limits: limitsReached(batch.limits, result, refused), boundaryClosed, leaseReleased, next });
     replace(join(instance, RETURN_FILE), kept);
     replace(afterPath, record);
     return record;

@@ -15,6 +15,7 @@ import { holdUnpassed, savedWhole, attributable, heldAt, BY_HAND, HELD } from '.
 import { earlierRuns } from './earlier-runs.mjs';
 import { LEFT_COMMAND } from './batch-close.mjs';
 import { leftAt, LEFT } from './batch-left.mjs';
+import { loadPackages, isPackagesError, packagedTickets, packageOf, PACKAGES } from './packages.mjs';
 
 // ADR 0010, decisions 8 to 12: the one command a PM runs before a batch in a standing Router/Worker team.
 // It builds the engine's inputs from the PM's tickets, checks the product repository, computes the ceiling,
@@ -34,7 +35,7 @@ export const HOOKS_FIRST = 'A commit by hand runs the repository\'s commit hooks
 export const HOOKS_MOVED = `The repository's commit hooks were changed or moved since the batch opened. ${HOOKS_FIRST}`;
 const MODE_FILE = 'profiles/team-mode.json', JOURNAL = 'holiday/.switch-in-progress.json', LEDGER = 'pm-decisions.md';
 const IN_PROGRESS = ['index.lock', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'BISECT_LOG', 'rebase-merge', 'rebase-apply'];
-const TICKET_FIELDS = ['id', 'title', 'goal', 'acceptance', 'paths', 'estimate'], TICKET_OPTIONAL = ['expectedPaths', 'commitMessage', 'dependsOn', 'riskFlags', 'moves', 'deletes', 'resume', 'continues', 'replan', 'verificationCommands'], BATCH_FIELDS = ['tickets', 'verificationCommands', 'sensitivePaths', 'nextLifecycleNumber'];
+const TICKET_FIELDS = ['id', 'title', 'goal', 'acceptance', 'paths', 'estimate'], TICKET_OPTIONAL = ['expectedPaths', 'commitMessage', 'dependsOn', 'riskFlags', 'moves', 'deletes', 'resume', 'continues', 'replan', 'verificationCommands', 'package'], BATCH_FIELDS = ['tickets', 'verificationCommands', 'sensitivePaths', 'nextLifecycleNumber'];
 const ESTIMATE = ['execTokens', 'checkTokens', 'reworkTokens'], MAX_PATHS = 100, MAX_FLAGS = 10;
 // ADR 0010, amendment of 2026-11-27: what the PM writes for a ticket that runs again.
 const REPLAN = ['cause', 'feasible', 'change'];
@@ -150,6 +151,7 @@ function checkBatch(batch, known) {
     need(ticket.verificationCommands === undefined || (strings(ticket.verificationCommands) && ticket.verificationCommands.every(command => batch.verificationCommands.includes(command))
       && new Set(ticket.verificationCommands).size === ticket.verificationCommands.length),
       `Ticket ${ticket.id}: verificationCommands must list 1 or more of the batch's verification commands, each once; its workers run only those`);
+    need(ticket.package === undefined || (typeof ticket.package === 'string' && TICKET_ID.test(ticket.package)), `Ticket ${ticket.id}: package must name a package of profiles/packages.json`);
     const resumeProblem = resumePathProblem(ticket);
     need(!resumeProblem, resumeProblem);
     need(ticket.continues === undefined || (typeof ticket.continues === 'string' && TICKET_ID.test(ticket.continues) && ticket.continues.toLowerCase() !== ticket.id.toLowerCase()),
@@ -286,7 +288,7 @@ const gitCommandsOf = ticket => [
   ...(ticket.deletes ?? []).map(path => `git --literal-pathspecs rm -q -- "${path}"`)];
 
 // The compiler input of one ticket, built from what the PM wrote and what the team's mode profile holds.
-function inputOf(ticket, { batch, profile, wrappers, product, productRoot, limits, allPaths, gitCommands, resumedPaths, ranBefore }) {
+function inputOf(ticket, { batch, profile, wrappers, product, productRoot, limits, allPaths, gitCommands, resumedPaths, ranBefore, pkg }) {
   const staffing = profile.staffing, tools = staffing.exec.tools, repoId = profile.spec.project.slug;
   const amounts = Object.fromEntries(ESTIMATE.map(key => [key, ticket.estimate[key]]));
   const policy = { schemaVersion: 1, mode: 'router-worker', approvalRef: ref('mode-switch', profile.confirmedProposal ?? profile.specDigest), stackRef: ref('team-spec', profile.spec),
@@ -297,7 +299,8 @@ function inputOf(ticket, { batch, profile, wrappers, product, productRoot, limit
   return { schemaVersion: 1,
     ticket: { id: ticket.id, title: ticket.title, goal: ticket.goal, acceptance: ticket.acceptance, acceptanceRef: ref('acceptance', ticket.acceptance), isCodeShipping: true, deliveryRequired: false, riskFlags: ticket.riskFlags ?? [] },
     mandate: { ticketId: ticket.id, repoId, approvalRef: ref('batch-ticket', ticket), policyDigest: digest(policy), allowedWritePaths: ticket.paths, allowedTools: tools,
-      budgetTokens: limits.authorizationPerTicket, stopConditions: STOP, ...(gitCommands.length ? { gitCommands } : {}), ...(resumedPaths ? { resumedPaths } : {}), ...(ranBefore ? { ranBefore } : {}), ...(ticket.verificationCommands ? { verificationCommands: ticket.verificationCommands } : {}) },
+      budgetTokens: limits.authorizationPerTicket, stopConditions: STOP, ...(gitCommands.length ? { gitCommands } : {}), ...(resumedPaths ? { resumedPaths } : {}), ...(ranBefore ? { ranBefore } : {}), ...(ticket.verificationCommands ? { verificationCommands: ticket.verificationCommands } : {}),
+      ...(pkg ? { package: { name: pkg.name, dir: pkg.dir, interfaces: pkg.interfaces, ...(pkg.conventions ? { conventions: pkg.conventions } : {}) } } : {}) },
     proposal: { assignmentId: `${ticket.id}.exec.1`, checkAssignmentId: `${ticket.id}.check.1`, duty: 'exec', attempt: 1, sessionRef: null, continuationOf: null, methodIds: [],
       selectionReason: 'Planned by the PM from the backlog', expectedPaths: ticket.expectedPaths ?? ticket.paths.filter(path => !path.endsWith('/**')), requestedTools: tools,
       estimate: { ref: ref('pm-estimate', amounts), ...amounts } },
@@ -416,6 +419,10 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     const staffed = review.reviewers.map(reviewer => [reviewer, rosterWrapper(instance, reviewer)]), unstaffed = staffed.find(([, found]) => !found.name);
     need(!unstaffed, `The reviewer ${unstaffed?.[0]} is not staffed (${unstaffed?.[1].gap}); both reviewers (${review.reviewers.join(', ')}) are needed before a batch opens. Staff it in the Router/Worker team's governance, then switch again. Nothing was started`);
     const reviewWrappers = Object.fromEntries(staffed.map(([reviewer, found]) => [reviewer, found.name]));
+    let team;
+    try { team = loadPackages({ instance, productRoot }); } catch (error) { if (isPackagesError(error)) need(false, `${error.message}. Nothing was started`); throw error; }
+    try { batch = { ...batch, tickets: packagedTickets(batch, team) }; } catch (error) { if (isPackagesError(error)) need(false, error.message); throw error; }
+    const packages = batch.tickets.map(ticket => packageOf(team, ticket));
     // ADR 0011, decision 7: a due periodic review is recorded before the next batch; one not obtained counts as recorded.
     const periodic = periodicDue({ instance, reviewers: review.reviewers });
     need(!periodic.due.length, periodicDueReason(periodic), 'PERIODIC_REVIEW_DUE');
@@ -461,7 +468,7 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     const run = { rounds: count, date: batch.date ?? new Date().toISOString().slice(0, 10), nextLifecycleNumber: batch.nextLifecycleNumber, runId,
       budgetCeilingTokens: ceiling, estimatedOutputTokens: Math.floor(ceiling / 2), guardianEstimateTokens: limits.authorizationPerTicket, maxAttemptsPerTicket: limits.attemptsPerTicket };
     const inputs = batch.tickets.map((ticket, i) => inputOf(ticket, { batch, profile, wrappers, product, productRoot, limits, allPaths, gitCommands: gitCommands[i], resumedPaths: plans[i]?.paths,
-      ranBefore: ran[i].count ? { runs: ran[i].runs, count: ran[i].count, replan: ticket.replan } : null }));
+      ranBefore: ran[i].count ? { runs: ran[i].runs, count: ran[i].count, replan: ticket.replan } : null, pkg: packages[i] }));
     let frozen = await freezeRun({ inputs, run, teamRoot: instance, standingBatch: true });
     need(!frozen.errors, `The batch cannot be frozen: ${frozen.errors?.[0]?.field}: ${frozen.errors?.[0]?.reason}`);
     if (manifest) {
@@ -485,8 +492,9 @@ export async function beforeBatch({ teamRoot, instanceRoot, batch, startAsIs = f
     const body = { schemaVersion: 1, stage: 'batch-open', runId: frozen.args.runId, openedAt: at, productRoot, productHead: product.head, branch: product.branch,
       startedAsIs: startAsIs === true, preexisting: product.preexisting, preexistingContent: contentOf(productRoot, product.preexisting), hooks, lease, boundaryDigest: boundary.digest, hookLogsCommands: true, isolationDigest: isolation.digest,
       limits, ceiling: { outputTokens: ceiling, stopLine: Math.floor(ceiling * 4 / 5) },
-      tickets: batch.tickets.map((ticket, i) => ({ id: ticket.id, title: ticket.title, goal: ticket.goal, acceptance: ticket.acceptance, commitMessage: ticket.commitMessage ?? `${ticket.id}: ${ticket.title}`, paths: ticket.paths, expectedPaths: inputs[i].proposal.expectedPaths, dependsOn: ticket.dependsOn ?? [], moves: ticket.moves ?? [], deletes: ticket.deletes ?? [], declared: declaredOf(ticket, batch.sensitivePaths), earlierRuns: { runs: ran[i].runs, count: ran[i].count }, ...(ticket.continues ? { continues: ticket.continues } : {}), ...(ticket.replan ? { replan: ticket.replan } : {}), ...(ticket.verificationCommands ? { verificationCommands: ticket.verificationCommands } : {}), ...(plans[i] ? { resume: { patch: plans[i].patch, digest: plans[i].digest, paths: plans[i].paths, content: contentOf(productRoot, plans[i].paths) } } : {}) })),
-      ...(runsAgain.length ? { runsAgain } : {}), sensitivePaths: batch.sensitivePaths, verificationCommands: batch.verificationCommands, review, reviewWrappers, triggerChanges: triggerChanges(lastFrozen, review), outsideCommits: outside,
+      tickets: batch.tickets.map((ticket, i) => ({ id: ticket.id, title: ticket.title, goal: ticket.goal, acceptance: ticket.acceptance, commitMessage: ticket.commitMessage ?? `${ticket.id}: ${ticket.title}`, paths: ticket.paths, expectedPaths: inputs[i].proposal.expectedPaths, dependsOn: ticket.dependsOn ?? [], moves: ticket.moves ?? [], deletes: ticket.deletes ?? [], declared: declaredOf(ticket, batch.sensitivePaths), earlierRuns: { runs: ran[i].runs, count: ran[i].count }, ...(ticket.continues ? { continues: ticket.continues } : {}), ...(ticket.replan ? { replan: ticket.replan } : {}), ...(ticket.verificationCommands ? { verificationCommands: ticket.verificationCommands } : {}),
+        ...(packages[i] ? { package: { name: packages[i].name, dir: packages[i].dir, interfaces: packages[i].interfaces, ...(packages[i].conventions ? { conventions: { path: packages[i].conventions.path, digest: packages[i].conventions.digest } } : {}) } } : {}), ...(plans[i] ? { resume: { patch: plans[i].patch, digest: plans[i].digest, paths: plans[i].paths, content: contentOf(productRoot, plans[i].paths) } } : {}) })),
+      ...(runsAgain.length ? { runsAgain } : {}), ...(team ? { packages: { file: PACKAGES, digest: team.digest, packages: team.packages.map(({ name, dir, interfaces }) => ({ name, dir, interfaces })) } } : {}), sensitivePaths: batch.sensitivePaths, verificationCommands: batch.verificationCommands, review, reviewWrappers, triggerChanges: triggerChanges(lastFrozen, review), outsideCommits: outside,
       launchManifest: manifest ? 'chained' : 'absent', runRecord: frozen.record, args: frozen.args };
     const record = { ...body, digest: digest(body) };
     // The ledger lines come before the record: a before that dies between leaves lines of a batch that never opened, which

@@ -601,3 +601,40 @@ the kit, not a team limit, and `attemptsPerTicket`, the attempts inside one
 engine run, is unchanged. This supersedes the amendment of 2026-11-26, "the kit
 saves left work and counts its runs", where it says the count refuses nothing
 and where it matches runs by overlapping paths.
+
+### 2026-11-27: packages of one repository
+
+Status: Accepted.
+
+The owner asked on 2026-11-27 for a team on one repository with several
+sub-projects on different stacks, whose number and names are the project's
+own, with the right conventions loaded for each task and little context spent
+on exchanges between them. Until then every worker's wrapper told it to read
+all of `profiles/stack.md`, the rules of every stack, a ticket's scope inside the repository was only its
+hand-written `paths`, and nothing told the PM that a file another sub-project
+builds against had changed.
+
+A team may list its packages in `profiles/packages.json` in its instance root:
+each a name, a folder of the product, and optionally a conventions file in the
+team root, verification commands and interface patterns naming the files
+outside its folder that it builds against. The file is optional; without it
+nothing changes. A ticket may name its `package`. `before` refuses an unknown
+package, a ticket path, move or deletion outside the package's folder, and a
+package command the batch does not list; a ticket without commands of its own
+verifies with its package's. `before` freezes the file's digest and the
+packages in the batch record, and inlines the package's conventions in the
+ticket's exec and check briefs with its name, folder and interfaces: the
+right conventions reach the worker without a tool call, and no other package's
+are named. Sub-projects exchange through interface files, not by reading each
+other's code. `after` matches each ticket's changed paths against the other
+frozen packages' interfaces and logs, for the owner's spot review, each change
+with the packages that read it, for the PM to file their follow-up tickets
+with `dependsOn`; it holds nothing. A ticket without `package` is repository-wide
+work and its briefs and record entry are unchanged; one whose every path lies
+inside one package's folder is refused until it names that package. The exec
+and check wrappers the switch writes now tell a worker to read
+`profiles/stack.md` except when its assignment carries a package; a team
+switched before this change keeps its wrappers until the next switch. The kit
+does not stop a worker from reading another package's files or the shared
+file: the hook guards writes and commands only. Detail: `docs/design/router-worker/batch-reference.md`,
+"Packages of one repository".
