@@ -128,6 +128,15 @@ budget per ticket. Those come from the team.
    The record lists the tickets that run again as `runsAgain: [{ticket, count,
    replan}]`, for the PM to relay to the owner; it is absent when there are none.
 
+   With `--receipt`, `before` prints a receipt in the place of the record, and
+   writes the same record. The receipt holds `runId`, the record's `digest`,
+   `record` (the absolute path of `rw-batch.json`), `ceiling`, `startedAsIs`
+   and `preexisting` when the batch started as is, `runsAgain` when present,
+   `resumes: [{ticket, patch}]` when a ticket resumes a patch,
+   `triggerChanges`, `outsideCommits`, `next`, and `args`. The `args` are the
+   record's, unchanged (the same JSON, so the same launch digest). A refusal
+   prints the same with or without it.
+
 Any refusal after step 4 releases the lock, and closes the boundary if it was
 opened. A patch already applied in step 8 is taken back out of the work tree.
 
@@ -580,6 +589,19 @@ which is where the owner sees which batch was passed over and why: a line that
 cannot be written leaves no mark. Without `--run`, the run id read from the
 closed batch must be the batch record's. A batch is settled or marked once.
 
+**The PM's attestation of the run.** `settle`, in both forms, prints beside
+the record, not in it, `monitoring: {runId, status, attestations, meaning}`.
+`status` is read from the line `reconcile-run.mjs --monitoring` appends to
+`agents/lifecycle.md` (or a rotated `agents/archive/lifecycle-*.md`) for the
+run id: `complete` when its coverage is `attended`; `partial` when it is
+`partial` or `unknown`, when the line cannot be read, or when one of several
+lines for the run says less; `missing` when there is no line. `missing` means
+no one attested the run; it says nothing about whether an owner stop or a
+hardware halt occurred. The status is not sealed in the settlement, since the
+PM may attest after settling. `rw-batch.mjs monitoring --instance .` prints,
+read only, the newest 10 archived batches (by `openedAt`) with the same status,
+and what each status means. Nothing is refused on it.
+
 Settlement reports cost. It does not hold or undo a commit: a ticket that went
 over its authorization and passed its check is still committed. The
 authorization is a limit judged afterwards, as ADR 0010 says; what a batch over
@@ -742,7 +764,9 @@ a narrower pattern would miss `oauth/` or `authz.js`.
   `madeAt`, the tickets with
   their goal, acceptance, changed and flagged paths, content digests and the
   flagged paths that are symbolic links with their targets (`links`), the
-  rule ids, the ADRs, each verification command's exit and output digest).
+  rule ids, the ADRs, each verification command's exit, output digest and
+  output tail, the last 4,000 characters, which the brief shows in full only
+  for a command that did not pass).
   When a command failed or timed out, it also says so on standard error (the
   result's `notice`) and tells the PM to brief again before dispatching the
   reviewer if the failure is flaky or its cause is gone. `review-brief` takes
@@ -794,7 +818,12 @@ a narrower pattern would miss `oauth/` or `authz.js`.
   diff does not follow renames, so a path's removed lines stay with it. For a
   ticket that resumed earlier work the brief names its patch in the team's
   folder. Then R's rules as `id: text`; the ADRs as absolute paths; the
-  output tail of each verification command; the batch-review protocol
+  output of each verification command: a command that failed, timed out or
+  passed the buffer limit with its whole kept tail, and a command that passed
+  (exit 0, in time, within the buffer) with its exit, the digest of its output
+  and the last lines of its tail (at most 300 characters, from a line start),
+  followed by one line that names `rw-batch-review-R.json`, the attempt and the
+  field where its whole kept tail is; the batch-review protocol
   (`agents/router-worker-review.md`); and the report schema, to be returned as
   the last fenced json block. It never holds a worker's report, the checker's
   verdict or another reviewer's report. The diff and each output tail sit in a
@@ -1672,9 +1701,12 @@ The limits not being the ones the ledger binds is refused with its own code,
 
 ## Not covered
 
-- **Nothing checks that the PM attested the run** at the reconciliation step.
-  The Guardian of a batch is told the attestation follows; a PM that leaves
-  `--monitoring` out leaves no line, and no command refuses.
+- **No command refuses a run the PM did not attest** at the reconciliation
+  step. The Guardian of a batch is told the attestation follows; a PM that
+  leaves `--monitoring` out leaves no line. `settle` and `rw-batch.mjs
+  monitoring` then show the run as `missing`: no one attested it, which says
+  nothing about whether a stop occurred. The attestation is the PM's word: the
+  kit reads its coverage and does not check it.
 - **A batch the engine ran and `abort` cleared before `after`** is not
   settled and does not hold the next batch: `abort` leaves no archive for it,
   and the kit cannot tell whether the engine ran. Its ledger line says only
