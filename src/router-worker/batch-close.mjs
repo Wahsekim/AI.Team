@@ -318,7 +318,19 @@ export function afterBatch({ teamRoot, instanceRoot, result, run = runCommands }
 
 // The plan of a batch: after's commits, or for a reviewed batch the commits of its resolution, checked again against
 // the verdicts, after's plan and the held patches on disk.
-export const HELD_REASONS = ['rejected', 'review-not-obtained', 'verification-failed-after-removal'];
+export const DEPENDENCY_HELD = 'dependency-held';
+export const HELD_REASONS = ['rejected', 'review-not-obtained', 'verification-failed-after-removal', DEPENDENCY_HELD];
+// Inside a batch dependsOn is a delivery dependency: a ticket is committed only when every ticket of the batch it builds on,
+// directly or through others, is delivered. `dropped`: the ids of the batch's tickets that are not. Returns, for each other
+// ticket that depends on one of them, the ids of the batch it waits on directly. before refuses a dependency later in the batch.
+export function waitingOn(tickets, dropped) {
+  const out = new Set(dropped.map(id => String(id).toLowerCase())), waits = {};
+  for (const ticket of tickets) {
+    const on = out.has(ticket.id.toLowerCase()) ? [] : (ticket.dependsOn ?? []).filter(id => out.has(id.toLowerCase()));
+    if (on.length) { waits[ticket.id] = on; out.add(ticket.id.toLowerCase()); }
+  }
+  return waits;
+}
 function resolutionOf(instance, batch, after) {
   const { reasons, flagged } = reviewGate(instance, batch, after);
   if (!flagged) return { plan: after.commits, held: [], wrote: [], reviewed: false };
@@ -326,10 +338,10 @@ function resolutionOf(instance, batch, after) {
   need(intact(resolution, 'batch-resolved'), `This batch was reviewed: resolve it first with: rw-batch.mjs resolve --instance <instance-root>${exists(path) ? `. ${RESOLUTION_FILE} is not a finished resolution: run resolve again` : ''}`);
   need(resolution.afterDigest === after.digest && resolution.reviewsDigest === digest(verdictsOf(instance, batch.runId)), `${RESOLUTION_FILE} belongs to another close of the batch or to other verdicts. ${ABANDON}`);
   const removed = Array.isArray(resolution.removed) ? resolution.removed : null, ids = new Set((removed ?? []).map(entry => entry?.ticket));
-  const plan = after.commits.filter(commit => !ids.has(commit.ticket));
+  const plan = after.commits.filter(commit => !ids.has(commit.ticket)), waits = waitingOn(batch.tickets, [...ids]);
   need(removed && removed.every(entry => HELD_REASONS.includes(entry.reason) && after.commits.some(commit => commit.ticket === entry.ticket && digest(commit.paths) === digest(entry.paths))) && digest(resolution.commits) === digest(plan)
-    && after.commits.every((commit, i) => !reasons[i] || ids.has(commit.ticket)) && Array.isArray(resolution.verification?.wrote),
-  `${RESOLUTION_FILE} does not hold after's commits less the tickets a review held. ${ABANDON}`);
+    && after.commits.every((commit, i) => !reasons[i] || ids.has(commit.ticket)) && plan.every(commit => !waits[commit.ticket]) && Array.isArray(resolution.verification?.wrote),
+  `${RESOLUTION_FILE} does not hold after's commits less the tickets a review held and those that depend on them. ${ABANDON}`);
   const lost = removed.filter(entry => entry.patch !== `reviews/held/${batch.runId}/${entry.ticket}.patch` || !exists(join(instance, entry.patch)) || bytesDigest(readFileSync(join(instance, entry.patch))) !== entry.patchDigest);
   need(!lost.length, `The patch of ${lost.map(entry => plain(String(entry.ticket))).join(', ')} is missing or was changed; the held work would be lost. ${ABANDON}`);
   const committing = new Set(plan.flatMap(commit => commit.paths)), wrote = resolution.verification.wrote;

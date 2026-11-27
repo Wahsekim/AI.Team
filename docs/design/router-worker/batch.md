@@ -237,7 +237,8 @@ elective review of a ticket that passed with changes; it binds like a
 required one.
 
 Once every reviewer has a final verdict, `resolve`. It saves each ticket a
-review rejected, or could not judge, as a patch under `reviews/held/<run id>/`,
+review rejected, or could not judge, and each ticket that depends on one, as a
+patch under `reviews/held/<run id>/`,
 takes it out of the work tree, and runs the verification commands again when a
 later ticket is still to be committed. Exit 2 when a ticket is held. Then
 `commit`, which commits what the resolution kept; or `abort` when every commit
