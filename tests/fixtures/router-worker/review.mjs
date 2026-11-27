@@ -18,6 +18,9 @@ export const COMMANDS = ['echo verified-by-kit', 'pwd'];
 export const batchOf = (...tickets) => ({ tickets, verificationCommands: COMMANDS, sensitivePaths: ['src/auth/**'], nextLifecycleNumber: 1 });
 export const agentsOf = commands => ({ worker: () => ({ outcome: 'done', progress: true, filesTouched: [], decisionsCount: 1, selfReportTokens: 100, blocked: false, terminalStop: false, notes: 'done' }),
   verifier: () => ({ pass: true, staticPass: true, e2ePass: true, summary: 'ok', commandsRun: commands.map(command => ({ command, exitCode: 0 })), failures: [] }) });
+const failedCheck = { pass: false, staticPass: false, e2ePass: false, summary: 'broken', commandsRun: COMMANDS.map(command => ({ command, exitCode: 1 })), failures: ['a test fails'] };
+// The checker fails the checks named by their order, 1 being the first ticket's.
+export const checker = (...failing) => { let n = 0; const pass = agentsOf(COMMANDS).verifier; return { verifier: () => failing.includes(++n) ? failedCheck : pass() }; };
 
 // `commands`: the verification commands the batch freezes and the owner confirms, or a function of the fixture's base folder.
 export function live(t, { commands = COMMANDS, blank = false } = {}) {

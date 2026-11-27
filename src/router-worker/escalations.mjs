@@ -1,10 +1,10 @@
-import { readFileSync, appendFileSync, mkdirSync, readdirSync } from 'node:fs';
+import { readFileSync, appendFileSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { digest, bytesDigest } from '../loop/contracts.mjs';
+import { digest } from '../loop/contracts.mjs';
 import { instanceOf } from './roots.mjs';
 import { overlap, plain } from './batch.mjs';
 import { byPerson, AT_TERMINAL } from './switch.mjs';
-import { HELD } from './review-resolve.mjs';
+import { resumedFrom } from './earlier-runs.mjs';
 
 // ADR 0011, decisions 16 and 17, with the owner's rule of 2026-11-20: a ticket rejected, or whose review was not
 // obtained, in a second batch goes to the owner; one of each counts too. It is blocked, and so is every ticket related to it;
@@ -17,20 +17,7 @@ const same = (a, b) => String(a).toLowerCase() === String(b).toLowerCase();
 const linesOf = path => { let text; try { text = readFileSync(path, 'utf8'); } catch { return []; } return text.split('\n').filter(Boolean).map(line => { try { return JSON.parse(line); } catch { return null; } }).filter(Boolean); };
 const append = (path, rows) => { if (rows.length) appendFileSync(path, rows.map(row => JSON.stringify(row) + '\n').join('')); };
 
-// ADR 0011, amendment of 2026-11-26, "a rejection counts with the work it resumes": the ticket a held patch was held for,
-// told by the patch's place under reviews/held/<run id>/, or by its bytes when a copy of it was resumed from elsewhere.
-function resumedFrom(instance, resume) {
-  if (!resume) return null;
-  const at = /^reviews\/held\/([^/]+)\/([^/]+)\.patch$/.exec(resume.patch);
-  if (at) return { runId: at[1], ticket: at[2] };
-  const listed = dir => { try { return readdirSync(dir, { withFileTypes: true }); } catch { return []; } };
-  for (const run of listed(join(instance, HELD)).filter(entry => entry.isDirectory()).map(entry => entry.name).sort())
-    for (const name of listed(join(instance, HELD, run)).filter(entry => entry.isFile() && entry.name.endsWith('.patch')).map(entry => entry.name).sort())
-      if (bytesDigest(readFileSync(join(instance, HELD, run, name))) === resume.digest) return { runId: run, ticket: name.slice(0, -'.patch'.length) };
-  return null;
-}
-
-// Appends a reviewer's final outcome for each ticket of a run, with the held work it resumed, and returns the escalations it
+// Appends a reviewer's final outcome for each ticket of a run, with the saved work it resumed, and returns the escalations it
 // raised. A line already there is not written again, so a judgment that died half-way is judged again without counting twice.
 // `outcomes`: [{ ticket, outcome: 'rejected'|'not-obtained', finding }]; `tickets`: [{ id, paths, resume }], the paths each
 // changed and the resume its batch record froze.
@@ -42,7 +29,7 @@ export function recordOutcomes({ instance, runId, reviewer, outcomes, tickets, a
   append(join(instance, TICKETS), fresh);
   const all = [...seen, ...fresh], known = linesOf(join(instance, ESCALATIONS)), raised = [];
   for (const { ticket } of outcomes) {
-    // A ticket's lines are those under its id and under every id whose held work it resumed, followed down the chain.
+    // A ticket's lines are those under its id and under every id whose saved work it resumed, followed down the chain.
     const ids = [ticket];
     for (let i = 0; i < ids.length; i++) for (const line of all) {
       const from = line.resumedFrom?.ticket;
@@ -64,10 +51,30 @@ export function recordOutcomes({ instance, runId, reviewer, outcomes, tickets, a
 export const outcomesOf = (instance, runId) => linesOf(join(instance, TICKETS)).filter(line => line.runId === runId);
 export const escalationsOf = (instance, runId) => linesOf(join(instance, ESCALATIONS)).filter(entry => entry.runIds?.includes(runId));
 // Only a line written at a terminal for the escalation as it stands lifts it; the kit cannot tell such a line from a forged one.
-const openEscalations = instance => {
-  const lifted = linesOf(join(instance, ACKNOWLEDGED)).filter(ack => ack.atTerminal === true);
-  return linesOf(join(instance, ESCALATIONS)).filter(entry => !lifted.some(ack => same(ack.id, entry.id) && ack.escalationDigest === digest(entry)));
+const liftedIn = instance => {
+  const acks = linesOf(join(instance, ACKNOWLEDGED)).filter(ack => ack.atTerminal === true);
+  return entry => acks.some(ack => same(ack.id, entry.id) && ack.escalationDigest === digest(entry));
 };
+const openEscalations = instance => { const lifted = liftedIn(instance); return linesOf(join(instance, ESCALATIONS)).filter(entry => !lifted(entry)); };
+
+// decisions/0008: a ticket runs at most three times, the initial run and two retries.
+const MAX_FAILED_RUNS = 3;
+const EXHAUSTED = 'attempts-exhausted';
+// ADR 0010, amendment of 2026-11-27: a ticket whose failed runs reach the cap goes to the owner and is blocked like an escalated
+// ticket. The owner's acknowledgement lets it run again; a failed run after the latest acknowledgement escalates it again.
+// `failed`: the ticket's failed runs, oldest first. Returns the escalation, written once, or null.
+export function exhaustion({ instance, ticket, failed, at }) {
+  const known = linesOf(join(instance, ESCALATIONS)), lifted = liftedIn(instance), runIds = failed.map(run => run.runId);
+  const acknowledged = new Set(known.filter(entry => entry.kind === EXHAUSTED && lifted(entry)).flatMap(entry => Array.isArray(entry.runIds) ? entry.runIds : []));
+  if (runIds.length < MAX_FAILED_RUNS || acknowledged.has(runIds.at(-1))) return null;
+  const id = `ESC-${ticket.id}-exhausted-${runIds.at(-1)}`, raised = known.find(entry => same(entry.id, id));
+  if (raised) return raised;
+  const entry = { id, kind: EXHAUSTED, ticket: ticket.id, runIds, paths: ticket.paths, at };
+  mkdirSync(join(instance, 'reviews'), { recursive: true });
+  append(join(instance, ESCALATIONS), [entry]);
+  appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} ESCALATED ${id}: ticket ${entry.ticket} failed in ${runIds.length} runs by the engine (${runIds.join(', ')}): the initial run and two retries are spent; it and every ticket related to it are blocked until the owner reviews it and runs: team-mode.mjs acknowledge ${id} --instance <instance-root>. Then it may be filed again with a replan, and a further failed run escalates it again. Unrelated tickets go on.\n`);
+  return entry;
+}
 
 // The tickets of a batch an open escalation blocks: the escalated ticket itself, a ticket whose paths overlap its
 // paths, and a ticket that depends on a blocked one, directly or through others, here or in an archived batch.

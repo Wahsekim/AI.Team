@@ -37,6 +37,7 @@ the kit does not cover. The runbook sends you to a section here by its title.
 | `deletes` (optional) | Tracked files the worker deletes: `["src/old.js"]`. Each gives the exec worker one exact command, `git --literal-pathspecs rm -q -- "<path>"`. An empty list declares nothing, as an absent one. Frozen in the record (`[]` when absent) |
 | `verificationCommands` (optional, per ticket) | 1 or more of the batch's `verificationCommands`, each once. The ticket's exec and check briefs list only these, so a ticket that changes a document need not run the product's test suite. Absent, the ticket runs the batch's whole list. The hook still accepts the batch's whole list from any worker, and the review's re-verification runs the whole list. Frozen in the ticket's entry of the record when given |
 | `resume` (optional) | A patch in the team's folder that holds the work an earlier batch left for this ticket, as `left` prints it: `"left/<run id>/US-08.patch"`. "before" applies it to the product, so what it changes is the ticket's. See "Resuming left work" |
+| `replan` (optional) | Required on a ticket that ran before and was not committed (see "Earlier runs of a ticket"), refused on any other: `{ "cause": "<why the earlier run was not committed>", "feasible": "<why the ticket can be done as it is now written>", "change": "<what is different this time>" }`, exactly these three, each one line of at most 200 characters with no space at either end. Frozen in the ticket's entry of the record, logged for the owner, and put in the ticket's exec and check briefs |
 | `runId`, `date` (optional) | Default: `rw-<commit>-L<nextLifecycleNumber>-<time>`, new at every `before`, and today |
 
 The PM does not write a ceiling, a number of rounds, a wrapper name or a
@@ -78,7 +79,9 @@ budget per ticket. Those come from the team.
    outside the product.
 4. **The lock** on the product repository is taken. The team and the product
    are then read again: with the lock held, no mode switch and no change of
-   limits can run.
+   limits can run. Each ticket's `resume` patch is checked, and its earlier
+   runs are counted (below): a ticket at the cap is escalated and refused with
+   `TICKET_ATTEMPTS_EXHAUSTED`, and a ticket that ran before needs a `replan`.
 5. **The engine's arguments are built and frozen**:
 
    | Argument | Value |
@@ -120,7 +123,9 @@ budget per ticket. Those come from the team.
    the newest archive on the branch cannot be read). Each ticket's entry holds
    `earlierRuns` (below): `{runs: [{runId, ticket, status}], count}`, the
    newest 20 runs, oldest batch first, and how many there are (`runs` is
-   empty and `count` 0 when there are none).
+   empty and `count` 0 when there are none), and its `replan` when it has one.
+   The record lists the tickets that run again as `runsAgain: [{ticket, count,
+   replan}]`, for the PM to relay to the owner; it is absent when there are none.
 
 Any refusal after step 4 releases the lock, and closes the boundary if it was
 opened. A patch already applied in step 8 is taken back out of the work tree.
@@ -154,24 +159,56 @@ kit against an older batch. Nothing is refused on any of this. A batch aborted
 before `after` is not archived, so the next batch names the same commits again.
 
 **Earlier runs of a ticket** ([ADR 0010](../../../decisions/0010-router-worker-second-mode.md),
-amendment of 2026-11-26, "the kit saves left work and counts its runs"). For each
-ticket, the archived batches in which the engine ran a ticket of the same id
-(compared without case), or one whose `paths` overlap its `paths` (the
-comparison of two tickets claiming one file), and the kit did not commit it.
-The engine ran a ticket when `after` recorded an outcome for it (`passed` or
-`not-passed`; a ticket the engine never reached, `not-run`, is not a run). The
-kit committed it when the archive's `commit.json` or `commits.json` lists a
-commit for it. Each entry is `{runId, ticket, status}`: the archived batch, the
-ticket's id there, and its status. Once the record is written, one ledger line
-per such ticket names them for the owner's spot review: `BATCH <run> RUNS
-<ticket> AGAIN (owner spot review): <n> earlier run(s) by the engine that the
-kit did not commit: ..., <run> as <ticket> (<status>)` (the newest ten, after
-`...,` when there are more).
-Nothing is refused: whether a count should stop a batch is the owner's to
-decide, and [ADR 0008](../../../decisions/0008-router-worker-topology.md) sets
-the attempts within one run. Each archive's batch record is read once, its
-`after.json`, `commit.json` and `commits.json` once each, with no Git call, so
-the scan stays small however many batches a team archived.
+amendments of 2026-11-26 and 2026-11-27). For each ticket, the archived
+batches in which the engine ran it and the kit did not commit it. "It" is a
+ticket of the same id (compared without case), and the ticket whose saved
+patch it resumes: a `resume` at `left/<run id>/<ticket>.patch` or
+`reviews/held/<run id>/<ticket>.patch`, or a copy elsewhere in the team folder
+whose digest is that of a file under one of those folders (the same
+recognition as a rejection's `resumedFrom`). The resumed ticket's own `resume`,
+as its batch record froze it, is followed in turn, down the chain. Tickets that
+only share a file are not one piece of work: paths count for nothing (owner
+rule of 2026-11-26). The engine ran a ticket when `after` recorded an outcome
+for it (`passed` or `not-passed`; a ticket the engine never reached, `not-run`,
+is not a run). The kit committed it when the archive's `commit.json` or
+`commits.json` lists a commit for it. Each entry is `{runId, ticket, status}`:
+the archived batch, the ticket's id there, and its status.
+
+A ticket with at least one earlier run is replanned, not handed out again:
+- **No `replan`**: refused with `BATCH_REFUSED`. The reason names the latest
+  earlier run and where its evidence is: the archive's `after.json` (the
+  ticket's status), the engine's return kept beside it as `return.json` (the
+  worker's and the checker's reports), and the saved patch under `left/` or
+  `reviews/held/` when there is one; and the three texts to write.
+- **The `replan` of the latest earlier run, unchanged**: refused. A `replan`
+  on a ticket with no earlier run is refused too.
+- **Opened**: once the record is written, one ledger line per such ticket names
+  the runs and the replan for the owner's spot review, and is the report to
+  the owner: `BATCH <run> RUNS <ticket> AGAIN (owner spot review): <n> earlier
+  run(s) by the engine that the kit did not commit: ..., <run> as <ticket>
+  (<status>). Replanned by the PM: cause: <cause>; feasible: <feasible>; change:
+  <change>.` (the newest ten runs, after `...,` when there are more). The exec
+  and check briefs carry `ranBefore: {runs, count, replan}` and a note that
+  what failed before must not fail again; the brief of a ticket that never ran
+  is unchanged.
+
+**At most two retries** (decisions/0008: the initial run and two retries). A
+ticket's failed runs are its earlier runs whose status is `not-passed`: a run
+that passed and was not committed because its batch was held, rejected or
+aborted needs a `replan` and does not count. A ticket with three failed runs
+is refused with `TICKET_ATTEMPTS_EXHAUSTED`, which names the runs, and
+escalated: `{id: "ESC-<ticket>-exhausted-<latest failed run>", kind:
+"attempts-exhausted", ticket, runIds, paths, at}` in
+`reviews/escalations.jsonl` and an `ESCALATED` ledger line. It is then blocked
+like any escalated ticket (see "Review verdict, commit gate and escalation")
+until the owner runs `team-mode.mjs acknowledge <id>`. A failed run named by an
+acknowledged escalation of this kind is spent: the ticket may be filed again,
+with a `replan`, and its next failed run escalates it again under a new id.
+The cap is a constant of the kit, not a limit of `profiles/team-mode.json`;
+the attempts inside one engine run (`attemptsPerTicket`) are another count.
+Each archive's batch record is read once, its `after.json`, `commit.json` and
+`commits.json` once each, with no Git call; the digest of saved patches is read
+only for a `resume` outside `left/` and `reviews/held/`.
 
 ## After
 
@@ -867,8 +904,9 @@ offline on transcript fixtures.
   "rejected"|"not-obtained", finding, resumedFrom?, at}`, once per ticket, run
   and reviewer. `resumedFrom: {runId, ticket}` is present when the batch record
   froze a held patch as the ticket's `resume`: a patch at
-  `reviews/held/<run id>/<ticket>.patch`, or a copy elsewhere in the team folder
-  whose digest is that of a file under `reviews/held/`. A ticket's adverse
+  `reviews/held/<run id>/<ticket>.patch` or `left/<run id>/<ticket>.patch`, or a
+  copy elsewhere in the team folder whose digest is that of a file under one of
+  those folders. A ticket's adverse
   outcomes are the lines under its id (compared without case) and the lines of
   every ticket whose work it continues, followed from `resumedFrom` to
   `resumedFrom`, so the same work filed again under a new id with its held
@@ -886,7 +924,8 @@ offline on transcript fixtures.
   whichever id) in `reviews/escalations.jsonl`, an `ESCALATED` ledger line,
   which names the other ids (`ticket <id> (resuming the work of <other id>)`), and
   the verdict's `escalated` list. Two reviewers rejecting the same ticket in one
-  batch count once.
+  batch count once. A ticket whose failed runs reach the cap is escalated by
+  `before` with the kind `attempts-exhausted` (see "Earlier runs of a ticket").
 - **What an escalation blocks** (owner rule of 2026-11-20: report to the human,
   block what is related, replan the rest). "before" refuses a batch that holds
   the escalated ticket, a ticket whose paths overlap the escalated ticket's
@@ -1475,11 +1514,14 @@ any batch's.
 - A ticket's `resume` patch is not a file of the team's folder, or is not a
   patch of edits and new files inside the ticket's `paths` that applies on the
   product's HEAD (see "Resuming left work").
+- A ticket that ran before carries no `replan`, or the one its latest run
+  froze; a ticket that never ran carries one (see "Earlier runs of a ticket").
 - The batch cannot be frozen: an estimate above the authorization, a roster that does not staff the three workers.
 - The launch preflight or the isolation check does not pass.
 
 The limits not being the ones the ledger binds is refused with its own code,
-`LIMITS_NOT_BOUND`.
+`LIMITS_NOT_BOUND`, and a ticket whose failed runs reached the cap with
+`TICKET_ATTEMPTS_EXHAUSTED`.
 
 ## Not covered
 
@@ -1579,14 +1621,19 @@ The limits not being the ones the ledger binds is refused with its own code,
   which a PM session can rewrite with the archive. A branch rebuilt since the
   last archived batch, or one with no archived batch, is not compared; the
   ledger says so for the rebuilt branch. Only the first 100 ids are frozen.
-- **Earlier runs are told by id and by `paths`.** The same work filed again
-  under a new id whose `paths` overlap none of the earlier grants is not
-  counted. Another piece of work on the same files is counted as a run of this
-  one, and so is a run that was not committed although the work later landed
-  under another id. A batch aborted before `after` is not archived and is not
-  counted, nor is an archive whose batch record cannot be read, and an archive
-  whose after record cannot be read counts as no earlier run. The archives
-  are files a PM session can rewrite.
+- **Earlier runs are told by id and by the saved patch a ticket resumes.** The
+  same work filed under a new id and done again from nothing starts a new
+  count, and so does a copy of a saved patch edited outside `left/` and
+  `reviews/held/`. A run that was not committed although the work later landed
+  under another id still counts. A batch aborted before `after` is not
+  archived and is not counted, nor is an archive whose batch record cannot be
+  read, and an archive whose after record cannot be read counts as no earlier
+  run. The archives are files a PM session can rewrite.
+- **A replan is checked for presence, not for soundness.** The kit checks that
+  a ticket that ran before carries three one-line texts and that they are not
+  those of its latest run; a change of one word passes. Whether the cause is
+  the real one and the change answers it is the PM's judgment, and the owner's
+  at the spot review.
 - **A rejection counts by its id and by the held patch it resumes.** The same
   work filed again under a new id and done again from nothing, or resumed from
   a copy of its held patch edited outside `reviews/held/`, is new work and is

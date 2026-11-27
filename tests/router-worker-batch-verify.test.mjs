@@ -124,7 +124,7 @@ test('after sets aside the work of a ticket that did not pass as a patch, then r
   assert.equal(saved.status, 0, JSON.stringify(saved.refused));
   assert.deepEqual(saved.out.tickets, [{ ticket: 'US-03', state: 'patch', patch, by: 'after', resume: patch }]); assert.equal(f.ledger(), ledger, 'left saved nothing');
   assert.equal(markNotMetered({ ...f.common, reason: 'not measured in this test', runId: open.runId }).errors, undefined);
-  const next = await beforeBatch({ ...f.common, batch: { ...batchOf(ticket('US-03', ['src/app.js'], { resume: saved.out.tickets[0].resume })), verificationCommands: f.commands } });
+  const next = await beforeBatch({ ...f.common, batch: { ...batchOf(ticket('US-03', ['src/app.js'], { resume: saved.out.tickets[0].resume, replan: { cause: 'Its verification command failed', feasible: 'The command passes on the work as saved', change: 'The saved work is resumed and finished' } })), verificationCommands: f.commands } });
   assert.equal(next.errors, undefined, JSON.stringify(next.errors)); assert.equal(inTree(f, 'src/app.js'), LEFT_WORK['src/app.js']);
 });
 

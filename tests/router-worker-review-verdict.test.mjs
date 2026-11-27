@@ -17,6 +17,8 @@ import { refusal, ticket, batchOf, live, changed, runBatch, edits, reportOf, fai
 
 // Security's review as before its first brief: no brief, no verdict, no dispatch.
 const fresh = f => { for (const path of [join(f.root, VERDICTS_FILE), join(f.root, REVIEW_FILE('security')), f.projectsRoot]) rmSync(path, { recursive: true, force: true }); };
+// A ticket that ran before and was not committed runs again only with a replan (ADR 0010, amendment of 2026-11-27).
+const replanOf = n => ({ cause: `Security rejected run ${n}`, feasible: 'The token can be read from the environment', change: `Attempt ${n + 1} reads the token from the environment` });
 const escaped = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 test('a passed review lets the flagged ticket commit and resolve ends the review state; commit waits for the review and the resolution', async t => {
@@ -386,8 +388,8 @@ test('a rejection whose verdict was lost is recovered by judging the same transc
 
 test('a ticket rejected in a second batch is escalated: only a batch with it or a related ticket is refused, until the owner acknowledges it', async t => {
   const f = live(t), discard = () => { git(f.product, 'checkout', '-q', '--', '.'); git(f.product, 'clean', '-fdq'); };
-  const rejectOnce = async () => {
-    const { open } = await runBatch(f, [ticket('US-02', ['src/authz.js'])], edits(['src/authz.js']));
+  const rejectOnce = async (extra = {}) => {
+    const { open } = await runBatch(f, [ticket('US-02', ['src/authz.js'], extra)], edits(['src/authz.js']));
     const made = f.brief('security'), verdict = f.judge('security', transcriptOf(f, made, { report: failing(reportOf(made), 'US-02', 'kit.sec.secret-in-code') }));
     assert.equal(f.resolve().errors, undefined);
     const committed = f.commit();
@@ -397,7 +399,7 @@ test('a ticket rejected in a second batch is escalated: only a batch with it or 
   };
   const one = await rejectOnce();
   assert.deepEqual(one.verdict.escalated, [], 'a first rejection goes back to the backlog');
-  const two = await rejectOnce(), [escalation] = two.verdict.escalated;
+  const two = await rejectOnce({ replan: replanOf(1) }), [escalation] = two.verdict.escalated;
   assert.equal(escalation.kind, 'second-rejection'); assert.equal(escalation.ticket, 'US-02');
   assert.deepEqual(escalation.runIds, [one.open.runId, two.open.runId]); assert.deepEqual(escalation.paths, ['src/authz.js']);
   assert.deepEqual(f.lines('reviews/escalations.jsonl').map(line => line.id), [escalation.id]);
@@ -427,7 +429,7 @@ process.stdout.write(JSON.stringify(acknowledgeEscalation(${JSON.stringify({ ...
   assert.equal(acknowledgeEscalation({ ...f.common, id: escalation.id, confirm: proposal.digest, atTerminal: true }).errors, undefined);
   assert.deepEqual(f.lines('reviews/acknowledged.jsonl').map(line => [line.id, line.atTerminal]), [[escalation.id, true]]);
   assert.match(f.ledger(), new RegExp(`ESCALATION ${escalation.id} ACKNOWLEDGED: .*typed at an interactive terminal`));
-  assert.equal((await f.before(batchOf(ticket('US-02', ['src/authz.js'])))).errors, undefined, 'the owner lifted the block');
+  assert.equal((await f.before(batchOf(ticket('US-02', ['src/authz.js'], { replan: replanOf(2) })))).errors, undefined, 'the owner lifted the block');
 });
 
 test('a rejected ticket filed again under another id with its held patch as resume is escalated at the second rejection, naming both ids', async t => {
@@ -441,7 +443,7 @@ test('a rejected ticket filed again under another id with its held patch as resu
   };
   const one = await reject(ticket('US-02', ['src/authz.js']), '// first\n'), held = `reviews/held/${one.open.runId}/US-02.patch`;
   assert.deepEqual(one.verdict.escalated, []); assert.ok(existsSync(join(f.root, held)), 'resolve held the rejected ticket as a patch');
-  const two = await reject(ticket('US-12', ['src/authz.js'], { resume: held }), '// first\n// again\n'), [escalation] = two.verdict.escalated;
+  const two = await reject(ticket('US-12', ['src/authz.js'], { resume: held, replan: replanOf(1) }), '// first\n// again\n'), [escalation] = two.verdict.escalated;
   assert.equal(escalation?.ticket, 'US-12'); assert.deepEqual(escalation.runIds, [one.open.runId, two.open.runId]);
   assert.deepEqual(escalation.findings.map(item => item.ticket), ['US-02', 'US-12']);
   assert.deepEqual(f.lines('reviews/tickets.jsonl').map(line => [line.ticket, line.resumedFrom]), [['US-02', undefined], ['US-12', { runId: one.open.runId, ticket: 'US-02' }]]);
