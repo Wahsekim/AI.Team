@@ -189,8 +189,8 @@ a later batch.
 | `VERIFICATION_NOT_RUN` | not held: the tree held more than the planned commits, so the kit did not run the commands and the commits rest on the checkers |
 | `NESTED_REPOSITORY` | the folder stays uncommitted |
 | `PREEXISTING_PATH_CHANGED` | not held; that path is never committed |
-| `GUARDIAN_ATTENTION`, `LEDGER_NOT_WRITTEN`, `BOUNDARY_NOT_RESTORED`, `LOCK_RELEASE_FAILED`, `LOCK_NOT_HELD_BY_THIS_BATCH` | not held |
-| `HOOK_SAW_NO_WORKER`, `VERIFICATION_FAILED`, `CHECK_RUNS_MISSING`, `HOOKS_CHANGED`, `HOOKS_WRITTEN`, `BOUNDARY_CHANGED`, `PRODUCT_HEAD_MOVED`, `PRODUCT_BRANCH_CHANGED`, `GUARDIAN_NOT_CLEAN` | all held |
+| `GUARDIAN_ATTENTION`, `LEDGER_NOT_WRITTEN`, `BOUNDARY_NOT_RESTORED`, `LOCK_TAKEN_AGAIN`, `LOCK_RELEASE_FAILED`, `LOCK_NOT_HELD_BY_THIS_BATCH` | not held |
+| `HOOK_SAW_NO_WORKER`, `VERIFICATION_FAILED`, `ENTRIES_NOT_READ`, `CHECK_RUNS_MISSING`, `HOOKS_CHANGED`, `HOOKS_WRITTEN`, `BOUNDARY_CHANGED`, `PRODUCT_HEAD_MOVED`, `PRODUCT_BRANCH_CHANGED`, `GUARDIAN_NOT_CLEAN` | all held |
 
 **All held**: the kit commits nothing of the batch, and the batch is not put
 in review. Run `abort`, then `left`, then `settle METER.json --run <run id>`:

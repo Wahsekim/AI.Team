@@ -578,7 +578,7 @@ test('a commit that died after archiving is finished by the next call; nothing i
 });
 
 test('each finding that questions the run holds every commit; each check of commit refuses on its own', async t => {
-  assert.deepEqual([...HOLD_ALL].sort(), ['BOUNDARY_CHANGED', 'CHECK_RUNS_MISSING', 'GUARDIAN_NOT_CLEAN', 'HOOKS_CHANGED', 'HOOKS_WRITTEN', 'HOOK_SAW_NO_WORKER', 'PRODUCT_BRANCH_CHANGED', 'PRODUCT_HEAD_MOVED', 'VERIFICATION_FAILED']);
+  assert.deepEqual([...HOLD_ALL].sort(), ['BOUNDARY_CHANGED', 'CHECK_RUNS_MISSING', 'ENTRIES_NOT_READ', 'GUARDIAN_NOT_CLEAN', 'HOOKS_CHANGED', 'HOOKS_WRITTEN', 'HOOK_SAW_NO_WORKER', 'PRODUCT_BRANCH_CHANGED', 'PRODUCT_HEAD_MOVED', 'VERIFICATION_FAILED']);
   const edits = { 'src/app.js': 'x\n' }, holds = (closed, code) => { assert.ok(closed.findings.some(finding => finding.code === code), `${code}: ${JSON.stringify(closed.findings)}`); assert.equal(closed.holdAll, true); assert.deepEqual(closed.commits, []); };
   const boundary = await ran(t, { tickets: two, edits }), file = join(boundary.root, '.claude/rw-write-boundary.json'), body = (({ digest: _old, ...rest }) => rest)(JSON.parse(readFileSync(file, 'utf8')));
   const widened = { ...body, wrappers: { ...body.wrappers, 'tag-list-fixture-worker-exec': { duty: 'exec', writePaths: ['**'] } } };
@@ -607,7 +607,7 @@ test('each finding that questions the run holds every commit; each check of comm
   assert.deepEqual(unwatched.account.blockers, []);
   // A lock another team holds when the batch ends, and hook log lines from before the batch opened.
   const stolen = await ran(t, { tickets: two, edits }); releaseLease({ productRoot: stolen.product, lease: stolen.open.lease }); acquireLease({ teamRoot: fixture(t).root, productRoot: stolen.product });
-  assert.ok(stolen.after().findings.some(finding => finding.code === 'LOCK_NOT_HELD_BY_THIS_BATCH'));
+  assert.match(refusal(stolen.after()).reason, /locked by another team root\. Nothing was changed/); assert.equal(existsSync(join(stolen.root, AFTER_FILE)), false);
   const old = live(t); appendFileSync(join(old.root, '.claude/rw-write-boundary.log.jsonl'), JSON.stringify({ at: '2020-01-01T00:00:00.000Z', tool: 'Edit', agentType: 'tag-list-fixture-worker-exec', decision: 'allow' }) + '\n');
   const opened = await old.before(batchOf(...two)), { result } = await runWorkflow({ scriptPath: join(old.root, '.claude/workflows/run-n-rounds.js'), args: opened.args, agentImpl: makeAgentImpl({}) });
   writeFileSync(join(old.product, 'src/app.js'), 'x\n');

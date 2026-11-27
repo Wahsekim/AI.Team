@@ -1,5 +1,6 @@
-import { readFileSync, writeFileSync, appendFileSync, rmSync, lstatSync, mkdirSync, renameSync, copyFileSync, realpathSync, readdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync, rmSync, lstatSync, mkdirSync, mkdtempSync, renameSync, copyFileSync, realpathSync, readdirSync } from 'node:fs';
 import { join, resolve, relative, isAbsolute, sep, dirname } from 'node:path';
+import { tmpdir } from 'node:os';
 import { digest, bytesDigest } from '../loop/contracts.mjs';
 import { instanceOf } from './roots.mjs';
 import { git, gitRun, isRepositoryRoot, acquireLease, releaseLease, readLease, alive, commandRunning } from './lease.mjs';
@@ -103,6 +104,28 @@ export const contentOf = (product, paths) => Object.fromEntries(paths.map(path =
   const stat = lstatSync(join(product, path), { throwIfNoEntry: false });
   return [path, stat?.isFile() ? bytesDigest(readFileSync(join(product, path))) : null];
 }));
+// What Git would record for each path: "<mode> <object id>", or null for a path it would not hold. `oidAt`: the field of the object id.
+const entryLines = (text, oidAt) => Object.fromEntries(text.split('\0').filter(Boolean).map(line => { const tab = line.indexOf('\t'), fields = line.slice(0, tab).split(' '); return [line.slice(tab + 1), `${fields[0]} ${fields[oidAt]}`]; }));
+const pick = (paths, found) => Object.fromEntries(paths.map(path => [path, found[path] ?? null]));
+// Of the work tree, read by Git itself through an index of its own over `head`, so core.fileMode, core.symlinks and clean filters apply.
+export function entriesOf(product, head, paths) {
+  const dir = mkdtempSync(join(tmpdir(), 'rw-entries-')), env = { GIT_INDEX_FILE: join(dir, 'index') };
+  try {
+    // The whole index is listed and the paths picked from it: ls-files takes paths as arguments only, and a ticket may change more than a command line holds.
+    const listed = () => gitRun(product, ['ls-files', '-s', '-z'], { env }), read = gitRun(product, ['read-tree', head], { env }), known = listed();
+    // A path neither in the work tree nor in `head` matches nothing, which add refuses.
+    const addable = paths.filter(path => lstatSync(join(product, path), { throwIfNoEntry: false }) || Object.hasOwn(entryLines(known.stdout ?? '', 1), path));
+    const added = addable.length ? gitRun(product, ['--literal-pathspecs', 'add', '-A', '--pathspec-from-file=-', '--pathspec-file-nul'], { env, input: addable.join('\0') }) : { status: 0 }, now = listed();
+    need([read, known, added, now].every(step => step.status === 0 && !step.error), `What Git would record for ${paths.slice(0, 5).map(plain).join(', ')} could not be read`);
+    return pick(paths, entryLines(now.stdout, 1));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+// Of a commit's tree.
+export function treeEntriesOf(product, sha, paths) {
+  const listed = gitRun(product, ['ls-tree', '-r', '-z', sha]);
+  need(listed.status === 0 && !listed.error, `The tree of commit ${plain(sha).slice(0, 8)} could not be read`);
+  return pick(paths, entryLines(listed.stdout, 2));
+}
 // The records of a batch leave the team's root in one move, so a batch is either open or archived.
 export function archiveBatch(instance, runId, records, sources) {
   const final = join(instance, ARCHIVE, runId), staging = join(instance, ARCHIVE, `.${runId}.tmp`);

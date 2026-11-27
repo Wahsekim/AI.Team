@@ -638,3 +638,36 @@ switched before this change keeps its wrappers until the next switch. The kit
 does not stop a worker from reading another package's files or the shared
 file: the hook guards writes and commands only. Detail: `docs/design/router-worker/batch-reference.md`,
 "Packages of one repository".
+
+### 2026-11-27: three findings of the review of main
+
+Status: Accepted (they correct the kit against rules this record already
+holds; no owner decision changes).
+
+An outside review of main found three places where the kit did less than this
+record says.
+
+- **Earlier runs.** A ticket filed again under its own id, without the
+  `continues` an archived filing of it carried, was counted from its own runs
+  only: three runs without a commit could look like one. The links the archives
+  froze for the ticket's own id, since the kit last committed it, are now
+  followed like those of the tickets it reaches.
+- **What a commit holds.** `after` pinned the bytes of each changed file, and
+  `commit` compared bytes: a file made executable, a link aimed elsewhere, or a
+  deletion a commit hook restored after the close could be committed as the
+  ticket's work. `after` now also pins what Git would record for each path (a
+  mode and an object id, or nothing), computed by Git through an index of its
+  own; `commit` compares the work tree before it commits, each commit after it
+  lands, a commit it takes up and the ones it already recorded, and `resolve`
+  compares the same. A commit that differs is refused and left as it is. A
+  path Git refuses to stage holds every commit of the batch
+  (`ENTRIES_NOT_READ`), and the close is still written. A record closed by an
+  earlier kit holds bytes only and is bound as before.
+- **The lock at the close.** `after` set work aside and ran the product's
+  commands before it read the lock. It now reads it first. A lock that is not
+  the batch's is taken for the length of that `after` when it is free or was
+  left by a command of the team that ended, and the close records
+  `LOCK_TAKEN_AGAIN` unless it resumes a close that died; held by anyone else,
+  `after` refuses and changes nothing.
+
+Detail: `docs/design/router-worker/batch-reference.md`.

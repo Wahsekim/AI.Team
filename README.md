@@ -226,10 +226,10 @@ before that list existed gets it, and the closed shell, from `team-mode.mjs limi
 ([details](docs/design/router-worker/mode-switch.md)). A PM session that starts cold in such a team is sent to the batch
 procedure by step 7 of the PM Start Protocol in `CLAUDE.md`. `scripts/rw-batch.mjs` runs a batch in such a team: `before` checks the
 tickets and the product repository, computes the ceiling, takes the lock and
-opens the write limits; `after` matches the engine's return against what was
+opens the write limits; `after` reads the lock before it changes anything, matches the engine's return against what was
 frozen, finds what was written outside the tickets' paths and closes the batch, and
 holds every commit when the hook logged no call of the batch's workers or fewer checker runs than the passed tickets need, sets the work of a ticket that did not pass aside as a patch, and runs the passed tickets' commands itself on the tree it would commit;
-`commit` makes one commit per ticket that passed; `abort` clears a batch that
+`commit` makes one commit per ticket that passed and refuses one that does not hold what `after` saw, mode and link target included; `abort` clears a batch that
 will not run, and for a closed batch saves each ticket that was flagged and passed no review as a patch and takes it out of the work tree;
 `before` names in the ledger the commits made outside the kit since the last batch, refuses a ticket that ran before without a commit (under its id, as the ticket it names in `continues`, or as the ticket whose saved patch it resumes) until it carries a `replan` (why that run was not committed, why the ticket can be done, what is different), which it logs for the owner and puts in the briefs, and sends a ticket to the owner after its third run without a commit (the initial run and two retries);
 a ticket may name a package of `profiles/packages.json`, a folder of the product with its own conventions, commands and interface files: `before` keeps the ticket in that folder and inlines that package's conventions in its briefs, and `after` logs each interface file a ticket changed with the packages that read it, for their follow-up tickets;

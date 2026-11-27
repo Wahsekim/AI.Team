@@ -5,7 +5,7 @@ import { digest, bytesDigest } from '../loop/contracts.mjs';
 import { git, gitRun, acquireLease, releaseLease } from './lease.mjs';
 import { readBoundary, closeBoundary, stateOf } from './write-boundary.mjs';
 import { runCommands, confirmedOf } from './run-commands.mjs';
-import { AFTER_FILE, RESOLUTION_FILE, RUN_ID, TICKET_ID, changedPaths, contentOf, hooksOf, plain, HOOKS_MOVED } from './batch.mjs';
+import { AFTER_FILE, RESOLUTION_FILE, RUN_ID, TICKET_ID, changedPaths, contentOf, entriesOf, hooksOf, plain, HOOKS_MOVED } from './batch.mjs';
 import { openBatch, intact, Refusal, IN_PROGRESS, ABANDON, HELD_REASONS, alive } from './batch-close.mjs';
 import { reviewGate, verdictsOf, briefsOf, finalOf } from './review-judge.mjs';
 
@@ -176,9 +176,11 @@ export function resolveBatch({ teamRoot, instanceRoot, run = runCommands }) {
     save(journal);
     for (const entry of journal.removed) need(exists(join(instance, entry.patch)) && bytesDigest(readFileSync(join(instance, entry.patch))) === entry.patchDigest, `${plain(entry.patch)} is missing or was changed since resolve saved it. ${ABANDON}`);
 
-    const commits = after.commits, first = reasons.findIndex(Boolean), pinned = id => after.tickets.find(ticket => ticket.id === id)?.content ?? {};
+    const commits = after.commits, first = reasons.findIndex(Boolean), pinned = id => after.tickets.find(ticket => ticket.id === id) ?? {};
     const isRemoved = id => journal.removed.some(entry => entry.ticket === id);
-    const drift = list => list.flatMap(commit => { const now = contentOf(product, commit.paths), was = pinned(commit.ticket); return commit.paths.filter(file => now[file] !== was[file]); });
+    // What Git would record, as commit binds it; an earlier kit's record pinned only the bytes.
+    const drift = list => list.flatMap(commit => { const { entries, content = {} } = pinned(commit.ticket), now = entries ? entriesOf(product, batch.productHead, commit.paths) : contentOf(product, commit.paths);
+      return commit.paths.filter(file => now[file] !== (entries ?? content)[file]); });
     // What is not yet removed must be what after recorded and the reviewers read; on a resume, the tickets the commands
     // already condemned are exempt, since a command may have changed them.
     const condemned = new Set(heldAfterVerification(commits, first, journal.verification).map(commit => commit.ticket));

@@ -9,9 +9,9 @@ import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { abortBatch, BATCH_FILE, AFTER_FILE } from '../src/router-worker/batch.mjs';
 import { markNotMetered } from '../src/router-worker/batch-settle.mjs';
-import { readLease } from '../src/router-worker/lease.mjs';
-import { git } from './fixtures/router-worker/standing-team.mjs';
-import { ticket, live, changed, engineRun, runBatch, batchOf, edits } from './fixtures/router-worker/review.mjs';
+import { readLease, acquireLease, releaseLease } from '../src/router-worker/lease.mjs';
+import { git, fixture, afterBatch, passing } from './fixtures/router-worker/standing-team.mjs';
+import { ticket, live, changed, engineRun, runBatch, batchOf, edits, checker } from './fixtures/router-worker/review.mjs';
 
 const PROGRESS = 'rw-batch-commits.json';
 const moduleOf = name => JSON.stringify(new URL(`../src/router-worker/${name}`, import.meta.url).href);
@@ -109,4 +109,37 @@ test('before writes its ledger lines before its record: a record that cannot be 
   assert.equal(opened.errors, undefined, JSON.stringify(opened.errors));
   assert.equal(f.ledger().match(narrowed)?.length, 2, 'the next before compares with the same archived list and logs it again');
   assert.equal(JSON.parse(readFileSync(join(f.root, BATCH_FILE), 'utf8')).runId, opened.runId);
+});
+
+// Review finding H2: after reads the lock before it claims the close or changes anything.
+test('after refuses, changing nothing, while another team or a running command of this team holds the lock', async t => {
+  const f = live(t), { open, result } = await engineRun(f, TWO, edits(['src/list/a.js', 'src/list/b.js']), {}, checker(2));
+  const runs = [], close = () => afterBatch({ ...f.common, result, run: args => { runs.push(args); return passing(args); } });
+  const unchanged = () => { assert.equal(existsSync(join(f.root, AFTER_FILE)), false, 'the close is not claimed'); assert.deepEqual(changed(f), ['src/list/a.js', 'src/list/b.js'], 'the work of the ticket that did not pass is still in the tree');
+    assert.deepEqual(runs, [], 'no command ran'); assert.equal(f.state(), 'batch'); };
+  assert.equal(releaseLease({ productRoot: f.product, lease: open.lease }).errors, undefined);
+  const other = acquireLease({ teamRoot: fixture(t).root, productRoot: f.product });
+  assert.match(close().errors?.[0]?.reason, /locked by another team root.*Nothing was changed.*run after again.*rw-batch\.mjs abort/);
+  unchanged(); assert.deepEqual(readLease({ productRoot: f.product }).lease.digest, other.lease.digest);
+  releaseLease({ productRoot: f.product, lease: other.lease.digest });
+  const holder = await lockHolder(t, f);
+  assert.match(close().errors?.[0]?.reason, new RegExp(`still running \\(process ${holder.pid}\\).*Nothing was changed`));
+  unchanged();
+  await stop(holder);
+  const closed = close();
+  assert.equal(closed.errors, undefined, JSON.stringify(closed.errors)); assert.equal(closed.lockRetaken, true); assert.equal(closed.leaseReleased, true);
+  assert.ok(closed.findings.some(finding => finding.code === 'LOCK_TAKEN_AGAIN'), JSON.stringify(closed.findings));
+  assert.deepEqual(changed(f), ['src/list/a.js'], 'the ticket that did not pass is set aside under the lock after took'); assert.equal(runs.length, 1);
+  assert.equal(readLease({ productRoot: f.product }).status, 'free');
+});
+
+test('a resumed close whose earlier run released the lock takes it for its own length, finishes, and leaves it free', async t => {
+  const f = live(t), { open, result } = await engineRun(f, TWO, edits(['src/list/a.js', 'src/list/b.js']));
+  writeFileSync(join(f.root, AFTER_FILE), JSON.stringify({ stage: 'batch-closing', runId: open.runId, claimedAt: '2020-01-01T00:00:00.000Z' }));
+  assert.equal(releaseLease({ productRoot: f.product, lease: open.lease }).errors, undefined);
+  const seen = [], closed = afterBatch({ ...f.common, result, run: args => { seen.push(readLease({ productRoot: f.product }).lease?.commandPid); return passing(args); } });
+  assert.equal(closed.errors, undefined, JSON.stringify(closed.errors)); assert.equal(closed.stage, 'batch-closed');
+  assert.deepEqual(seen, [process.pid], 'the commands ran under the lock this after took');
+  assert.equal(closed.lockRetaken, true); assert.equal(closed.leaseReleased, true); assert.ok(!closed.findings.some(finding => finding.code.startsWith('LOCK_')), JSON.stringify(closed.findings));
+  assert.equal(readLease({ productRoot: f.product }).status, 'free'); assert.equal(closed.commits.length, 2);
 });
