@@ -203,6 +203,9 @@ test('the checker\'s approved command is logged as the batch\'s own command, the
   assert.deepEqual(logged('cd "/p" && npm test'), approved('npm test'));
   assert.deepEqual(logged(' cd /p && npm run lint\n'), approved('npm run lint'));
   assert.deepEqual(logged('npm test', '/p'), approved('npm test'));
+  // A package's command that runs in its folder is one confirmed command, typed whole from the product root.
+  const inFolder = { ...boundary, wrappers: { w: { duty: 'check', writePaths: [], commands: ['cd app && npm test'] } } }, asked = (command, cwd) => decideCall({ input: { tool_name: 'Bash', agent_type: 'w', cwd, tool_input: { command } }, boundary: inFolder }).decision;
+  assert.deepEqual([asked('cd app && npm test', '/p'), asked('cd "/p" && cd app && npm test', '/t'), asked('npm test', '/p/app')], ['approve', 'approve', 'deny']);
   assert.deepEqual(logged('API_TOKEN=abc npm test'), { tool: 'Bash', agentType: 'w', judged: true, decision: 'deny', command: 'API_TOKEN=<redacted> npm test' });
   // A declared move or deletion names product paths; only the checker's runs are counted, so the exec worker's carry no command.
   for (const command of [move, 'npm test']) assert.deepEqual(logged(command, '/p', 'x'), { tool: 'Bash', agentType: 'x', judged: true, decision: 'approve' }, command);

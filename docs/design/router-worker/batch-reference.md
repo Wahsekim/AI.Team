@@ -1574,6 +1574,15 @@ into `next`, and into one ledger line per ticket:
 
 It holds nothing and changes no ticket's status.
 
+**Commands that run in a package's folder.** Every command runs from the
+product root, typed exactly as the owner confirmed it; a package has no run
+folder of its own. A tool that must run inside the folder is confirmed with the
+change of folder in it, as one command: `cd app && <command>`. The hook accepts
+that text from the product root or after `cd "<product root>" &&`, and `after`
+runs it the same way; the bare command typed from inside the folder is refused.
+A tool that takes the folder as an argument (`npm --prefix server test`) needs
+no `cd`.
+
 Limits:
 
 - The kit does not stop a worker from reading another package's files. The
