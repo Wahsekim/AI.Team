@@ -22,7 +22,7 @@ const LEDGER = 'pm-decisions.md';
 export const IN_PROGRESS = ['index.lock', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'BISECT_LOG', 'rebase-merge', 'rebase-apply'];
 // Findings after which no ticket of the batch is committed by the kit: what ran is not what was frozen, or the tree it
 // would commit fails its verification and no ticket can be told apart.
-export const HOLD_ALL = ['BOUNDARY_CHANGED', 'PRODUCT_HEAD_MOVED', 'PRODUCT_BRANCH_CHANGED', 'GUARDIAN_NOT_CLEAN', 'HOOKS_CHANGED', 'HOOKS_WRITTEN', 'HOOK_SAW_NO_WORKER', 'CHECK_RUNS_MISSING', 'VERIFICATION_FAILED'];
+export const HOLD_ALL = ['BOUNDARY_CHANGED', 'PRODUCT_HEAD_MOVED', 'PRODUCT_BRANCH_CHANGED', 'GUARDIAN_NOT_CLEAN', 'HOOKS_CHANGED', 'HOOKS_WRITTEN', 'HOOK_SAW_NO_WORKER', 'CHECK_RUNS_MISSING', 'VERIFICATION_FAILED', 'ENTRIES_NOT_READ'];
 // A claim that names no process, an earlier kit's, is taken to be running while it is this recent.
 const CLAIM_MS = 60000;
 export { alive };
@@ -159,6 +159,8 @@ export function afterBatch({ teamRoot, instanceRoot, result, run = runCommands }
     need(account.status === 'accounted', `The engine return is not the return of this batch: ${account.findings.join(', ')}`);
     need(Array.isArray(batch.review?.triggers) && Array.isArray(batch.review.reviewers) && batch.review.reviewers.every(reviewer => typeof batch.reviewWrappers?.[reviewer] === 'string'),
       `${BATCH_FILE} holds no frozen review trigger list or reviewer wrappers: an earlier kit opened it. ${ABANDON}`);
+    const earlier = readJSON(afterPath);
+    need(!exists(afterPath) || earlier?.stage === 'batch-closing' || earlier?.stage !== 'batch-closed', 'This batch was already closed; finish it with: rw-batch.mjs commit --instance <instance-root>');
     // The lock is read before the close is claimed or anything is changed (review finding H2). Free (a resumed close whose earlier
     // run released it, or one an operator removed) or left by a command of this team that ended, it is taken for this after's length.
     const found = readLease({ productRoot: product });
@@ -169,8 +171,7 @@ export function afterBatch({ teamRoot, instanceRoot, result, run = runCommands }
     }
     // The close is claimed before anything is changed, so two calls never close the same batch together and
     // one that died is taken up again, not judged as if someone had tampered with the batch.
-    const earlier = readJSON(afterPath), claim = () => ({ stage: 'batch-closing', runId: batch.runId, claimedAt: new Date().toISOString(), pid: process.pid });
-    need(!exists(afterPath) || earlier?.stage === 'batch-closing' || earlier?.stage !== 'batch-closed', 'This batch was already closed; finish it with: rw-batch.mjs commit --instance <instance-root>');
+    const claim = () => ({ stage: 'batch-closing', runId: batch.runId, claimedAt: new Date().toISOString(), pid: process.pid });
     need(!exists(afterPath) || earlier?.stage === 'batch-closing', `${AFTER_FILE} cannot be read. ${ABANDON}`);
     const resumed = earlier?.stage === 'batch-closing', age = resumed ? Date.now() - Date.parse(earlier.claimedAt) : null;
     // An after runs the verification commands, as long as they take: its claim stands while its process lives. A claim
@@ -249,10 +250,14 @@ export function afterBatch({ teamRoot, instanceRoot, result, run = runCommands }
     // Every changed path is pinned, flagged or not: an elective review reads what after saw, not what is there later. The reviews
     // read the bytes; commit binds what Git records (review finding F2): a mode, a link's target, an absence.
     // A passed ticket that changed nothing is not committed, so it is not flagged, even when it declared itself sensitive.
+    const unread = [];
     for (const ticket of tickets.filter(entry => entry.status === 'passed' && entry.changedPaths.length)) {
       ticket.review = flagPaths(batch.review, ticket.changedPaths, batch.tickets.find(entry => entry.id === ticket.id).declared ?? []);
-      ticket.content = contentOf(product, ticket.changedPaths); ticket.entries = entriesOf(product, batch.productHead, ticket.changedPaths);
+      ticket.content = contentOf(product, ticket.changedPaths);
+      // A path Git refuses to stage (a repository with no commit, a path beyond a link) could not be committed either: the close goes on and holds.
+      try { ticket.entries = entriesOf(product, batch.productHead, ticket.changedPaths); } catch { unread.push(ticket.id); }
     }
+    if (unread.length) findings.push({ code: 'ENTRIES_NOT_READ', tickets: unread });
     const reviews = Object.fromEntries(batch.review.reviewers.map(name => [name, { tickets: tickets.filter(ticket => ticket.review?.required.includes(name)).map(ticket => ticket.id) }]).filter(([, entry]) => entry.tickets.length));
     // The workers' writes outside every ticket, and those of the kit's run of the commands.
     const outside = [...new Set([...strays, ...outsideOf(files)])].sort();
@@ -282,6 +287,7 @@ export function afterBatch({ teamRoot, instanceRoot, result, run = runCommands }
     if (holdAll) next.push(`No ticket of this batch is committed by the kit. ${hooksTouched ? `${HOOKS_FIRST}. ` : ''}${ABANDON}`);
     const broke = findings.find(finding => finding.code === 'VERIFICATION_FAILED');
     if (broke) next.push(`The kit ran the passed tickets' verification commands on the product as it stands and ${broke.commands.length ? `${broke.commands.map(entry => `${plain(entry.command)} (${ending(entry)})`).join(', ')} did not pass, again when run a second time` : `no verification command confirmed for the team was left to run (${broke.dropped.map(plain).join(' | ')})`}: the kit cannot tell which ticket broke the tree, so it commits none. Read the output in the record's verification`);
+    if (unread.length) next.push(`The kit could not read what Git would record for the changed paths of ${unread.join(', ')} (git add refuses one of them: a repository with no commit, a path beyond a symbolic link, a line-ending rule), so it cannot say what a commit would hold`);
     const aside = setAsideList.filter(entry => entry.state === 'patch'), stuck = setAsideList.filter(entry => entry.state === 'in-tree'), advice = patchAdvice(setAsideList);
     if (aside.length) next.push(`The work of ${aside.map(entry => `${entry.ticket} (${entry.patch})`).join(', ')}, which did not pass, was set aside as a patch, out of the work tree, so that the kit verifies only what it commits`);
     next.push(...[advice.ready, advice.refused, advice.stuck].filter(Boolean));

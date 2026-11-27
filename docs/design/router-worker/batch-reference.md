@@ -324,6 +324,7 @@ only for a `resume` outside `left/` and `reviews/held/`.
    | `WRITE_OUTSIDE_PATHS` | paths changed that no ticket covers, through a worker's shell (judged at step 2) or written by the kit's run of the commands (step 5) | the paths are left uncommitted; the tickets are still committed |
    | `HOOK_SAW_NO_WORKER` | files changed and the hook logged no call of the batch's three workers since the batch opened (a call of another agent of the team does not count): the session did not load it, so the write limits were not enforced during the run, or the hook ran and could not append to its log. A resumed path that still holds what `before` applied is not such a change | all held |
    | `VERIFICATION_FAILED` | the kit's own run of the passed tickets' verification commands on the tree of the planned commits (step 4) had a command that failed or timed out, and again when run a second time (`commands`: each with the second run's `exit`, `timedOut`, and `overflowed` when its output passed the buffer limit), or no confirmed command left to run (`commands` empty, `dropped` the ones the passed tickets need). `next` names the commands, then `abort` and `left` | all held |
+   | `ENTRIES_NOT_READ` | Git refused to stage a changed path of a passed ticket (a repository with no commit where a file was, a path beyond a symbolic link, a line-ending rule), so the kit cannot pin what a commit would hold; `tickets` names them | all held |
    | `VERIFICATION_NOT_RUN` | the kit did not run the commands, since the tree held more than the planned commits after step 3 (`reason`, and `paths`: each path in the way, changed before the batch, outside every planned commit, or of a ticket that could not be set aside). `next` says the kit did not verify the tree it will commit, and why | not held |
    | `CHECK_RUNS_MISSING` | for a verification command of the batch, the hook logged fewer approved runs of it by the checker since the batch opened than there are passed tickets that verify with it (a ticket without its own `verificationCommands` verifies with the batch's whole list). Lists each such command with `needed` and `seen`. A run by the exec worker does not count. The log does not say which ticket's checker skipped its run, so no ticket is told apart. Not checked for a batch an earlier kit opened, whose hook did not log approved commands | all held |
    | `NESTED_REPOSITORY` | a worker created a Git repository inside the product; Git would commit a link to it, not its files | the folder is left uncommitted |
@@ -603,7 +604,7 @@ a command"). It pushes nothing.
   would record for it: its mode and object id (`100644`, `100755`, `120000`
   for a symbolic link, whose object is its target), or `null` for a path the
   commit removes. Git computes it, through an index of its own over the batch's
-  start, so `core.fileMode`, `core.symlinks` and clean filters apply as they
+  start (`commit` reads the work tree over the branch as it then stands), so `core.fileMode`, `core.symlinks` and clean filters apply as they
   will at the commit. A file made executable, a link pointed elsewhere, a file
   replaced by a link or a deleted path brought back after `after` closed the
   batch is a change the same as an edit (review finding F2). The reviews read

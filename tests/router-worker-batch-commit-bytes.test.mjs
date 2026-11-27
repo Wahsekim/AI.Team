@@ -6,6 +6,7 @@ import { join, dirname } from 'node:path';
 import { runWorkflow, makeAgentImpl } from '../scripts/lib/workflow-harness.mjs';
 import { digest } from '../src/loop/contracts.mjs';
 import { git, checksRan, afterBatch } from './fixtures/router-worker/standing-team.mjs';
+import { readLease } from '../src/router-worker/lease.mjs';
 import { live, ticket, batchOf, refusal, engineRun } from './fixtures/router-worker/review.mjs';
 
 const write = (root, path, text, mode) => { mkdirSync(dirname(join(root, path)), { recursive: true }); writeFileSync(join(root, path), text, mode ? { mode } : undefined); };
@@ -121,4 +122,22 @@ test('an after record of an earlier kit, with no Git entries, is bound by the by
   writeFileSync(join(f.product, 'src/app.js'), 'x = 2\n');
   const done = f.commit();
   assert.equal(done.errors, undefined, JSON.stringify(done.errors)); assert.equal(git(f.product, 'show', 'HEAD:src/app.js'), 'x = 2\n');
+});
+
+test('a path Git cannot record holds every commit; the close is still written and the lock released', async t => {
+  const f = live(t);
+  write(f.product, 'src/app.js', 'x = 1\n'); git(f.product, 'add', '-A'); git(f.product, 'commit', '-q', '-m', 'seed');
+  const open = await f.before({ ...batchOf(ticket('T-1', ['src/app.js'])), verificationCommands: f.commands });
+  assert.equal(open.errors, undefined, JSON.stringify(open.errors));
+  // A repository with no commit where the file was: git add refuses it.
+  const worker = () => { rmSync(join(f.product, 'src/app.js')); mkdirSync(join(f.product, 'src/app.js')); git(join(f.product, 'src/app.js'), 'init', '-q'); return { outcome: 'done', progress: true, filesTouched: ['src/app.js'], decisionsCount: 1, selfReportTokens: 100, blocked: false, terminalStop: false, notes: 'replaced' }; };
+  const verifier = () => ({ pass: true, staticPass: true, e2ePass: true, summary: 'ok', commandsRun: f.commands.map(command => ({ command, exitCode: 0 })), failures: [] });
+  const { result } = await runWorkflow({ scriptPath: join(f.root, '.claude/workflows/run-n-rounds.js'), args: open.args, agentImpl: makeAgentImpl({ worker, verifier }) });
+  checksRan(f.root, open);
+  const closed = afterBatch({ ...f.common, result });
+  assert.equal(closed.errors, undefined, JSON.stringify(closed.errors));
+  assert.deepEqual(closed.findings.find(finding => finding.code === 'ENTRIES_NOT_READ')?.tickets, ['T-1']);
+  assert.equal(closed.holdAll, true); assert.deepEqual(closed.commits, []); assert.equal(closed.leaseReleased, true);
+  assert.equal(readLease({ productRoot: f.product }).status, 'free');
+  assert.match(closed.next.join('\n'), /could not read what Git would record/);
 });

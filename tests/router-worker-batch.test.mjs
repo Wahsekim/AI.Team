@@ -578,7 +578,7 @@ test('a commit that died after archiving is finished by the next call; nothing i
 });
 
 test('each finding that questions the run holds every commit; each check of commit refuses on its own', async t => {
-  assert.deepEqual([...HOLD_ALL].sort(), ['BOUNDARY_CHANGED', 'CHECK_RUNS_MISSING', 'GUARDIAN_NOT_CLEAN', 'HOOKS_CHANGED', 'HOOKS_WRITTEN', 'HOOK_SAW_NO_WORKER', 'PRODUCT_BRANCH_CHANGED', 'PRODUCT_HEAD_MOVED', 'VERIFICATION_FAILED']);
+  assert.deepEqual([...HOLD_ALL].sort(), ['BOUNDARY_CHANGED', 'CHECK_RUNS_MISSING', 'ENTRIES_NOT_READ', 'GUARDIAN_NOT_CLEAN', 'HOOKS_CHANGED', 'HOOKS_WRITTEN', 'HOOK_SAW_NO_WORKER', 'PRODUCT_BRANCH_CHANGED', 'PRODUCT_HEAD_MOVED', 'VERIFICATION_FAILED']);
   const edits = { 'src/app.js': 'x\n' }, holds = (closed, code) => { assert.ok(closed.findings.some(finding => finding.code === code), `${code}: ${JSON.stringify(closed.findings)}`); assert.equal(closed.holdAll, true); assert.deepEqual(closed.commits, []); };
   const boundary = await ran(t, { tickets: two, edits }), file = join(boundary.root, '.claude/rw-write-boundary.json'), body = (({ digest: _old, ...rest }) => rest)(JSON.parse(readFileSync(file, 'utf8')));
   const widened = { ...body, wrappers: { ...body.wrappers, 'tag-list-fixture-worker-exec': { duty: 'exec', writePaths: ['**'] } } };

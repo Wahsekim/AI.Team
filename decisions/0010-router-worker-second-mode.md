@@ -660,7 +660,9 @@ record says.
   own; `commit` compares the work tree before it commits, each commit after it
   lands, a commit it takes up and the ones it already recorded, and `resolve`
   compares the same. A commit that differs is refused and left as it is. A
-  record closed by an earlier kit holds bytes only and is bound as before.
+  path Git refuses to stage holds every commit of the batch
+  (`ENTRIES_NOT_READ`), and the close is still written. A record closed by an
+  earlier kit holds bytes only and is bound as before.
 - **The lock at the close.** `after` set work aside and ran the product's
   commands before it read the lock. It now reads it first. A lock that is not
   the batch's is taken for the length of that `after` when it is free or was

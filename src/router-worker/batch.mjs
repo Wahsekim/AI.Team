@@ -111,7 +111,8 @@ const pick = (paths, found) => Object.fromEntries(paths.map(path => [path, found
 export function entriesOf(product, head, paths) {
   const dir = mkdtempSync(join(tmpdir(), 'rw-entries-')), env = { GIT_INDEX_FILE: join(dir, 'index') };
   try {
-    const listed = () => gitRun(product, ['--literal-pathspecs', 'ls-files', '-s', '-z', '--', ...paths], { env }), read = gitRun(product, ['read-tree', head], { env }), known = listed();
+    // The whole index is listed and the paths picked from it: ls-files takes paths as arguments only, and a ticket may change more than a command line holds.
+    const listed = () => gitRun(product, ['ls-files', '-s', '-z'], { env }), read = gitRun(product, ['read-tree', head], { env }), known = listed();
     // A path neither in the work tree nor in `head` matches nothing, which add refuses.
     const addable = paths.filter(path => lstatSync(join(product, path), { throwIfNoEntry: false }) || Object.hasOwn(entryLines(known.stdout ?? '', 1), path));
     const added = addable.length ? gitRun(product, ['--literal-pathspecs', 'add', '-A', '--pathspec-from-file=-', '--pathspec-file-nul'], { env, input: addable.join('\0') }) : { status: 0 }, now = listed();
@@ -121,7 +122,7 @@ export function entriesOf(product, head, paths) {
 }
 // Of a commit's tree.
 export function treeEntriesOf(product, sha, paths) {
-  const listed = gitRun(product, ['--literal-pathspecs', 'ls-tree', '-z', sha, '--', ...paths]);
+  const listed = gitRun(product, ['ls-tree', '-r', '-z', sha]);
   need(listed.status === 0 && !listed.error, `The tree of commit ${plain(sha).slice(0, 8)} could not be read`);
   return pick(paths, entryLines(listed.stdout, 2));
 }
