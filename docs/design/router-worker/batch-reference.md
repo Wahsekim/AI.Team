@@ -128,6 +128,15 @@ budget per ticket. Those come from the team.
    The record lists the tickets that run again as `runsAgain: [{ticket, count,
    replan}]`, for the PM to relay to the owner; it is absent when there are none.
 
+   With `--receipt`, `before` prints a receipt in the place of the record, and
+   writes the same record. The receipt holds `runId`, the record's `digest`,
+   `record` (the absolute path of `rw-batch.json`), `ceiling`, `startedAsIs`
+   and `preexisting` when the batch started as is, `runsAgain` when present,
+   `resumes: [{ticket, patch}]` when a ticket resumes a patch,
+   `triggerChanges`, `outsideCommits`, `next`, and `args`. The `args` are the
+   record's, unchanged (the same JSON, so the same launch digest). A refusal
+   prints the same with or without it.
+
 Any refusal after step 4 releases the lock, and closes the boundary if it was
 opened. A patch already applied in step 8 is taken back out of the work tree.
 
@@ -427,7 +436,10 @@ folder. The checker's approved call carries the verification command it
 matched, as the batch froze it (without the `cd`); the exec worker's approved
 call carries none, since its moves and deletions name product paths; a refused
 call carries its own text, redacted (see "Not covered"). `after` counts the
-checker's approved runs of each command (`CHECK_RUNS_MISSING`). `before` marks
+checker's approved runs of each command (`CHECK_RUNS_MISSING`) and records
+them as `checkRuns` with `attribution: "batch"`: the log does not say which
+ticket a run was for, so two runs for one ticket satisfy a count of two, and
+the count proves no single ticket's check. `before` marks
 the batch record (`hookLogsCommands`) so that `after` counts them only for a
 batch whose hook logs them. The checker's brief of a standing batch therefore
 tells it to run every verification command it lists, each exactly as given, and
@@ -583,6 +595,19 @@ which is where the owner sees which batch was passed over and why: a line that
 cannot be written leaves no mark. Without `--run`, the run id read from the
 closed batch must be the batch record's. A batch is settled or marked once.
 
+**The PM's attestation of the run.** `settle`, in both forms, prints beside
+the record, not in it, `monitoring: {runId, status, attestations, meaning}`.
+`status` is read from the line `reconcile-run.mjs --monitoring` appends to
+`agents/lifecycle.md` (or a rotated `agents/archive/lifecycle-*.md`) for the
+run id: `complete` when its coverage is `attended`; `partial` when it is
+`partial` or `unknown`, when the line cannot be read, or when one of several
+lines for the run says less; `missing` when there is no line. `missing` means
+no one attested the run; it says nothing about whether an owner stop or a
+hardware halt occurred. The status is not sealed in the settlement, since the
+PM may attest after settling. `rw-batch.mjs monitoring --instance .` prints,
+read only, the newest 10 archived batches (by `openedAt`) with the same status,
+and what each status means. Nothing is refused on it.
+
 Settlement reports cost. It does not hold or undo a commit: a ticket that went
 over its authorization and passed its check is still committed. The
 authorization is a limit judged afterwards, as ADR 0010 says; what a batch over
@@ -595,6 +620,24 @@ tickets, then moves the batch's records to `batches/<run id>/` and appends one
 line to `pm-decisions.md`. It takes the lock for its length (see "The lock of
 a command"). It pushes nothing.
 
+- **What the kit verified.** A checker's pass and the kit's own run of the
+  commands on the tree it commits are different assurances. The record
+  (`commit.json`) says which the batch has. `verification.committedTree` is
+  `verified` when the kit's last run of the commands passed on a tree that
+  held exactly what is committed: `after`'s run when no review held a ticket,
+  or, once `resolve` held one, its own run, passed and changing no file to
+  commit. Otherwise it is `not-verified`, with the `reason`: a path stood in
+  `after`'s way (`VERIFICATION_NOT_RUN`), or tickets were held after the last
+  run and what is left was not run alone. The facts are beside it:
+  `verification.after` (`passed` or `not-run`) and, for a reviewed batch,
+  `verification.resolve` (`passed`, `failed` or `not-run`). A batch committed
+  `not-verified` says so in its ledger line ("the kit did not verify the
+  committed tree"). `commit --verified-only` refuses such a batch and commits
+  nothing: for a caller, an unattended one above all, that wants the stricter
+  assurance. Without the flag the owner's rule stands: the tickets are
+  committed and the gap is named. A commit that archived the batch and died
+  is finished by the next `commit` whatever its flag; the archived record
+  says what was verified.
 - It refuses when the product is no longer on the batch's branch, when a Git
   operation is in progress, when the commit hooks were changed or moved, when
   an archive of this batch was already started, when the work
@@ -1692,9 +1735,12 @@ The limits not being the ones the ledger binds is refused with its own code,
 
 ## Not covered
 
-- **Nothing checks that the PM attested the run** at the reconciliation step.
-  The Guardian of a batch is told the attestation follows; a PM that leaves
-  `--monitoring` out leaves no line, and no command refuses.
+- **No command refuses a run the PM did not attest** at the reconciliation
+  step. The Guardian of a batch is told the attestation follows; a PM that
+  leaves `--monitoring` out leaves no line. `settle` and `rw-batch.mjs
+  monitoring` then show the run as `missing`: no one attested it, which says
+  nothing about whether a stop occurred. The attestation is the PM's word: the
+  kit reads its coverage and does not check it.
 - **A batch the engine ran and `abort` cleared before `after`** is not
   settled and does not hold the next batch: `abort` leaves no archive for it,
   and the kit cannot tell whether the engine ran. Its ledger line says only

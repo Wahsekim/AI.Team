@@ -7,7 +7,7 @@ import { writeFileSync, readFileSync, mkdirSync, rmSync, existsSync } from 'node
 import { join, dirname } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { bytesDigest } from '../src/loop/contracts.mjs';
-import { afterBatch } from '../src/router-worker/batch-close.mjs';
+import { afterBatch, commitBatch } from '../src/router-worker/batch-close.mjs';
 import { AFTER_FILE, beforeBatch, abortBatch } from '../src/router-worker/batch.mjs';
 import { markNotMetered } from '../src/router-worker/batch-settle.mjs';
 import { git, passing } from './fixtures/router-worker/standing-team.mjs';
@@ -53,6 +53,7 @@ test('with the commands passing both tickets are planned and the after record ho
   assert.deepEqual(closed.findings.find(finding => finding.code === 'WRITE_OUTSIDE_PATHS')?.paths, ['build.txt']); assert.deepEqual(closed.left, ['build.txt']); assert.equal(closed.holdAll, false);
   const done = f.commit();
   assert.equal(done.errors, undefined, JSON.stringify(done.errors)); assert.deepEqual(done.commits.map(commit => commit.ticket), ['US-01', 'US-03']); assert.deepEqual(done.left, ['build.txt']);
+  assert.deepEqual(done.verification, { committedTree: 'verified', after: 'passed' }); assert.doesNotMatch(f.ledger(), /did not verify the committed tree/);
   assert.equal(git(f.product, 'show', `${done.commits[0].sha}:src/list/a.js`), '// formatted\n');
   assert.deepEqual(changed(f), ['build.txt']); assert.equal(log(f, open).split('\n').length, 2);
 });
@@ -163,6 +164,12 @@ test('a path outside every ticket, or one changed before a batch started as is, 
   assert.equal(first.verification.reason, 'the work tree also holds a path no planned commit holds');
   assert.deepEqual(first.commits.map(commit => commit.ticket), ['US-01', 'US-03']); assert.match(first.next.join('\n'), /did not verify the tree it will commit/);
   assert.match(first.next.join('\n'), /a command writes outside every ticket.*in every batch.*\.gitignore/, 'next names the cause that repeats and its remedy');
+  // A checker's pass is not the kit's verification of the final tree: the strict commit refuses, the plain one says so in its record and ledger line.
+  assert.match(refusal(commitBatch({ ...f.common, verifiedOnly: true }))?.reason, /The kit did not verify the tree this batch would commit \(the work tree also holds a path no planned commit holds\).*--verified-only/);
+  assert.equal(git(f.product, 'rev-parse', 'HEAD').trim(), outside.open.productHead, 'the refused commit committed nothing');
+  const plain = f.commit();
+  assert.deepEqual(plain.verification, { committedTree: 'not-verified', reason: 'the work tree also holds a path no planned commit holds', after: 'not-run' });
+  assert.match(f.ledger(), /COMMITTED on \S+: 2 commit\(s\).*; the kit did not verify the committed tree\. Nothing was pushed\./);
   const g = live(t);
   writeFileSync(join(g.product, 'stray.txt'), 'pre-existing\n');
   const asIs = await engineRun({ ...g, before: batch => beforeBatch({ ...g.common, batch, startAsIs: true }) }, TWO, EDITS);

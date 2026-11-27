@@ -274,6 +274,23 @@ test('CLI: before prints the batch record with the preflight manifest chained in
   assert.equal(cleared.status, 0, cleared.stderr); assert.equal(JSON.parse(cleared.stdout).stage, 'batch-aborted'); assert.equal(readLease({ productRoot: f.product }).status, 'free'); assert.equal(run('abort', '--instance', f.root).status, 2);
 });
 
+test('CLI: before --receipt prints the run id, the digest, what the owner is told, the next step and the args of the record unchanged, in fewer bytes', t => {
+  const f = live(t), file = join(f.base, 'batch.json'), run = (...argv) => spawnSync(process.execPath, [join(f.kit, 'scripts/rw-batch.mjs'), ...argv], { encoding: 'utf8' });
+  writeFileSync(file, JSON.stringify(batchOf(ticket('US-01', ['src/a.js'])))); writeFileSync(join(f.product, 'notes.txt'), 'x\n');
+  assert.equal(run('before', file, '--instance', f.root, '--receipt', '--receipt').status, 1);
+  const done = run('before', file, '--instance', f.root, '--receipt', '--start-as-is');
+  assert.equal(done.status, 0, done.stdout + done.stderr);
+  const receipt = JSON.parse(done.stdout), record = JSON.parse(readFileSync(join(f.root, BATCH_FILE), 'utf8'));
+  assert.equal(JSON.stringify(receipt.args), JSON.stringify(record.args), 'the args the engine gets are the record\'s, byte for byte'); assert.equal(digest(receipt.args), digest(record.args));
+  assert.deepEqual([receipt.runId, receipt.digest, receipt.record], [record.runId, record.digest, join(f.root, BATCH_FILE)]);
+  assert.deepEqual([receipt.startedAsIs, receipt.preexisting], [true, ['notes.txt']]);
+  assert.deepEqual([receipt.triggerChanges, receipt.outsideCommits, receipt.ceiling], [record.triggerChanges, record.outsideCommits, record.ceiling]);
+  assert.match(receipt.next, /run-n-rounds.*rw-batch\.mjs after RESULT\.json/);
+  const full = Buffer.byteLength(JSON.stringify(record, null, 2) + '\n'), short = Buffer.byteLength(done.stdout);
+  t.diagnostic(`before prints ${full} bytes as the record, ${short} as the receipt; args ${Buffer.byteLength(JSON.stringify(record.args, null, 2))}`);
+  assert.ok(short < full, `${short} < ${full}`);
+});
+
 // A batch run by the real engine with mock agents; `edits` is what the workers leave in the product, `spend` the output tokens of each agent call.
 async function ran(t, { tickets, agents = {}, edits = {}, hook = true, extra = {}, hooks = () => ({}), fields = {}, spend = 0, seed = {} }) {
   const f = live(t);
@@ -689,6 +706,7 @@ test('every passed ticket needs a checker run of each of its verification comman
   assert.deepEqual([...runUnderHook(short.root, CHECK, ['npm test']), ...runUnderHook(short.root, EXEC, ['npm test'])], ['approve', 'approve']);
   const closed = short.after(); held(closed, 'CHECK_RUNS_MISSING');
   assert.deepEqual(closed.findings.find(finding => finding.code === 'CHECK_RUNS_MISSING').commands, [{ command: 'npm test', needed: 2, seen: 1 }]);
+  assert.deepEqual(closed.checkRuns, { attribution: 'batch', commands: [{ command: 'npm test', needed: 2, seen: 1 }] }, 'the count is of the batch: it proves no single ticket\'s check');
   assert.match(closed.next.join('\n'), /checker ran.*fewer times than the tickets that passed/);
   const full = await ran(t, { tickets: two, edits: edited, hook: false });
   assert.deepEqual(runUnderHook(full.root, CHECK, ['npm test', 'npm test']), ['approve', 'approve']);
@@ -981,6 +999,8 @@ test('settle after a run that halted: only the ticket that ran is settled, by th
   const done = spawnSync(process.execPath, [join(f.kit, 'scripts/rw-batch.mjs'), 'settle', meterFile, '--instance', f.root, '--run', f.open.runId], { encoding: 'utf8' });
   assert.equal(done.status, 2, done.stdout + done.stderr); const record = JSON.parse(done.stdout);
   assert.equal(record.status, 'review'); assert.deepEqual(record.tickets.map(entry => [entry.ticket, entry.authorizedTokens, entry.budgetGate]), [['US-01', 200000, 'blocked']]);
+  assert.equal(record.monitoring.status, 'missing'); assert.match(record.monitoring.meaning, /no one attested the run/);
+  assert.equal(JSON.parse(readFileSync(join(f.root, 'batches', f.open.runId, 'settlement.json'), 'utf8')).monitoring, undefined, 'printed beside the record, not sealed in it');
   assert.deepEqual(record.calls.map(call => call.duty), ['exec', 'check', 'guard']);
   assert.match(f.read('pm-decisions.md'), /SETTLED \(review\): 256020 token\(s\) on 1 ticket\(s\) of 200000 authorized/);
   assert.ok(existsSync(join(f.root, 'batches', f.open.runId, 'settlement.json')));
@@ -1001,7 +1021,9 @@ test('the next batch does not open until the last one is settled, or marked as n
   const marked = run('settle', '--not-metered', 'the session transcripts were deleted', '--instance', f.root, '--run', f.open.runId);
   assert.equal(marked.status, 0, marked.stdout + marked.stderr); const record = JSON.parse(marked.stdout);
   assert.equal(record.stage, 'batch-not-metered'); assert.equal(record.runId, f.open.runId); assert.equal(record.reason, 'the session transcripts were deleted');
-  assert.deepEqual(JSON.parse(readFileSync(join(f.root, 'batches', f.open.runId, 'settlement.json'), 'utf8')), record);
+  const { monitoring, ...sealed } = record;
+  assert.deepEqual(JSON.parse(readFileSync(join(f.root, 'batches', f.open.runId, 'settlement.json'), 'utf8')), sealed, 'the attestation status is printed beside the mark, not in it');
+  assert.equal(monitoring.status, 'missing');
   assert.match(f.read('pm-decisions.md'), new RegExp(`BATCH ${f.open.runId} NOT METERED by rw-batch\\.mjs settle --not-metered: the session transcripts were deleted\\.`));
   assert.match(refusal(mark('again', { runId: f.open.runId })).reason, /already settled/);
   assert.match(refusal(settleBatch({ teamRoot: f.kit, instanceRoot: f.root, meter: meterOf(f, [1, 1, 1, 1, 1]), rules: loadRetryRules({ teamRoot: f.kit, instanceRoot: f.root }), runId: f.open.runId })).reason, /already settled/);

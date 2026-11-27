@@ -12,7 +12,7 @@ it says what to do in the case at hand. Do what it says: this runbook does
 not repeat it.
 
 ```sh
-node kit/scripts/rw-batch.mjs before BATCH.json --instance . [--start-as-is]
+node kit/scripts/rw-batch.mjs before BATCH.json --instance . [--start-as-is] --receipt
 node kit/scripts/rw-batch.mjs after RESULT.json --instance .
 node kit/scripts/rw-batch.mjs settle METER.json --instance . [--run <run id>]
 node kit/scripts/rw-batch.mjs settle --not-metered "<reason>" --instance . [--run <run id>]
@@ -23,6 +23,7 @@ node kit/scripts/rw-batch.mjs resolve --instance .
 node kit/scripts/rw-batch.mjs commit --instance .
 node kit/scripts/rw-batch.mjs abort --instance .
 node kit/scripts/rw-batch.mjs left --instance . [--run <run id>]
+node kit/scripts/rw-batch.mjs monitoring --instance .
 node kit/scripts/rw-batch.mjs periodic-brief --reviewer <security|architect> --instance .
 node kit/scripts/rw-batch.mjs periodic --reviewer <security|architect> --transcript <agent-*.jsonl> --instance . [--meter METER.json] [REPORT.json]
 node kit/scripts/rw-batch.mjs periodic --no-answer "<reason>" --reviewer <security|architect> --instance .
@@ -36,10 +37,10 @@ Exit 0 done, 2 refused or (for `after` and `settle`) a batch in review, or (for
 
 | Step | Who | What |
 |---|---|---|
-| 1 | PM | `before BATCH.json`: the batch is checked, frozen and opened |
-| 2 | PM | runs `run-n-rounds` with the `args` of the batch record |
+| 1 | PM | `before BATCH.json --receipt`: the batch is checked, frozen and opened. The receipt holds the run id, the record's digest, what to tell the owner (`startedAsIs`, `runsAgain`, `resumes`, `triggerChanges`, `outsideCommits`) and the `args`; the whole record is in `rw-batch.json` |
+| 2 | PM | runs `run-n-rounds` with the receipt's `args`, unchanged |
 | 3 | PM | `after RESULT.json`, with the engine's return: the run is checked, the work of each ticket that did not pass is set aside as a patch, the kit runs the passed tickets' verification commands on a tree that holds only the planned commits, the write limits close, the lock is released. See "How long after takes" |
-| 4 | PM | `node kit/scripts/reconcile-run.mjs RESULT.json . --monitoring ATTESTATION.json`: lifecycle and message ledgers, as in specialist mode, and the PM's attestation of the run (`docs/engine.md`): who watched, over which interval, and each owner stop or hardware halt it saw. A headless PM attests `"coverage": "partial"` and says in `notes` that no owner channel existed |
+| 4 | PM | `node kit/scripts/reconcile-run.mjs RESULT.json . --monitoring ATTESTATION.json`: lifecycle and message ledgers, as in specialist mode, and the PM's attestation of the run (`docs/engine.md`): who watched, over which interval, and each owner stop or hardware halt it saw. A headless PM attests `"coverage": "partial"` and says in `notes` that no owner channel existed. `settle` and `monitoring` show the run as `complete`, `partial` or `missing`; `missing` means no one attested it, not that no stop occurred |
 | 5 | PM | a flagged batch only: the review steps below, then `resolve` |
 | 6 | PM | `commit`: one commit per ticket that passed, or per ticket the resolution kept; the batch is archived. A batch whose commits are all held is archived with `abort` instead; `commit` refuses it |
 | 7 | PM | `node kit/scripts/measure-spawn.mjs <session-dir> --json > METER.json`, then `settle METER.json --run <run id>`: usage per ticket. The next `before` is refused until this is done |
