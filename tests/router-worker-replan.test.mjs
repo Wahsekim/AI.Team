@@ -123,6 +123,26 @@ test('a ticket exhausted under a new id is blocked under the id it continues too
   assert.equal(original?.code, 'TICKET_ESCALATED'); assert.match(original.reason, new RegExp(escalation.id));
 });
 
+test('an id filed again without its continues carries the runs the archives link it to; a link it froze before the kit committed it is closed', async t => {
+  const f = live(t);
+  for (const n of [0, 1]) await ran(f, [ticket('US-01', ['src/list/a.js'], n ? { replan: replan(n) } : {})], ['src/list/a.js']);
+  await ran(f, [ticket('US-02', ['src/list/a.js'], { continues: 'US-01', replan: replan(2) })], ['src/list/a.js']);
+  assert.equal(refusal(await f.before(batchOf(ticket('US-02', ['src/list/a.js'], { replan: replan(3) }))))?.code, 'TICKET_ATTEMPTS_EXHAUSTED', 'the archive holds the link: the PM need not repeat it');
+  const [escalation] = f.lines('reviews/escalations.jsonl');
+  assert.deepEqual([escalation.ticket, escalation.tickets], ['US-02', ['US-01', 'US-02']]);
+
+  const g = live(t);
+  await ran(g, [ticket('US-01', ['src/list/a.js'])], ['src/list/a.js']);
+  const done = await runBatch(g, [ticket('US-02', ['src/list/a.js'], { continues: 'US-01', replan: replan(1) })], edits(['src/list/a.js']));
+  assert.deepEqual(g.commit().commits?.map(commit => commit.ticket), ['US-02']);
+  assert.equal(markNotMetered({ ...g.common, reason: 'not measured in this test', runId: done.open.runId }).errors, undefined);
+  await ran(g, [ticket('US-01', ['src/list/a.js'], { replan: replan(1) })], ['src/list/a.js']);
+  const fresh = await g.before(batchOf(ticket('US-02', ['src/list/b.js'])));
+  assert.equal(fresh.errors, undefined, JSON.stringify(fresh.errors));
+  assert.deepEqual(fresh.tickets[0].earlierRuns, { runs: [], count: 0 }, 'new work under a committed id does not inherit what the ticket it once continued did since');
+  assert.equal(abortBatch(g.common).errors, undefined);
+});
+
 test('one half of a split keeps its own runs when the kit commits the other half', async t => {
   const f = live(t);
   for (const n of [0, 1]) await ran(f, [ticket('US-01', ['src/list/a.js', 'src/list/b.js'], n ? { replan: replan(n) } : {})], ['src/list/a.js', 'src/list/b.js']);

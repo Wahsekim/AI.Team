@@ -48,17 +48,18 @@ export function earlierRuns(instance, archived) {
     .map(({ id, record }) => {
       const after = readJSON(join(instance, ARCHIVE, id, 'after.json')), committed = committedIn(instance, id);
       const findings = (Array.isArray(after?.findings) ? after.findings : []).map(finding => finding?.code).filter(code => typeof code === 'string');
-      return { committed: [...committed].filter(ticket => typeof ticket === 'string'), ran: (Array.isArray(after?.tickets) ? after.tickets : []).filter(entry => RAN.includes(entry?.status) && typeof entry.id === 'string' && TICKET_ID.test(entry.id) && !committed.has(entry.id))
+      return { committed: [...committed].filter(ticket => typeof ticket === 'string'), filed: record.tickets.filter(entry => typeof entry?.id === 'string'), ran: (Array.isArray(after?.tickets) ? after.tickets : []).filter(entry => RAN.includes(entry?.status) && typeof entry.id === 'string' && TICKET_ID.test(entry.id) && !committed.has(entry.id))
         .map(entry => ({ runId: id, ticket: entry.id, status: entry.status, findings, replan: record.tickets.find(ticket => ticket?.id === entry.id)?.replan })) };
     });
   return (ticket, resume) => {
     const ids = [ticket.id], isMine = other => ids.some(id => same(id, other));
     const linked = (entry, patch) => [entry.continues, resumedFrom(instance, patch)?.ticket].filter(id => typeof id === 'string' && TICKET_ID.test(id) && !isMine(id));
     ids.push(...linked(ticket, resume));
-    for (let i = 1; i < ids.length; i++) for (const entry of filed.filter(other => same(other.id, ids[i]))) ids.push(...linked(entry, entry.resume));
     // Committed work is done: the id filed again is new work, and the runs before that commit are not its runs;
     // and so is a linked ticket the kit committed since: its runs before that commit are closed with it.
     const committedLast = id => batches.findLastIndex(batch => batch.committed.some(other => same(other, id))), since = committedLast(ticket.id);
+    // The links an id froze since the kit last committed it are its own, this id's too: the ticket filed now need not repeat them.
+    for (let i = 0; i < ids.length; i++) for (const entry of batches.slice(committedLast(ids[i]) + 1).flatMap(batch => batch.filed).filter(other => same(other.id, ids[i]))) ids.push(...linked(entry, entry.resume));
     const mine = batches.flatMap((batch, i) => i > since ? batch.ran.filter(run => isMine(run.ticket) && i > committedLast(run.ticket)) : []), plainRun = ({ runId, ticket: id, status }) => ({ runId, ticket: id, status });
     return { runs: mine.slice(-EARLIER_KEPT).map(plainRun), count: mine.length, every: mine.map(({ replan, ...run }) => run), replan: mine.at(-1)?.replan,
       stranger: typeof ticket.continues === 'string' && !filed.some(entry => same(entry.id, ticket.continues)) ? ticket.continues : null };
