@@ -98,6 +98,7 @@ the team's hook and its wrappers:
 | `dependsOn` | Optional ids of tickets this one builds on |
 | `moves`, `deletes` | Optional tracked files the worker renames or deletes; the worker gets the exact Git command for each |
 | `resume` | Optional patch that holds earlier work of this ticket, as `left`, `after`, `abort` or `resolve` printed it |
+| `continues` | Optional id of the earlier ticket whose work this one takes up under a new id (a new attempt from nothing, a split); its runs count as this ticket's |
 | `replan` | For a ticket that ran before and was not committed, only then: `{"cause", "feasible", "change"}`, one line each (below) |
 | `commitMessage` | Optional, one line. Default `<id>: <title>` |
 | `nextLifecycleNumber` | The next lifecycle entry number |
@@ -110,8 +111,9 @@ budget per ticket: those come from the team. The rules of each field:
 [Resuming left work](batch-reference.md#resuming-left-work).
 
 **A ticket that runs again.** A ticket ran before when an archived batch ran
-it, under its id or as the ticket whose saved patch it resumes, and the kit did
-not commit it. `before` refuses it until it carries a `replan`, and names
+it, under its id, as the ticket it names in `continues` or as the ticket whose
+saved patch it resumes, and the kit did not commit it. File earlier work under
+a new id only with `continues` or `resume`, so its runs stay on one count. `before` refuses it until it carries a `replan`, and names
 where the evidence of its latest run is. Read it: `after.json` and
 `return.json` in `batches/<run id>/`, and the saved patch. Decide whether the
 ticket can be done; if it can, write why that run was not committed (`cause`),
@@ -119,8 +121,10 @@ why it can be done as now written (`feasible`) and what is different
 (`change`: the plan, the paths, the estimate, a split, a resumed patch). The
 same replan as last time is refused. `before` logs the replan for the owner
 and lists it under `runsAgain`: report it to the owner. A ticket gets the
-initial run and two retries: after its third run that did not pass, `before`
-refuses it with `TICKET_ATTEMPTS_EXHAUSTED` and escalates it to the owner. Detail:
+initial run and two retries: after its third run without a commit, whatever
+kept each from it (a failed check, a rejection, a held or aborted batch),
+`before` refuses it with `TICKET_ATTEMPTS_EXHAUSTED` and escalates it to the
+owner. Detail:
 [Earlier runs of a ticket](batch-reference.md#what-before-does-in-order).
 
 A ticket's worker runs only the batch's verification commands and the Git

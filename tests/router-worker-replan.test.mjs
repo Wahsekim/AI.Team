@@ -1,5 +1,5 @@
 // ADR 0010, amendment of 2026-11-27: a ticket that ran before and was not committed is replanned before it runs again, and
-// a ticket runs at most three times (the initial run and two retries) before it goes to the owner.
+// a ticket runs at most three times without a commit (the initial run and two retries) before it goes to the owner.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { copyFileSync, mkdirSync, existsSync } from 'node:fs';
@@ -61,34 +61,32 @@ test('a ticket that failed before is refused without a replan, with the evidence
   assert.equal(abortBatch(f.common).errors, undefined);
 });
 
-test('a ticket runs at most three times: a run that passed and was held does not count; the fourth filing escalates, and after the owner\'s acknowledgement one more failure escalates again', async t => {
+test('a ticket runs at most three times without a commit, whatever kept each run from it: the fourth filing escalates, under its id, a new id that resumes or continues it, and again after the owner\'s acknowledgement', async t => {
   const f = live(t), file = (n, extra = {}) => ticket('US-01', ['src/list/a.js'], { ...(n ? { replan: replan(n) } : {}), ...extra });
   // Run 0 passes and its batch is archived without commit, as a held batch is.
   const held = await runBatch(f, [file(0)], edits(['src/list/a.js']));
   assert.equal(abortBatch(f.common).errors, undefined); git(f.product, 'checkout', '-q', '--', '.'); git(f.product, 'clean', '-fdq');
   assert.equal(markNotMetered({ ...f.common, reason: 'not measured in this test', runId: held.open.runId }).errors, undefined);
-  assert.match(refusal(await f.before(batchOf(file(0))))?.reason, /US-01 ran before/, 'a run that passed and was not committed still needs a replan');
+  assert.match(refusal(await f.before(batchOf(file(0))))?.reason, /US-01 ran before/, 'a run that passed and was not committed needs a replan');
 
   const failed = [];
   for (const n of [1, 2]) failed.push((await ran(f, [file(n)], ['src/list/a.js'])).open.runId);
-  // Three earlier runs, two of them failed: it opens.
-  const third = await ran(f, [file(3)], ['src/list/a.js']); failed.push(third.open.runId);
-  assert.equal(third.open.tickets[0].earlierRuns.count, 3);
+  const spent = [held.open.runId, ...failed];
 
-  const exhausted = refusal(await f.before(batchOf(file(4), ticket('US-05', ['src/list/e.js']))));
+  const exhausted = refusal(await f.before(batchOf(file(3), ticket('US-05', ['src/list/e.js']))));
   assert.equal(exhausted?.code, 'TICKET_ATTEMPTS_EXHAUSTED');
-  for (const runId of failed) assert.ok(exhausted.reason.includes(runId), `the refusal names ${runId}`);
-  assert.doesNotMatch(exhausted.reason, new RegExp(held.open.runId));
+  assert.match(exhausted.reason, new RegExp(`US-01 ran 3 times by the engine without a commit: ${spent[0]} \\(passed[^)]*\\), ${spent[1]} \\(did not pass its check\\), ${spent[2]} \\(did not pass its check\\)`));
   const [escalation] = f.lines('reviews/escalations.jsonl');
-  assert.deepEqual([escalation.kind, escalation.ticket, escalation.runIds, escalation.paths], ['attempts-exhausted', 'US-01', failed, []]);
+  assert.deepEqual([escalation.kind, escalation.ticket, escalation.runIds, escalation.paths], ['attempts-exhausted', 'US-01', spent, []]);
   assert.ok(exhausted.reason.includes(escalation.id));
-  assert.match(f.ledger(), new RegExp(`ESCALATED ${escalation.id}: ticket US-01 failed in 3 runs by the engine \\(${failed.join(', ')}\\).*team-mode\\.mjs acknowledge ${escalation.id}`));
-  const blocked = refusal(await f.before(batchOf(file(4))));
+  assert.match(f.ledger(), new RegExp(`ESCALATED ${escalation.id}: ticket US-01 ran 3 times by the engine without a commit: ${spent[0]} \\(passed.*team-mode\\.mjs acknowledge ${escalation.id}`));
+  const blocked = refusal(await f.before(batchOf(file(3))));
   assert.equal(blocked?.code, 'TICKET_ESCALATED'); assert.match(blocked.reason, new RegExp(escalation.id));
-  assert.equal(f.lines('reviews/escalations.jsonl').length, 1);
-  const renamed = refusal(await f.before(batchOf(ticket('US-11', ['src/list/a.js'], { resume: `left/${failed[2]}/US-01.patch`, replan: replan(4) }))));
+  const renamed = refusal(await f.before(batchOf(ticket('US-11', ['src/list/a.js'], { resume: `left/${failed[1]}/US-01.patch`, replan: replan(3) }))));
   assert.equal(renamed?.code, 'TICKET_ATTEMPTS_EXHAUSTED', 'a new id that resumes the saved patch meets the same escalation');
-  assert.ok(renamed.reason.includes(escalation.id)); assert.match(renamed.reason, /US-11 \(resuming the work of US-01\)/);
+  assert.ok(renamed.reason.includes(escalation.id)); assert.match(renamed.reason, new RegExp(`US-11 ran 3 times.*${spent[2]} as US-01 `));
+  const named = refusal(await f.before(batchOf(ticket('US-12', ['src/list/b.js'], { continues: 'US-01', replan: replan(3) }))));
+  assert.equal(named?.code, 'TICKET_ATTEMPTS_EXHAUSTED', 'a new id that names the ticket it continues meets the same escalation'); assert.ok(named.reason.includes(escalation.id));
   assert.equal(f.lines('reviews/escalations.jsonl').length, 1);
   const shared = await f.before(batchOf(ticket('US-05', ['src/list/a.js'])));
   assert.equal(shared.errors, undefined, 'a ticket that only shares the file goes on'); assert.equal(abortBatch(f.common).errors, undefined);
@@ -96,11 +94,11 @@ test('a ticket runs at most three times: a run that passed and was held does not
   const proposal = proposeAcknowledge({ ...f.common, id: escalation.id });
   assert.equal(acknowledgeEscalation({ ...f.common, id: escalation.id, confirm: proposal.digest, atTerminal: true }).errors, undefined);
   assert.equal((await f.before(batchOf(file(0))))?.errors?.[0]?.code, 'BATCH_REFUSED', 'acknowledged, it still needs a replan');
-  const fourth = await ran(f, [file(4)], ['src/list/a.js']);
-  const again = refusal(await f.before(batchOf(file(5))));
+  const fourth = await ran(f, [file(3)], ['src/list/a.js']);
+  const again = refusal(await f.before(batchOf(file(4))));
   assert.equal(again?.code, 'TICKET_ATTEMPTS_EXHAUSTED');
   const second = f.lines('reviews/escalations.jsonl')[1];
-  assert.notEqual(second?.id, escalation.id); assert.deepEqual(second.runIds, [...failed, fourth.open.runId]); assert.ok(again.reason.includes(second.id));
+  assert.notEqual(second?.id, escalation.id); assert.deepEqual(second.runIds, [...spent, fourth.open.runId]); assert.ok(again.reason.includes(second.id));
 });
 
 test('a ticket the kit committed starts a new count when its id is filed again', async t => {
@@ -114,7 +112,7 @@ test('a ticket the kit committed starts a new count when its id is filed again',
   assert.equal(abortBatch(f.common).errors, undefined);
 });
 
-test('a new id that resumes the saved patch of a failed ticket, at its place, as a copy or through a chain, continues its count; tickets that share a file and resume nothing do not', async t => {
+test('a new id that resumes the saved patch of a failed ticket, at its place, as a copy or through a chain, or names it in continues, carries its count; tickets that share a file and link nothing do not', async t => {
   const f = live(t), table = 'src/table.json';
   const one = await ran(f, [ticket('US-01', ['src/list/a.js', table])], ['src/list/a.js', table]), r1 = one.open.runId, patch = `left/${r1}/US-01.patch`;
   assert.ok(existsSync(join(f.root, patch)), 'left saved the failed ticket\'s work');
@@ -136,7 +134,17 @@ test('a new id that resumes the saved patch of a failed ticket, at its place, as
   const chained = await f.before(batchOf(ticket('US-13', ['src/list/a.js', table], { resume: `left/${r2}/US-11.patch`, replan: replan(2) })));
   assert.equal(chained.errors, undefined, JSON.stringify(chained.errors));
   assert.deepEqual(chained.tickets[0].earlierRuns, { runs: [...runs, { runId: r2, ticket: 'US-11', status: 'not-passed' }], count: 2 }, 'the chain of resumes is followed');
-  assert.deepEqual(again(f).map(line => line.match(/ RUNS (\S+) AGAIN/)[1]), ['US-12', 'US-11', 'US-13']);
+  assert.equal(abortBatch(f.common).errors, undefined); git(f.product, 'checkout', '-q', '--', '.'); git(f.product, 'clean', '-fdq');
+
+  // A new id that does the work again from nothing names the ticket it continues; the links that ticket froze are followed.
+  assert.match(refusal(await f.before(batchOf(ticket('US-14', ['src/list/b.js'], { continues: 'US-99' }))))?.reason, /US-14: continues names US-99, and no archived batch holds a ticket of that id/);
+  assert.match(refusal(await f.before(batchOf(ticket('US-14', ['src/list/b.js'], { continues: 'US-14' }))))?.reason, /US-14: continues must name the id of the earlier ticket/);
+  assert.match(refusal(await f.before(batchOf(ticket('US-14', ['src/list/b.js'], { continues: 'US-11' }))))?.reason, new RegExp(`US-14 ran before.*${r2} as US-11`));
+  const named = await f.before(batchOf(ticket('US-14', ['src/list/b.js'], { continues: 'US-11', replan: replan(2) })));
+  assert.equal(named.errors, undefined, JSON.stringify(named.errors));
+  assert.deepEqual([named.tickets[0].continues, named.tickets[0].earlierRuns], ['US-11', { runs: [...runs, { runId: r2, ticket: 'US-11', status: 'not-passed' }], count: 2 }]);
+  assert.match(again(f).at(-1), / RUNS US-14 AGAIN \(continues US-11\) \(owner spot review\): 2 earlier run/);
+  assert.deepEqual(again(f).map(line => line.match(/ RUNS (\S+) AGAIN/)[1]), ['US-12', 'US-11', 'US-13', 'US-14']);
 });
 
 test('the briefs of a ticket that never ran are the briefs the kit wrote before replans existed', () => {

@@ -58,21 +58,24 @@ const liftedIn = instance => {
 const openEscalations = instance => { const lifted = liftedIn(instance); return linesOf(join(instance, ESCALATIONS)).filter(entry => !lifted(entry)); };
 
 // decisions/0008: a ticket runs at most three times, the initial run and two retries.
-const MAX_FAILED_RUNS = 3;
+const MAX_UNCOMMITTED_RUNS = 3;
 const EXHAUSTED = 'attempts-exhausted';
-// ADR 0010, amendment of 2026-11-27: a ticket whose failed runs reach the cap goes to the owner. The escalation is told by
-// the latest failed run and the ticket's id in it, so a new id that resumes that run's patch meets the same one. It names no
-// paths: a ticket that only shares a file is not blocked. The owner's acknowledgement lets the ticket run again; its next
-// failed run escalates it again. `failed`: the ticket's failed runs, oldest first. Returns the open escalation, written once, or null.
-export function exhaustion({ instance, failed, at }) {
-  const last = failed.at(-1), runIds = failed.map(run => run.runId);
-  if (runIds.length < MAX_FAILED_RUNS) return null;
+// Why a run was not committed, as far as its archive tells: the ticket's own check, or the findings of its batch.
+export const runSaid = run => `${run.runId}${same(run.ticket, run.as ?? run.ticket) ? '' : ` as ${run.ticket}`} (${run.status === 'passed' ? `passed${run.findings?.length ? `; batch findings: ${run.findings.join(', ')}` : ', not committed'}` : 'did not pass its check'})`;
+// ADR 0010, amendment of 2026-11-27: a ticket whose runs without a commit reach the cap goes to the owner, whatever kept each
+// from being committed. The escalation is told by the latest run and the ticket's id in it, so a new id that continues or
+// resumes that work meets the same one. It names no paths: a ticket that only shares a file is not blocked. The owner's
+// acknowledgement lets the ticket run again; its next run without a commit escalates it again.
+// `runs`: the ticket's earlier runs, oldest first. Returns the open escalation, written once, or null.
+export function exhaustion({ instance, runs, at }) {
+  if (runs.length < MAX_UNCOMMITTED_RUNS) return null;
+  const last = runs.at(-1), runIds = runs.map(run => run.runId);
   const known = linesOf(join(instance, ESCALATIONS)), id = `ESC-${last.ticket}-exhausted-${last.runId}`, raised = known.find(entry => same(entry.id, id));
   if (raised) return liftedIn(instance)(raised) ? null : raised;
   const entry = { id, kind: EXHAUSTED, ticket: last.ticket, runIds, paths: [], at };
   mkdirSync(join(instance, 'reviews'), { recursive: true });
   append(join(instance, ESCALATIONS), [entry]);
-  appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} ESCALATED ${id}: ticket ${entry.ticket} failed in ${runIds.length} runs by the engine (${runIds.join(', ')}): the initial run and two retries are spent; it, a ticket that resumes its saved work and every ticket that depends on it are blocked until the owner reviews it and runs: team-mode.mjs acknowledge ${id} --instance <instance-root>. Then it may be filed again with a replan, and a further failed run escalates it again. Other tickets go on.\n`);
+  appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} ESCALATED ${id}: ticket ${entry.ticket} ran ${runs.length} times by the engine without a commit: ${runs.map(run => runSaid({ ...run, as: entry.ticket })).join(', ')}. The initial run and two retries are spent; it, a ticket that continues or resumes its work and every ticket that depends on it are blocked until the owner reviews it and runs: team-mode.mjs acknowledge ${id} --instance <instance-root>. Then it may be filed again with a replan, and a further run without a commit escalates it again. Other tickets go on.\n`);
   return entry;
 }
 

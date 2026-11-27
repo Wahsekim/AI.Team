@@ -37,6 +37,7 @@ the kit does not cover. The runbook sends you to a section here by its title.
 | `deletes` (optional) | Tracked files the worker deletes: `["src/old.js"]`. Each gives the exec worker one exact command, `git --literal-pathspecs rm -q -- "<path>"`. An empty list declares nothing, as an absent one. Frozen in the record (`[]` when absent) |
 | `verificationCommands` (optional, per ticket) | 1 or more of the batch's `verificationCommands`, each once. The ticket's exec and check briefs list only these, so a ticket that changes a document need not run the product's test suite. Absent, the ticket runs the batch's whole list. The hook still accepts the batch's whole list from any worker, and the review's re-verification runs the whole list. Frozen in the ticket's entry of the record when given |
 | `resume` (optional) | A patch in the team's folder that holds the work an earlier batch left for this ticket, as `left` prints it: `"left/<run id>/US-08.patch"`. "before" applies it to the product, so what it changes is the ticket's. See "Resuming left work" |
+| `continues` (optional) | The id of the earlier ticket whose work this one takes up under a new id, when it resumes no saved patch of it: a new attempt from nothing, or one part of a split. That ticket's earlier runs count as this one's (see "Earlier runs of a ticket"). Refused when it names the ticket itself or an id no archived batch holds. Frozen in the batch record and named in the ledger line. |
 | `replan` (optional) | Required on a ticket that ran before and was not committed (see "Earlier runs of a ticket"), refused on any other: `{ "cause": "<why the earlier run was not committed>", "feasible": "<why the ticket can be done as it is now written>", "change": "<what is different this time>" }`, exactly these three, each one line of at most 200 characters with no space at either end. Frozen in the ticket's entry of the record, logged for the owner, and put in the ticket's exec and check briefs |
 | `runId`, `date` (optional) | Default: `rw-<commit>-L<nextLifecycleNumber>-<time>`, new at every `before`, and today |
 
@@ -161,12 +162,16 @@ before `after` is not archived, so the next batch names the same commits again.
 **Earlier runs of a ticket** ([ADR 0010](../../../decisions/0010-router-worker-second-mode.md),
 amendments of 2026-11-26 and 2026-11-27). For each ticket, the archived
 batches in which the engine ran it and the kit did not commit it. "It" is a
-ticket of the same id (compared without case), and the ticket whose saved
-patch it resumes: a `resume` at `left/<run id>/<ticket>.patch` or
+ticket of the same id (compared without case), the ticket it names in
+`continues`, and the ticket whose saved patch it resumes: a `resume` at `left/<run id>/<ticket>.patch` or
 `reviews/held/<run id>/<ticket>.patch`, or a copy elsewhere in the team folder
 whose digest is that of a file under one of those folders (the same
-recognition as a rejection's `resumedFrom`). The resumed ticket's own `resume`,
-as its batch record froze it, is followed in turn, down the chain. Tickets that
+recognition as a rejection's `resumedFrom`). The `continues` and `resume` that
+the archives froze for each ticket so reached are followed in turn, back to
+the first filing; a ticket that continues the same earlier ticket (the other
+half of a split) is not reached, and its runs are its own. `continues` is for
+work done again from nothing or split under a new id; `before` refuses one that
+names the ticket itself or an id no archived batch holds. Tickets that
 only share a file are not one piece of work: paths count for nothing (owner
 rule of 2026-11-26). The engine ran a ticket when `after` recorded an outcome
 for it (`passed` or `not-passed`; a ticket the engine never reached, `not-run`,
@@ -194,21 +199,22 @@ A ticket with at least one earlier run is replanned, not handed out again:
   what failed before must not fail again; the brief of a ticket that never ran
   is unchanged.
 
-**At most two retries** (decisions/0008: the initial run and two retries). A
-ticket's failed runs are its earlier runs whose status is `not-passed`: a run
-that passed and was not committed because its batch was held, rejected or
-aborted needs a `replan` and does not count. A ticket with three failed runs
-is refused with `TICKET_ATTEMPTS_EXHAUSTED`, which names the runs, and
-escalated: `{id: "ESC-<ticket>-exhausted-<latest failed run>", kind:
+**At most two retries** (decisions/0008: the initial run and two retries).
+Every earlier run counts, whatever kept it from being committed (owner rule of
+2026-11-27): a check that did not pass, a rejection, a batch held or aborted.
+A ticket with three earlier runs is refused with `TICKET_ATTEMPTS_EXHAUSTED`,
+which names each run with its status and, for a run that passed, the findings
+of its batch, and escalated: `{id: "ESC-<ticket>-exhausted-<latest failed run>", kind:
 "attempts-exhausted", ticket, runIds, paths: [], at}` in
 `reviews/escalations.jsonl` and an `ESCALATED` ledger line, where `<ticket>` is
-the ticket's id in its latest failed run. Until the owner runs `team-mode.mjs
+the ticket's id in its latest run. Until the owner runs `team-mode.mjs
 acknowledge <id>` the ticket is refused under that id (`TICKET_ESCALATED`), a
-new id that resumes its saved patch is refused with the same escalation
-(`TICKET_ATTEMPTS_EXHAUSTED`), and so is a ticket that depends on it. The
+new id that continues it or resumes its saved patch is refused with the same
+escalation (`TICKET_ATTEMPTS_EXHAUSTED`), and so is a ticket that depends on it. The
 escalation names no paths: a ticket that only shares a file goes on, unlike a
 review escalation. Once it is acknowledged the ticket may be filed again, with
-a `replan`, and its next failed run escalates it again under a new id.
+a `replan`, and its next run without a commit escalates it again under a new
+id.
 The cap is a constant of the kit, not a limit of `profiles/team-mode.json`;
 the attempts inside one engine run (`attemptsPerTicket`) are another count.
 Each archive's batch record is read once, its `after.json`, `commit.json` and
@@ -929,7 +935,7 @@ offline on transcript fixtures.
   whichever id) in `reviews/escalations.jsonl`, an `ESCALATED` ledger line,
   which names the other ids (`ticket <id> (resuming the work of <other id>)`), and
   the verdict's `escalated` list. Two reviewers rejecting the same ticket in one
-  batch count once. A ticket whose failed runs reach the cap is escalated by
+  batch count once. A ticket whose runs without a commit reach the cap is escalated by
   `before` with the kind `attempts-exhausted` (see "Earlier runs of a ticket").
 - **What an escalation blocks** (owner rule of 2026-11-20: report to the human,
   block what is related, replan the rest). "before" refuses a batch that holds
@@ -1525,7 +1531,7 @@ any batch's.
 - The launch preflight or the isolation check does not pass.
 
 The limits not being the ones the ledger binds is refused with its own code,
-`LIMITS_NOT_BOUND`, and a ticket whose failed runs reached the cap with
+`LIMITS_NOT_BOUND`, and a ticket whose runs without a commit reached the cap with
 `TICKET_ATTEMPTS_EXHAUSTED`.
 
 ## Not covered
@@ -1626,9 +1632,10 @@ The limits not being the ones the ledger binds is refused with its own code,
   which a PM session can rewrite with the archive. A branch rebuilt since the
   last archived batch, or one with no archived batch, is not compared; the
   ledger says so for the rebuilt branch. Only the first 100 ids are frozen.
-- **Earlier runs are told by id and by the saved patch a ticket resumes.** The
-  same work filed under a new id and done again from nothing starts a new
-  count, and so does a copy of a saved patch edited outside `left/` and
+- **Earlier runs are told by id, by `continues` and by the saved patch a ticket
+  resumes.** The same work filed under a new id and done again from nothing,
+  with no `continues`, starts a new count: the kit cannot tell it from new
+  work, and the field is the PM's to fill. So does a copy of a saved patch edited outside `left/` and
   `reviews/held/`. A run that was not committed although the work later landed
   under another id still counts. A batch aborted before `after` is not
   archived and is not counted, nor is an archive whose batch record cannot be

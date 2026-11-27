@@ -574,23 +574,29 @@ failed, then dispatches, and reports to the user), and:
 (the specialist team's rule is at most two retries; the same here).
 
 A ticket's earlier runs are the archived batches, since the kit last committed
-it, in which the engine ran it and the kit did not commit it, where "it" is a ticket of the same id or the ticket
-whose saved patch (under `left/` or `reviews/held/`, told by its place or, for
-a copy, by its bytes) it resumes, followed down a chain of resumes. Tickets that
-only share a file are not one piece of work. `before` refuses a ticket with an
+it, in which the engine ran it and the kit did not commit it, where "it" is a
+ticket of the same id, the ticket it names in `continues`, or the ticket whose
+saved patch (under `left/` or `reviews/held/`, told by its place or, for a
+copy, by its bytes) it resumes, followed back through the links the archives
+froze. Tickets that only share a file are not one piece of work. `before` refuses a ticket with an
 earlier run until it carries a `replan` of three one-line texts: why the
 earlier run was not committed, why the ticket can be done as now written, and
 what is different this time. It refuses the replan of the ticket's latest run
 unchanged, and a replan on a ticket that never ran. The replan is frozen in the
 batch record, put in the ticket's exec and check briefs with its earlier runs,
 and logged in the ledger line for the owner, which is the report to the user.
-"Two retries" is read as ADR 0008 reads it: the initial run plus two. A ticket
-whose failed runs (status `not-passed`; a run that passed and was not committed
-does not count) reach three is refused with `TICKET_ATTEMPTS_EXHAUSTED` and
-escalated to the owner with the kind `attempts-exhausted`, which blocks it, a
-ticket that resumes its saved patch and a ticket that depends on it, and no
-ticket that only shares a file, until the owner acknowledges it; after that it may be filed again with a
-replan, and a further failed run escalates it again. The cap is a constant of
+"Two retries" is read as ADR 0008 reads it: the initial run plus two. Asked the
+same day which runs count, the owner chose every run without a commit, whatever
+kept it from one: a check that did not pass, a rejection, a batch held or
+aborted. A ticket with three such runs is refused with
+`TICKET_ATTEMPTS_EXHAUSTED` and escalated to the owner with the kind
+`attempts-exhausted`, which blocks it, a ticket that continues it or resumes
+its saved patch and a ticket that depends on it, and no ticket that only shares
+a file, until the owner acknowledges it; after that it may be filed again with
+a replan, and a further run without a commit escalates it again. The owner
+also asked that a ticket opened anew name the original, to follow the work: a
+ticket may carry `continues`, the id of the earlier ticket whose work it takes
+up, and that ticket's runs then count as its own. The cap is a constant of
 the kit, not a team limit, and `attemptsPerTicket`, the attempts inside one
 engine run, is unchanged. This supersedes the amendment of 2026-11-26, "the kit
 saves left work and counts its runs", where it says the count refuses nothing
