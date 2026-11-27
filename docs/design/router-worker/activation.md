@@ -8,18 +8,14 @@ way to change that. Activation produces a **new copy** of the instance in which
 the wrappers are runnable. The instance and its `kit/` are never written, so the
 project's standing team is unchanged whatever happens in the smoke run.
 
-```sh
-node kit/scripts/activate-router-worker.mjs SPEC.json DRAFT.json /abs/NEW.rw-active \
-  --instance <instance-root> --approval <approval.json> --approval-digest sha256:<64 hex>
-```
-
-Exit 0 prints the activation record; exit 2 is a refusal; exit 1 is usage.
+`activateTeam` in `src/router-worker/activate.mjs` makes the copy. Its
+command-line tool was removed with the throwaway-copy tooling
+([ADR 0010](../../../decisions/0010-router-worker-second-mode.md), decision 17).
 
 ## Owner approval
 
 Activation needs a file written by the owner and, separately, the digest of that
-file as the caller reviewed it (the same anchor pattern as the offline
-preflight):
+file as the caller reviewed it:
 
 ```json
 {
@@ -89,7 +85,7 @@ never merged back into the instance.
   enforcement of the tool lists, canary negatives.
 - Creating the disposable product clone.
 - The wall-clock and plan-window ceilings of ADR 0006 are owner-attended policy.
-- Retries need a main-session resume ([continuation](continuation.md)); the
-  smoke scope is one execution and one check.
+- Retries need a main-session resume; the smoke scope is one execution and one
+  check.
 - No activation of the instance itself, and no scope other than
   `disposable-smoke`, exists.

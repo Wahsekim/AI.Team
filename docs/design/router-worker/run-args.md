@@ -8,14 +8,11 @@ already owns the count bound, the Q5 budget gate, the failure policy and the
 Guardian audit. Until now a Router/Worker preview produced one plan item, and
 the rest of the engine arguments were whatever a caller typed. This step builds
 the complete arguments from frozen inputs, so those controls cannot be left out
-or loosened by omission.
+or loosened by omission. `freezeRun` in `src/router-worker/run-args.mjs` does
+it; the launch host and the batch commands call it.
 
-```sh
-node kit/scripts/freeze-run-router-worker.mjs RUN.json --team-root <team-root>
-```
-
-`RUN.json` is `{"run": {...}, "inputs": [...]}`. `inputs` are compiler inputs
-([preflight contract](preflight-contract.md)), one per ticket, in run order.
+`RUN.json` is `{"run": {...}, "inputs": [...]}`. `inputs` are compiler inputs,
+one per ticket, in run order.
 `run` carries only the owner directive and the ledger position:
 
 | Field | Meaning |
@@ -29,8 +26,6 @@ node kit/scripts/freeze-run-router-worker.mjs RUN.json --team-root <team-root>
 | `budgetCeilingTokens`, `estimatedOutputTokens` | enforced only for `engine` dispatch (`record.budget.enforced`). A `main-session` run has no output meter; its limits are the attempt cap and each ticket's authorization, enforced by the dispatch gate |
 | `dispatch` (optional, `engine` or `main-session`, default `engine`) | who dispatches the calls: the count engine, or the copy's main session through the [dispatch gate](main-session-dispatch.md). The run record carries it; the engine arguments do not |
 | `maxAttemptsPerTicket` (optional, 1 to 3; default 1 for `engine`, 2 for `main-session`) | attempts per ticket. For `main-session` a retry resumes the same agents. For `engine`, above 1, a failed verification on a clean execution is retried by the engine with a FRESH worker and verifier, which re-read the project; `estimatedOutputTokens` must then cover the worst case |
-
-Exit 0 prints `{args, record}`; exit 2 is a refusal; exit 1 is usage.
 
 ## What is derived, not accepted from the caller
 
@@ -46,9 +41,8 @@ Exit 0 prints `{args, record}`; exit 2 is a refusal; exit 1 is usage.
 ## Inputs that select a method
 
 A schema-v2 input that selects an approved method is compiled with the
-loader-verified method bundle. The CLI loads the pinned bundle of the kit it
-runs from, with the same integrity checks as `compile-router-worker.mjs`; in a
-two-root instance that is `<instance>/kit`. `freezeRun` takes the bundle as
+loader-verified method bundle. The caller loads the pinned bundle of the kit it
+runs from (`loadMethods`); in a two-root instance that is `<instance>/kit`. `freezeRun` takes the bundle as
 `methodBundle`. A serialized catalog is not accepted in its place: without the
 verified bundle the run is refused with `METHOD_BUNDLE_REQUIRED` and no
 arguments are produced.

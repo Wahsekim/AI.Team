@@ -25,7 +25,6 @@ const ENGINE = fileURLToPath(new URL('../.claude/workflows/run-n-rounds.js', imp
 const HOOK = fileURLToPath(new URL('../scripts/hooks/rw-write-boundary.mjs', import.meta.url));
 const GATE = fileURLToPath(new URL('../scripts/hooks/rw-dispatch-gate.mjs', import.meta.url));
 const CLI = fileURLToPath(new URL('../scripts/launch-router-worker.mjs', import.meta.url));
-const ARM = fileURLToPath(new URL('../scripts/arm-boundary-router-worker.mjs', import.meta.url));
 const DUTIES = ['exec', 'check', 'guard'];
 const git = (dir, ...args) => execFileSync('git', ['-C', dir, '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', ...args], { encoding: 'utf8' });
 const write = (root, path, text) => { mkdirSync(dirname(join(root, path)), { recursive: true }); writeFileSync(join(root, path), text); };
@@ -167,8 +166,6 @@ test('an input selecting an approved method is prepared with the loader-verified
   const f = fixture(t), file = join(f.base, 'run.json'); writeFileSync(file, JSON.stringify({ run: RUN, inputs: [input] }));
   const cli = spawnSync(process.execPath, [CLI, 'prepare', file, '--team-root', f.team, '--product-root', f.product], { encoding: 'utf8' });
   assert.equal(cli.status, 0, cli.stderr);
-  const arm = fixture(t), armed = spawnSync(process.execPath, [ARM, file, '--team-root', arm.team, '--product-root', arm.product], { encoding: 'utf8' });
-  assert.equal(armed.status, 0, armed.stderr);
 });
 
 test('CLI prepares from RUN.json, exits 2 on refusal and 1 on usage', t => {

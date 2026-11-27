@@ -6,12 +6,11 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, realpathSy
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { observeIsolation } from '../src/router-worker/isolation.mjs';
 import { acquireLease, releaseLease } from '../src/router-worker/lease.mjs';
 import { digest } from '../src/loop/contracts.mjs';
 
-const CLI = fileURLToPath(new URL('../scripts/isolation-router-worker.mjs', import.meta.url));
 const HOOK = fileURLToPath(new URL('../scripts/hooks/rw-write-boundary.mjs', import.meta.url));
 const DUTIES = ['exec', 'check', 'guard'];
 const git = (dir, ...args) => execFileSync('git', ['-C', dir, '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', ...args], { encoding: 'utf8' });
@@ -143,17 +142,6 @@ test('zero calls without ownership: the gate needs the lease this host holds', t
   writeFileSync(join(f.product, '.git/rw-ownership-lease.json'), '{broken');
   const unreadable = f.observe();
   assert.deepEqual(codes(unreadable), ['OWNERSHIP_UNREADABLE']); assert.equal(unreadable.status, 'unknown');
-});
-
-test('CLI prints the record and exits 0 only when the gate is clear', t => {
-  const f = fixture(t), run = (...args) => spawnSync(process.execPath, [CLI, ...args], { encoding: 'utf8' });
-  const clear = run('--team-root', f.team, '--product-root', f.product, '--lease', f.lease);
-  assert.equal(clear.status, 0, clear.stderr); assert.equal(JSON.parse(clear.stdout).status, 'clear');
-  write(f.product, 'untracked.txt', 'x\n');
-  const blocked = run('--team-root', f.team, '--product-root', f.product, '--lease', f.lease);
-  assert.equal(JSON.parse(run('--team-root', f.team, '--product-root', f.product).stdout).findings.some(x => x.code === 'OWNERSHIP_NOT_PRESENTED'), true);
-  assert.equal(blocked.status, 2); assert.equal(JSON.parse(blocked.stdout).status, 'blocked');
-  assert.equal(run('--team-root', f.team).status, 1, 'usage error');
 });
 
 test('a team root without an armed write boundary is blocked', t => {

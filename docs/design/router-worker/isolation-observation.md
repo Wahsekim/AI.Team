@@ -5,15 +5,13 @@ that a runtime enforces anything.
 
 The retry journal refuses to prepare or start a call unless every host admission
 gate is `clear` ([retry accounting](retry-accounting.md)). Until now the
-`runtime-isolation` gate was a value the host declared. This command observes it:
+`runtime-isolation` gate was a value the host declared. `observeIsolation` in
+`src/router-worker/isolation.mjs` observes it; the launch host and the batch
+commands call it. Its command-line tool was removed with the throwaway-copy
+tooling ([ADR 0010](../../../decisions/0010-router-worker-second-mode.md), decision 17).
 
-```sh
-node kit/scripts/isolation-router-worker.mjs --team-root <team-root> --product-root <product-root> --lease <digest>
-```
-
-`<team-root>` is the directory the runtime would start in (an instance or a
-staging copy). Both paths must be canonical. Exit 0 means `clear`; exit 2 means
-`blocked`, `unknown` or an invalid request. The JSON record carries `gate`,
+`teamRoot` is the directory the runtime would start in (an instance or a
+staging copy). Both paths must be canonical. The JSON record carries `gate`,
 `status`, the product `head`, the three wrapper names, sorted `findings`
 (`code`, `severity`, `detail`) and a digest of itself. Any `blocked` finding
 gives `blocked`; otherwise any finding gives `unknown`; only an empty list is

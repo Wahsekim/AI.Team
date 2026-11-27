@@ -2,16 +2,10 @@
 // and the 'budget' admission gate is derived from that ledger, not declared.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
-import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
 import { createSettlementLedger, advanceSettlementLedger, inspectSettlementLedger, settleAgainstJournal, usageEventFromMeterRow } from '../src/router-worker/settlement.mjs';
 import { loadRetryRules, createRetryJournal, advanceRetryJournal } from '../src/router-worker/retries.mjs';
 import { digest } from '../src/loop/contracts.mjs';
 
-const CLI = fileURLToPath(new URL('../scripts/settle-router-worker.mjs', import.meta.url));
 const rules = loadRetryRules();
 const reference = name => ({ id: name, digest: digest(name) });
 const GATES = ['owner', 'budget', 'security', 'global-progress', 'round-trip', 'governance', 'lifecycle', 'count-guardian', 'runtime-isolation'];
@@ -139,25 +133,12 @@ test('invalid ledgers and events are refused', () => {
   throws(() => rig().send({ type: 'refund', callRef: callRef('exec') }), 'INVALID_SETTLEMENT');
 });
 
-test('a measure-spawn row becomes a usage event in harness units; the CLI settles read-only', t => {
+test('a measure-spawn row becomes a usage event in harness units', () => {
   const row = { agentId: 'a1b2c3', agentType: 'sample-worker-exec', finished: true, uniqueMessages: 14, harnessEq: 11000, total: 90000, input: 1000, cacheCreate: 10000, cacheRead: 78000, output: 1000 };
   const event = usageEventFromMeterRow({ row, callRef: callRef('exec'), eventId: 'meter-1' });
   assert.equal(event.harnessTokens, 11000, 'input + cache_creation, never the four-class total'); assert.equal(event.uniqueMessages, 14); assert.equal(event.finished, true);
   assert.equal(usageEventFromMeterRow({ row: { ...row, finished: null }, callRef: callRef('exec'), eventId: 'meter-2' }).finished, null);
   throws(() => usageEventFromMeterRow({ row: { ...row, harnessEq: undefined }, callRef: callRef('exec'), eventId: 'meter-3' }), 'INVALID_SETTLEMENT');
-  const r = rig().send(event, 'meter-1').send(usage('check', 5000));
-  const dir = mkdtempSync(join(tmpdir(), 'rw-settle-')), file = join(dir, 'request.json');
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const run = (...argv) => spawnSync(process.execPath, [CLI, ...argv], { encoding: 'utf8' });
-  writeFileSync(file, JSON.stringify({ ledger: r.ledger, retryJournal: journalAfterFirstRound() }));
-  const ok = run(file);
-  assert.equal(ok.status, 0, ok.stderr); assert.equal(JSON.parse(ok.stdout).budgetGate, 'clear');
-  writeFileSync(file, JSON.stringify({ ledger: r.ledger, retryJournal: journalAfterFirstRound(), nextEstimateTokens: 9000 }));
-  const blocked = run(file);
-  assert.equal(blocked.status, 2); assert.equal(JSON.parse(blocked.stdout).budgetGate, 'blocked');
-  writeFileSync(file, '{broken');
-  assert.equal(run(file).status, 2);
-  assert.equal(run().status, 1);
 });
 
 // exec-2 is a continuation of exec-1 on the same session: both calls grow one transcript.

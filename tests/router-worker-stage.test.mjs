@@ -207,9 +207,7 @@ test('governance staffing rejects unknown roles, delegation tools and writable a
 });
 
 // Rollout gate G-01: the read closure is derived from the staged Markdown, not declared by hand.
-import { preflight } from '../src/router-worker/preflight.mjs';
 import { bytesDigest } from '../src/loop/contracts.mjs';
-import { inputFixture } from './fixtures/router-worker/input.mjs';
 const DUTY_LIST = ['exec', 'check', 'guard'];
 
 test('stage derives each wrapper read closure from the staged files and resolves it across both roots', t => {
@@ -236,32 +234,6 @@ test('stage derives each wrapper read closure from the staged files and resolves
   assert.ok(result.governanceContext.nodes.some(n => n.path === 'agents/architect.md'));
   assert.deepEqual(result.rosterRecord, { wrappers: Object.fromEntries(DUTY_LIST.map(d => [d, `tag-list-fixture-worker-${d}`])) });
   assert.deepEqual(result.missingReads, []);
-});
-
-test('the derived closure is accepted by the offline preflight when run against the staging copy', t => {
-  const f = instance(t), result = stageTeam(f.spec, f.draft, f.staging, f.roots), input = inputFixture(), sources = [];
-  const write = (path, content) => { mkdirSync(dirname(join(f.staging, path)), { recursive: true }); writeFileSync(join(f.staging, path), content); };
-  for (const duty of DUTY_LIST) input.policy.profiles[duty].wrapper = result.rosterRecord.wrappers[duty];
-  const addSource = (field, value) => {
-    const keys = field.split('.'), parent = keys.slice(0, -1).reduce((v, k) => v[k], input), key = keys.at(-1), id = parent[key].id;
-    parent[key] = { id, digest: digest(value) }; write(`sources/${id}.json`, JSON.stringify({ id, value })); sources.push({ field, path: `sources/${id}.json` });
-  };
-  addSource('policy.approvalRef', { note: 'synthetic' }); addSource('policy.stackRef', { verificationCommands: input.policy.verificationCommands });
-  addSource('policy.runtimeRef', { runtime: 'mock-only' }); addSource('policy.rosterRef', result.rosterRecord);
-  for (const duty of DUTY_LIST) addSource(`policy.profiles.${duty}.permissionRef`, { duty, fixtureOnly: true });
-  addSource('mandate.approvalRef', { note: 'synthetic' }); input.mandate.policyDigest = digest(input.policy);
-  const nodes = result.context.nodes.map(({ path, sha256, reads }) => ({ path, sha256, reads }));
-  const limits = Object.fromEntries(DUTY_LIST.map(duty => [duty, 200000]));
-  const approval = JSON.stringify({ schemaVersion: 1, purpose: 'offline-preflight', status: 'approved', inputDigest: digest(input), sources,
-    context: { metric: result.context.metric, roots: result.context.roots, limits, nodes } });
-  write('approval.json', approval);
-  const options = { input, teamRoot: join(f.staging, 'kit'), instanceRoot: f.staging, approvalPath: 'approval.json', expectedApprovalDigest: bytesDigest(approval) };
-  const output = preflight(options);
-  assert.equal(output.errors, undefined, JSON.stringify(output.errors));
-  const roots = Object.fromEntries(output.preflight.files.map(file => [file.path, file.root]));
-  assert.equal(roots['agents/_shared/meta-rules.md'], 'kit'); assert.equal(roots['charter.md'], 'instance');
-  writeFileSync(join(f.staging, 'agents/router-worker-contract.md'), 'edited after staging\n');
-  assert.equal(preflight(options).errors[0].code, 'CONTEXT_SOURCE_CHANGED', 'a staged source edited after derivation is detected');
 });
 
 test('a wrapper read that resolves in neither root fails the stage', t => {

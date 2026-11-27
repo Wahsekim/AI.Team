@@ -6,7 +6,6 @@ import { mkdtempSync, mkdirSync, writeFileSync, copyFileSync, rmSync, realpathSy
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
 import { settleRun } from '../src/router-worker/run-settlement.mjs';
 import { freezeRun } from '../src/router-worker/run-args.mjs';
 import { createSettlementLedger, advanceSettlementLedger, settleAgainstJournal } from '../src/router-worker/settlement.mjs';
@@ -15,7 +14,6 @@ import { digest } from '../src/loop/contracts.mjs';
 import { inputFixture } from './fixtures/router-worker/input.mjs';
 
 const ENGINE = fileURLToPath(new URL('../.claude/workflows/run-n-rounds.js', import.meta.url));
-const CLI = fileURLToPath(new URL('../scripts/settle-run-router-worker.mjs', import.meta.url));
 const rules = loadRetryRules(), reference = name => ({ id: name, digest: digest(name) });
 const GATES = ['owner', 'budget', 'security', 'global-progress', 'round-trip', 'governance', 'lifecycle', 'count-guardian', 'runtime-isolation'];
 const admission = () => ({ sourceRef: reference('host-gate-fixture'), gates: Object.fromEntries(GATES.map(gate => [gate, 'clear'])) });
@@ -91,17 +89,6 @@ test('altered or foreign inputs are refused', async t => {
   assert.equal(code(() => settleRun({ record, account: account(), tickets: [...tickets, ticket('US-10')], guardian: guardRow() })), 'INVALID_RUN_SETTLEMENT', 'a ticket that is not in the run');
   assert.equal(code(() => settleRun({ record, account: account(), tickets: [tickets[0], tickets[0]], guardian: guardRow() })), 'INVALID_RUN_SETTLEMENT');
   assert.equal(code(() => settleRun({ record, tickets, guardian: { agentId: 'g1' } })), 'INVALID_RUN_SETTLEMENT');
-});
-
-test('CLI is read-only: exit 0 clear, 2 otherwise or invalid, 1 usage', async t => {
-  const { record, team } = await frozenRecord(t), file = join(team, 'request.json'), run = (...argv) => spawnSync(process.execPath, [CLI, ...argv], { encoding: 'utf8' });
-  writeFileSync(file, JSON.stringify({ record, account: account(), tickets: [ticket('US-08'), ticket('US-09')], guardian: guardRow() }));
-  const ok = run(file);
-  assert.equal(ok.status, 0, ok.stderr); assert.equal(JSON.parse(ok.stdout).totalTokens, 49000);
-  writeFileSync(file, JSON.stringify({ record, account: account(), tickets: [ticket('US-08'), ticket('US-09')], guardian: null }));
-  assert.equal(run(file).status, 2);
-  writeFileSync(file, '{broken'); assert.equal(run(file).status, 2);
-  assert.equal(run().status, 1);
 });
 
 test('a run that halted early settles only the tickets it dispatched', async t => {

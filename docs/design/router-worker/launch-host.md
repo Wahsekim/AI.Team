@@ -15,7 +15,7 @@ halt on failure) and the [write boundary](write-boundary.md) hook act then.
 node kit/scripts/launch-router-worker.mjs prepare RUN.json --team-root <activated copy> --product-root <product-root>
 ```
 
-`RUN.json` is the file `freeze-run-router-worker.mjs` takes. Exit 0 prepared,
+`RUN.json` is `{"run": {...}, "inputs": [...]}`. Exit 0 prepared,
 2 refused, 1 usage. Steps, in this order:
 
 1. Refuse if `<copy>/rw-launch.json` exists. An activated copy is prepared once.
@@ -212,8 +212,8 @@ ticket authorization, and only the product state the run ended in is observed.
 ### Continuation after an engine run (removed)
 
 An earlier design continued a ticket after an engine run by resuming its exec
-agent from the main session (`launch-router-worker.mjs retry`,
-`isolation-router-worker.mjs --retry-of`). The probe above showed that an
+agent from the main session (`launch-router-worker.mjs retry` and the
+`--retry-of` option of the isolation check). The probe above showed that an
 engine-started agent cannot be resumed, so the path could not work; it was
 removed ([ADR 0010](../../../decisions/0010-router-worker-second-mode.md),
 decision 16). A failed ticket of an engine batch goes to the PM.

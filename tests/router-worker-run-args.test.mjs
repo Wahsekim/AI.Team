@@ -17,7 +17,6 @@ import { inputFixture } from './fixtures/router-worker/input.mjs';
 
 const ENGINE = fileURLToPath(new URL('../.claude/workflows/run-n-rounds.js', import.meta.url));
 const RECONCILE = fileURLToPath(new URL('../scripts/reconcile-run.mjs', import.meta.url));
-const CLI = fileURLToPath(new URL('../scripts/freeze-run-router-worker.mjs', import.meta.url));
 const write = (root, path, text) => { mkdirSync(dirname(join(root, path)), { recursive: true }); writeFileSync(join(root, path), text); };
 const rosterText = (rows = {}) => ['| Role id | Role file | Wrapper file | Model | Reasoning | Status |', '|---|---|---|---|---|---|',
   '| pm | agents/pm.md | main session | inherits | owner | active |',
@@ -182,19 +181,6 @@ test('duplicate delivery of one return reconciles once: lifecycle entries and th
   assert.match(once, /Next NNN to assign: 005/);
 });
 
-test('CLI writes nothing, prints arguments and record, exits 2 on refusal and 1 on usage', t => {
-  const team = fixture(t), file = join(team, 'run.json');
-  writeFileSync(file, JSON.stringify({ run: RUN, inputs: [inputFixture(), second()] }));
-  const run = (...argv) => spawnSync(process.execPath, [CLI, ...argv], { encoding: 'utf8' });
-  const ok = run(file, '--team-root', team);
-  assert.equal(ok.status, 0, ok.stderr);
-  const printed = JSON.parse(ok.stdout);
-  assert.equal(printed.record.launchable, false); assert.equal(printed.record.argsDigest, digest(printed.args));
-  writeFileSync(file, JSON.stringify({ run: { ...RUN, rounds: 3 }, inputs: [inputFixture(), second()] }));
-  assert.equal(run(file, '--team-root', team).status, 2);
-  assert.equal(run(file).status, 1);
-});
-
 // Schema-v2 input selecting the pinned check method.
 function methodInput(bundle) {
   const input = inputFixture();
@@ -225,14 +211,6 @@ test('a method selection without a verified bundle, or with a serialized stand-i
     assert.equal(refused.errors?.[0].code, 'METHOD_BUNDLE_REQUIRED', JSON.stringify(refused));
     assert.equal(refused.args, undefined);
   }
-});
-
-test('CLI loads the pinned bundle of its own kit for a method-bearing input', t => {
-  const team = fixture(t), file = join(team, 'run.json');
-  writeFileSync(file, JSON.stringify({ run: ONE, inputs: [methodInput(loadMethods())] }));
-  const out = spawnSync(process.execPath, [CLI, file, '--team-root', team], { encoding: 'utf8' });
-  assert.equal(out.status, 0, out.stderr);
-  assert.match(JSON.stringify(JSON.parse(out.stdout).args.plan[0]), /pstack-blast-radius/);
 });
 
 test('an engine run makes one attempt per ticket unless the run asks for the fresh-agent retry; every attempt is a call the accounting counts', async t => {

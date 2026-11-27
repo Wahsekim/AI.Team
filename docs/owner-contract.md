@@ -40,8 +40,7 @@ the human side. Cross-linked from `charter.template.md` and `CLAUDE.md`.
    cannot edit its own template source. Ritual and criteria:
    `docs/backport-ritual.md`.
 7. **Router/Worker state custody.** Where a deployment uses Router/Worker
-   mode, its retry stores, registry anchor and settlement ledgers are local
-   and uncommitted. You are trusted not to roll them back; after any
+   mode, its settlement ledgers are local and uncommitted. You are trusted not to roll them back; after any
    whole-state restore nothing continues automatically until you have stopped
    and reviewed each affected ticket
    (`docs/design/router-worker/storage-policy.md`).
