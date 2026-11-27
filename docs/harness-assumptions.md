@@ -10,8 +10,8 @@ a dependency worth stating explicitly.
 the engine) require it; earlier 2.1.x fails on the workflow path at runtime,
 not at bootstrap. Check `claude --version` before deploying. The kit targets
 Claude Code only. CI runs on macOS; Linux, Windows and WSL are not tested, and
-the reconciler relies on POSIX same-directory rename. Other
-runtimes/versions: walk this table before bootstrap and record deviations in
+the reconciler relies on POSIX same-directory rename. Another
+Claude Code version: walk this table before bootstrap and record deviations in
 `profiles/project.md`.
 
 **Enforcement classes** (never present one as another):

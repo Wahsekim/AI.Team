@@ -7,7 +7,7 @@ makes the decisions. The kit came out of a multi-agent team that ran a real
 product for about three months, and it keeps that team's governance.
 
 Status: alpha. CI runs a deterministic fault-injection suite on macOS. Use the
-kit for attended pilots that you can roll back. [SECURITY.md](SECURITY.md) and
+kit for attended, low-sensitivity pilots that you can roll back. [SECURITY.md](SECURITY.md) and
 [docs/harness-assumptions.md](docs/harness-assumptions.md) state the limits.
 
 ## What it is
@@ -41,10 +41,14 @@ kit for attended pilots that you can roll back. [SECURITY.md](SECURITY.md) and
 - A loop engine (`run-n-rounds`) with a hard round count, a token gate, a
   verification gate and a guardian audit.
 - Router/Worker batches (`scripts/rw-batch.mjs`) with a lock, write limits
-  enforced by a hook, one commit per passed ticket and a review the kit
-  triggers. `scripts/team-mode.mjs` switches a team between modes.
-- The validator, a runtime compatibility check, a launch preflight and a run
-  reconciler.
+  enforced by a hook, one commit per passed ticket, and a Security or
+  Architect review of the tickets the kit flags
+  ([ADR 0011](decisions/0011-router-worker-batch-review.md)).
+  `scripts/team-mode.mjs` switches a team between modes.
+- A validator (`scripts/validate-team.sh`), a runtime compatibility check
+  (`scripts/check-claude-compat.sh`), a launch preflight
+  (`scripts/preflight-run.mjs`) and a run reconciler
+  (`scripts/reconcile-run.mjs`).
 - Append-only ledgers with rotation, a lessons index, periodic audits and a
   failure-class catalog.
 - Methods from pinned skill packs, injected into briefs for named role and
@@ -68,7 +72,7 @@ kit for attended pilots that you can roll back. [SECURITY.md](SECURITY.md) and
 - An issue tracker is optional. [methodologies/kanban.md](methodologies/kanban.md)
   describes the adapters and the fallback without one.
 
-### Deploy a team
+### How to Deploy
 
 1. Create the instance root next to your product and add this repository as
    `kit/`:
@@ -157,18 +161,17 @@ gives both procedures.
 - **Security.** Report a vulnerability as [SECURITY.md](SECURITY.md) describes.
   It also holds the rules for secrets and untrusted input.
 - **How changes land.** Only the PM session commits, one conventional commit
-  per slice on a working branch, merged through a pull request. Nothing is
-  pushed to `main` directly. See
-  [ADR 0007](decisions/0007-pm-only-commits.md).
+  per slice on a working branch. Nothing is committed or pushed to `main`
+  directly. See [ADR 0007](decisions/0007-pm-only-commits.md).
 - **Public repository.** Tracked files hold synthetic data only. CI runs
   `scripts/check-public-data.sh` to refuse client identifiers.
 - **Development notes stay local.** Plans, reviews, hand-offs and dated
   assessments of the kit's own development go in `dev-notes/`, which Git
   ignores. The kit's own ledgers are ignored too. `tests/tracked-tree.test.mjs`
-  fails on a history folder or a dated document under `docs/`, and on a
+  fails on a history folder or a dated file under `docs/`, and on a
   README over 200 lines.
 - **Run the checks before a change lands.** From the repository root:
   `scripts/validate-team.sh .` and `node --test tests/*.test.mjs`.
-- **Decisions.** Architecture decisions are ADRs in [decisions/](decisions/README.md).
-  The owner ratifies them.
+- **Decisions.** Architecture decisions are ADRs in [decisions/](decisions/README.md),
+  which lists the status of each. An ADR takes effect when the owner ratifies it.
 - **Language.** Documentation is written in English.

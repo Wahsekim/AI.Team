@@ -72,6 +72,8 @@ guarantees.
 ## Pilot scope
 
 Use the kit for attended, low-sensitivity pilots that you can roll back.
+Not yet validated: end-to-end runs with real Claude sessions, and unattended
+operation on private code.
 These owner decisions are still open: a production permission manifest,
 retention limits for ledgers and evidence, branch protection rules and a
 first tagged release.
