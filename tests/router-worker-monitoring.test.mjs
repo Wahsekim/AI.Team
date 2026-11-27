@@ -53,3 +53,8 @@ test('CLI: monitoring prints the newest archived batches with their status and w
   assert.deepEqual(printed.batches.map(entry => [entry.runId, entry.status, entry.openedAt]), [['run-c', 'missing', '2026-07-18T09:00:00Z'], ['run-b', 'missing', '2026-07-17T09:00:00Z'], [RUN, 'complete', '2026-07-16T14:00:00Z']]);
   assert.match(printed.meaning.missing, /no one attested the run; this says nothing about whether a stop occurred/);
 });
+
+test('an observer whose text spells the fields a second time cannot raise the status', () => {
+  const line = '- Monitoring attestation run-x: observer=Pia; interval=2026-07-16T14:09:00Z/2026-07-16T14:54:00Z; coverage=attended; q3Events=0; q4Events=0; interval=2026-07-16T14:09:00Z/2026-07-16T14:54:00Z; coverage=partial; q3Events=0; q4Events=0';
+  assert.deepEqual(monitoringOf('/nowhere', 'run-x', line), { runId: 'run-x', status: 'partial', attestations: [{ coverage: null, q3Events: null, q4Events: null }] });
+});

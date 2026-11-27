@@ -12,7 +12,7 @@ export const MEANING = {
   partial: 'the PM attested the run, with partial or unknown coverage: a stop may have gone unseen',
   missing: 'no one attested the run; this says nothing about whether a stop occurred' };
 // The fields as reconcile-run.mjs writes them. The line is the PM's own word: the kit reads it and does not vouch for it.
-const FIELDS = /; interval=\d{4}-[^;/]*Z\/\d{4}-[^;/]*Z; coverage=([a-z]+); q3Events=(\d+); q4Events=(\d+)(?:; |$)/;
+const FIELDS = /; interval=\d{4}-[^;/]*Z\/\d{4}-[^;/]*Z; coverage=([a-z]+); q3Events=(\d+); q4Events=(\d+)(?=; |$)/g;
 
 const read = path => { try { return readFileSync(path, 'utf8'); } catch { return ''; } };
 const ledgersOf = instance => {
@@ -22,8 +22,8 @@ const ledgersOf = instance => {
 
 export function monitoringOf(instance, runId, text = ledgersOf(instance)) {
   const prefix = `- Monitoring attestation ${runId}: `;
-  const found = text.split('\n').filter(line => line.startsWith(prefix)).map(line => FIELDS.exec(line)).map(match => ({ coverage: match?.[1] ?? null, q3Events: match ? Number(match[2]) : null, q4Events: match ? Number(match[3]) : null }));
-  // A line the kit cannot parse still shows someone attested; several lines count as the weakest of them.
+  const found = text.split('\n').filter(line => line.startsWith(prefix)).map(line => [...line.matchAll(FIELDS)]).map(all => all.length === 1 ? all[0] : null).map(match => ({ coverage: match?.[1] ?? null, q3Events: match ? Number(match[2]) : null, q4Events: match ? Number(match[3]) : null }));
+  // A line the kit cannot parse, or whose free text spells the fields a second time, still shows someone attested; several lines count as the weakest of them.
   const status = found.length ? RANK[Math.min(...found.map(entry => RANK.indexOf(STATUS[entry.coverage] ?? 'partial')))] : 'missing';
   return { runId, status, attestations: found };
 }

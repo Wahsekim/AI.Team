@@ -619,16 +619,22 @@ a command"). It pushes nothing.
 
 - **What the kit verified.** A checker's pass and the kit's own run of the
   commands on the tree it commits are different assurances. The record
-  (`commit.json`) says which the batch has: `verification.after` is `passed`
-  when `after` ran the passed tickets' commands on a tree that held only the
-  planned commits, and `not-run` with the `reason` when a path stood in the
-  way (`VERIFICATION_NOT_RUN`); for a reviewed batch `verification.resolve`
-  is `passed`, `failed` or `not-run` for the run `resolve` made once a ticket
-  was removed. A batch committed with `not-run` says so in its ledger line
-  ("the kit did not verify the committed tree"). `commit --verified-only`
-  refuses such a batch and commits nothing: for a caller, an unattended one
-  above all, that wants the stricter assurance. Without the flag the owner's
-  rule stands: the tickets are committed and the gap is named.
+  (`commit.json`) says which the batch has. `verification.committedTree` is
+  `verified` when the kit's last run of the commands passed on a tree that
+  held exactly what is committed: `after`'s run when no review held a ticket,
+  or, once `resolve` held one, its own run, passed and changing no file to
+  commit. Otherwise it is `not-verified`, with the `reason`: a path stood in
+  `after`'s way (`VERIFICATION_NOT_RUN`), or tickets were held after the last
+  run and what is left was not run alone. The facts are beside it:
+  `verification.after` (`passed` or `not-run`) and, for a reviewed batch,
+  `verification.resolve` (`passed`, `failed` or `not-run`). A batch committed
+  `not-verified` says so in its ledger line ("the kit did not verify the
+  committed tree"). `commit --verified-only` refuses such a batch and commits
+  nothing: for a caller, an unattended one above all, that wants the stricter
+  assurance. Without the flag the owner's rule stands: the tickets are
+  committed and the gap is named. A commit that archived the batch and died
+  is finished by the next `commit` whatever its flag; the archived record
+  says what was verified.
 - It refuses when the product is no longer on the batch's branch, when a Git
   operation is in progress, when the commit hooks were changed or moved, when
   an archive of this batch was already started, when the work
@@ -779,9 +785,7 @@ a narrower pattern would miss `oauth/` or `authz.js`.
   `madeAt`, the tickets with
   their goal, acceptance, changed and flagged paths, content digests and the
   flagged paths that are symbolic links with their targets (`links`), the
-  rule ids, the ADRs, each verification command's exit, output digest and
-  output tail, the last 4,000 characters, which the brief shows in full only
-  for a command that did not pass).
+  rule ids, the ADRs, each verification command's exit and output digest).
   When a command failed or timed out, it also says so on standard error (the
   result's `notice`) and tells the PM to brief again before dispatching the
   reviewer if the failure is flaky or its cause is gone. `review-brief` takes
@@ -833,12 +837,7 @@ a narrower pattern would miss `oauth/` or `authz.js`.
   diff does not follow renames, so a path's removed lines stay with it. For a
   ticket that resumed earlier work the brief names its patch in the team's
   folder. Then R's rules as `id: text`; the ADRs as absolute paths; the
-  output of each verification command: a command that failed, timed out or
-  passed the buffer limit with its whole kept tail, and a command that passed
-  (exit 0, in time, within the buffer) with its exit, the digest of its output
-  and the last lines of its tail (at most 300 characters, from a line start),
-  followed by one line that names `rw-batch-review-R.json`, the attempt and the
-  field where its whole kept tail is; the batch-review protocol
+  output tail of each verification command; the batch-review protocol
   (`agents/router-worker-review.md`); and the report schema, to be returned as
   the last fenced json block. It never holds a worker's report, the checker's
   verdict or another reviewer's report. The diff and each output tail sit in a

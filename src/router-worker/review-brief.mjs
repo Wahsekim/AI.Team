@@ -18,7 +18,7 @@ export { REVIEW_FILE };
 // Each brief is recorded, sealed, in rw-batch-review-<reviewer>.json, which the judging of the review reads.
 const KIT = fileURLToPath(new URL('../../', import.meta.url));
 const PROTOCOL = 'agents/router-worker-review.md', KIT_PROTOCOL = 'config/router-worker/review-protocol.md';
-const DIFF_CAP = 60000, PASSED_TAIL = 300;
+const DIFF_CAP = 60000;
 // A fence longer than any backtick run in the text, so the text cannot close it.
 export const fenced = (text, info = '') => { const fence = '`'.repeat(Math.max(4, ...(text.match(/`+/g) ?? []).map(run => run.length + 1))); return `${fence}${info}\n${text}${text.endsWith('\n') ? '' : '\n'}${fence}`; };
 const need = (condition, reason) => { if (!condition) throw new Refusal(reason); };
@@ -85,11 +85,6 @@ function overCap({ whole, files }, resumed) {
   return [intro, ...shown, ...(left.length ? [rest(left, named)] : []), ...resumed].join('\n\n');
 }
 
-// Only a command that exited 0 within its time and buffer passed; any other run is shown whole.
-const passed = run => run.exit === 0 && !run.timedOut && !run.overflowed;
-// The end of a passed command's output, from the first line start in its last PASSED_TAIL characters; one long line is cut where it falls.
-const lastLines = tail => { if (tail.length <= PASSED_TAIL) return tail; const end = tail.slice(-PASSED_TAIL), start = tail.at(-PASSED_TAIL - 1) === '\n' ? 0 : end.indexOf('\n') + 1; return start > 0 && start < end.length ? end.slice(start) : end; };
-
 export const REPORT = (reviewer, briefDigest) => ({ schemaVersion: 1, reviewer, briefDigest,
   filesRead: [{ path: '<flagged path>', read: true }],
   rules: [{ rule: '<rule id>', ticket: '<ticket id>', result: 'pass|fail|not-checked', file: '<path>', line: 1, note: '<what was checked>' }],
@@ -105,17 +100,14 @@ function render({ instance, batch, reviewer, attempt, tickets, diff, rules, adrs
     `Changed paths of the ticket: ${ticket.changedPaths.join(', ')}`].join('\n')).join('\n\n');
   const resumed = tickets.filter(({ frozen }) => frozen.resume).map(({ ticket, frozen }) => `${ticket.id} resumed earlier work: its patch is ${join(instance, frozen.resume.patch)}; read it whole for the change it made, then the changed paths for what this batch added`);
   const diffText = !diff.files ? fenced(diff.whole, 'diff') : overCap(diff, resumed);
-  const runs = verification.map(run => passed(run)
-    ? `### \`${run.command}\`: exit 0, passed; output ${run.outputDigest}; its last lines:\n${fenced(lastLines(run.tail))}`
-    : `### \`${run.command}\`: exit ${run.exit}${run.timedOut ? ' (stopped at the time limit)' : ''}\n${fenced(run.tail)}`).join('\n\n');
-  const kept = verification.some(passed) ? [`The whole output tail the kit kept of each command that passed is in ${join(instance, REVIEW_FILE(reviewer))}, in the entry of \`entries\` whose \`attempt\` is ${attempt}, under \`verification\`: open it with your Read tool when a rule rests on that output.`] : [];
+  const runs = verification.map(run => `### \`${run.command}\`: exit ${run.exit}${run.timedOut ? ' (stopped at the time limit)' : ''}\n${fenced(run.tail)}`).join('\n\n');
   return [headingOf(reviewer, batch.runId, attempt),
     `You review the tickets below as ${reviewer}. You write nothing in the product and run no shell command: the kit ran the verification commands and gives their output here. Follow the protocol.`,
     ...(retryReason ? ['## Why you are dispatched again', `Your earlier attempt was refused by the kit: ${retryReason}. This attempt is the last one.`] : []),
     '## Protocol', protocol.trim(), '## Tickets', ticketText, `## Diff from ${batch.productHead}`, diffText,
     '## Rules to check, for each ticket: pass, fail or not-checked, with file and line', lines(rules.map(rule => `${rule.id}: ${rule.text}`)),
     '## ADRs to check the change against', adrs.length ? lines(adrs) : 'None listed.',
-    '## Verification run by the kit, from the product root', runs || 'No command was run.', ...kept,
+    '## Verification run by the kit, from the product root', runs || 'No command was run.',
     ...(dropped.length ? [`Frozen in the batch but no longer confirmed for the team, so not run: ${dropped.join(' | ')}`] : []),
     '## Report', 'Return your report as JSON in this shape; return it as the last fenced json block of your final message.',
     fenced(JSON.stringify(REPORT(reviewer, '<the briefDigest below>'), null, 2), 'json')].join('\n\n') + '\n';
@@ -188,7 +180,7 @@ export function reviewBrief({ teamRoot, instanceRoot, reviewer, tickets: named =
     const seq = 1 + Math.max(0, ...batch.review.reviewers.flatMap(name => briefsOf(instance, name, batch.runId)).map(entry => entry.seq ?? 0));
     const record = sealed({ schemaVersion: 1, stage: 'review-brief', runId: batch.runId, reviewer, wrapper, attempt, seq, briefDigest, madeAt: new Date().toISOString(),
       tickets: tickets.map(({ ticket, frozen, elective: chosenElectively, flaggedFiles, content, links }) => ({ id: ticket.id, elective: chosenElectively, goal: frozen.goal, acceptance: frozen.acceptance, changedPaths: ticket.changedPaths, flaggedFiles, content, links })),
-      ruleIds: rules.map(rule => rule.id), adrs: batch.review.adrs, verification, dropped, ...(retryReason ? { retryReason } : {}) });
+      ruleIds: rules.map(rule => rule.id), adrs: batch.review.adrs, verification: verification.map(({ tail, ...kept }) => kept), dropped, ...(retryReason ? { retryReason } : {}) });
     const path = join(instance, REVIEW_FILE(reviewer));
     writeFileSync(`${path}.tmp`, JSON.stringify({ schemaVersion: 1, runId: batch.runId, reviewer, entries: [...entries, record] }, null, 2) + '\n'); renameSync(`${path}.tmp`, path);
     // resolve holds the batch on a failure here while it is the latest brief of the batch, so the PM hears of it now.

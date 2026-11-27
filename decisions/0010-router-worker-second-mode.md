@@ -677,15 +677,18 @@ Detail: `docs/design/router-worker/batch-reference.md`.
 Status: Accepted (reports and opt-in switches; no rule of this record changes).
 
 The same review asked that the kit say plainly what it did and did not check,
-and spend less of the PM's and the reviewers' context saying it.
+and spend less of the PM's context saying it. Its proposal to shorten the
+output a reviewer is given for a command that passed was declined by the
+owner: a tool can exit 0 and still warn, and no check or reviewer input is
+weakened to save tokens.
 
 - **A receipt for `before`.** `before --receipt` prints the run id, the
   record's digest and path, what the PM tells the owner, the next step and the
   engine's arguments, byte for byte those of the record. The record on disk
   and the default output are unchanged.
 - **What the kit verified.** `commit.json` and the ledger line say whether
-  `after` ran the commands on the tree that was committed; `commit
-  --verified-only` commits nothing the kit did not verify. Without the flag
+  the kit's last run of the commands passed on exactly the tree that was
+  committed; `commit --verified-only` commits nothing else. Without the flag
   the rule of 2026-11-26 stands.
 - **Check runs are counted by batch.** The after record carries the counts
   with `attribution: "batch"`: they prove no single ticket's check.

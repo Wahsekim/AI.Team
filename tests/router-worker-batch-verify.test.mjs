@@ -53,7 +53,7 @@ test('with the commands passing both tickets are planned and the after record ho
   assert.deepEqual(closed.findings.find(finding => finding.code === 'WRITE_OUTSIDE_PATHS')?.paths, ['build.txt']); assert.deepEqual(closed.left, ['build.txt']); assert.equal(closed.holdAll, false);
   const done = f.commit();
   assert.equal(done.errors, undefined, JSON.stringify(done.errors)); assert.deepEqual(done.commits.map(commit => commit.ticket), ['US-01', 'US-03']); assert.deepEqual(done.left, ['build.txt']);
-  assert.deepEqual(done.verification, { after: 'passed' }); assert.doesNotMatch(f.ledger(), /did not verify the committed tree/);
+  assert.deepEqual(done.verification, { committedTree: 'verified', after: 'passed' }); assert.doesNotMatch(f.ledger(), /did not verify the committed tree/);
   assert.equal(git(f.product, 'show', `${done.commits[0].sha}:src/list/a.js`), '// formatted\n');
   assert.deepEqual(changed(f), ['build.txt']); assert.equal(log(f, open).split('\n').length, 2);
 });
@@ -168,7 +168,7 @@ test('a path outside every ticket, or one changed before a batch started as is, 
   assert.match(refusal(commitBatch({ ...f.common, verifiedOnly: true }))?.reason, /The kit did not verify the tree this batch would commit \(the work tree also holds a path no planned commit holds\).*--verified-only/);
   assert.equal(git(f.product, 'rev-parse', 'HEAD').trim(), outside.open.productHead, 'the refused commit committed nothing');
   const plain = f.commit();
-  assert.deepEqual(plain.verification, { after: 'not-run', reason: 'the work tree also holds a path no planned commit holds' });
+  assert.deepEqual(plain.verification, { committedTree: 'not-verified', reason: 'the work tree also holds a path no planned commit holds', after: 'not-run' });
   assert.match(f.ledger(), /COMMITTED on \S+: 2 commit\(s\).*; the kit did not verify the committed tree\. Nothing was pushed\./);
   const g = live(t);
   writeFileSync(join(g.product, 'stray.txt'), 'pre-existing\n');
