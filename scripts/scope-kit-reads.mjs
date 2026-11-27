@@ -9,7 +9,7 @@
 import { readFileSync, writeFileSync, renameSync, lstatSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 
-const IGNORED = ['kit/tests/', 'kit/.github/', 'kit/docs/design/router-worker/history/']
+const IGNORED = ['kit/tests/', 'kit/.github/']
 const DENIED = 'Read(./kit/tests/**)'
 const IGNORE = '.ignore', SETTINGS = '.claude/settings.json'
 const HEADER = '# Kit development material, kept out of the team\'s searches (kit/scripts/scope-kit-reads.mjs)\n'

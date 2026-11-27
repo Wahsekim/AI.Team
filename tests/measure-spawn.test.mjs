@@ -1,4 +1,4 @@
-// Tests for scripts/measure-spawn.mjs (teamai port P01): per-subagent token
+// Tests for scripts/measure-spawn.mjs: per-subagent token
 // totals read from Claude Code transcripts, deduplicated by message.id,
 // joined to the main session's Agent-tool results, failing loudly on drift.
 import { test } from 'node:test'

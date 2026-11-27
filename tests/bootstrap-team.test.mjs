@@ -412,10 +412,10 @@ test('ADR 0009: --dry-run in two-root mode writes nothing', async () => {
   })
 })
 
-const IGNORED = ['kit/tests/', 'kit/.github/', 'kit/docs/design/router-worker/history/']
+const IGNORED = ['kit/tests/', 'kit/.github/']
 const DENIED = 'Read(./kit/tests/**)'
 
-test('two-root bootstrap keeps kit tests and development history out of searches and reads, and keeps every other setting', async () => {
+test('two-root bootstrap keeps kit tests and CI out of searches and reads, and keeps every other setting', async () => {
   await withInstance(async root => {
     const hooks = { PreToolUse: [{ matcher: 'Write', hooks: [{ type: 'command', command: 'node "/x/hook.mjs"' }] }] }
     await mkdir(join(root, '.claude'), { recursive: true })

@@ -772,7 +772,7 @@ const TWO_ROOT = {
   'kit/agents/builder.md': '# Builder seed\n\n## Base Agent\n\nsynthetic\n',
   'kit/agents/templates.md': '# Brief templates\n\n- model: opus\n',
   'kit/scripts/validate-team.sh': '#!/bin/bash\n',
-  '.ignore': 'kit/tests/\nkit/.github/\nkit/docs/design/router-worker/history/\n',
+  '.ignore': 'kit/tests/\nkit/.github/\n',
   '.claude/settings.json': '{"permissions": {"deny": ["Read(./kit/tests/**)"]}}\n',
 }
 
@@ -917,7 +917,7 @@ test('ADR 0009: open kit-upgrade review items fail the deployment until each is 
   })
 })
 
-test('a two-root deployment fails while kit tests and development history are not kept out of its searches and reads', async () => {
+test('a two-root deployment fails while kit tests and CI are not kept out of its searches and reads', async () => {
   await withFixture(TWO_ROOT, async root => {
     const { code, out } = await runValidator(root, '--mode', 'deployment')
     assert.equal(code, 0, out); assert.match(out, /PASS - kit-read-scope:/)
@@ -925,7 +925,7 @@ test('a two-root deployment fails while kit tests and development history are no
   await withFixture({ ...TWO_ROOT, '.ignore': 'kit/tests/\n' }, async root => {
     const { code, out } = await runValidator(root, '--mode', 'deployment')
     assert.equal(code, 1, out)
-    assert.match(out, /FAIL - kit-read-scope: \.ignore: kit\/\.github\/; \.ignore: kit\/docs\/design\/router-worker\/history\/ missing — run node kit\/scripts\/scope-kit-reads\.mjs \./)
+    assert.match(out, /FAIL - kit-read-scope: \.ignore: kit\/\.github\/ missing — run node kit\/scripts\/scope-kit-reads\.mjs \./)
   })
   await withFixture({ ...TWO_ROOT, '.claude/settings.json': '{"permissions": {"allow": ["Read"]}}\n' }, async root => {
     const { code, out } = await runValidator(root, '--mode', 'deployment')

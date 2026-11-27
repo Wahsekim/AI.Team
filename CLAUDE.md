@@ -97,8 +97,8 @@ budget/halt axes ONLY in the charter table.
 
 A deployed session works from the operating documents above. The ADRs in
 `decisions/` record why a rule exists: open one only when an operating
-document sends you to a specific decision. Dated development records
-(`docs/design/**/history/`) and `tests/` are the kit's own, not the team's.
+document sends you to a specific decision. `tests/` is the kit's own, not
+the team's.
 
 ## PM Start Protocol
 

@@ -1,6 +1,5 @@
 #!/bin/bash
-# lessons-stats.sh — lesson citation counts from lifecycle `- Lessons:` lines
-# (teamai port P03, docs/teamai-port-plan-2026-10-14.md).
+# lessons-stats.sh — lesson citation counts from lifecycle `- Lessons:` lines.
 #
 # Usage: scripts/lessons-stats.sh [ROOT]   (default: .)
 #

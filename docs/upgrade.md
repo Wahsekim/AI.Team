@@ -31,8 +31,8 @@ repository pinned by `kit.lock`. Run everything from the instance root.
    in the instance. It appends the same items to `kit-upgrade-review.md` as
    open `- [ ]` entries.
    It also adds what is missing of the read scope (`scripts/scope-kit-reads.mjs`):
-   `.ignore` lines that keep `kit/tests/`, `kit/.github/` and the kit's
-   development history out of the session's searches, and a
+   `.ignore` lines that keep `kit/tests/` and `kit/.github/` out of the
+   session's searches, and a
    `Read(./kit/tests/**)` deny rule in `.claude/settings.json`, keeping every
    other setting. It does this even when the pin is unchanged.
    It writes the review entries first, then the engine copy, then the read

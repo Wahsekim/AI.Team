@@ -21,7 +21,7 @@ deployed instance").
    its operational name (idempotent, never overwrites) and fills the
    name/path placeholders — steps 1 and 3 then reduce to filling the
    remaining `ask:first_start` placeholders in the interview. In a two-root
-   instance (README "How to Deploy") run it as `kit/scripts/bootstrap-team.sh`
+   instance (README "Deploy a team") run it as `kit/scripts/bootstrap-team.sh`
    from the instance root; it then also seeds the ledgers and never writes
    under `kit/`.
 1. Create `profiles/project.md` from `profiles/project.template.md`.

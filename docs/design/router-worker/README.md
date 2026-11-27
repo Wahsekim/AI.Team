@@ -22,9 +22,7 @@ commit. It has run on a real team since 2026-11-24.
 A deployed session works from the operating documents: [batch.md](batch.md)
 (the PM's runbook, with [batch-reference.md](batch-reference.md) for the
 detail), [mode-switch.md](mode-switch.md), [write-boundary.md](write-boundary.md)
-and [proof-1.md](proof-1.md). The rest of this file is the original design;
-the dated reviews, hand-off and implementation status of the build are in
-[history/](history/).
+and [proof-1.md](proof-1.md). The rest of this file is the original design.
 
 ## 1. Decision: change task allocation, retain the control plane
 
@@ -431,8 +429,7 @@ state; concurrency needs slots, budget and ownership together. They do not block
 the isolated serial pilot, but cannot be advertised as implemented.
 
 The original recommended first delivery was RW-01 plus a separate RW-02 dry-run
-PR. PR #5 instead packages multiple offline slices as separate commits; review
-them in the [handoff order](history/pr-handoff.md). Do not start with listeners, worker
+PR. PR #5 instead packages multiple offline slices as separate commits. Do not start with listeners, worker
 pools, cross-round memory or a general agent platform. Both modes may coexist;
 expansion depends on paired evidence and owner decisions.
 
@@ -480,7 +477,7 @@ Other retained controls:
   handoff assumptions, distrust self-report, owner-perspective acceptance and
   defect-class scans. One worker need not invent internal handoffs; real boundaries
   retain M3.
-- [Lifecycle/metering](../../../agents/lifecycle.md#harness-rules): estimates include
+- [Lifecycle/metering](../../../agents/lifecycle.template.md#harness-rules): estimates include
   methods/check/rework; measure via harness, not worker summaries; reproduce engine
   blocks verbatim. `Tokens:` is not a bill and PM estimates are not runtime caps.
 - [PM direct-verify exception](../../../agents/pm.md#direct-verify-exceptional): only
