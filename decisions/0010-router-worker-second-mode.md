@@ -72,8 +72,9 @@ not the goal.
    Models are stored in the roster only, as for specialist roles. Running
    without the owner means nobody answers permission prompts: the workers use
    an allow-list for the project's verification commands. Changed by the
-   amendments of 2026-11-18: the workers' shell in a batch, and 2026-11-20:
-   who changes the limits.
+   amendments of 2026-11-18: the workers' shell in a batch, 2026-11-20: who
+   changes the limits, and 2026-11-24: a worker moves and deletes the files
+   its ticket declares.
 
 ### Running a batch
 
@@ -99,8 +100,10 @@ not the goal.
     files changed outside the tickets' paths, usage settled per ticket). The
     hook that enforces the write limits is installed in the team's settings at
     the switch and judges only the three workers. Changed by the amendments
-    of 2026-11-18: the workers' shell in a batch, and of 2026-11-25 and
-    2026-11-26 on what `after` checks and what holds a commit.
+    of 2026-11-18 and 2026-11-24 on the workers' shell, of 2026-11-25 and
+    2026-11-26 on what `after` checks, what holds a commit and a command's
+    lock, and of 2026-11-27 on the lock at the close, what a commit holds and
+    packages.
 13. **The PM commits at reconciliation**, one commit per ticket, on a working
     branch, never on the default branch
     ([ADR 0007](0007-pm-only-commits.md)). Workers do not commit.
@@ -204,7 +207,8 @@ the other limits. `before` refuses a batch that names a verification command
 the list does not hold. While a batch is open, the exec worker and the checker
 run those commands, exactly as confirmed and from the product root, without a
 permission prompt. The hook refuses every other shell command of the three
-workers, in a batch and between batches. This narrows the consequence on a
+workers, in a batch and between batches; the amendment of 2026-11-24 adds the
+exec worker's declared moves and deletions. This narrows the consequence on a
 worker's shell: it starts only confirmed commands. What those commands write
 or run is not bounded. Detail: "The workers' shell".
 
@@ -227,12 +231,14 @@ nothing in the kit writes a limit. The last `MODE SWITCH` or `LIMITS CHANGED`
 line binds the limits by digest, and `before` refuses limits it does not bind
 (`LIMITS_NOT_BOUND`). The hook refuses a file-tool write of
 `profiles/team-mode.json` from any session, the PM's included. A PM session
-that imports the kit and calls `changeLimits` changes nothing.
+that imports the kit and calls `changeLimits`, or `switchMode` into
+Router/Worker mode, changes nothing.
 
 Not covered: a faked terminal or test context, and a forged ledger line with
 the digest of the limits it wrote. The profile packed under `holiday/` is not
 guarded; it binds at the next switch back, where the owner sees it in the
-proposal. The digests detect an accidental edit, not a deliberate one; the
+proposal. The digests of the batch records detect an accidental edit, not a
+deliberate one; the
 owner's spot review of `pm-decisions.md` is the check on that. Detail: "What
 decides the limits";
 [mode-switch.md](../docs/design/router-worker/mode-switch.md), "Changing the
@@ -267,12 +273,14 @@ digest and paths in the batch record. It grants no write beyond the ticket's
 
 Status: Proposed.
 
-Only a problem in the run itself holds a batch's commits
-(`GUARDIAN_NOT_CLEAN`): no answer, a request to halt and investigate, a
-runaway, a budget gate that did not behave, or a failed check at risk of being
-dropped. Any other verdict that is not `clean`, a missed halt risk included,
-is recorded as `GUARDIAN_ATTENTION` and holds nothing, since a headless batch
-never has an observer. Detail: "After".
+A batch's commits are all held for the Guardian (`GUARDIAN_NOT_CLEAN`) when
+it did not answer, asked to halt and investigate, or reports a problem in the
+run itself: a runaway, a budget gate that did not behave, or a failed check at
+risk of being dropped. Any other verdict of its that is not `clean`, a missed
+halt risk included, is recorded as `GUARDIAN_ATTENTION` and holds nothing,
+since a headless batch never has an observer. The tickets are still committed
+only when their own check passed and their review, if any, passed. Detail:
+"After".
 
 ### 2026-11-25: a ticket names the verification commands its workers run
 
@@ -300,8 +308,8 @@ closed with. Detail: [engine.md](../docs/engine.md), `standingBatch`;
 
 Status: Accepted.
 
-`after` holds every commit when the hook logged no call of the batch's three
-workers (`HOOK_SAW_NO_WORKER`), or when the checker's approved runs of a
+`after` holds every commit when files changed and the hook logged no call of
+the batch's three workers (`HOOK_SAW_NO_WORKER`), or when the checker's approved runs of a
 verification command are fewer than the passed tickets that verify with it
 (`CHECK_RUNS_MISSING`). The count does not tell tickets apart, and whether a
 run passed stays the checker's word. Detail: "After"; "What these commands
@@ -315,7 +323,9 @@ For a standing batch the engine's return lists its gate decisions
 (`budgetStatus.gateTrace`). `after` holds the batch (`GUARDIAN_NOT_CLEAN`,
 `budgetGate: inconsistent`) when the trace is missing or malformed, or shows a
 call dispatched at or above 80% of the ceiling, one declined below it, or
-calls the return does not report. Comparing `tripped` with the final spend
+dispatched calls that differ from the exec and checker calls the return
+reports. This refines the hold of 2026-11-25 for a budget gate that did not
+behave. Comparing `tripped` with the final spend
 could not see a late dispatch, since both come from one expression. The check
 trusts the engine's return. A batch frozen without `standingBatch` keeps the
 earlier rule. One frozen with it and closed before this amendment has no
@@ -354,11 +364,12 @@ Status: Accepted.
 The next command of the team takes over a command's lock whose process is
 gone; no other lock is taken over. Whether a path lies inside a ticket's grant
 is judged with case, as `after` and the hook judge it; whether two tickets
-claim one file is judged without case. `before` appends its ledger lines
-before it writes the batch record. The next confirmed change of limits
+claim one file is judged without case. `abort` refuses while a command of the
+team that holds the lock, or the `after` that claimed the batch, still runs.
+`before` appends its ledger lines before it writes the batch record. The next confirmed change of limits
 finishes or removes a change that died before its rename. Detail: "The lock
-of a command"; "What "before" does, in order"; mode-switch.md, "Changing the
-limits later".
+of a command"; "Abort"; "What "before" does, in order"; mode-switch.md,
+"Changing the limits later".
 
 ### 2026-11-27: a ticket that ran before is replanned, and runs at most three times
 
@@ -378,7 +389,8 @@ Every run without a commit counts. A ticket with three is refused
 The cap is a constant of the kit, not a team limit; `attemptsPerTicket` is
 unchanged. This supersedes the amendment of 2026-11-26, "the kit saves left
 work and counts its runs", where it says the count refuses nothing and where
-it matches runs by overlapping paths. Detail: "Earlier runs of a ticket".
+it matches runs by overlapping paths. Detail: "What "before" does, in order",
+the paragraphs "Earlier runs of a ticket" and "At most two retries".
 
 ### 2026-11-27: packages of one repository
 
@@ -398,15 +410,17 @@ repository".
 Status: Accepted (they correct the kit against rules this record already
 holds; no owner decision changes).
 
-- Earlier runs follow the frozen links of the ticket's own id too.
+- Earlier runs follow the links the archives froze for the ticket's own id
+  too, since the kit last committed it.
 - `after` pins what Git would record for each path, and `commit` and
   `resolve` refuse a commit that differs. A path Git refuses to stage holds
   every commit (`ENTRIES_NOT_READ`), and the close is still written.
 - `after` reads the lock before it changes anything. It takes the lock again
-  when it is free or a dead command's (`LOCK_TAKEN_AGAIN`), and otherwise
-  refuses.
+  when it is free or was left by a command of the team that ended, and records
+  `LOCK_TAKEN_AGAIN` unless it resumes a close that died; held by anyone else,
+  it refuses and changes nothing.
 
-Detail: "After"; "Commit".
+Detail: "What "before" does, in order"; "After"; "Commit".
 
 ### 2026-11-27: what a batch reports about itself
 
@@ -416,8 +430,9 @@ The owner declined to shorten the output a reviewer is given for a command
 that passed: a tool can exit 0 and still warn, and no check or reviewer input
 is weakened to save tokens. The kit adds `before --receipt`, the
 `verification` statement of `commit.json` with `commit --verified-only`, the
-batch attribution of check-run counts, and the PM's attestation status in
-`settle` and `rw-batch.mjs monitoring`. Without `--verified-only` the rule of
+record of check runs as counted by batch (they prove no single ticket's
+check), and the PM's attestation status in `settle` and `rw-batch.mjs
+monitoring`. Without `--verified-only` the rule of
 2026-11-26 stands. `tests/router-worker-dispatch-size.test.mjs` holds the
 bytes of one dispatch under ceilings. Detail: "What "before" does, in order";
-"Commit"; "Settle".
+"The workers' shell"; "Commit"; "Settle".
