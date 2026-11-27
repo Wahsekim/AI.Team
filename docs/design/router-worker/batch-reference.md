@@ -171,8 +171,10 @@ only share a file are not one piece of work: paths count for nothing (owner
 rule of 2026-11-26). The engine ran a ticket when `after` recorded an outcome
 for it (`passed` or `not-passed`; a ticket the engine never reached, `not-run`,
 is not a run). The kit committed it when the archive's `commit.json` or
-`commits.json` lists a commit for it. Each entry is `{runId, ticket, status}`:
-the archived batch, the ticket's id there, and its status.
+`commits.json` lists a commit for it. Runs before the latest archived batch
+that committed the ticket do not count: committed work is done, and the id
+filed again is new work. Each entry is `{runId, ticket, status}`: the archived
+batch, the ticket's id there, and its status.
 
 A ticket with at least one earlier run is replanned, not handed out again:
 - **No `replan`**: refused with `BATCH_REFUSED`. The reason names the latest
@@ -198,12 +200,15 @@ that passed and was not committed because its batch was held, rejected or
 aborted needs a `replan` and does not count. A ticket with three failed runs
 is refused with `TICKET_ATTEMPTS_EXHAUSTED`, which names the runs, and
 escalated: `{id: "ESC-<ticket>-exhausted-<latest failed run>", kind:
-"attempts-exhausted", ticket, runIds, paths, at}` in
-`reviews/escalations.jsonl` and an `ESCALATED` ledger line. It is then blocked
-like any escalated ticket (see "Review verdict, commit gate and escalation")
-until the owner runs `team-mode.mjs acknowledge <id>`. A failed run named by an
-acknowledged escalation of this kind is spent: the ticket may be filed again,
-with a `replan`, and its next failed run escalates it again under a new id.
+"attempts-exhausted", ticket, runIds, paths: [], at}` in
+`reviews/escalations.jsonl` and an `ESCALATED` ledger line, where `<ticket>` is
+the ticket's id in its latest failed run. Until the owner runs `team-mode.mjs
+acknowledge <id>` the ticket is refused under that id (`TICKET_ESCALATED`), a
+new id that resumes its saved patch is refused with the same escalation
+(`TICKET_ATTEMPTS_EXHAUSTED`), and so is a ticket that depends on it. The
+escalation names no paths: a ticket that only shares a file goes on, unlike a
+review escalation. Once it is acknowledged the ticket may be filed again, with
+a `replan`, and its next failed run escalates it again under a new id.
 The cap is a constant of the kit, not a limit of `profiles/team-mode.json`;
 the attempts inside one engine run (`attemptsPerTicket`) are another count.
 Each archive's batch record is read once, its `after.json`, `commit.json` and
@@ -1636,7 +1641,7 @@ The limits not being the ones the ledger binds is refused with its own code,
   at the spot review.
 - **A rejection counts by its id and by the held patch it resumes.** The same
   work filed again under a new id and done again from nothing, or resumed from
-  a copy of its held patch edited outside `reviews/held/`, is new work and is
+  a copy of its saved patch edited outside `reviews/held/` and `left/`, is new work and is
   not counted with the earlier ticket. An escalation still blocks by the
   escalated ticket's id and paths, not by the ids it was counted with: an
   escalated ticket that changed a file most tickets touch blocks every ticket

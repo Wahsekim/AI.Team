@@ -60,19 +60,19 @@ const openEscalations = instance => { const lifted = liftedIn(instance); return 
 // decisions/0008: a ticket runs at most three times, the initial run and two retries.
 const MAX_FAILED_RUNS = 3;
 const EXHAUSTED = 'attempts-exhausted';
-// ADR 0010, amendment of 2026-11-27: a ticket whose failed runs reach the cap goes to the owner and is blocked like an escalated
-// ticket. The owner's acknowledgement lets it run again; a failed run after the latest acknowledgement escalates it again.
-// `failed`: the ticket's failed runs, oldest first. Returns the escalation, written once, or null.
-export function exhaustion({ instance, ticket, failed, at }) {
-  const known = linesOf(join(instance, ESCALATIONS)), lifted = liftedIn(instance), runIds = failed.map(run => run.runId);
-  const acknowledged = new Set(known.filter(entry => entry.kind === EXHAUSTED && lifted(entry)).flatMap(entry => Array.isArray(entry.runIds) ? entry.runIds : []));
-  if (runIds.length < MAX_FAILED_RUNS || acknowledged.has(runIds.at(-1))) return null;
-  const id = `ESC-${ticket.id}-exhausted-${runIds.at(-1)}`, raised = known.find(entry => same(entry.id, id));
-  if (raised) return raised;
-  const entry = { id, kind: EXHAUSTED, ticket: ticket.id, runIds, paths: ticket.paths, at };
+// ADR 0010, amendment of 2026-11-27: a ticket whose failed runs reach the cap goes to the owner. The escalation is told by
+// the latest failed run and the ticket's id in it, so a new id that resumes that run's patch meets the same one. It names no
+// paths: a ticket that only shares a file is not blocked. The owner's acknowledgement lets the ticket run again; its next
+// failed run escalates it again. `failed`: the ticket's failed runs, oldest first. Returns the open escalation, written once, or null.
+export function exhaustion({ instance, failed, at }) {
+  const last = failed.at(-1), runIds = failed.map(run => run.runId);
+  if (runIds.length < MAX_FAILED_RUNS) return null;
+  const known = linesOf(join(instance, ESCALATIONS)), id = `ESC-${last.ticket}-exhausted-${last.runId}`, raised = known.find(entry => same(entry.id, id));
+  if (raised) return liftedIn(instance)(raised) ? null : raised;
+  const entry = { id, kind: EXHAUSTED, ticket: last.ticket, runIds, paths: [], at };
   mkdirSync(join(instance, 'reviews'), { recursive: true });
   append(join(instance, ESCALATIONS), [entry]);
-  appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} ESCALATED ${id}: ticket ${entry.ticket} failed in ${runIds.length} runs by the engine (${runIds.join(', ')}): the initial run and two retries are spent; it and every ticket related to it are blocked until the owner reviews it and runs: team-mode.mjs acknowledge ${id} --instance <instance-root>. Then it may be filed again with a replan, and a further failed run escalates it again. Unrelated tickets go on.\n`);
+  appendFileSync(join(instance, LEDGER), `${at.slice(0, 10)} ESCALATED ${id}: ticket ${entry.ticket} failed in ${runIds.length} runs by the engine (${runIds.join(', ')}): the initial run and two retries are spent; it, a ticket that resumes its saved work and every ticket that depends on it are blocked until the owner reviews it and runs: team-mode.mjs acknowledge ${id} --instance <instance-root>. Then it may be filed again with a replan, and a further failed run escalates it again. Other tickets go on.\n`);
   return entry;
 }
 

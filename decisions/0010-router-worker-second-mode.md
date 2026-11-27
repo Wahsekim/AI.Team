@@ -573,8 +573,8 @@ failed, then dispatches, and reports to the user), and:
 
 (the specialist team's rule is at most two retries; the same here).
 
-A ticket's earlier runs are the archived batches in which the engine ran it and
-the kit did not commit it, where "it" is a ticket of the same id or the ticket
+A ticket's earlier runs are the archived batches, since the kit last committed
+it, in which the engine ran it and the kit did not commit it, where "it" is a ticket of the same id or the ticket
 whose saved patch (under `left/` or `reviews/held/`, told by its place or, for
 a copy, by its bytes) it resumes, followed down a chain of resumes. Tickets that
 only share a file are not one piece of work. `before` refuses a ticket with an
@@ -587,8 +587,9 @@ and logged in the ledger line for the owner, which is the report to the user.
 "Two retries" is read as ADR 0008 reads it: the initial run plus two. A ticket
 whose failed runs (status `not-passed`; a run that passed and was not committed
 does not count) reach three is refused with `TICKET_ATTEMPTS_EXHAUSTED` and
-escalated to the owner with the kind `attempts-exhausted`, which blocks it
-until the owner acknowledges it; after that it may be filed again with a
+escalated to the owner with the kind `attempts-exhausted`, which blocks it, a
+ticket that resumes its saved patch and a ticket that depends on it, and no
+ticket that only shares a file, until the owner acknowledges it; after that it may be filed again with a
 replan, and a further failed run escalates it again. The cap is a constant of
 the kit, not a team limit, and `attemptsPerTicket`, the attempts inside one
 engine run, is unchanged. This supersedes the amendment of 2026-11-26, "the kit

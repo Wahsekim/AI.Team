@@ -7,7 +7,7 @@ import { LEFT } from './batch-left.mjs';
 
 // ADR 0010, amendments of 2026-11-26 and 2026-11-27: the earlier runs of a ticket are the archived batches in which the engine
 // ran a ticket of the same id, or the ticket whose saved patch it resumes, followed through a chain of resumes, and the kit did
-// not commit it. Tickets that only share a file are not one piece of work.
+// not commit it, since the kit last committed it. Tickets that only share a file are not one piece of work.
 const RAN = ['passed', 'not-passed'];
 const EARLIER_KEPT = 20;
 const readJSON = path => { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; } };
@@ -42,12 +42,12 @@ export function resumedFrom(instance, resume) {
 // not pass, oldest first; `replan`, the one its latest run froze.
 export function earlierRuns(instance, archived) {
   const records = new Map(archived.map(({ id, record }) => [id, record]));
-  const runs = archived.filter(({ id, record }) => RUN_ID.test(id) && typeof record?.openedAt === 'string' && Array.isArray(record.tickets))
+  const batches = archived.filter(({ id, record }) => RUN_ID.test(id) && typeof record?.openedAt === 'string' && Array.isArray(record.tickets))
     .sort((a, b) => a.record.openedAt.localeCompare(b.record.openedAt) || a.id.localeCompare(b.id))
-    .flatMap(({ id, record }) => {
+    .map(({ id, record }) => {
       const after = readJSON(join(instance, ARCHIVE, id, 'after.json')), committed = committedIn(instance, id);
-      return (Array.isArray(after?.tickets) ? after.tickets : []).filter(entry => RAN.includes(entry?.status) && typeof entry.id === 'string' && TICKET_ID.test(entry.id) && !committed.has(entry.id))
-        .map(entry => ({ runId: id, ticket: entry.id, status: entry.status, replan: record.tickets.find(ticket => ticket?.id === entry.id)?.replan }));
+      return { committed: [...committed].filter(ticket => typeof ticket === 'string'), ran: (Array.isArray(after?.tickets) ? after.tickets : []).filter(entry => RAN.includes(entry?.status) && typeof entry.id === 'string' && TICKET_ID.test(entry.id) && !committed.has(entry.id))
+        .map(entry => ({ runId: id, ticket: entry.id, status: entry.status, replan: record.tickets.find(ticket => ticket?.id === entry.id)?.replan })) };
     });
   return (ticket, resume) => {
     const ids = [ticket.id];
@@ -56,7 +56,9 @@ export function earlierRuns(instance, archived) {
       ids.push(from.ticket);
       from = resumedFrom(instance, records.get(from.runId)?.tickets?.find(entry => entry?.id === from.ticket)?.resume);
     }
-    const mine = runs.filter(run => ids.some(id => same(id, run.ticket))), plainRun = ({ runId, ticket: id, status }) => ({ runId, ticket: id, status });
+    // Committed work is done: the id filed again is new work, and the runs before that commit are not its runs.
+    const isMine = other => ids.some(id => same(id, other)), since = batches.findLastIndex(batch => batch.committed.some(isMine));
+    const mine = batches.slice(since + 1).flatMap(batch => batch.ran).filter(run => isMine(run.ticket)), plainRun = ({ runId, ticket: id, status }) => ({ runId, ticket: id, status });
     return { runs: mine.slice(-EARLIER_KEPT).map(plainRun), count: mine.length, failed: mine.filter(run => run.status !== 'passed').map(plainRun), replan: mine.at(-1)?.replan };
   };
 }
