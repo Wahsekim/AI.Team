@@ -27,7 +27,7 @@ Single-toolchain projects fill the flat block. Multi-toolchain projects
 (monorepo: e.g. Python backend + Node frontend) fill `packages:` instead — one
 entry per toolchain, each with its own commands and working directory; the flat
 fields then hold only truly repo-wide commands (or are omitted). A Router/Worker
-team also lists its packages in `profiles/packages.json` (shape: `docs/design/router-worker/batch-reference.md`).
+team lists its packages in `profiles/packages.json` and keeps each stack's rules in that package's conventions file, not here (shape: `docs/design/router-worker/batch-reference.md`).
 
 ```yaml
 stack:

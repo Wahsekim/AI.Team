@@ -42,14 +42,17 @@ test('a ticket without package, with no packages file or with one, gets the brie
   assert.equal(Object.hasOwn(bare, 'packages'), false);
   assert.equal(abortBatch(f.common).errors, undefined);
 
-  writeFileSync(join(f.root, PACKAGES), JSON.stringify({ schemaVersion: 1, packages: [{ name: 'web', dir: 'src', conventions: 'profiles/stack/web.md' }] }));
-  writeFileSync(join(f.root, 'profiles/stack.md'), 'unchanged\n'); mkdirSync(join(f.root, 'profiles/stack'), { recursive: true });
+  // A packages file whose folders hold none of the ticket's paths: the ticket is repository-wide work.
+  writeFileSync(join(f.root, PACKAGES), JSON.stringify({ schemaVersion: 1, packages: [{ name: 'web', dir: 'src/list/web', conventions: 'profiles/stack/web.md' }] }));
+  mkdirSync(join(f.product, 'src/list/web'), { recursive: true }); mkdirSync(join(f.root, 'profiles/stack'), { recursive: true });
   writeFileSync(join(f.root, 'profiles/stack/web.md'), 'WEB-MARK\n');
   const beside = await f.before(batch);
   assert.equal(beside.errors, undefined, JSON.stringify(beside.errors));
   assert.deepEqual(briefsOf(beside), briefsOf(bare), 'byte-identical briefs');
   assert.deepEqual(beside.tickets[0], bare.tickets[0]);
   assert.equal(abortBatch(f.common).errors, undefined);
+  // A ticket that stays inside one package must name it, or it would run without that package's conventions.
+  assert.match(refusal(await f.before(batchOf(ticket('T-02', ['src/list/web/a.js']))))?.reason, /T-02 writes only inside the folder of package web \(src\/list\/web\/\) and does not name it: add "package": "web"/);
 });
 
 test('before refuses a package the team does not have, a path outside the package\'s folder, and a package command the batch does not list', async t => {

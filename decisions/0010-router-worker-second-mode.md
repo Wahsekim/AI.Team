@@ -609,8 +609,8 @@ Status: Accepted.
 The owner asked on 2026-11-27 for a team on one repository with several
 sub-projects on different stacks, whose number and names are the project's
 own, with the right conventions loaded for each task and little context spent
-on exchanges between them. Until then every worker was told to read all of
-`profiles/stack.md`, a ticket's scope inside the repository was only its
+on exchanges between them. Until then every worker's wrapper told it to read
+all of `profiles/stack.md`, the rules of every stack, a ticket's scope inside the repository was only its
 hand-written `paths`, and nothing told the PM that a file another sub-project
 builds against had changed.
 
@@ -630,7 +630,11 @@ other's code. `after` matches each ticket's changed paths against the other
 frozen packages' interfaces and logs, for the owner's spot review, each change
 with the packages that read it, for the PM to file their follow-up tickets
 with `dependsOn`; it holds nothing. A ticket without `package` is repository-wide
-work and its briefs and record entry are unchanged. The kit does not stop a
-worker from reading another package's files: the hook guards writes and
-commands only. Detail: `docs/design/router-worker/batch-reference.md`,
+work and its briefs and record entry are unchanged; one whose every path lies
+inside one package's folder is refused until it names that package. The exec
+and check wrappers the switch writes now tell a worker to read
+`profiles/stack.md` except when its assignment carries a package; a team
+switched before this change keeps its wrappers until the next switch. The kit
+does not stop a worker from reading another package's files or the shared
+file: the hook guards writes and commands only. Detail: `docs/design/router-worker/batch-reference.md`,
 "Packages of one repository".

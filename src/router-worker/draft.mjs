@@ -97,6 +97,9 @@ function instantiate(spec, source) {
   } finally { rmSync(temp, { recursive: true, force: true }); }
 }
 
+// ADR 0010, amendment of 2026-11-27: a ticket of a package carries its stack rules in the assignment; the shared file would load the other packages' too.
+const STACK_UNLESS_PACKAGED = 'profiles/stack.md (not when the assignment carries a package: its conventions and commands are in the assignment, and this file holds the other packages\' rules too)';
+
 function workerRole(duty) {
   const job = { exec: 'Complete one bounded, verifiable outcome across layers. Return uncommitted changes and evidence.',
     check: 'Verify the host-bound candidate independently. Run approved checks in an isolated runner; never accept author claims alone.',
@@ -113,7 +116,7 @@ function wrapper(spec, role, p, twoRoot) {
   const extra = duty === 'guard' ? '\nRead agents/chaos.md for the original guardian and halt-investigation obligations.\n'
     : duty && spec.project.ui ? '\nRead agents/_shared/browser-access.md for real UI verification. Missing browser/runtime evidence remains unverified; a simulated result does not satisfy M5.\n'
     : duty ? '' : '\nThis role keeps its original triggers and obligations from its role file; the topology change does not waive them.\n';
-  return `---\nname: "${name}"\ndescription: "Inactive Router/Worker ${label} draft; requires approved activation"\nmodel: "${p.model}"\neffort: "${p.effort}"\nmaxTurns: ${p.maxTurns}\ntools: ${p.tools.join(', ')}\ndisallowedTools: ${deniedTools(p).join(', ')}\npermissionMode: "default"\n---\n\n# Specific Agent Contract\n\nDo not run from this draft. Runtime activation is not implemented.\n\nAll read paths below are relative to the team root, where the runtime must start; the product root is separate.${twoRoot ? ' A path that does not exist there is read under kit/, which is never edited.' : ''} Read agents/${role}.md, agents/router-worker-contract.md, charter.md, profiles/project.md, profiles/stack.md, agents/_shared/meta-rules.md, agents/_shared/verify-discipline.md and the relevant agents/lessons.md index lines.\n${extra}\nModel and effort are copied from agents/roster.md. Bash, when listed, is not a read-only sandbox. Tools do not authorize product, ledger, commit or external-service access beyond the frozen assignment and host boundary.\n`;
+  return `---\nname: "${name}"\ndescription: "Inactive Router/Worker ${label} draft; requires approved activation"\nmodel: "${p.model}"\neffort: "${p.effort}"\nmaxTurns: ${p.maxTurns}\ntools: ${p.tools.join(', ')}\ndisallowedTools: ${deniedTools(p).join(', ')}\npermissionMode: "default"\n---\n\n# Specific Agent Contract\n\nDo not run from this draft. Runtime activation is not implemented.\n\nAll read paths below are relative to the team root, where the runtime must start; the product root is separate.${twoRoot ? ' A path that does not exist there is read under kit/, which is never edited.' : ''} Read agents/${role}.md, agents/router-worker-contract.md, charter.md, profiles/project.md, ${duty === 'exec' || duty === 'check' ? STACK_UNLESS_PACKAGED : 'profiles/stack.md'}, agents/_shared/meta-rules.md, agents/_shared/verify-discipline.md and the relevant agents/lessons.md index lines.\n${extra}\nModel and effort are copied from agents/roster.md. Bash, when listed, is not a read-only sandbox. Tools do not authorize product, ledger, commit or external-service access beyond the frozen assignment and host boundary.\n`;
 }
 
 export function draftTeam(input, { teamRoot = ROOT, instanceRoot } = {}) {

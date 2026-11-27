@@ -1578,10 +1578,19 @@ Limits:
 
 - The kit does not stop a worker from reading another package's files. The
   hook guards writes and commands only; the brief tells the worker what to read.
+- The exec and check wrappers the switch writes tell a worker to read
+  `profiles/stack.md` except when its assignment carries a package. A team
+  switched to Router/Worker before this change keeps wrappers that name the
+  file without the exception, until the next switch writes them again: there
+  every worker still reads the whole file. Keep `profiles/stack.md` to what
+  the whole repository shares, and each stack's rules in its package's
+  conventions file; nothing checks that split.
 - Conventions cost their size in every brief of that package's tickets, exec
   and check.
 - A ticket without `package` is not scoped to a folder and gets no package
-  conventions.
+  conventions. `before` refuses one whose every path, move and deletion lies
+  inside one package's folder until it names that package; a ticket that
+  reaches into two packages, or outside all of them, runs unscoped.
 - One team still has one product repository.
 - No seed file is shipped: a team writes `profiles/packages.json` by hand from
   the shape above.

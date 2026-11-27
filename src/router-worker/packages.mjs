@@ -29,7 +29,8 @@ function conventionsOf(instance, entry) {
   const bytes = readFileSync(join(instance, path));
   let text;
   try { text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes); } catch { text = null; }
-  need(text && !text.includes('\0'), `${at}: the conventions file ${path} is not UTF-8 text`);
+  need(text !== null && !text.includes('\0'), `${at}: the conventions file ${path} is not UTF-8 text`);
+  need(text.trim(), `${at}: the conventions file ${path} is empty; write the package's rules in it, or leave conventions out`);
   return { path, digest: bytesDigest(bytes), text };
 }
 
@@ -66,12 +67,16 @@ export function loadPackages({ instance, productRoot }) {
 
 // The batch's tickets as they run: a ticket of a package is checked against it and, with no commands of its own, verifies with the package's.
 export function packagedTickets(batch, team) {
+  const written = ticket => [...ticket.paths, ...(ticket.moves ?? []).flatMap(move => [move.from, move.to]), ...(ticket.deletes ?? [])];
   return batch.tickets.map(ticket => {
+    // A ticket that stays inside one package names it: left out, it would run without that package's conventions.
+    const home = ticket.package === undefined && team?.packages.find(entry => written(ticket).every(path => path.startsWith(`${entry.dir}/`)));
+    need(!home, `Ticket ${ticket.id} writes only inside the folder of package ${home?.name} (${home?.dir}/) and does not name it: add "package": "${home?.name}", so that it runs with that package's conventions and commands`);
     if (ticket.package === undefined) return ticket;
     need(team, `Ticket ${ticket.id} names package ${ticket.package}, but the team has no packages file (${PACKAGES}). Write it, or leave the field out`);
     const own = team.packages.find(entry => entry.name.toLowerCase() === ticket.package.toLowerCase());
     need(own, `Ticket ${ticket.id} names package ${ticket.package}, which ${PACKAGES} does not list (known: ${team.packages.map(entry => entry.name).join(', ') || 'none'})`);
-    const outside = [...ticket.paths, ...(ticket.moves ?? []).flatMap(move => [move.from, move.to]), ...(ticket.deletes ?? [])].find(path => !path.startsWith(`${own.dir}/`));
+    const outside = written(ticket).find(path => !path.startsWith(`${own.dir}/`));
     need(outside === undefined, `Ticket ${ticket.id} writes ${outside}, outside the folder of its package ${own.name} (${own.dir}/): ${SHARED}`);
     if (ticket.verificationCommands || !own.verificationCommands) return ticket;
     const unlisted = own.verificationCommands.find(command => !batch.verificationCommands.includes(command));
