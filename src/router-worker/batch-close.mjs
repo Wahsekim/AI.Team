@@ -12,7 +12,7 @@ import { runCommands, confirmedOf } from './run-commands.mjs';
 import { setAside, productState } from './review-resolve.mjs';
 import { leftAt, resumeOf, patchAdvice } from './batch-left.mjs';
 import { interfaceChanges } from './packages.mjs';
-import { BATCH_FILE, AFTER_FILE, PROGRESS_FILE, RETURN_FILE, RESOLUTION_FILE, RECORDS, ARCHIVE, RUN_ID, TICKET_ID, oneLine, changedPaths, contentOf, hooksOf, archiveBatch, plain, proposedTokens, HOOKS_FIRST, HOOKS_MOVED } from './batch.mjs';
+import { BATCH_FILE, AFTER_FILE, PROGRESS_FILE, RETURN_FILE, RESOLUTION_FILE, RECORDS, ARCHIVE, RUN_ID, TICKET_ID, oneLine, changedPaths, contentOf, entriesOf, treeEntriesOf, hooksOf, archiveBatch, plain, proposedTokens, HOOKS_FIRST, HOOKS_MOVED } from './batch.mjs';
 
 // ADR 0010, decisions 12 and 13: what a PM runs when a batch ends in a standing Router/Worker team.
 // after: the engine's return is matched against what was frozen, the product is compared with the tickets'
@@ -150,13 +150,23 @@ function inTheWay(batch, outcomes, paths) {
 }
 
 export function afterBatch({ teamRoot, instanceRoot, result, run = runCommands }) {
+  let retaken = null, unreleased = null, product;
   try {
-    const { instance, batch } = openBatch(teamRoot, instanceRoot), product = batch.productRoot, afterPath = join(instance, AFTER_FILE);
+    const { instance, batch } = openBatch(teamRoot, instanceRoot), afterPath = join(instance, AFTER_FILE);
+    product = batch.productRoot;
     // A return that is not this batch's return changes nothing: the lock stays held and the boundary open.
     const account = accountRun({ args: batch.args, record: batch.runRecord, result });
     need(account.status === 'accounted', `The engine return is not the return of this batch: ${account.findings.join(', ')}`);
     need(Array.isArray(batch.review?.triggers) && Array.isArray(batch.review.reviewers) && batch.review.reviewers.every(reviewer => typeof batch.reviewWrappers?.[reviewer] === 'string'),
       `${BATCH_FILE} holds no frozen review trigger list or reviewer wrappers: an earlier kit opened it. ${ABANDON}`);
+    // The lock is read before the close is claimed or anything is changed (review finding H2). Free (a resumed close whose earlier
+    // run released it, or one an operator removed) or left by a command of this team that ended, it is taken for this after's length.
+    const found = readLease({ productRoot: product });
+    if (found.status !== 'held' || found.lease.digest !== batch.lease) {
+      const taken = acquireLease({ teamRoot: instance, productRoot: product, command: true });
+      need(!taken.errors, `${String(taken.errors?.[0]?.reason ?? '').replace(/\.$/, '')}. Nothing was changed: no work was set aside and no command was run. Wait for the holder to finish and run after again; if the batch cannot be closed, archive it with: rw-batch.mjs abort --instance <instance-root>`);
+      retaken = unreleased = taken.lease.digest;
+    }
     // The close is claimed before anything is changed, so two calls never close the same batch together and
     // one that died is taken up again, not judged as if someone had tampered with the batch.
     const earlier = readJSON(afterPath), claim = () => ({ stage: 'batch-closing', runId: batch.runId, claimedAt: new Date().toISOString(), pid: process.pid });
@@ -173,7 +183,7 @@ export function afterBatch({ teamRoot, instanceRoot, result, run = runCommands }
       catch (error) { need(error?.code !== 'EEXIST', 'Another after is closing this batch'); throw error; }
     }
 
-    const findings = [], boundary = readBoundary(instance);
+    const findings = retaken && !resumed ? [{ code: 'LOCK_TAKEN_AGAIN' }] : [], boundary = readBoundary(instance);
     // A resumed close may find its own work done: the boundary already closed, the lock already released.
     const workers = [batch.args.plan[0].agentType, batch.args.plan[0].verifierAgentType, batch.args.guardianAgentType].sort();
     const ownClosed = resumed && boundary && boundary.productRoot === product && stateOf(boundary) !== 'batch'
@@ -236,11 +246,12 @@ export function afterBatch({ teamRoot, instanceRoot, result, run = runCommands }
     if (rechanged.length) findings.push({ code: 'PREEXISTING_PATH_CHANGED', paths: rechanged });
     const tickets = batch.tickets.map((ticket, i) => ({ id: ticket.id, ...outcomes[i], changedPaths: files.filter(path => within(path, ticket.paths)) }));
     // ADR 0011, decision 3: the reviewers each passed ticket's changes require, by the list frozen at "before"; commit is gated on their verdicts.
-    // Every changed path is pinned, flagged or not: an elective review reads what after saw, not what is there later.
+    // Every changed path is pinned, flagged or not: an elective review reads what after saw, not what is there later. The reviews
+    // read the bytes; commit binds what Git records (review finding F2): a mode, a link's target, an absence.
     // A passed ticket that changed nothing is not committed, so it is not flagged, even when it declared itself sensitive.
     for (const ticket of tickets.filter(entry => entry.status === 'passed' && entry.changedPaths.length)) {
       ticket.review = flagPaths(batch.review, ticket.changedPaths, batch.tickets.find(entry => entry.id === ticket.id).declared ?? []);
-      ticket.content = contentOf(product, ticket.changedPaths);
+      ticket.content = contentOf(product, ticket.changedPaths); ticket.entries = entriesOf(product, batch.productHead, ticket.changedPaths);
     }
     const reviews = Object.fromEntries(batch.review.reviewers.map(name => [name, { tickets: tickets.filter(ticket => ticket.review?.required.includes(name)).map(ticket => ticket.id) }]).filter(([, entry]) => entry.tickets.length));
     // The workers' writes outside every ticket, and those of the kit's run of the commands.
@@ -255,8 +266,9 @@ export function afterBatch({ teamRoot, instanceRoot, result, run = runCommands }
       if (Object.keys(reviews).length) reviewBoundary({ teamRoot: instance, runId: batch.runId, reviewers: batch.reviewWrappers }); else closeBoundary({ teamRoot: instance });
       boundaryClosed = true;
     } catch { findings.push({ code: 'BOUNDARY_NOT_RESTORED' }); }
-    const lease = readLease({ productRoot: product }), ours = lease.status === 'held' && lease.lease.digest === batch.lease, alreadyFree = resumed && lease.status === 'free';
-    const leaseReleased = alreadyFree || (ours && !releaseLease({ productRoot: product, lease: batch.lease }).errors);
+    // The lock may have changed hands while the commands ran: only the one this after holds is released.
+    const mine = retaken ?? batch.lease, lease = readLease({ productRoot: product }), ours = lease.status === 'held' && lease.lease.digest === mine;
+    const leaseReleased = ours && !releaseLease({ productRoot: product, lease: mine }).errors; unreleased = null;
     if (!leaseReleased) findings.push({ code: ours ? 'LOCK_RELEASE_FAILED' : 'LOCK_NOT_HELD_BY_THIS_BATCH' });
 
     // Decision 13: one commit per ticket that passed, of that ticket's own paths. Everything else stays in the work tree.
@@ -293,11 +305,11 @@ export function afterBatch({ teamRoot, instanceRoot, result, run = runCommands }
     // The engine's return is kept beside the record, which carries its digest: the settlement of usage needs it, and so does anyone who audits the batch.
     const kept = JSON.parse(JSON.stringify(result));
     const record = sealed({ schemaVersion: 1, stage: 'batch-closed', runId: batch.runId, batchDigest: batch.digest, closedAt: at, status: status(),
-      account, returnDigest: digest(kept), tickets, reviews, commits, left, holdAll, ...(crossed.length ? { interfaceChanges: crossed } : {}), hook, setAside: setAsideList, verification, findings, limits: limitsReached(batch.limits, result, refused), boundaryClosed, leaseReleased, next });
+      account, returnDigest: digest(kept), tickets, reviews, commits, left, holdAll, ...(crossed.length ? { interfaceChanges: crossed } : {}), hook, setAside: setAsideList, verification, findings, limits: limitsReached(batch.limits, result, refused), boundaryClosed, leaseReleased, ...(retaken ? { lockRetaken: true } : {}), next });
     replace(join(instance, RETURN_FILE), kept);
     replace(afterPath, record);
     return record;
-  } catch (error) { return refuse(error); }
+  } catch (error) { return refuse(error); } finally { if (unreleased) releaseLease({ productRoot: product, lease: unreleased }); }
 }
 
 // The plan of a batch: after's commits, or for a reviewed batch the commits of its resolution, checked again against
@@ -367,16 +379,25 @@ export function commitBatch({ teamRoot, instanceRoot }) {
       `${PROGRESS_FILE} cannot be read. ${ABANDON}`);
     const done = progress.commits, head = () => git(product, 'rev-parse', 'HEAD')?.trim(), parentOf = sha => git(product, 'rev-parse', `${sha}^`)?.trim();
     const holds = (sha, paths) => digest((git(product, 'diff-tree', '--no-commit-id', '--name-only', '--no-renames', '-r', '-z', sha) ?? '').split('\0').filter(Boolean).sort()) === digest([...paths].sort());
-    const drift = commits => commits.flatMap(commit => { const now = contentOf(product, commit.paths), was = after.tickets.find(ticket => ticket.id === commit.ticket)?.content ?? {}; return commit.paths.filter(path => now[path] !== was[path]); });
+    // What after pinned of a ticket's paths: what Git records, or for a record of an earlier kit the bytes of each file.
+    const pinnedOf = id => after.tickets.find(ticket => ticket.id === id) ?? {};
+    const drift = commits => commits.flatMap(commit => { const { entries, content = {} } = pinnedOf(commit.ticket), now = entries ? entriesOf(product, head(), commit.paths) : contentOf(product, commit.paths);
+      return commit.paths.filter(path => now[path] !== (entries ?? content)[path]); });
+    // The same of a commit's tree; an earlier kit's record binds only the bytes of a file it saw.
+    const blob = (sha, path) => { const shown = gitRun(product, ['cat-file', 'blob', `${sha}:${path}`], { encoding: 'buffer' }); return shown.status === 0 ? bytesDigest(shown.stdout) : null; };
+    const unlike = (sha, commit) => { const { entries, content = {} } = pinnedOf(commit.ticket), now = entries ? treeEntriesOf(product, sha, commit.paths) : null;
+      return commit.paths.filter(path => entries ? now[path] !== entries[path] : typeof content[path] === 'string' && blob(sha, path) !== content[path]); };
     // A commit that was made just before this command died, and so was never recorded, is taken up when it is the next planned one.
     const tip = done.length ? done.at(-1).sha : batch.productHead, upNext = plan[done.length];
     if (upNext && head() !== tip && parentOf(head()) === tip && holds(head(), upNext.paths)) {
       // It holds what after saw when the work tree does and the commit is the work tree.
-      const unlike = [...new Set([...drift([upNext]), ...changedPaths(product).filter(path => upNext.paths.includes(path))])];
-      need(!unlike.length, `The commit ${head().slice(0, 8)} found for ticket ${upNext.ticket} does not hold what after saw (${unlike.slice(0, 5).map(plain).join(', ')}). ${ABANDON}`);
+      const differ = [...new Set([...drift([upNext]), ...changedPaths(product).filter(path => upNext.paths.includes(path)), ...unlike(head(), upNext)])];
+      need(!differ.length, `The commit ${head().slice(0, 8)} found for ticket ${upNext.ticket} does not hold what after saw (${differ.slice(0, 5).map(plain).join(', ')}). ${ABANDON}`);
       done.push({ ticket: upNext.ticket, sha: head() }); replace(progressPath, { schemaVersion: 1, runId: batch.runId, commits: done });
     }
     need(done.every((made, i) => holds(made.sha, plan[i].paths)), `A commit recorded for this batch does not hold its ticket's paths. ${ABANDON}`);
+    const unbound = done.flatMap((made, i) => unlike(made.sha, plan[i]).map(path => `${made.ticket}: ${plain(path)}`));
+    need(!unbound.length, `A commit recorded for this batch does not hold what after saw (${unbound.slice(0, 5).join(', ')}). ${ABANDON}`);
     need(head() === (done.length ? done.at(-1).sha : batch.productHead) && done.every((made, i) => parentOf(made.sha) === (i ? done[i - 1].sha : batch.productHead)),
       `The product branch is not the batch's start plus the commits this command made: someone committed, or moved the branch. ${ABANDON}`);
     const todo = plan.slice(done.length);
@@ -398,11 +419,9 @@ export function commitBatch({ teamRoot, instanceRoot }) {
       need(sha && sha !== parent && parentOf(sha) === parent, `The commit of ticket ${commit.ticket} did not land on the product branch. ${ABANDON}`);
       // A hook may have put other paths into the commit: what it holds must be the ticket's paths, nothing else.
       need(holds(sha, commit.paths), `The commit of ticket ${commit.ticket} (${sha.slice(0, 8)}) does not hold exactly that ticket's paths; a commit hook may have added or dropped some. It is left as it is. ${ABANDON}`);
-      // And each file holds the bytes after saw, which a hook that rewrites and stages a file would change (review finding R23-01).
-      const was = after.tickets.find(ticket => ticket.id === commit.ticket)?.content ?? {};
-      const blob = path => { const shown = gitRun(product, ['cat-file', 'blob', `${sha}:${path}`], { encoding: 'buffer' }); return shown.status === 0 ? bytesDigest(shown.stdout) : null; };
-      const rewritten = commit.paths.filter(path => typeof was[path] === 'string' && blob(path) !== was[path]);
-      need(!rewritten.length, `The commit of ticket ${commit.ticket} (${sha.slice(0, 8)}) holds other bytes than after saw in ${rewritten.slice(0, 5).map(plain).join(', ')}; a commit hook may have rewritten them. It is left as it is: inspect the hooks and the commit before anything else. ${ABANDON}`);
+      // And each path holds what after saw, which a hook that rewrites, restores or re-modes and stages a path would change (review findings R23-01, F2).
+      const rewritten = unlike(sha, commit);
+      need(!rewritten.length, `The commit of ticket ${commit.ticket} (${sha.slice(0, 8)}) holds other content than after saw in ${rewritten.slice(0, 5).map(plain).join(', ')}; a commit hook may have rewritten them. It is left as it is: inspect the hooks and the commit before anything else. ${ABANDON}`);
       done.push({ ticket: commit.ticket, sha });
       replace(progressPath, { schemaVersion: 1, runId: batch.runId, commits: done });
     }

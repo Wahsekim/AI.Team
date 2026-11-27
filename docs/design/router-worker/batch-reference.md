@@ -167,8 +167,10 @@ ticket of the same id (compared without case), the ticket it names in
 `reviews/held/<run id>/<ticket>.patch`, or a copy elsewhere in the team folder
 whose digest is that of a file under one of those folders (the same
 recognition as a rejection's `resumedFrom`). The `continues` and `resume` that
-the archives froze for each ticket so reached are followed in turn, back to
-the first filing; a ticket that continues the same earlier ticket (the other
+the archives froze for the ticket's own id and for each ticket so reached,
+since the kit last committed that id, are followed in turn, back to the first
+filing: a ticket filed again under its id need not repeat the `continues` an
+archived filing of it carried. A ticket that continues the same earlier ticket (the other
 half of a split) is not reached, and its runs are its own. `continues` is for
 work done again from nothing or split under a new id; `before` refuses one that
 names the ticket itself or an id no archived batch holds. Tickets that
@@ -235,6 +237,19 @@ only for a `resume` outside `left/` and `reviews/held/`.
    in order, the Guardian's record, the lifecycle count. A return that does not
    match is refused and **nothing changes**: the lock stays held and the write
    boundary stays open.
+
+   **Whose lock is it?** Then, before the close is claimed and before anything
+   changes, `after` reads the lock on the product. The batch's own lock is
+   released at step 7. A lock that is free (an earlier `after` of this batch
+   that died had released it, or an operator removed it), or a command's lock of
+   this team whose process is gone, is taken again as a command's lock for the
+   length of this `after` (see "The lock of a command") and released at step 7;
+   the record says so (`lockRetaken: true`). A lock held by another team, by a
+   command of this team that still runs, or that cannot be read is a refusal
+   that names why and says that nothing was changed: no claim, no work set
+   aside, no command run, the write boundary as it was. The PM waits for the
+   holder and runs `after` again, or archives the batch with `abort` if it
+   cannot be closed.
 2. **What the workers did.** The findings that need no command come first:
    the boundary, the branch, the hooks, the Guardian, the hook log
    (`HOOK_SAW_NO_WORKER`, `CHECK_RUNS_MISSING`) and the paths the workers
@@ -272,7 +287,7 @@ only for a `resume` outside `left/` and `reviews/held/`.
    its own list uses the batch's list), in the batch's order: a command every
    passed ticket left out is one the PM said they do not need. It runs them on
    the product as it stands, from the product root, under the lock the batch
-   still holds, as `review-brief` runs its commands: only those that are both
+   still holds or that `after` took again, as `review-brief` runs its commands: only those that are both
    frozen in the batch and still in the team's confirmed `allowedCommands`
    (`/bin/sh -c`, 15 minutes each, output truncated and digested). A command
    that failed or timed out is run once more, after the others: `after` cannot
@@ -320,10 +335,12 @@ only for a `resume` outside `left/` and `reviews/held/`.
    | `PRODUCT_HEAD_MOVED`, `PRODUCT_BRANCH_CHANGED` | someone committed or changed branch during the batch | all held |
    | `GUARDIAN_NOT_CLEAN` | the Guardian did not answer, asked to halt and investigate, or found a runaway or a failed check at risk of being dropped; or the engine's own figures show a budget gate that did not behave (`budgetGate: inconsistent`): `tripped` does not match the final spend against 80% of the ceiling, or, for a standing batch, the engine's trace of its gate decisions (`budgetStatus.gateTrace`) is missing or malformed, shows a call dispatched at or above that line or one declined below it, or shows fewer or more dispatched exec and checker calls than the return reports. Only then do the engine's blockers name the Guardian (`guardian-unavailable` or `guardian-not-clean`) | all held |
    | `GUARDIAN_ATTENTION` | the Guardian found no such problem but did not call the run clean (`missedHaltRisk`, or `budgetGateCorrect: false` with consistent engine figures). The engine tells the Guardian of a batch that no observer watches the run by design, that the PM attests an owner stop or a hardware halt after it (`reconcile-run.mjs --monitoring`), and that the ceiling comes from the owner's limits, so neither the missing observer nor a ceiling far above the spend is a finding, and a Guardian that finds nothing wrong answers `clean`. Its findings are in the engine's return for the PM to read; no blocker names the Guardian. A batch held by another finding is not put in review | not held |
-   | `BOUNDARY_NOT_RESTORED`, `LOCK_RELEASE_FAILED`, `LOCK_NOT_HELD_BY_THIS_BATCH` | the batch could not be closed completely | not held |
+   | `LOCK_TAKEN_AGAIN` | a first `after` of the batch found the batch's lock gone (free, or a dead command's lock of this team) and took the lock again for its own length (`lockRetaken: true`). A resumed `after` that takes it again records `lockRetaken` with no finding, since the `after` that died may have released it | not held |
+   | `BOUNDARY_NOT_RESTORED`, `LOCK_RELEASE_FAILED`, `LOCK_NOT_HELD_BY_THIS_BATCH` | the batch could not be closed completely. `LOCK_NOT_HELD_BY_THIS_BATCH`: the lock `after` held (the batch's, or the one it took again) changed hands while it ran, so it is not released | not held |
 
 7. **The write boundary closes and the lock is released**, whatever the
-   findings: a lock must not outlive its batch. When a ticket is flagged for a
+   findings: a lock must not outlive its batch. Only the lock `after` holds is
+   released: the batch's, or the one it took again. When a ticket is flagged for a
    reviewer the boundary goes to the review state instead of closed (see
    "Review state and brief").
 8. **The commit plan**: one commit for each ticket that passed and changed
@@ -350,7 +367,8 @@ The refusal names `abort` as the way out when that process is not an `after`
 of this batch any more (the system gave its id to another program). An
 `after` whose process is gone is taken up by the next call, which
 recognises the boundary it already closed (the batch's own three workers, no
-write path) and the lock it already released, and runs the commands again. A
+write path), takes the lock again if the dead one had released it, and runs the
+commands again. A
 claim that names no process, written by an earlier kit, is taken to be running
 while it is under a minute old; one with no readable time, or one from the
 future, counts as dead.
@@ -577,10 +595,22 @@ a command"). It pushes nothing.
   operation is in progress, when the commit hooks were changed or moved, when
   an archive of this batch was already started, when the work
   tree is not exactly what `after` saw (the same paths, and for each ticket to
-  commit, reviewed or not, the content `after` recorded), or when the branch is
+  commit, reviewed or not, the entry `after` recorded: see below), or when the branch is
   not the batch's starting commit plus the commits this command itself made.
 - The plan is derived again from the tickets: a path is committed only inside
   the paths of a ticket that passed.
+- What `after` records per path to commit (`tickets[].entries`) is what Git
+  would record for it: its mode and object id (`100644`, `100755`, `120000`
+  for a symbolic link, whose object is its target), or `null` for a path the
+  commit removes. Git computes it, through an index of its own over the batch's
+  start, so `core.fileMode`, `core.symlinks` and clean filters apply as they
+  will at the commit. A file made executable, a link pointed elsewhere, a file
+  replaced by a link or a deleted path brought back after `after` closed the
+  batch is a change the same as an edit (review finding F2). The reviews read
+  `content` (the bytes) and the links apart; `entries` binds only `commit` and
+  `resolve`. An `after` record of an earlier kit has no `entries`: it is bound
+  by the bytes of each file, as before, and a change of mode or a link's
+  target is not seen.
 - After each commit it checks that the commit landed on the branch and holds
   exactly the ticket's paths. A commit hook that adds or drops paths stops the
   batch there; the commit is left as it is.
@@ -595,15 +625,18 @@ a command"). It pushes nothing.
   only what is missing. The commits made are recorded by their ids
   (`rw-batch-commits.json`), so a hook that rewrites messages does not confuse
   the resume. Each recorded commit is checked again to hold its ticket's paths.
-  Each new commit must also hold, in every file, the bytes `after` recorded: a
-  commit hook that rewrites and stages a file (a formatter, for instance) stops
-  `commit`, which leaves that commit as it is and names the files.
+  Each new commit, each recorded one and a commit taken up after a `commit`
+  that died must also hold, for every path, the entry `after` recorded (read
+  from the commit's tree), the absence of a deleted path included: a commit
+  hook that rewrites, restores or changes the mode of a path and stages it (a
+  formatter, for instance) stops `commit`, which leaves that commit as it is
+  and names the paths.
   A commit made just before the command died, and so never recorded, is taken
   up when it is the next planned one: its parent is the expected commit and it
   holds exactly that ticket's paths. A commit made by hand that fits the same
   description is taken up too, but only when its files are what `after` saw:
-  the work tree holds the content `after` recorded and nothing of the ticket's
-  paths differs from the commit. Otherwise `commit` refuses and records nothing.
+  the work tree and the commit's tree hold the entries `after` recorded and
+  nothing of the ticket's paths differs from the commit. Otherwise `commit` refuses and records nothing.
   A pre-commit hook that rewrites a file (a formatter) is accepted on a normal
   `commit`, but a commit it rewrote is not what `after` saw, so if the command
   dies right after it, the take-up refuses and the batch is aborted. Whether to
@@ -980,8 +1013,9 @@ ticket held because its review was not obtained.
 flagged batch has a final verdict, before `commit`. It takes the lock and checks
 that the product is on the batch's branch at the batch's start commit, with no
 Git operation in progress and the same commit hooks, and that every changed path
-of a ticket still to be committed or held has the content `after` pinned
-(`tickets[].content`). It also reads the verification commands the kit ran when
+of a ticket still to be committed or held has the entry `after` pinned
+(`tickets[].entries`: mode and object id, as `commit` binds it; the bytes,
+`tickets[].content`, for a record of an earlier kit). It also reads the verification commands the kit ran when
 the reviews were briefed. Across every reviewer's briefs of the batch, the most
 recent complete run decides: the brief with the highest `seq`, never the wall
 clock, among the briefs that ran every frozen command (none dropped). A brief

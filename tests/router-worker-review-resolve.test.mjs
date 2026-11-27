@@ -121,7 +121,9 @@ test('resolve refuses a product changed since after; abort after resolve re-appl
   writeFileSync(join(f.product, 'src/list/b.js'), '// edited by hand\n');
   assert.match(refusal(f.resolve()).reason, /src\/list\/b\.js.*changed since after/);
   assert.equal(f.state(), 'review'); assert.equal(readLease({ productRoot: f.product }).status, 'free');
-  writeFileSync(join(f.product, 'src/list/b.js'), EDITS['src/list/b.js']);
+  writeFileSync(join(f.product, 'src/list/b.js'), EDITS['src/list/b.js']); chmodSync(join(f.product, 'src/list/b.js'), 0o755);
+  assert.match(refusal(f.resolve()).reason, /src\/list\/b\.js.*changed since after/, 'a mode changed since after is a change too');
+  chmodSync(join(f.product, 'src/list/b.js'), 0o644);
   const resolved = f.resolve(), patch = `reviews/held/${open.runId}/US-02.patch`;
   assert.equal(resolved.errors, undefined);
   const aborted = abortBatch(f.common);
