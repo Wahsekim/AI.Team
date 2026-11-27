@@ -352,7 +352,9 @@ batch that depends on it, directly or through others, as a patch under
 `reviews/held/<run id>/` with the reason `dependency-held` and the tickets it
 waits on, before it runs the commands again; the tickets that depend on none
 of them are judged by that run as decision 15 says. `commit` refuses a
-resolution that keeps such a dependent. The reason is not a rejection: it
+resolution that keeps such a dependent. A batch that an earlier kit
+resolved with a dependent kept, and that is not yet committed, is refused the
+same way and is closed with `abort`. The reason is not a rejection: it
 does not count toward decision 16.
 
 Not changed: `after` needs no such rule, because a standing batch halts at the

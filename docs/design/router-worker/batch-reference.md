@@ -1051,7 +1051,9 @@ never changed by it. Then:
    the same way, with the reason `dependency-held` and `waitsOn`, the ids of
    the batch it depends on directly that are not delivered. This happens
    before step 3, so the commands judge the tree that will be committed. A
-   ticket that passed and changed nothing is delivered and holds no dependent.
+   ticket that passed and changed nothing is delivered and holds no dependent,
+   unless it depends on a held ticket itself: the tickets that build on it are
+   then held through it, and their `waitsOn` names it.
    A ticket held by step 3 needs no such pass: step 3 holds every ticket after
    it, and a dependent comes later in the batch. `dependency-held` is not a
    review outcome: it is not written to `reviews/tickets.jsonl` and does not
